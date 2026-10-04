@@ -1,0 +1,3 @@
+[submodule "src/lib/go2rtc"]
+	path = src/lib/go2rtc
+	url = git@github.com:AlexxIT/go2rtc.git
