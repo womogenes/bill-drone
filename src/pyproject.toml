@@ -8,10 +8,12 @@ dependencies = [
     "opencv-python>=5.0.0.93",
     "pandas>=3.0.6",
     "pyserial>=3.5",
+    "requests>=2.34.2",
     "websocket-client>=1.9.2",
 ]
 
 [dependency-groups]
 dev = [
+    "microdot>=2.7.0",
     "micropython-esp32-stubs>=1.29.0.post1",
 ]

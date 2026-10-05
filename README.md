@@ -14,7 +14,7 @@ Still in the very early stages of this, but hope to get results quickly.
 - We are bold. A 3.7V battery will definitely power an ESP32-CAM unless experiments show otherwise.
 - When you give `uv run` commands, assume we're in `src/`. So, for example, `uv run --project src python src/sw/sensors/camera_readings.py` is too verbose. Instead, just say `uv run sw/sensors/camera_readings.py`.
 - Do not keep tests checked in.
-- We are lean. We are scrappy. We should keep the absolute minimum amount possible in this repo that is required to do a thing. Do not maintain backwards compatability. For example, the guard clause here:
+- We are lean. We are scrappy. We should keep the absolute minimum amount possible in this repo that is required to do a thing. Do not maintain backwards compatability. Do not write defensive code; prefer to fail loudly. For example, the guard clause here:
 
 ```py
 def get_frame():
@@ -43,28 +43,3 @@ is a bad pattern and must be avoided. We should let it fail loudly.
 ## Local setup
 
 Static laptop is streaming go2rtc over port 8555. On my tailnet, that's `http://100.64.0.6:1984/`.
-
-## MicroPython
-
-The gist behind this is that the MCU executes Python instead of machine instructions so we can iterate on the firmware much faster.
-
-To install MicroPython:
-
-```sh
-# Run this from src/
-uv tool install mpremote
-mpremote --help
-
-# ESP32
-uvx --from esptool esptool chip-id
-uvx --from esptool esptool --port /dev/ttyUSB0 erase-flash
-uvx --from esptool esptool --port /dev/ttyUSB0 --baud 460800 write-flash 0x1000 /path/to/firmware.bin
-
-# Connect:
-uvx mpremote repl
-
-# Upload stuff
-mpremote run program.py
-mpremote reset
-mpremote fs cp main.py :main.py  # copy to boot
-```
