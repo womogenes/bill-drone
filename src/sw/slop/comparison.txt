@@ -1,0 +1,35 @@
+Bottle calibration comparison
+
+no_bottle: readings_2026-10-04_22-32-57.csv; 630 samples
+bottle: readings_2026-10-04_22-40-47.csv; 630 samples
+bottle_097: readings_2026-10-04_22-51-32.csv; 628 samples
+21 throttle settings, 200 through 1200; originally 30 samples per setting per run.
+Excluded only CSV lines 339–340 (data indices 337–338) in the 0.97 kg run:
+both throttle=750, force=-260280; the other 28 readings span 117198 to 122262.
+Raw CSVs are unchanged. 1,888 samples retained; no other filtering applied.
+Medians and interquartile ranges summarize each step.
+The older CSV has no bottle metadata and is treated as the no-bottle run.
+
+Assumed bottle mass: 1.62 kg (15.8868 N).
+Median matched-throttle bottle shift: -660,157.5 counts.
+Signed bottle-direction sensitivity: -407,504.6 counts/kg.
+Sensitivity magnitude: 407,504.6 counts/kgf; 41,553.9 counts/N.
+Bottle separation spans 622,921.5 to 747,304.5 counts
+(20.0% increase from minimum to maximum).
+This systematic variation is not explained by a single constant calibration offset.
+Possible contributors include differing motor thrust between runs, mounting/load-path
+changes, sensor nonlinearity, or drift. These recordings cannot distinguish them.
+
+Force changes use (counts - own-run median at throttle 200) / sensitivity magnitude.
+Positive is increasing counts, opposite the bottle's load direction.
+These are approximate changes, NOT absolute thrust: throttle 200 is not a motor-off tare.
+no_bottle: peak step median at throttle 1100; change from throttle 200 = 1.165 kgf (11.426 N).
+bottle: peak step median at throttle 1100; change from throttle 200 = 0.861 kgf (8.444 N).
+bottle_097: peak step median at throttle 1100; change from throttle 200 = 1.144 kgf (11.217 N).
+1.62 kg bottle: inferred sensitivity magnitude spans 384,519.4 to 461,299.1 counts/kg; median 407,504.6.
+0.97 kg bottle: inferred sensitivity magnitude spans 382,038.1 to 396,720.6 counts/kg; median 384,756.2.
+All three median curves peak at 1100 and decline at 1150 and 1200.
+All force curves retain the original 1.62 kg calibration scale for direct comparison.
+Firmware command 1000 means 2000 us; 1100 and 1200 mean 2100 and 2200 us.
+The observed peak alone does not establish an ESC limit or an optimal operating point.
+For a cleaner calibration, compare bottle on/off with the motor stopped and mounting unchanged.
