@@ -1,14 +1,17 @@
-Electronics deck, 2026-10-11
-Updated live CAD and exported electronics_deck.stl in millimeters.
-Removed a 50 x 42 mm floor window (4 mm clipped corners) beneath the perfboard.
-Camera braces, both tape rails, mounting holes and IMU access preserved.
-Solid volume removed: 6204 mm3, approximately 18.5% of prior deck volume.
-The perfboard spans the new window and rests on the existing raised rails.
+Electronics platform revision, 2026-10-11
+Platform only: integral camera posts, braces and retaining cap removed from design.
+Four new 3.5 mm through holes for a future camera bracket, 38 x 12 mm centres.
+CAD coordinates: x +/-19 mm; y -36 and -24 mm. Platform bottom z=11 mm.
+Existing beam-cap mounting holes, IMU opening, perfboard window and tape rails retained.
+Envelope 78 x 118.5 x 7 mm. Flat bottom down in project.
 
-Project electronics_deck.3mf opened and sliced in Creality Print GUI 7.0.1.
-Ender-3 V3 KE, PLA, 0.4 mm nozzle, textured PEI.
-0.20 mm layers, 3 walls, 15% gyroid, 4 top/bottom layers (0.8 mm).
-6 mm outer brim, supports off, nozzle 220 C, bed 65 C first/60 C subsequent.
-Deck bottom down; camera posts upright.
-GUI estimate: 23.13 g including brim, 1h26m. No print started.
-This project contains the deck only, not the separate camera retaining cap.
+Ender-3 V3 KE, 0.4 mm nozzle, PLA, textured PEI.
+0.20 mm layers; 3 walls; 15% gyroid; 4 top/bottom layers (0.8 mm).
+6 mm outer brim, 0.1 mm gap; supports disabled.
+220 C nozzle; 65 C first-layer bed, 60 C thereafter.
+First layer 25/35 mm/s; outer/inner walls 60/120 mm/s.
+
+3MF prepared directly without CUA, per request. NOT sliced or GUI-verified.
+Prior 23.13 g / 1h26m estimate is obsolete. New solid-PLA equivalent is
+approximately 23.53 g; actual print consumption requires slicing.
+No print launched.

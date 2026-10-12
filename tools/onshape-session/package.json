@@ -1,0 +1,7 @@
+{
+  "name": "onshape-session",
+  "private": true,
+  "type": "module",
+  "scripts": {"start": "node cli.mjs serve", "test": "node --test"},
+  "dependencies": {"playwright-core": "1.58.2"}
+}

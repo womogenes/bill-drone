@@ -29,7 +29,8 @@ lan_addr = wifi.ifconfig()[0]
 print(f"Connected! LAN address: {lan_addr}")
 
 
-from drivers import actuators
+from drivers import actuators, control
+
 actuators.init()
 
 
@@ -41,11 +42,14 @@ actuators.init()
 # Initialize load cell sensor
 from drivers.load_cell import LoadCell
 from drivers import imu
+
 load_cell = LoadCell()
 imu.init()
 
 adc = ADC(Pin(35), atten=ADC.ATTN_6DB)
 adc.block().init(bits=12)
+VOLTAGE_DIVIDER_RATIO = (100_000 + 10_000) / 10_000
+
 
 def get_sensor_data():
     """
@@ -56,14 +60,16 @@ def get_sensor_data():
         "force": force,
         "force_age_ms": (
             time.ticks_diff(time.ticks_ms(), load_cell.last_read_ms)
-            if load_cell.last_read_ms is not None else None
+            if load_cell.last_read_ms is not None
+            else None
         ),
         "force_sequence": load_cell.sequence,
         "actuators": actuators.read(),
+        "control": control.settings,
         "adc_raw": adc.read_u16(),
+        "adc_voltage": adc.read_uv() * VOLTAGE_DIVIDER_RATIO / 1_000_000,
         "imu": imu.read(),
     }
-
 
 
 ## ====================
@@ -76,6 +82,7 @@ def get_sensor_data():
 SEND_IP_ADDR = True
 if SEND_IP_ADDR:
     import requests
+
     print("Sending IP address...")
     res = requests.get(f"http://kv.wfeng.dev/_/bill-esp32-drone-addr/{lan_addr}")
     print(f"Sending IP address got code:", res.status_code)
@@ -86,6 +93,7 @@ from microdot import Microdot
 from microdot.websocket import with_websocket
 
 app = Microdot()
+
 
 @app.get("/")
 async def md_index(req):
@@ -103,9 +111,22 @@ async def receive_commands(ws, last_command):
         if op == "heartbeat":
             continue
         if op == "stop":
-            actuators.stop()
+            control.stop()
+        elif op == "control":
+            if command["settings"].get("enabled") and (
+                imu.read() is None
+                or time.ticks_diff(time.ticks_ms(), imu.last_read_ms) > 100
+            ):
+                raise ValueError("IMU is offline")
+            control.configure(command["settings"])
         else:
-            commands = {"servo": actuators.set_servo, "throttle": actuators.set_throttle}
+            if op == "throttle" and control.settings["enabled"]:
+                control.stop()
+                continue
+            commands = {
+                "servo": actuators.set_servo,
+                "throttle": actuators.set_throttle,
+            }
             commands[op](command["side"], command["value"])
 
 
@@ -114,8 +135,11 @@ async def watch_commands(last_command):
     Stop ESCs on command silence without closing the telemetry connection.
     """
     while True:
-        if time.ticks_diff(time.ticks_ms(), last_command[0]) >= 500:
-            actuators.stop()
+        now = time.ticks_ms()
+        if time.ticks_diff(now, last_command[0]) >= 500 or (
+            control.settings["enabled"] and time.ticks_diff(now, imu.last_read_ms) > 100
+        ):
+            control.stop()
         await asyncio.sleep_ms(50)
 
 
@@ -151,7 +175,7 @@ async def md_websocket(req, ws):
         await asyncio.gather(*tasks)
 
     finally:
-        actuators.stop()
+        control.stop()
         for task in tasks:
             task.cancel()
 
@@ -160,7 +184,10 @@ async def main():
     """
     Sample the IMU independently of dashboard connections.
     """
-    await asyncio.gather(imu.sample(), app.start_server(port=80))
+    try:
+        await asyncio.gather(imu.sample(), app.start_server(port=80))
+    finally:
+        control.stop()
 
 
 if __name__ == "__main__":

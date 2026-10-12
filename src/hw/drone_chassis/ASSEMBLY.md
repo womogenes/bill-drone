@@ -7,6 +7,16 @@ https://cad.onshape.com/documents/d7e760af3cc2197cafa5a123/w/0a0eede3b0e261a3b55
 The assembly retains two linked instances of the servo-mount Part Studio.
 Re-export modified parts before slicing; old STLs do not update themselves.
 
+## Electronics platform revision
+
+The current electronics deck is a platform only. The integral camera stand and
+retaining cap have been removed; the obsolete assembly cap is suppressed.
+A future bracket can use four 3.5 mm through holes on 38 x 12 mm centres
+(x = +/-19 mm, y = -36/-24 mm). Existing deck attachment, IMU access, tape rails,
+and the perfboard lightening window remain unchanged. Install bracket screws
+before mounting the deck if underside access is needed. Older camera assembly
+instructions below describe the retired stand, not the current platform.
+
 ## Interchangeable side frames
 
 Exposed joint-block, landing-mount and hatch-mount outline corners have 1 mm

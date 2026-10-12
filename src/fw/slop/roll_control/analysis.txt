@@ -1,0 +1,93 @@
+Roll identification — 2026-10-11
+
+RESULT: Data collected and plant/gain fits produced, but NO validated improved PID.
+The strongest finding is blocking PWM output updates: the control loop runs at
+about 25 Hz. PID arithmetic itself is fast. No normal firmware files were changed.
+
+Measured timing
+- Device timestamped control period: about 40 ms (25 Hz).
+- PID calculate() at zero input: 461.5 microseconds/call.
+- Repeated writes to left PWM: 38.408 ms/call; right: 37.605 ms/call.
+- Actual calculate + paired PWM writes averaged 34.410 ms during a powered run.
+  Isolated repeated writes and paired writes have different PWM phase alignment;
+  do not add the isolated timings to infer the paired-loop duration.
+- Laptop telemetry: about 12.5 Hz, not a reliable proxy for control timing.
+- Raw timing output is in profile-output.txt; device benchmark is profile.py.
+
+Measurements at base throttle 200
+- baseline.json: prior 25 s recording, PID 1.5 / 0.5 / 1.5, roll RMS 14.72 degrees.
+- 20261011-232437.json: PID 1.5 / 0 / 1.5, cutoff at 4.83 s, +33.07 degrees.
+- 20261011-232535.json: PID 1.5 / 0.8 / 1.25, cutoff after about 2.5 s.
+  This first simulation-selected candidate FAILED hardware validation.
+- 20261011-232605.json: PID 1.5 / 0 / 0.7, cutoff at 2.45 s, +37.70 degrees.
+  Laptop-side 30-degree cutoff overshot because of telemetry latency.
+- 20261011-233134-onboard.*: zero-throttle recorder verification, 102 samples.
+- 20261011-233242-onboard.*: PID 1.5 / 0.5 / 1.5, 62 samples, local cutoff
+  at 2.41 s and +30.08 degrees. The trace shows startup integral accumulation.
+- 20261011-233400-onboard.*: PID 1.5 / 0.3 / 1.05, stopped after 0.17 s;
+  estimator reinitialization drift triggered the outward-startup guard. Excluded
+  from fitting for insufficient samples. Recorder now preserves the settled IMU.
+- 20261011-233444-onboard.*: PID 1.5 / 0.3 / 1.05, full 8 s, 203 samples.
+  Last five seconds: -28.00 to +18.80 degrees, mean -5.25, RMS 15.19 degrees.
+  Completed within cutoff, but this is NOT an improvement over the earlier run.
+  Conditions differ (startup versus an already-running baseline), so these RMS
+  numbers do not constitute a controlled performance comparison.
+
+Model and fitting
+roll'' = b*m - d*roll' + g*roll + bias
+motor lag: tau*m' + m = differential_throttle(t-delay)
+differential_throttle = (left - right)/2, throttle units 0..1000.
+Angles in degrees; gyro X approximates roll rate for this single-axis fixture.
+b, d and g are constrained nonnegative; positive g represents unstable gravity.
+Integrate over 0.2 s before regression to avoid differentiating gyro noise.
+Grid-search delay and lag; fit first two-thirds and score last third of each run.
+Runs have equal weight, so the long periodic baseline does not dominate.
+Exclude first second, windows containing |roll| >= 30 degrees, and telemetry gaps
+>0.2 s. No endstop/contact samples are used for fitting. Interpolation adds no data.
+
+Latest fit:
+b=6.908, d=0.070, g=5.695, bias=57.254, delay=0.10 s, lag=0.24 s.
+Validation RMSE: 14.27 deg/s for rate change over a 0.2-second window.
+Near-best fits trade delay 0.08..0.16 s against lag 0.12..0.28 s. These are effective
+system parameters, not a separately identified motor-only delay or time constant.
+The original narrow-frequency recording could not identify unstable gravity;
+new transients improve that, but closed-loop identifiability remains limited.
+
+Gain search
+First nominal-model optimum 1.5 / 0.8 / 1.25 failed in hardware.
+After simulating measured 40 ms sampling and both endstop startup directions,
+the nominal optimum 1.5 / 0.3 / 1.05 was measured and still oscillated badly.
+A final robustness search adds 40 ms delay, 20% motor lag, and input-gain factors
+0.8/1.0/1.2. These are chosen engineering stress scenarios, NOT confidence bounds.
+No searched gains kept every simulated scenario inside 30 degrees after entry.
+The ranked entries in tuning-result.json are least-bad diagnostics, not advice.
+This does not prove PID cannot stabilize the rig; it shows this fitted model and
+search do not support a robust recommendation. Startup contact/spin-up behavior
+is especially uncertain because the linear fit intentionally excludes endstops.
+
+Recorder incident and recovery
+An initial attempt failed memory allocation before actuation. A smaller-buffer
+retry lost communication; user restarted ESP. No onboard trace exists for that
+failed attempt and its motor state was not verified before restart.
+Recorder was then revised to reset the old asyncio loop, avoid the temporary
+allocation, and use a 2 s hardware WDT. It was verified at zero throttle before
+powered use. Successful experiments stop outputs, save data, and hard-reset into
+normal firmware (PID defaults off). Fresh IMU data and motion limits are checked
+locally. A previous loop-state problem is suspected, not proven as the hang cause.
+MicroPython loop-reset documentation:
+https://docs.micropython.org/en/latest/library/asyncio.html#asyncio.new_event_loop
+
+Files / reproduction from src/
+- collect.py: laptop websocket recorder (cutoff has network latency).
+- probe.py and onboard.py: temporary ESP recorder and upload/download launcher.
+- Onboard .bin format: little-endian float32 rows with six columns:
+  elapsed seconds, roll degrees, gyro-X deg/s, left throttle, right throttle,
+  integral contribution. Companion JSON contains gains, termination and timing.
+- fit.py -> fit-result.json and fit.png.
+- tune.py -> tuning-result.json (simulation results, not approved gains).
+  MPLCONFIGDIR=/tmp/mpl-drone .venv/bin/python fw/slop/roll_control/fit.py
+  .venv/bin/python fw/slop/roll_control/tune.py
+
+Next: address blocking PWM output timing, then collect synchronized independent
+excitation and repeat identification/validation. Do not install the fitted gains
+as defaults on the strength of these results.

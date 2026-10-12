@@ -63,6 +63,7 @@ if __name__ == "__main__":
     load_cell = LoadCell()
 
     import time
+
     while True:
         print(load_cell.read())
         time.sleep(0.15)
