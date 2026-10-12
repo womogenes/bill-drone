@@ -5,14 +5,16 @@ Wiring: DT/DOUT to GPIO32, SCK to GPIO33, VCC to 3V3, GND to GND.
 
 from machine import Pin, disable_irq, enable_irq
 import micropython
-from time import sleep_us
+from time import sleep_us, ticks_ms
 
 
 class LoadCell:
     def __init__(self, dout=32, sck=33):
         self.sck = Pin(sck, Pin.OUT, value=0)
-        self.dout = Pin(dout, Pin.IN)
+        self.dout = Pin(dout, Pin.IN, Pin.PULL_UP)
         self.value = None
+        self.last_read_ms = None
+        self.sequence = 0
 
     @micropython.native
     def read(self):
@@ -51,6 +53,8 @@ class LoadCell:
             value -= 0x1000000
 
         self.value = value
+        self.last_read_ms = ticks_ms()
+        self.sequence += 1
         return value
 
 
