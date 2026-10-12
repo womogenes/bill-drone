@@ -11,14 +11,11 @@ import {
 import { LoaderCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { ServoPanel } from '@/components/servo-panel';
-import { ShuntPanel } from '@/components/shunt-panel';
+import { ActuatorPanel } from '@/components/actuator-panel';
+import { ADCPanel } from '@/components/adc-panel';
 import { ImuPanel } from '@/components/imu-panel';
-import {
-  LoadCellPanel,
-  type Reading,
-  type Sample,
-} from '@/components/load-cell-panel';
+import { LoadCellPanel } from '@/components/load-cell-panel';
+import type { LoadCellSample, Reading, Side } from '@/lib/telemetry';
 
 const statuses = {
   offline: {
@@ -42,7 +39,11 @@ export default function Page() {
   const [status, setStatus] = useState<keyof typeof statuses>('offline');
   const [address, setAddress] = useState('');
   const [reading, setReading] = useState<Reading | null>(null);
-  const [samples, setSamples] = useState<Sample[]>([]);
+  const [samples, setSamples] = useState<LoadCellSample[]>([]);
+  const [stopEpoch, setStopEpoch] = useState(0);
+  const heartbeat = useRef<ReturnType<typeof setInterval> | undefined>(
+    undefined
+  );
   const socket = useRef<WebSocket | null>(null);
   const watchdog = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -53,6 +54,7 @@ export default function Page() {
     const controller = new AbortController();
     lookup.current = controller;
     clearTimeout(watchdog.current);
+    clearInterval(heartbeat.current);
     socket.current?.close();
     socket.current = null;
     setStatus('connecting');
@@ -83,13 +85,14 @@ export default function Page() {
         clearTimeout(watchdog.current);
         socket.current = null;
         setStatus('offline');
+        clearInterval(heartbeat.current);
         ws.close();
       }
 
       function received() {
         if (socket.current !== ws) return;
         clearTimeout(watchdog.current);
-        // The ESP streams every 100 ms; silence means the link is stale.
+        // Silence means the telemetry link is stale.
         watchdog.current = setTimeout(offline, 3000);
       }
 
@@ -98,6 +101,11 @@ export default function Page() {
       ws.onopen = () => {
         if (socket.current !== ws) return;
         setStatus('connected');
+        heartbeat.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ command: 'heartbeat' }));
+          }
+        }, 200);
         received();
       };
       ws.onmessage = (event) => {
@@ -120,7 +128,7 @@ export default function Page() {
             [
               ...previous.filter((point) => point.time >= time - 300000),
               { time, force: data.force, session },
-            ].slice(-6000)
+            ].slice(-15000)
           )
         );
       };
@@ -139,15 +147,41 @@ export default function Page() {
       clearTimeout(start);
       lookup.current?.abort();
       clearTimeout(watchdog.current);
+      clearInterval(heartbeat.current);
       socket.current?.close();
       socket.current = null;
     };
   }, [connect]);
 
-  const sendServo = useCallback((angle: number) => {
-    if (socket.current?.readyState === WebSocket.OPEN) {
-      socket.current.send(JSON.stringify({ command: 'servo', value: angle }));
+  const sendActuator = useCallback(
+    (command: 'servo' | 'throttle', side: Side, value: number) => {
+      if (socket.current?.readyState === WebSocket.OPEN) {
+        socket.current.send(JSON.stringify({ command, side, value }));
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    function stop(event: KeyboardEvent) {
+      if (event.code !== 'Space') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
+      setStopEpoch((previous) => previous + 1);
+      if (socket.current?.readyState === WebSocket.OPEN) {
+        socket.current.send(JSON.stringify({ command: 'stop' }));
+      }
     }
+    function close() {
+      socket.current?.close();
+    }
+    window.addEventListener('keydown', stop, true);
+    window.addEventListener('pagehide', close);
+    return () => {
+      window.removeEventListener('keydown', stop, true);
+      window.removeEventListener('pagehide', close);
+    };
   }, []);
 
   const { label, icon: StatusIcon, color } = statuses[status];
@@ -184,13 +218,8 @@ export default function Page() {
           </Button>
         </div>
       </header>
-      <main className="grid items-start md:grid-cols-[repeat(2,minmax(0,28rem))]">
-        <div className="min-w-0">
-          <ServoPanel
-            angle={reading?.servo_angle}
-            connected={status === 'connected'}
-            onChange={sendServo}
-          />
+      <main className="grid min-h-[calc(100dvh-4rem)] divide-y divide-border lg:h-[calc(100dvh-4rem)] lg:grid-cols-[repeat(3,minmax(0,28rem))] lg:divide-x lg:divide-y-0 lg:overflow-hidden">
+        <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
           <Suspense>
             <LoadCellPanel
               samples={samples}
@@ -199,14 +228,32 @@ export default function Page() {
               onClear={() => setSamples([])}
             />
           </Suspense>
-        </div>
-        <div className="min-w-0">
           <ImuPanel reading={reading?.imu} connected={status === 'connected'} />
-          <ShuntPanel
-            raw={reading?.shunt_raw}
-            connected={status === 'connected'}
-          />
+          <ADCPanel raw={reading?.adc_raw} connected={status === 'connected'} />
         </div>
+        {(['left', 'right'] as const).map((side) => (
+          <div
+            key={side}
+            className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain"
+          >
+            <ActuatorPanel
+              key={`${side}-servo-${status}`}
+              side={side}
+              kind="servo"
+              value={reading?.actuators?.[side].servo_angle}
+              connected={status === 'connected'}
+              onChange={sendActuator}
+            />
+            <ActuatorPanel
+              key={`${side}-esc-${status}-${stopEpoch}`}
+              side={side}
+              kind="throttle"
+              value={reading?.actuators?.[side].throttle}
+              connected={status === 'connected'}
+              onChange={sendActuator}
+            />
+          </div>
+        ))}
       </main>
     </>
   );

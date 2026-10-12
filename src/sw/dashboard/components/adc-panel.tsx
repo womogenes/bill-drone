@@ -12,9 +12,9 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 
-const STORAGE_KEY = 'shunt-calibration';
+const STORAGE_KEY = 'adc-calibration';
 
-export const ShuntPanel = memo(function ShuntPanel({
+export const ADCPanel = memo(function ADCPanel({
   raw,
   connected,
 }: {
@@ -42,17 +42,17 @@ export const ShuntPanel = memo(function ShuntPanel({
       onOpenChange={(open) => (open ? openCalibration() : setEditing(false))}
     >
       <section
-        aria-labelledby="shunt-heading"
+        aria-labelledby="adc-heading"
         className="w-full max-w-md space-y-6 px-6 py-8"
       >
         <div className="flex items-center justify-between">
-          <h2 id="shunt-heading" className="font-semibold">
-            Shunt
+          <h2 id="adc-heading" className="font-semibold">
+            ADC
           </h2>
           <DialogTrigger
             render={<Button variant="ghost" size="icon" />}
-            aria-label="Calibrate shunt"
-            title="Calibrate shunt"
+            aria-label="Calibrate ADC"
+            title="Calibrate ADC"
           >
             <Settings2 />
           </DialogTrigger>
@@ -65,10 +65,10 @@ export const ShuntPanel = memo(function ShuntPanel({
         </div>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Shunt calibration</DialogTitle>
+            <DialogTitle>ADC calibration</DialogTitle>
           </DialogHeader>
           <form
-            id="shunt-calibration"
+            id="adc-calibration"
             className="space-y-4"
             onSubmit={(event) => {
               event.preventDefault();
@@ -83,12 +83,12 @@ export const ShuntPanel = memo(function ShuntPanel({
             }}
           >
             <div className="space-y-2">
-              <label htmlFor="shunt-zero" className="text-sm">
+              <label htmlFor="adc-zero" className="text-sm">
                 Zero reading
               </label>
               <div className="flex gap-2">
                 <Input
-                  id="shunt-zero"
+                  id="adc-zero"
                   type="number"
                   min={0}
                   max={4095}
@@ -108,11 +108,11 @@ export const ShuntPanel = memo(function ShuntPanel({
               </div>
             </div>
             <div className="space-y-2">
-              <label htmlFor="shunt-scale" className="text-sm">
+              <label htmlFor="adc-scale" className="text-sm">
                 ADC units / A
               </label>
               <Input
-                id="shunt-scale"
+                id="adc-scale"
                 type="number"
                 min={0.000001}
                 step="any"
