@@ -1,0 +1,26 @@
+Revision: added 1 mm exposed side-frame outline chamfers. STL and 3MF refreshed.
+Re-slice the updated project; the estimates below are from the prior revision.
+
+Prepared 2026-10-11; opened and sliced in Creality Print 7.0.1 GUI.
+Project: side_frames_and_landing_legs.3mf (two plates)
+Plate 1: two identical side frames, flat inner faces down.
+Plate 2: two identical landing-leg frames, broad faces down.
+STLs exported from current Onshape geometry in millimeters.
+
+Ender-3 V3 KE, 0.4 mm nozzle, PLA, textured PEI.
+0.20 mm layers, 5 walls, 5 top/bottom layers, 25% gyroid.
+6 mm outer brim, 0.1 mm brim gap, supports disabled.
+220 C nozzle; 65 C initial bed, 60 C remaining layers.
+First-layer perimeter/infill 25/35 mm/s; outer/inner walls 60/120;
+sparse infill 150; bridges 25 mm/s. 12 mm3/s flow limit.
+
+Creality GUI sliced estimates (include brims):
+Side frames: 33.12 g per plate, approximately 16.56 g per copy; 2h20m.
+Landing legs: 35.09 g per plate, approximately 17.55 g per copy; 1h55m.
+Total: 68.21 g and 4h15m across two prints.
+Per-copy estimates divide each two-identical-part plate by two, not a separately
+measured per-object report. Actual use varies; allow extra for priming.
+
+Both sliced previews reviewed. No print launched.
+The 3MF is a project with geometry/settings; re-slice after reopening if needed.
+Already-printed beam bridge and IMU tube cap remain compatible.
