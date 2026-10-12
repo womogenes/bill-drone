@@ -11,11 +11,18 @@ import {
 import { LoaderCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { ControlPanel } from '@/components/control-panel';
 import { ActuatorPanel } from '@/components/actuator-panel';
 import { ADCPanel } from '@/components/adc-panel';
 import { ImuPanel } from '@/components/imu-panel';
+import { RollHistoryPanel } from '@/components/roll-history-panel';
 import { LoadCellPanel } from '@/components/load-cell-panel';
-import type { LoadCellSample, Reading, Side } from '@/lib/telemetry';
+import type {
+  RollSample,
+  Reading,
+  Side,
+  ControlSettings,
+} from '@/lib/telemetry';
 
 const statuses = {
   offline: {
@@ -39,7 +46,7 @@ export default function Page() {
   const [status, setStatus] = useState<keyof typeof statuses>('offline');
   const [address, setAddress] = useState('');
   const [reading, setReading] = useState<Reading | null>(null);
-  const [samples, setSamples] = useState<LoadCellSample[]>([]);
+  const [samples, setSamples] = useState<RollSample[]>([]);
   const [stopEpoch, setStopEpoch] = useState(0);
   const heartbeat = useRef<ReturnType<typeof setInterval> | undefined>(
     undefined
@@ -79,7 +86,6 @@ export default function Page() {
       const ws = new WebSocket(`ws://${address}/ws`);
       socket.current = ws;
       const session = Date.now();
-      let lastSequence: number | undefined;
       function offline() {
         if (socket.current !== ws) return;
         clearTimeout(watchdog.current);
@@ -114,20 +120,12 @@ export default function Page() {
         const data = JSON.parse(event.data);
         const time = Date.now();
         startTransition(() => setReading({ ...data, time }));
-        if (typeof data.force !== 'number' || !Number.isFinite(data.force))
-          return;
-        if (data.force_age_ms === null || data.force_age_ms > 1000) return;
-        if (
-          data.force_sequence !== undefined &&
-          data.force_sequence === lastSequence
-        )
-          return;
-        lastSequence = data.force_sequence;
+        if (data.imu == null) return;
         startTransition(() =>
           setSamples((previous) =>
             [
               ...previous.filter((point) => point.time >= time - 300000),
-              { time, force: data.force, session },
+              { time, roll: data.imu.roll, session },
             ].slice(-15000)
           )
         );
@@ -161,6 +159,12 @@ export default function Page() {
     },
     []
   );
+
+  const sendControl = useCallback((settings: Partial<ControlSettings>) => {
+    if (socket.current?.readyState === WebSocket.OPEN) {
+      socket.current.send(JSON.stringify({ command: 'control', settings }));
+    }
+  }, []);
 
   useEffect(() => {
     function stop(event: KeyboardEvent) {
@@ -220,8 +224,15 @@ export default function Page() {
       </header>
       <main className="grid min-h-[calc(100dvh-4rem)] divide-y divide-border lg:h-[calc(100dvh-4rem)] lg:grid-cols-[repeat(3,minmax(0,28rem))] lg:divide-x lg:divide-y-0 lg:overflow-hidden">
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
+          {reading?.control && (
+            <ControlPanel
+              settings={reading.control}
+              connected={status === 'connected' && reading.imu != null}
+              onChange={sendControl}
+            />
+          )}
           <Suspense>
-            <LoadCellPanel
+            <RollHistoryPanel
               samples={samples}
               reading={reading}
               connected={status === 'connected'}
@@ -229,7 +240,12 @@ export default function Page() {
             />
           </Suspense>
           <ImuPanel reading={reading?.imu} connected={status === 'connected'} />
-          <ADCPanel raw={reading?.adc_raw} connected={status === 'connected'} />
+          <LoadCellPanel reading={reading} connected={status === 'connected'} />
+          <ADCPanel
+            raw={reading?.adc_raw}
+            voltage={reading?.adc_voltage}
+            connected={status === 'connected'}
+          />
         </div>
         {(['left', 'right'] as const).map((side) => (
           <div
@@ -245,9 +261,10 @@ export default function Page() {
               onChange={sendActuator}
             />
             <ActuatorPanel
-              key={`${side}-esc-${status}-${stopEpoch}`}
+              key={`${side}-esc-${status}-${stopEpoch}-${reading?.control?.enabled}`}
               side={side}
               kind="throttle"
+              locked={reading?.control?.enabled}
               value={reading?.actuators?.[side].throttle}
               connected={status === 'connected'}
               onChange={sendActuator}

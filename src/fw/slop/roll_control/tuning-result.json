@@ -1,0 +1,77 @@
+{
+  "status": "simulation only; no hardware recommendation",
+  "candidates_within_30_degrees": 0,
+  "stress_scenarios": "input gain 0.8/1/1.2 times fitted, +40 ms delay, 1.2 times motor lag",
+  "candidates": [
+    {
+      "kp": 1.2,
+      "ki": 0.1,
+      "kd": 0.35,
+      "worst_cost": 524481.1276727169,
+      "worst_peak_after_entry": 49.0
+    },
+    {
+      "kp": 1.2,
+      "ki": 0.05,
+      "kd": 0.35,
+      "worst_cost": 524715.0233103285,
+      "worst_peak_after_entry": 49.0
+    },
+    {
+      "kp": 1.2,
+      "ki": 0.2,
+      "kd": 0.4,
+      "worst_cost": 526054.606461202,
+      "worst_peak_after_entry": 49.0
+    },
+    {
+      "kp": 1.2,
+      "ki": 0.05,
+      "kd": 0.4,
+      "worst_cost": 526295.6636467092,
+      "worst_peak_after_entry": 49.0
+    },
+    {
+      "kp": 1.2,
+      "ki": 0.15,
+      "kd": 0.35,
+      "worst_cost": 526707.1676953286,
+      "worst_peak_after_entry": 49.0
+    },
+    {
+      "kp": 1.2,
+      "ki": 0.1,
+      "kd": 0.4,
+      "worst_cost": 526864.0881150595,
+      "worst_peak_after_entry": 49.0
+    },
+    {
+      "kp": 1.2,
+      "ki": 0.05,
+      "kd": 0.3,
+      "worst_cost": 527025.0670609236,
+      "worst_peak_after_entry": 49.0
+    },
+    {
+      "kp": 1.2,
+      "ki": 0.15,
+      "kd": 0.4,
+      "worst_cost": 527340.3728629643,
+      "worst_peak_after_entry": 49.0
+    },
+    {
+      "kp": 1.1,
+      "ki": 0.1,
+      "kd": 0.4,
+      "worst_cost": 528582.7035004387,
+      "worst_peak_after_entry": 49.0
+    },
+    {
+      "kp": 1.2,
+      "ki": 0.1,
+      "kd": 0.3,
+      "worst_cost": 528603.7173519759,
+      "worst_peak_after_entry": 49.0
+    }
+  ]
+}

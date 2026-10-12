@@ -1,0 +1,16 @@
+2026-10-11: nonblocking ESC PWM update deployed.
+Only normal firmware change: drivers/actuators.py.
+Original ESP32 high-speed LEDC registers replace blocking ESC duty_ns setters.
+GPIO mapping and timer resolution are discovered after PWM initialization.
+PWM remains 50 Hz; servo update path unchanged.
+Sources: Espressif ESP-IDF v5.5 ledc_reg.h and gpio_sig_map.h (ESP32).
+
+Zero-throttle onboard capture: 20261011-234301-onboard.bin / .json.
+Measured IMU/control cadence: 100.08 Hz (previously ~25 Hz).
+Measured calculate + two ESC updates: 1.377 ms (previously ~34 ms).
+All recorded ESC commands were zero.
+
+Continuous register-update check: alternated 950/1000 us stop-range pulses while
+writing every 10 ms. Hardware duty readback tracked the changes within 10–20 ms
+on both channels. A pin-level pulse measurement returned -2 (input not enabled),
+so no external waveform timing claim is made. Powered PID tuning was not repeated.

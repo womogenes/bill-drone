@@ -13,12 +13,14 @@ export const ActuatorPanel = memo(function ActuatorPanel({
   kind,
   value: angle,
   connected,
+  locked = false,
   onChange,
 }: {
   side: Side;
   kind: 'servo' | 'throttle';
   value: number | undefined;
   connected: boolean;
+  locked?: boolean;
   onChange: (kind: 'servo' | 'throttle', side: Side, value: number) => void;
 }) {
   const isServo = kind === 'servo';
@@ -62,7 +64,7 @@ export const ActuatorPanel = memo(function ActuatorPanel({
   return (
     <section
       aria-labelledby={heading}
-      className="w-full max-w-md space-y-6 px-6 py-8"
+      className="w-full max-w-md space-y-4 px-4 py-4"
     >
       <div className="flex items-center gap-4">
         <h2 id={heading} className="font-semibold">
@@ -102,7 +104,7 @@ export const ActuatorPanel = memo(function ActuatorPanel({
           max={max}
           step={1}
           value={[draft ?? angle ?? 0]}
-          disabled={disabled}
+          disabled={disabled || locked}
           onValueChange={(value) => {
             const next = Array.isArray(value) ? value[0] : value;
             setDraft(next);

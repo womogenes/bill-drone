@@ -16,7 +16,7 @@ export function ImuPanel({
   return (
     <section
       aria-labelledby="imu-heading"
-      className="w-full max-w-md space-y-6 px-6 py-8"
+      className="w-full max-w-md space-y-4 px-4 py-4"
     >
       <div className="flex items-center gap-4">
         <h2 id="imu-heading" className="font-semibold">
@@ -30,13 +30,27 @@ export function ImuPanel({
           {online ? 'Online' : 'Offline'}
         </span>
       </div>
+      <div className="grid grid-cols-2 gap-4 tabular-nums">
+        <div>
+          <p className="text-sm text-muted-foreground">Roll</p>
+          <p className="mt-1 text-xl font-medium">
+            {online ? `${reading.roll.toFixed(1)}°` : '—'}
+          </p>
+        </div>
+        <div>
+          <p className="text-sm text-muted-foreground">Temperature</p>
+          <p className="mt-1 text-xl font-medium">
+            {online ? `${reading.temperature.toFixed(1)} °C` : '—'}
+          </p>
+        </div>
+      </div>
       {(
         [
           ['Acceleration', 'g', 'accel', 3],
           ['Angular velocity', '°/s', 'gyro', 2],
         ] as const
       ).map(([label, unit, key, digits]) => (
-        <div key={key} className="space-y-3">
+        <div key={key} className="space-y-2">
           <h3 className="text-sm text-muted-foreground">
             {label} ({unit})
           </h3>
@@ -52,12 +66,6 @@ export function ImuPanel({
           </dl>
         </div>
       ))}
-      <div>
-        <p className="text-sm text-muted-foreground">Temperature</p>
-        <p className="mt-1 text-xl font-medium tabular-nums">
-          {online ? `${reading.temperature.toFixed(1)} °C` : '—'}
-        </p>
-      </div>
     </section>
   );
 }

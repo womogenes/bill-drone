@@ -3,3 +3,6 @@ __pycache__/
 .ruff_cache/
 .venv/
 *.log
+node_modules/
+.pnpm-store/
+.DS_Store

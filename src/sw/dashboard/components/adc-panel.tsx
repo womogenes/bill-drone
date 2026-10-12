@@ -16,9 +16,11 @@ const STORAGE_KEY = 'adc-calibration';
 
 export const ADCPanel = memo(function ADCPanel({
   raw,
+  voltage,
   connected,
 }: {
   raw: number | undefined;
+  voltage: number | undefined;
   connected: boolean;
 }) {
   const [editing, setEditing] = useState(false);
@@ -43,7 +45,7 @@ export const ADCPanel = memo(function ADCPanel({
     >
       <section
         aria-labelledby="adc-heading"
-        className="w-full max-w-md space-y-6 px-6 py-8"
+        className="w-full max-w-md space-y-4 px-4 py-4"
       >
         <div className="flex items-center justify-between">
           <h2 id="adc-heading" className="font-semibold">
@@ -57,11 +59,21 @@ export const ADCPanel = memo(function ADCPanel({
             <Settings2 />
           </DialogTrigger>
         </div>
-        <div>
-          <p className="text-sm text-muted-foreground">Raw ADC</p>
-          <p className="mt-1 text-3xl font-medium tabular-nums">
-            {available ? raw.toLocaleString() : '—'}
-          </p>
+        <div className="grid grid-cols-2 gap-4 tabular-nums">
+          <div>
+            <p className="text-sm text-muted-foreground">Raw ADC</p>
+            <p className="mt-1 text-3xl font-medium">
+              {available ? raw.toLocaleString() : '—'}
+            </p>
+          </div>
+          <div>
+            <p className="text-sm text-muted-foreground">Voltage</p>
+            <p className="mt-1 text-3xl font-medium">
+              {connected && voltage !== undefined
+                ? `${voltage.toFixed(2)} V`
+                : '—'}
+            </p>
+          </div>
         </div>
         <DialogContent>
           <DialogHeader>

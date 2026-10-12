@@ -49,32 +49,19 @@ for(var sx in [-1,1]) {
  smPoly(context,sid+"hanger",[[-12,-51],[12,-51],[12,-42],[6,-36],[6,-20],[14,-12],[-14,-12],[-6,-20],[-6,-36],[-12,-42]],vector(sx==1?18.5:-22.5,0,0),vector(1,0,0),vector(0,1,0),4);
  smJoin(context,sid+"hangerJoin",qUnion([body,smSolid(context,sid+"hanger")]));
 }
-// Camera construction remains in its original local coordinates, then moves as one part.
+// Removable electronics platform; preserve the existing beam-cap attachment.
 smBlock(context,id+"deck",-39,39,-111,7.5,11,14);const deck=smSolid(context,id+"deck");
 for(var x in [-26,26])for(var y in [-75.5,-55.5]) {
  const dy=y+65.5;
  smHole(context,id+("deckHole"~x~"y"~y),deck,vector(x,y,10),vector(0,0,1),x*dy>0?3.5:4.6,x*dy>0?5:3);
 }
-// ESP32-CAM 27 x 40.5 mm PCB: open central front/back, edge grooves only.
-for(var side in [-1,1]){
- const cid=id+("camPost"~side); const cx=side==1?14:-24;
- smBlock(context,cid+"shape",cx,cx+10,-110.2,-103,14,59);
- smBlock(context,cid+"frontLip",side==1?12.8:-14,side==1?14:-12.8,-110.2,-108.2,18,59);
- smBlock(context,cid+"rearLip",side==1?12.8:-14,side==1?14:-12.8,-106,-103,18,59);
- smPoly(context,cid+"brace",[[-103,14],[-88,14],[-103,40]],vector(side==1?21:-24,0,0),vector(1,0,0),vector(0,1,0),3);
- smJoin(context,cid+"join",qUnion([deck,smSolid(context,cid+"shape"),smSolid(context,cid+"frontLip"),smSolid(context,cid+"rearLip"),smSolid(context,cid+"brace")]));
- smHole(context,cid+"pilot",deck,vector(side*19,-106.6,53.5),vector(0,0,1),2.6,5.6);
-}
-for(var side in [-1,1]){
- smBlock(context,id+("camSeat"~side),side==1?10:-14,side==1?14:-10,-110.2,-103,14,18);
- smJoin(context,id+("camSeatJoin"~side),qUnion([deck,smSolid(context,id+("camSeat"~side))]));
-}
-smBlock(context,id+"cameraCap",-24,24,-110.2,-103,59,62);const cameraCap=smSolid(context,id+"cameraCap");
-for(var x in [-19,19])smHole(context,id+("cameraCapHole"~x),cameraCap,vector(x,-106.6,58),vector(0,0,1),3.5,5);
-smLabel(context,cameraCap,"Camera cap",orange);
 smLabel(context,deck,"Electronics deck",orange);
 
-opTransform(context,id+"centerDeck",{"bodies":qUnion([deck,cameraCap]),"transform":transform(vector(0,65.5,0)*millimeter)});
+opTransform(context,id+"centerDeck",{"bodies":deck,"transform":transform(vector(0,65.5,0)*millimeter)});
+// Four accessible M3 clearance holes for a future camera bracket: 38 x 12 mm.
+// Plain through holes allow screw heads below and nuts in the future bracket.
+for(var x in [-19,19])for(var y in [-36,-24])
+ smHole(context,id+("futureCameraHole"~x~"y"~y),deck,vector(x,y,10),vector(0,0,1),3.5,5);
 // Raised tape rails keep the perfboard above M3 deck-screw heads. Fit screws before taping the board.
 for(var x in [-32,29]) {
  smBlock(context,id+("boardRail"~x),x,x+3,18,68,14,18);
