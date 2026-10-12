@@ -45,7 +45,7 @@ def main():
     try:
         for throttle in range(200, 1201, 50):
             print(f"Setting throttle to {throttle}")
-            ws.send(str(throttle))
+            ws.send(json.dumps({"command": "throttle", "value": throttle}))
 
             # Drain incoming telemetry while the motor and load cell settle.
             settle_until = time.monotonic() + 1
@@ -57,7 +57,7 @@ def main():
                 readings.append({"throttle": throttle, "force": data["force"]})
     finally:
         try:
-            ws.send("0")
+            ws.send(json.dumps({"command": "throttle", "value": 0}))
         finally:
             ws.close()
 

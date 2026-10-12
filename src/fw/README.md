@@ -2,6 +2,21 @@
 
 The gist behind this is that the MCU executes Python instead of machine instructions so we can iterate on firmware much faster.
 
+[note to agents: do not modify this file]
+
+## Pinouts
+
+**ESCs and servos**
+
+- Left ESC: GPIO14 (12th from top left)
+- Left servo: GPIO26 (10th from top left)
+- Right ESC: GPIO 19 (8th from top right)
+- Right servo: GPIO 18 (9th from top right)
+
+**Sensors**
+
+- ADC: GPIO35 (6th from top left)
+
 ## MicroPython
 
 To install MicroPython:

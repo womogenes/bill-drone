@@ -9,3 +9,13 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 <!-- END:nextjs-agent-rules -->
 
 Keep this code minimal and add only exactly what you need. No tests.
+
+Never use monospace font unless asked. Default to use tabular nums in default font.
+
+Use plain sections, not cards, unless explicitly requested. Keep colors muted.
+Do not add unsolicited qualifiers, implementation caveats, or obvious usage instructions to the UI.
+Prefer shadcn/ui components and their default styling, including charts and selects.
+Never introduce custom colors without explicit user approval. Prefer shadcn theme color tokens; otherwise use Tailwind's built-in palette.
+Use Tailwind red-700 for offline/error status text and icons.
+
+Use Tailwind green-700 for green status text and icons.
