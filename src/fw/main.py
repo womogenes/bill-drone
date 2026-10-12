@@ -2,7 +2,7 @@
 MicroPython firmware for everything
 """
 
-from machine import ADC, PWM, Pin
+from machine import ADC, Pin, freq
 from config import WIFI_SSID, WIFI_PASSWORD
 
 import network
@@ -10,11 +10,14 @@ import time
 import asyncio
 import json
 
+freq(240_000_000)
+
 # Set up wireless connection
 
 network.hostname("bill-esp32-drone")
 wifi = network.WLAN(network.STA_IF)
 wifi.active(True)
+wifi.config(pm=network.WLAN.PM_NONE)
 
 print("Connecting to wifi...")
 wifi.connect(WIFI_SSID, WIFI_PASSWORD)
@@ -26,46 +29,8 @@ lan_addr = wifi.ifconfig()[0]
 print(f"Connected! LAN address: {lan_addr}")
 
 
-## =========
-## ESC LOGIC
-## ==========
-
-# Physical wiring: positions counted from the top of each header.
-LEFT_ESC_PIN = 14      # 12th from top left
-LEFT_SERVO_PIN = 26    # 10th from top left
-RIGHT_ESC_PIN = 19     # 8th from top right
-RIGHT_SERVO_PIN = 18   # 9th from top right
-
-# The existing single-pair commands control the left side.
-# Right-side pins are reserved here; their PWM outputs are not initialized yet.
-pwm = PWM(Pin(LEFT_ESC_PIN), freq=50, duty_u16=0)
-pwm.duty_ns(1_000_000)
-
-def set_throttle(throttle):
-    """
-    Set throttle from 0 to 1000 (1000–2000 us pulses)
-    """
-    pwm.duty_ns((1000 + throttle) * 1000)
-
-
-## Left servo: MG995, GPIO26
-
-SERVO_LIMIT = 60
-servo = PWM(Pin(LEFT_SERVO_PIN), freq=50, duty_u16=0)
-servo_angle = 0
-
-def set_servo(angle):
-    """
-    Set degrees relative to center, with 0 at 1500 us.
-    """
-    global servo_angle
-    if not -SERVO_LIMIT <= angle <= SERVO_LIMIT:
-        raise ValueError("Servo angle must be between -%s and %s" % (SERVO_LIMIT, SERVO_LIMIT))
-
-    servo.duty_ns(round(1_500_000 + angle * 1_000_000 / 90))
-    servo_angle = angle
-
-set_servo(0)
+from drivers import actuators
+actuators.init()
 
 
 ## ===============
@@ -79,8 +44,8 @@ from drivers import imu
 load_cell = LoadCell()
 imu.init()
 
-shunt = ADC(Pin(34))
-shunt.init(atten=ADC.ATTN_0DB, width=ADC.WIDTH_12BIT)
+adc = ADC(Pin(35), atten=ADC.ATTN_6DB)
+adc.block().init(bits=12)
 
 def get_sensor_data():
     """
@@ -94,8 +59,8 @@ def get_sensor_data():
             if load_cell.last_read_ms is not None else None
         ),
         "force_sequence": load_cell.sequence,
-        "servo_angle": servo_angle,
-        "shunt_raw": shunt.read(),
+        "actuators": actuators.read(),
+        "adc_raw": adc.read_u16(),
         "imu": imu.read(),
     }
 
@@ -112,7 +77,7 @@ SEND_IP_ADDR = True
 if SEND_IP_ADDR:
     import requests
     print("Sending IP address...")
-    res = requests.get(f"https://kv.wfeng.dev/_/bill-esp32-drone-addr/{lan_addr}")
+    res = requests.get(f"http://kv.wfeng.dev/_/bill-esp32-drone-addr/{lan_addr}")
     print(f"Sending IP address got code:", res.status_code)
     res.close()
 
@@ -127,24 +92,46 @@ async def md_index(req):
     return "online"
 
 
-async def receive_commands(ws):
+async def receive_commands(ws, last_command):
     """
     Dispatch servo and throttle commands.
     """
-    commands = {"servo": set_servo, "throttle": set_throttle}
     while True:
         command = json.loads(await ws.receive())
-        commands[command["command"]](command["value"])
+        last_command[0] = time.ticks_ms()
+        op = command["command"]
+        if op == "heartbeat":
+            continue
+        if op == "stop":
+            actuators.stop()
+        else:
+            commands = {"servo": actuators.set_servo, "throttle": actuators.set_throttle}
+            commands[op](command["side"], command["value"])
+
+
+async def watch_commands(last_command):
+    """
+    Stop ESCs on command silence without closing the telemetry connection.
+    """
+    while True:
+        if time.ticks_diff(time.ticks_ms(), last_command[0]) >= 500:
+            actuators.stop()
+        await asyncio.sleep_ms(50)
+
+
+TELEMETRY_HZ = 24
 
 
 async def send_sensor_data(ws):
     """
-    Continually send sensor data (w some delay)
+    Stream sensor readings at a target of 24 Hz.
     """
     while True:
+        started = time.ticks_ms()
         readings = get_sensor_data()
         await ws.send(json.dumps(readings))
-        await asyncio.sleep_ms(100)
+        elapsed = time.ticks_diff(time.ticks_ms(), started)
+        await asyncio.sleep_ms(max(0, round(1000 / TELEMETRY_HZ) - elapsed))
 
 
 @app.route("/ws")
@@ -153,22 +140,29 @@ async def md_websocket(req, ws):
     """
     Fires on a new websocket connection
     """
+    last_command = [time.ticks_ms()]
     tasks = [
         asyncio.create_task(send_sensor_data(ws)),
-        asyncio.create_task(receive_commands(ws)),
+        asyncio.create_task(receive_commands(ws, last_command)),
+        asyncio.create_task(watch_commands(last_command)),
     ]
 
     try:
         await asyncio.gather(*tasks)
 
     finally:
-        # Ok cleanup is actually important here
-        set_throttle(0)
+        actuators.stop()
         for task in tasks:
             task.cancel()
 
 
-if __name__ == "__main__":
+async def main():
+    """
+    Sample the IMU independently of dashboard connections.
+    """
+    await asyncio.gather(imu.sample(), app.start_server(port=80))
 
+
+if __name__ == "__main__":
     print("Starting app...")
-    app.run(port=80)
+    asyncio.run(main())

@@ -1,0 +1,14 @@
+Electronics deck, 2026-10-11
+Updated live CAD and exported electronics_deck.stl in millimeters.
+Removed a 50 x 42 mm floor window (4 mm clipped corners) beneath the perfboard.
+Camera braces, both tape rails, mounting holes and IMU access preserved.
+Solid volume removed: 6204 mm3, approximately 18.5% of prior deck volume.
+The perfboard spans the new window and rests on the existing raised rails.
+
+Project electronics_deck.3mf opened and sliced in Creality Print GUI 7.0.1.
+Ender-3 V3 KE, PLA, 0.4 mm nozzle, textured PEI.
+0.20 mm layers, 3 walls, 15% gyroid, 4 top/bottom layers (0.8 mm).
+6 mm outer brim, supports off, nozzle 220 C, bed 65 C first/60 C subsequent.
+Deck bottom down; camera posts upright.
+GUI estimate: 23.13 g including brim, 1h26m. No print started.
+This project contains the deck only, not the separate camera retaining cap.

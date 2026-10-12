@@ -1,21 +1,16 @@
 'use client';
 
 import { Activity, Unplug } from 'lucide-react';
-
-export type ImuReading = {
-  accel: [number, number, number];
-  gyro: [number, number, number];
-  temperature: number;
-};
+import type { ImuReading } from '@/lib/telemetry';
 
 export function ImuPanel({
   reading,
   connected,
 }: {
-  reading: ImuReading | undefined;
+  reading: ImuReading | null | undefined;
   connected: boolean;
 }) {
-  const online = connected && reading !== undefined;
+  const online = connected && reading != null;
   const StatusIcon = online ? Activity : Unplug;
 
   return (

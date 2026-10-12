@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import type { ImuReading } from '@/components/imu-panel';
+import type { LoadCellSample, Reading } from '@/lib/telemetry';
 import { Activity, CircleHelp, Download, Unplug, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,17 +21,6 @@ import {
 } from '@/components/ui/select';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 
-export type Sample = { time: number; force: number; session: number };
-export type Reading = {
-  imu?: ImuReading;
-  shunt_raw?: number;
-  servo_angle?: number;
-  time: number;
-  force: number | null;
-  force_age_ms?: number | null;
-  force_sequence?: number;
-};
-
 const format = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 0,
 }).format;
@@ -43,9 +32,9 @@ const clock = new Intl.DateTimeFormat(undefined, {
 }).format;
 
 // Keep endpoints and extrema in each bucket, including brief spikes.
-function plotSamples(samples: Sample[], bucketMs: number) {
+function plotSamples(samples: LoadCellSample[], bucketMs: number) {
   const points: { time: number; force: number | null }[] = [];
-  let bucket: Sample[] = [];
+  let bucket: LoadCellSample[] = [];
   function flush() {
     if (!bucket.length) return;
     const low = bucket.reduce((a, b) => (a.force < b.force ? a : b));
@@ -83,7 +72,7 @@ export function LoadCellPanel({
   connected,
   onClear,
 }: {
-  samples: Sample[];
+  samples: LoadCellSample[];
   reading: Reading | null;
   connected: boolean;
   onClear: () => void;

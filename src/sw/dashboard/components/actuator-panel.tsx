@@ -1,21 +1,33 @@
 'use client';
 
 import { memo, useEffect, useRef, useState } from 'react';
-import { Plug, RotateCcw, Unplug } from 'lucide-react';
+import { Plug, RotateCcw, Square, Unplug } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
+import type { Side } from '@/lib/telemetry';
 
 const SERVO_LIMIT = 60;
 
-export const ServoPanel = memo(function ServoPanel({
-  angle,
+export const ActuatorPanel = memo(function ActuatorPanel({
+  side,
+  kind,
+  value: angle,
   connected,
   onChange,
 }: {
-  angle: number | undefined;
+  side: Side;
+  kind: 'servo' | 'throttle';
+  value: number | undefined;
   connected: boolean;
-  onChange: (angle: number) => void;
+  onChange: (kind: 'servo' | 'throttle', side: Side, value: number) => void;
 }) {
+  const isServo = kind === 'servo';
+  const title = `${side === 'left' ? 'Left' : 'Right'} ${isServo ? 'servo' : 'ESC'}`;
+  const heading = `${side}-${kind}-heading`;
+  const min = isServo ? -SERVO_LIMIT : 0;
+  const max = isServo ? SERVO_LIMIT : 1000;
+  const suffix = isServo ? '°' : '';
+  const ResetIcon = isServo ? RotateCcw : Square;
   const [draft, setDraft] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
   const lastSent = useRef(-Infinity);
@@ -33,7 +45,7 @@ export const ServoPanel = memo(function ServoPanel({
     clearTimeout(timer.current);
     timer.current = undefined;
     if (pending.current === null) return;
-    onChange(pending.current);
+    onChange(kind, side, pending.current);
     pending.current = null;
     lastSent.current = performance.now();
   }
@@ -49,12 +61,12 @@ export const ServoPanel = memo(function ServoPanel({
 
   return (
     <section
-      aria-labelledby="servo-heading"
+      aria-labelledby={heading}
       className="w-full max-w-md space-y-6 px-6 py-8"
     >
       <div className="flex items-center gap-4">
-        <h2 id="servo-heading" className="font-semibold">
-          Servo
+        <h2 id={heading} className="font-semibold">
+          {title}
         </h2>
         <span
           role="status"
@@ -67,25 +79,27 @@ export const ServoPanel = memo(function ServoPanel({
           className="ml-auto"
           variant="ghost"
           size="icon"
-          aria-label="Center servo"
-          title="Center servo"
+          aria-label={isServo ? `Reset ${title}` : `Stop ${title}`}
+          title={isServo ? `Reset ${title}` : `Stop ${title}`}
           disabled={disabled}
           onClick={() => commit(0)}
         >
-          <RotateCcw />
+          <ResetIcon />
         </Button>
       </div>
       <div>
-        <p className="text-sm text-muted-foreground">Angle</p>
+        <p className="text-sm text-muted-foreground">
+          {isServo ? 'Angle' : 'Throttle'}
+        </p>
         <p className="mt-1 text-3xl font-medium tabular-nums">
-          {angle === undefined ? '—' : `${draft ?? angle}°`}
+          {disabled ? '—' : `${draft ?? angle}${suffix}`}
         </p>
       </div>
       <div className="space-y-3">
         <Slider
-          aria-label="Servo angle"
-          min={-SERVO_LIMIT}
-          max={SERVO_LIMIT}
+          aria-label={title}
+          min={min}
+          max={max}
           step={1}
           value={[draft ?? angle ?? 0]}
           disabled={disabled}
@@ -105,9 +119,15 @@ export const ServoPanel = memo(function ServoPanel({
           }}
         />
         <div className="flex justify-between text-sm text-muted-foreground tabular-nums">
-          <span>−{SERVO_LIMIT}°</span>
-          <span>0°</span>
-          <span>{SERVO_LIMIT}°</span>
+          <span>
+            {min}
+            {suffix}
+          </span>
+          {isServo && <span>0°</span>}
+          <span>
+            {max}
+            {suffix}
+          </span>
         </div>
       </div>
     </section>

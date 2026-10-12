@@ -80,6 +80,9 @@ for(var x in [-32,29]) {
  smBlock(context,id+("boardRail"~x),x,x+3,18,68,14,18);
  smJoin(context,id+("boardRailJoin"~x),qUnion([deck,smSolid(context,id+("boardRail"~x))]));
 }
+// Lighten the unused floor beneath the perfboard; retain both full tape rails.
+smPoly(context,id+"deckLightWindow",[[-21,22],[21,22],[25,26],[25,60],[21,64],[-21,64],[-25,60],[-25,26]],vector(0,0,10),vector(0,0,1),vector(1,0,0),5);
+smCut(context,id+"deckLightWindowCut",deck,smSolid(context,id+"deckLightWindow"));
 // IMU remains on the centered tube cap, accessible through its own deck window.
 smBlock(context,id+"imuWindow",-20,20,-14,14,10,16);
 smCut(context,id+"imuWindowCut",deck,smSolid(context,id+"imuWindow"));
