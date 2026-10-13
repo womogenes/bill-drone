@@ -1,5 +1,7 @@
 'use client';
 
+import { THROTTLE_MAX } from '@/lib/telemetry';
+
 import { memo, useEffect, useRef, useState } from 'react';
 import { Plug, RotateCcw, Square, Unplug } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -27,7 +29,7 @@ export const ActuatorPanel = memo(function ActuatorPanel({
   const title = `${side === 'left' ? 'Left' : 'Right'} ${isServo ? 'servo' : 'ESC'}`;
   const heading = `${side}-${kind}-heading`;
   const min = isServo ? -SERVO_LIMIT : 0;
-  const max = isServo ? SERVO_LIMIT : 1000;
+  const max = isServo ? SERVO_LIMIT : THROTTLE_MAX;
   const suffix = isServo ? '°' : '';
   const ResetIcon = isServo ? RotateCcw : Square;
   const [draft, setDraft] = useState<number | null>(null);
@@ -83,7 +85,7 @@ export const ActuatorPanel = memo(function ActuatorPanel({
           size="icon"
           aria-label={isServo ? `Reset ${title}` : `Stop ${title}`}
           title={isServo ? `Reset ${title}` : `Stop ${title}`}
-          disabled={disabled}
+          disabled={disabled || locked}
           onClick={() => commit(0)}
         >
           <ResetIcon />

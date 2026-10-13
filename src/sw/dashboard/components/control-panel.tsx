@@ -1,129 +1,442 @@
 'use client';
 
-import { useState } from 'react';
-import { Power } from 'lucide-react';
+import { THROTTLE_MAX } from '@/lib/telemetry';
+
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  Space,
+  Settings2,
+  Square,
+  type LucideIcon,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Kbd, KbdGroup } from '@/components/ui/kbd';
 import { Slider } from '@/components/ui/slider';
-import type { ControlSettings } from '@/lib/telemetry';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import type { ControlSettings, Reading } from '@/lib/telemetry';
+import { signed } from '@/lib/format';
 
-const ANGLE_LIMIT = 60;
+const keyIcons: Record<string, LucideIcon> = {
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  Space,
+};
 
-export function ControlPanel({
+const THROTTLE_STEP = 10;
+const KEY_REPEAT_MS = 100;
+const KEY_YAW_RATE = 20;
+const KEY_TILT = 15;
+const tiltKeys = {
+  ArrowUp: { axis: 'pitch', direction: -1 },
+  ArrowDown: { axis: 'pitch', direction: 1 },
+  ArrowLeft: { axis: 'roll', direction: -1 },
+  ArrowRight: { axis: 'roll', direction: 1 },
+} as const;
+
+const controls = [
+  { key: 'roll', label: 'Roll', min: -15, max: 15, suffix: '°' },
+  { key: 'pitch', label: 'Pitch', min: -15, max: 15, suffix: '°' },
+  { key: 'yaw_rate', label: 'Yaw rate', min: -45, max: 45, suffix: '°/s' },
+  {
+    key: 'base_throttle',
+    label: 'Collective throttle',
+    min: 0,
+    max: THROTTLE_MAX,
+    suffix: '',
+  },
+] as const;
+type Setpoint = (typeof controls)[number]['key'];
+const gainKeys = [
+  'attitude_kp',
+  'roll_kp',
+  'roll_ki',
+  'roll_kd',
+  'pitch_kp',
+  'pitch_ki',
+  'pitch_kd',
+  'yaw_kp',
+  'yaw_ki',
+  'yaw_kd',
+] as const;
+
+export const ControlPanel = memo(function ControlPanel({
   settings,
+  status,
   connected,
   onChange,
+  onStop,
 }: {
   settings: ControlSettings;
+  status: Reading['control_status'];
   connected: boolean;
   onChange: (settings: Partial<ControlSettings>) => void;
+  onStop: () => void;
 }) {
-  const [target, setTarget] = useState<number | null>(null);
-  const [gains, setGains] = useState({
-    kp: String(settings.kp),
-    ki: String(settings.ki),
-    kd: String(settings.kd),
-    base_throttle: String(settings.base_throttle),
-  });
+  const [draft, setDraft] = useState<Partial<Record<Setpoint, number>>>({});
+  const [gains, setGains] = useState<Record<string, string>>({});
+  const [open, setOpen] = useState(false);
+  const throttle = useRef(settings.base_throttle);
+
+  const changeSetpoint = useCallback(
+    (key: Setpoint, value: number) => {
+      if (key === 'base_throttle') throttle.current = value;
+      setDraft((previous) => ({ ...previous, [key]: value }));
+      onChange({ [key]: value });
+    },
+    [onChange]
+  );
+
+  useEffect(() => {
+    throttle.current = draft.base_throttle ?? settings.base_throttle;
+  }, [draft.base_throttle, settings.base_throttle]);
+
+  useEffect(() => {
+    if (!connected || !settings.enabled || open) return;
+
+    const held = new Set<string>();
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    function changeThrottle() {
+      const direction = Number(held.has('KeyW')) - Number(held.has('KeyS'));
+      if (!direction) return;
+
+      const next = Math.max(
+        0,
+        Math.min(THROTTLE_MAX, throttle.current + direction * THROTTLE_STEP)
+      );
+      throttle.current = next;
+      setDraft((previous) => ({ ...previous, base_throttle: next }));
+      onChange({ base_throttle: next });
+    }
+
+    function changeYaw() {
+      const yaw_rate =
+        KEY_YAW_RATE * (Number(held.has('KeyA')) - Number(held.has('KeyD')));
+      setDraft((previous) => ({ ...previous, yaw_rate }));
+      onChange({ yaw_rate });
+    }
+
+    function changeTilt(code: keyof typeof tiltKeys) {
+      const { axis } = tiltKeys[code];
+      const direction = Object.entries(tiltKeys).reduce(
+        (sum, [key, binding]) =>
+          sum +
+          (binding.axis === axis && held.has(key) ? binding.direction : 0),
+        0
+      );
+      const value = KEY_TILT * direction;
+      setDraft((previous) => ({ ...previous, [axis]: value }));
+      onChange({ [axis]: value });
+    }
+
+    function keydown(event: KeyboardEvent) {
+      if (event.code === 'Space') {
+        held.clear();
+        clearInterval(timer);
+        return;
+      }
+      if (
+        !['KeyW', 'KeyS', 'KeyA', 'KeyD'].includes(event.code) &&
+        !(event.code in tiltKeys)
+      )
+        return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest(
+          'input, textarea, select, [contenteditable="true"], [role="dialog"]'
+        )
+      )
+        return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat || held.has(event.code)) return;
+      held.add(event.code);
+
+      if (event.code === 'KeyW' || event.code === 'KeyS') {
+        changeThrottle();
+        if (timer === undefined)
+          timer = setInterval(changeThrottle, KEY_REPEAT_MS);
+      } else if (event.code in tiltKeys) {
+        changeTilt(event.code as keyof typeof tiltKeys);
+      } else {
+        changeYaw();
+      }
+    }
+
+    function keyup(event: KeyboardEvent) {
+      if (!held.delete(event.code)) return;
+      event.preventDefault();
+      if (event.code === 'KeyA' || event.code === 'KeyD') changeYaw();
+      if (event.code in tiltKeys)
+        changeTilt(event.code as keyof typeof tiltKeys);
+      if (!held.has('KeyW') && !held.has('KeyS')) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    }
+
+    function blur() {
+      if (held.size) onStop();
+      held.clear();
+      clearInterval(timer);
+      timer = undefined;
+    }
+
+    window.addEventListener('keydown', keydown, true);
+    window.addEventListener('keyup', keyup);
+    window.addEventListener('blur', blur);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('keydown', keydown, true);
+      window.removeEventListener('keyup', keyup);
+      window.removeEventListener('blur', blur);
+    };
+  }, [connected, settings.enabled, open, onChange, onStop]);
+
   return (
     <section
+      className="space-y-4 border-b px-4 py-4"
       aria-labelledby="control-heading"
-      className="w-full max-w-md space-y-4 px-4 py-4"
     >
-      <div className="flex items-center justify-between">
-        <h2 id="control-heading" className="font-semibold">
-          Roll control
+      <div className="flex items-center gap-2">
+        <h2 id="control-heading" className="mr-auto font-semibold">
+          Flight control
         </h2>
+        <Dialog
+          open={open}
+          onOpenChange={(value) => {
+            setOpen(value);
+            if (value)
+              setGains(
+                Object.fromEntries(
+                  gainKeys.map((key) => [key, String(settings[key])])
+                )
+              );
+          }}
+        >
+          <DialogTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Control gains"
+                disabled={settings.enabled}
+              />
+            }
+          >
+            <Settings2 />
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Control gains</DialogTitle>
+            </DialogHeader>
+            <form
+              className="space-y-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                onChange(
+                  Object.fromEntries(
+                    gainKeys.map((key) => [key, Number(gains[key])])
+                  )
+                );
+                setOpen(false);
+              }}
+            >
+              <label className="flex items-center justify-between gap-4">
+                Attitude P
+                <Input
+                  className="w-24"
+                  type="number"
+                  min={0}
+                  step="any"
+                  required
+                  value={gains.attitude_kp ?? ''}
+                  onChange={(event) =>
+                    setGains({ ...gains, attitude_kp: event.target.value })
+                  }
+                />
+              </label>
+              <div className="grid grid-cols-4 items-center gap-2">
+                <span />
+                <span>P</span>
+                <span>I</span>
+                <span>D</span>
+                {(['roll', 'pitch', 'yaw'] as const).map((axis) => (
+                  <GainRow
+                    key={axis}
+                    axis={axis}
+                    gains={gains}
+                    onChange={(key, value) =>
+                      setGains({ ...gains, [key]: value })
+                    }
+                  />
+                ))}
+              </div>
+              <Button
+                type="submit"
+                variant="outline"
+                disabled={!connected || settings.enabled}
+              >
+                Apply
+              </Button>
+            </form>
+          </DialogContent>
+        </Dialog>
         <Button
           variant="outline"
-          size="sm"
+          disabled={!connected || !status?.mapping_confirmed}
           aria-pressed={settings.enabled}
-          disabled={!connected}
-          onClick={() => onChange({ enabled: !settings.enabled })}
+          onClick={() =>
+            settings.enabled
+              ? onStop()
+              : onChange({
+                  enabled: true,
+                  base_throttle: 0,
+                  roll: 0,
+                  pitch: 0,
+                  yaw_rate: 0,
+                })
+          }
         >
-          <Power />
-          {settings.enabled ? 'On' : 'Off'}
+          {settings.enabled ? 'Disable' : 'Enable'}
+        </Button>
+        <Button
+          variant="outline"
+          size="icon"
+          aria-label="Stop motors"
+          onClick={onStop}
+        >
+          <Square />
         </Button>
       </div>
-      <div className="flex justify-between text-sm">
-        <label id="target-angle-label">Set angle</label>
-        <span className="tabular-nums">{target ?? settings.target}°</span>
+      <div className="flex flex-col gap-2 text-muted-foreground">
+        {[
+          { keys: ['W', 'S'], label: 'Throttle' },
+          { keys: ['A', 'D'], label: 'Yaw' },
+          { keys: ['ArrowUp', 'ArrowDown'], label: 'Pitch' },
+          { keys: ['ArrowLeft', 'ArrowRight'], label: 'Roll' },
+          { keys: ['Space'], label: 'Stop' },
+        ].map(({ keys, label }) => (
+          <div key={label} className="flex items-center gap-2">
+            <KbdGroup>
+              {keys.map((key) => {
+                const Icon = keyIcons[key];
+                return (
+                  <Kbd key={key} aria-label={key}>
+                    {Icon ? <Icon aria-hidden="true" /> : key}
+                  </Kbd>
+                );
+              })}
+            </KbdGroup>
+            <span>{label}</span>
+          </div>
+        ))}
       </div>
-      <Slider
-        aria-labelledby="target-angle-label"
-        min={-ANGLE_LIMIT}
-        max={ANGLE_LIMIT}
-        step={1}
-        disabled={!connected}
-        value={[target ?? settings.target]}
-        onValueChange={(value) => {
-          const angle = Array.isArray(value) ? value[0] : value;
-          setTarget(angle);
-          onChange({ target: angle });
-        }}
-        onValueCommitted={() => setTarget(null)}
-      />
-      <form
-        className="space-y-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onChange({
-            kp: Number(gains.kp),
-            ki: Number(gains.ki),
-            kd: Number(gains.kd),
-            base_throttle: Number(gains.base_throttle),
-          });
+      {status?.reason && (
+        <p role="status" className="text-red-700">
+          {status.reason}
+        </p>
+      )}
+      {controls.map((control) => (
+        <SetpointSlider
+          key={control.key}
+          control={control}
+          value={draft[control.key] ?? settings[control.key]}
+          disabled={!connected || !settings.enabled}
+          onChange={changeSetpoint}
+        />
+      ))}
+      <Button
+        variant="outline"
+        disabled={!connected || !settings.enabled}
+        onClick={() => {
+          setDraft((previous) => ({ ...previous, roll: 0, pitch: 0 }));
+          onChange({ roll: 0, pitch: 0 });
         }}
       >
-        <div className="grid grid-cols-3 gap-2">
-          {(['kp', 'ki', 'kd'] as const).map((gain) => (
-            <div key={gain} className="space-y-1">
-              <label
-                htmlFor={`pid-${gain}`}
-                className="text-sm text-muted-foreground"
-              >
-                {gain.toUpperCase()}
-              </label>
-              <Input
-                id={`pid-${gain}`}
-                type="number"
-                step="any"
-                min={0}
-                required
-                disabled={!connected}
-                value={gains[gain]}
-                onChange={(event) =>
-                  setGains({ ...gains, [gain]: event.target.value })
-                }
-              />
-            </div>
-          ))}
-        </div>
-        <div className="space-y-1">
-          <label
-            htmlFor="base-throttle"
-            className="text-sm text-muted-foreground"
-          >
-            Base throttle
-          </label>
+        Level
+      </Button>
+    </section>
+  );
+});
+
+const SetpointSlider = memo(function SetpointSlider({
+  control: { key, label, min, max, suffix },
+  value,
+  disabled,
+  onChange,
+}: {
+  control: (typeof controls)[number];
+  value: number;
+  disabled: boolean;
+  onChange: (key: Setpoint, value: number) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between tabular-nums">
+        <label id={`control-${key}`}>{label}</label>
+        <span>
+          {key === 'base_throttle' ? value : signed(value, 0)}
+          {suffix}
+        </span>
+      </div>
+      <Slider
+        aria-labelledby={`control-${key}`}
+        min={min}
+        max={max}
+        step={1}
+        value={[value]}
+        disabled={disabled}
+        onValueChange={(values) =>
+          onChange(key, Array.isArray(values) ? values[0] : values)
+        }
+      />
+    </div>
+  );
+});
+
+function GainRow({
+  axis,
+  gains,
+  onChange,
+}: {
+  axis: string;
+  gains: Record<string, string>;
+  onChange: (key: string, value: string) => void;
+}) {
+  return (
+    <>
+      <span className="capitalize">{axis} rate</span>
+      {['kp', 'ki', 'kd'].map((gain) => {
+        const key = `${axis}_${gain}`;
+        return (
           <Input
-            id="base-throttle"
+            key={key}
+            aria-label={`${axis} ${gain}`}
             type="number"
             min={0}
-            max={1000}
-            step={1}
+            step="any"
             required
-            disabled={!connected}
-            value={gains.base_throttle}
-            onChange={(event) =>
-              setGains({ ...gains, base_throttle: event.target.value })
-            }
+            value={gains[key] ?? ''}
+            onChange={(event) => onChange(key, event.target.value)}
           />
-        </div>
-        <Button type="submit" variant="outline" size="sm" disabled={!connected}>
-          Apply PID
-        </Button>
-      </form>
-    </section>
+        );
+      })}
+    </>
   );
 }
