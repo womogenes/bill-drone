@@ -32,6 +32,7 @@ print(f"Connected! LAN address: {lan_addr}")
 from drivers import actuators, control
 
 actuators.init()
+control.load_gains()
 
 
 ## ===============
@@ -56,6 +57,7 @@ def get_sensor_data():
     Read sensors yay
     """
     force = load_cell.read()
+
     return {
         "force": force,
         "force_age_ms": (
@@ -66,6 +68,7 @@ def get_sensor_data():
         "force_sequence": load_cell.sequence,
         "actuators": actuators.read(),
         "control": control.settings,
+        "control_status": control.status,
         "adc_raw": adc.read_u16(),
         "adc_voltage": adc.read_uv() * VOLTAGE_DIVIDER_RATIO / 1_000_000,
         "imu": imu.read(),
@@ -93,6 +96,8 @@ from microdot import Microdot
 from microdot.websocket import with_websocket
 
 app = Microdot()
+command_owner = None
+last_command_ms = 0
 
 
 @app.get("/")
@@ -100,29 +105,51 @@ async def md_index(req):
     return "online"
 
 
-async def receive_commands(ws, last_command):
+async def receive_commands(ws):
     """
     Dispatch servo and throttle commands.
     """
+    global command_owner, last_command_ms
+
     while True:
         command = json.loads(await ws.receive())
-        last_command[0] = time.ticks_ms()
         op = command["command"]
-        if op == "heartbeat":
-            continue
+
         if op == "stop":
-            control.stop()
+            control.stop("Stopped from dashboard")
+            command_owner = None
+            continue
+
+        if op == "heartbeat":
+            if command_owner is ws:
+                last_command_ms = time.ticks_ms()
+            continue
+
+        if command_owner is not None and command_owner is not ws:
+            continue
+
+        command_owner = ws
+        last_command_ms = time.ticks_ms()
+
+        if op == "calibrate_imu":
+            imu.calibrate()
+
+        elif imu.calibration_count:
+            continue
+
         elif op == "control":
             if command["settings"].get("enabled") and (
                 imu.read() is None
                 or time.ticks_diff(time.ticks_ms(), imu.last_read_ms) > 100
             ):
                 raise ValueError("IMU is offline")
+
             control.configure(command["settings"])
+
         else:
-            if op == "throttle" and control.settings["enabled"]:
-                control.stop()
+            if control.settings["enabled"]:
                 continue
+
             commands = {
                 "servo": actuators.set_servo,
                 "throttle": actuators.set_throttle,
@@ -130,16 +157,21 @@ async def receive_commands(ws, last_command):
             commands[op](command["side"], command["value"])
 
 
-async def watch_commands(last_command):
+async def heartbeat_esc():
     """
-    Stop ESCs on command silence without closing the telemetry connection.
+    Stop outputs when their controlling connection stops sending commands.
     """
+    global command_owner
+
     while True:
         now = time.ticks_ms()
-        if time.ticks_diff(now, last_command[0]) >= 500 or (
-            control.settings["enabled"] and time.ticks_diff(now, imu.last_read_ms) > 100
-        ):
-            control.stop()
+        if command_owner is not None and time.ticks_diff(now, last_command_ms) >= 500:
+            control.stop("Controller heartbeat lost")
+            command_owner = None
+
+        if control.settings["enabled"] and time.ticks_diff(now, imu.last_read_ms) > 100:
+            control.stop("IMU samples stopped")
+
         await asyncio.sleep_ms(50)
 
 
@@ -154,6 +186,7 @@ async def send_sensor_data(ws):
         started = time.ticks_ms()
         readings = get_sensor_data()
         await ws.send(json.dumps(readings))
+
         elapsed = time.ticks_diff(time.ticks_ms(), started)
         await asyncio.sleep_ms(max(0, round(1000 / TELEMETRY_HZ) - elapsed))
 
@@ -164,18 +197,20 @@ async def md_websocket(req, ws):
     """
     Fires on a new websocket connection
     """
-    last_command = [time.ticks_ms()]
+    global command_owner
     tasks = [
         asyncio.create_task(send_sensor_data(ws)),
-        asyncio.create_task(receive_commands(ws, last_command)),
-        asyncio.create_task(watch_commands(last_command)),
+        asyncio.create_task(receive_commands(ws)),
     ]
 
     try:
         await asyncio.gather(*tasks)
 
     finally:
-        control.stop()
+        if command_owner is ws:
+            control.stop("Controller disconnected")
+            command_owner = None
+
         for task in tasks:
             task.cancel()
 
@@ -185,7 +220,10 @@ async def main():
     Sample the IMU independently of dashboard connections.
     """
     try:
-        await asyncio.gather(imu.sample(), app.start_server(port=80))
+        await asyncio.gather(
+            imu.sample(), heartbeat_esc(), control.save_gains(), app.start_server(port=80)
+        )
+
     finally:
         control.stop()
 

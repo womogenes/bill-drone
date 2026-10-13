@@ -12,6 +12,7 @@ class LoadCell:
     def __init__(self, dout=32, sck=33):
         self.sck = Pin(sck, Pin.OUT, value=0)
         self.dout = Pin(dout, Pin.IN, Pin.PULL_UP)
+
         self.value = None
         self.last_read_ms = None
         self.sequence = 0
@@ -29,9 +30,11 @@ class LoadCell:
             return self.value
 
         value = 0
+
         # A clock-high pause over 60 us powers down the HX711. Keep this short
         # transfer uninterrupted; no conversion waiting occurs with IRQs off.
         irq = disable_irq()
+
         try:
             for _ in range(24):
                 sck(1)
@@ -55,6 +58,7 @@ class LoadCell:
         self.value = value
         self.last_read_ms = ticks_ms()
         self.sequence += 1
+
         return value
 
 

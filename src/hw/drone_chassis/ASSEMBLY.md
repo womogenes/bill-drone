@@ -1,21 +1,105 @@
 # Drone assembly
 
-Updated 2026-10-11. CAD source snapshots: `chassis.fs` and
+Updated 2026-10-12. CAD source snapshots: `chassis.fs` and
 `../end_attachment/servo.fs`. Live document is Drone, assembly tab Drone assembly:
 https://cad.onshape.com/documents/d7e760af3cc2197cafa5a123/w/0a0eede3b0e261a3b55f7eb1/e/d6979667eed205f63b0dfaf2
 
 The assembly retains two linked instances of the servo-mount Part Studio.
 Re-export modified parts before slicing; old STLs do not update themselves.
 
-## Electronics platform revision
+## Direct-mount electronics platform and camera fixture (current)
 
-The current electronics deck is a platform only. The integral camera stand and
-retaining cap have been removed; the obsolete assembly cap is suppressed.
-A future bracket can use four 3.5 mm through holes on 38 x 12 mm centres
-(x = +/-19 mm, y = -36/-24 mm). Existing deck attachment, IMU access, tape rails,
-and the perfboard lightening window remain unchanged. Install bracket screws
-before mounting the deck if underside access is needed. Older camera assembly
-instructions below describe the retired stand, not the current platform.
+The current Electronics deck replaces the IMU tube cap and mounts directly to
+its original beam-bridge interface. Do not stack it on the old cap. The bridge,
+side frames and landing legs are unchanged. Historical cap/deck/IMU instructions
+below are superseded by this section.
+
+The 80 x 129.5 mm platform now includes two integral rear-leg mounting tabs
+and triangular ribs. Its overall height is 31.3 mm; the original platform
+underside remains at z=5.3 mm between the tabs. Two M3 clamp
+centers at x=0, y=+/-10 mm and head seats at z=9.3 mm retain the original M3 x 20
+screws and captive bridge nuts. Two rear tabs share the existing landing-leg
+holes at x=+/-24, z=-12 and their captive nuts. The 5.2 mm tab thickness
+keeps M3 x 20 tips 0.2 mm short of the existing frame bore end. Only the deck needs reprinting;
+the existing rear leg frame, side frames, beam bridge and camera parts remain
+usable. No separate IMU bosses or deck-to-cap screws.
+A 90 x 70 mm perfboard mounts with 90 mm front-to-back and 70 mm across the beam, using four M2
+clearance holes on a 66 x 86 mm pattern (x=+/-33, y=-8/78). The 2 mm corner-hole
+inset is retained as an assumption from the previous board. Its front edge stays
+at y=-10 to clear the camera, so its center moves 15 mm rearward versus the
+60 x 40 board. Recheck balance after fitting the larger board and electronics. Four 5 mm standoffs provide side-entry
+4.5 mm across-flats, 2 mm high M2 nut pockets. Board thickness is assumed 1.6 mm;
+check M2 x 8 screw engagement against the actual board. The regulator and IMU
+layout on that perfboard are not specified or mechanically verified.
+
+The camera stands vertically with its antenna end DOWN. Only the two upper
+corners are clamped, using the measured 2.5 x 2.5 mm component-free regions on
+both PCB faces. Fixed front contact patches are at most 2.2 x 2.0 mm and the
+rear tab pads are 2.0 x 2.0 mm. Upper/outer edge stops allow 0.3 mm clearance.
+A single removable rear retaining bar uses two M2 x 10 screws and side-loaded
+M2 nuts. The screws sit above/outside the PCB and never touch it. The CAD shows
+the bar loose; it closes 1.1 mm to the nominal 1.2 mm board thickness. Tighten
+gently and evenly until both pads contact the clear PCB corners.
+
+Exposed post and PCB-bar top corners have 1 mm chamfers; foot corners use
+1.2 mm at the rear and 0.7 mm at the front. Lens-keeper outline corners use
+0.8 mm chamfers. Outer post front edges have a 0.5 mm edge break. Lens contact
+surfaces, PCB pads, mounting holes and nut pockets retain their dimensions.
+
+The camera module is also supported by a shallow lower barrel fork and removable
+upper keeper. The 8.9 mm nominal split opening accommodates the 8 mm fixed barrel
+and +/-0.3 mm lens-center measurement error. It is deliberately loose before
+clamping. Two M2 x 10 screws pull the keeper down until it gently holds the barrel;
+do not tighten to a prescribed torque or force the split closed. Nominal CAD
+contact occurs after about 0.9 mm keeper travel, with 0.1 mm split remaining.
+The loose assembly shown in CAD is not the final tightened position.
+
+The barrel contact band is 2.8 mm deep (y=-47.7 to -44.9), behind the nominal
+lens tip and 0.3 mm ahead of the square camera housing. The clamp grips the fixed
+barrel, never the glass. Screw lugs sit beside the housing and clear the modeled
+PCB, but unmodeled front components and actual connectors need a physical fit
+check. Stop if clamping shifts focus, strains the ribbon, or presses on components.
+The antenna end remains open. Tape wires to the deck for strain relief.
+
+Assembly order:
+1. Load four M2 nuts into the platform standoffs and all four M2 nuts into the
+   camera frame. The two new lens-clamp nuts slide in from behind, before the
+   camera is installed; the PCB-retainer nuts enter from the outside edges.
+2. Fit the camera frame with four M3 x 10 screws from below and four M3 nuts
+   above the feet, before placing the platform on the bridge.
+3. Remove both rear landing-leg screws, supporting the frame while they are
+   out. Lower the new deck into place; start the existing two M3 x 20 central
+   clamp screws loosely. Install these before fitting the perfboard.
+4. Secure the new deck tabs through the rear landing legs using two M3 x 20
+   screws in place of the previous M3 x 16 screws. Reuse the existing captive
+   nuts. Start all deck/leg screws loosely, then tighten evenly without pulling a misaligned part
+   into place. The two front landing-leg screws stay unchanged.
+5. Attach the perfboard with four M2 x 8 screws.
+6. With both camera retainers removed, place the CAM from behind, antenna down,
+   upper corners against their pads, and fixed barrel in the lower fork.
+7. Fit the PCB retaining bar using two M2 x 10 screws; tighten gently/evenly.
+8. Fit the lens keeper using two additional M2 x 10 screws from above. Alternate
+   small adjustments until the camera module is steady. Do not crush the barrel.
+
+Print camera_mount_with_lens_keeper.3mf: THREE pieces, frame and lens keeper
+front-face down, PCB retaining bar rear-face down. Historical filenames
+camera_mount_simple.3mf and camera_fixture_with_tabs.3mf are refreshed with the
+same three pieces. Do not print obsolete camera_tab_left/right files.
+The camera foot hole pattern and beam-bridge interface are unchanged.
+
+The braced electronics_deck.3mf is now inverted: perfboard standoff ends face
+the bed, braces point upward. Normal automatic supports from the build plate
+are enabled beneath the elevated platform. Do not use the old bottom-down,
+supports-off deck orientation. The combined electronics_deck_and_camera.3mf is
+also refreshed, with supports enabled for the deck and disabled on camera parts.
+Deck solid-PLA equivalent is about 29.89 g, excluding support/brim material.
+Settings: 0.20 mm layers, 3 walls, 15% gyroid, 4 top/bottom layers, 6 mm outer
+brim, supports disabled. Small transverse screw holes and nut-pocket roofs bridge.
+Projects are unsliced and have not been GUI-verified. No print was launched.
+
+The geometry/access checks and solid-volume mass estimates are recorded in
+stl/camera_fixture.txt. These checks do not establish physical grip or vibration
+resistance; test with the real board and camera before operation.
 
 ## Interchangeable side frames
 
@@ -28,7 +112,8 @@ the opposite side. Nut entries face outward. The hanger shoulders are symmetric,
 and hatch locating sockets are provided at both y = -9 and +9 mm. The existing
 hatch uses one socket on each frame; the extra sockets permit interchangeability.
 
-The already-printed beam bridge and IMU tube cap are unchanged and reusable.
+The already-printed beam bridge remains reusable. The current direct-mount deck
+replaces the old IMU tube cap; retain that cap only for the previous deck.
 Bridge tongue/socket dimensions, joint screw positions, and landing mounts are
 unchanged. Front and rear landing legs are already identical; print two copies.
 CAD union checks confirm front/back reflection and left/right interchange after

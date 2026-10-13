@@ -1,0 +1,32 @@
+Camera mount with lens keeper — 2026-10-12
+Print camera_mount_with_lens_keeper.3mf: frame, PCB retaining bar, lens keeper.
+Frame and lens keeper front-face down; PCB bar rear-face down.
+0.20 mm layers; 3 walls; 15% gyroid; 4 top/bottom; 6 mm outer brim; supports off.
+Designed for no supports; small transverse holes and nut-pocket roofs bridge.
+Unsliced project: inspect sliced preview in Creality Print before printing.
+
+Solid PLA equivalents at 1.24 g/cm3 (not sliced mass):
+  Frame 8.877 g; PCB bar 0.754 g; lens keeper 0.598 g; total 10.229 g.
+
+Hardware for camera assembly:
+  4 M3 x 10 screws + 4 M3 nuts: frame to existing deck holes.
+  2 M2 x 10 screws + 2 M2 nuts: upper PCB retaining bar.
+  2 MORE M2 x 10 screws + 2 M2 nuts: lens keeper.
+Load lens-clamp nuts from behind before installing camera.
+Only the clear upper PCB corners and fixed lens barrel are gripped.
+Never clamp glass. Tighten keeper gradually/evenly only until stable.
+The nominal 8.9 mm split opening permits lens-position uncertainty, then closes
+onto the 8 mm barrel. CAD shows the loose position, not a tight finished fit.
+Nominal closing travel 0.9 mm; do not force keeper faces together.
+Contact band depth 2.8 mm, behind lens tip; PCB antenna end stays open.
+Inspect real component, ribbon and connector clearance; these are not fully modeled.
+
+Onshape Part Studio and assembly group regenerate OK.
+No modeled volumetric interference. All 52 geometry/access checks pass.
+STLs verified closed two-manifold meshes; this is not a physical strength test.
+No print launched. See ../ASSEMBLY.md and camera_mount_validation.json.
+Old camera_tab_left/right files are obsolete. Historical combined filenames
+camera_mount_simple.3mf and camera_fixture_with_tabs.3mf contain this revision.
+
+Exposed outline corners chamfered: posts/bar 1 mm, feet 0.7/1.2 mm, keeper 0.8 mm.
+Lens bore, grip faces, PCB pads and fastening interfaces unchanged.
