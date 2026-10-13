@@ -10,15 +10,13 @@ import {
 } from 'react';
 import { LoaderCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
 import { ControlPanel } from '@/components/control-panel';
+import { Button } from '@/components/ui/button';
 import { ActuatorPanel } from '@/components/actuator-panel';
 import { ADCPanel } from '@/components/adc-panel';
 import { ImuPanel } from '@/components/imu-panel';
-import { RollHistoryPanel } from '@/components/roll-history-panel';
-import { LoadCellPanel } from '@/components/load-cell-panel';
 import type {
-  RollSample,
+  ImuSample,
   Reading,
   Side,
   ControlSettings,
@@ -42,11 +40,30 @@ const statuses = {
   },
 };
 
+function reuseUnchanged<T extends object>(
+  previous: T | undefined,
+  next: T | undefined
+): T | undefined {
+  if (
+    previous &&
+    next &&
+    Object.keys(next).length === Object.keys(previous).length &&
+    (Object.keys(next) as (keyof T)[]).every(
+      (key) => next[key] === previous[key]
+    )
+  ) {
+    return previous;
+  }
+  return next;
+}
+
 export default function Page() {
   const [status, setStatus] = useState<keyof typeof statuses>('offline');
   const [address, setAddress] = useState('');
   const [reading, setReading] = useState<Reading | null>(null);
-  const [samples, setSamples] = useState<RollSample[]>([]);
+  const [samples, setSamples] = useState<ImuSample[]>([]);
+  const latestReading = useRef<Reading | null>(null);
+  const history = useRef<ImuSample[]>([]);
   const [stopEpoch, setStopEpoch] = useState(0);
   const heartbeat = useRef<ReturnType<typeof setInterval> | undefined>(
     undefined
@@ -55,8 +72,20 @@ export default function Page() {
   const watchdog = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const lookup = useRef<AbortController | null>(null);
+  const pendingControl = useRef<Partial<ControlSettings>>({});
+  const controlTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  );
+  const lastControlSent = useRef(0);
+
+  const cancelControl = useCallback(() => {
+    clearTimeout(controlTimer.current);
+    controlTimer.current = undefined;
+    pendingControl.current = {};
+  }, []);
 
   const connect = useCallback(async () => {
+    cancelControl();
     lookup.current?.abort();
     const controller = new AbortController();
     lookup.current = controller;
@@ -66,6 +95,7 @@ export default function Page() {
     socket.current = null;
     setStatus('connecting');
     setReading(null);
+    latestReading.current = null;
 
     try {
       const response = await fetch(
@@ -88,6 +118,7 @@ export default function Page() {
       const session = Date.now();
       function offline() {
         if (socket.current !== ws) return;
+        cancelControl();
         clearTimeout(watchdog.current);
         socket.current = null;
         setStatus('offline');
@@ -117,18 +148,26 @@ export default function Page() {
       ws.onmessage = (event) => {
         if (socket.current !== ws) return;
         received();
-        const data = JSON.parse(event.data);
-        const time = Date.now();
-        startTransition(() => setReading({ ...data, time }));
-        if (data.imu == null) return;
-        startTransition(() =>
-          setSamples((previous) =>
-            [
-              ...previous.filter((point) => point.time >= time - 300000),
-              { time, roll: data.imu.roll, session },
-            ].slice(-15000)
-          )
+        const data: Reading = JSON.parse(event.data);
+        data.control = reuseUnchanged(
+          latestReading.current?.control,
+          data.control
         );
+        data.control_status = reuseUnchanged(
+          latestReading.current?.control_status,
+          data.control_status
+        );
+        const time = Date.now();
+        latestReading.current = { ...data, time };
+        if (data.imu == null) return;
+        history.current.push({ ...data.imu, time, session });
+        while (
+          history.current.length &&
+          (history.current[0].time < time - 60000 ||
+            history.current.length > 3000)
+        ) {
+          history.current.shift();
+        }
       };
       ws.onerror = offline;
       ws.onclose = offline;
@@ -137,19 +176,77 @@ export default function Page() {
       console.error(error);
       setStatus('offline');
     }
-  }, []);
+  }, [cancelControl]);
 
   useEffect(() => {
     const start = setTimeout(() => void connect(), 0);
     return () => {
       clearTimeout(start);
+      cancelControl();
       lookup.current?.abort();
       clearTimeout(watchdog.current);
       clearInterval(heartbeat.current);
       socket.current?.close();
       socket.current = null;
     };
-  }, [connect]);
+  }, [connect, cancelControl]);
+
+  useEffect(() => {
+    let frame = 0;
+    let displayed: Reading | null = null;
+    function update() {
+      const current = latestReading.current;
+      if (current !== displayed) {
+        displayed = current;
+        const points = [...history.current];
+        startTransition(() => {
+          setReading(current);
+          setSamples(points);
+        });
+      }
+      frame = requestAnimationFrame(update);
+    }
+    frame = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  const calibrateImu = useCallback(() => {
+    socket.current?.send(JSON.stringify({ command: 'calibrate_imu' }));
+  }, []);
+
+  const sendControl = useCallback((settings: Partial<ControlSettings>) => {
+    pendingControl.current = { ...pendingControl.current, ...settings };
+    if (controlTimer.current !== undefined) return;
+
+    function flush() {
+      controlTimer.current = undefined;
+      const ws = socket.current;
+      if (ws?.readyState !== WebSocket.OPEN) {
+        pendingControl.current = {};
+        return;
+      }
+      if (ws.bufferedAmount > 0) {
+        controlTimer.current = setTimeout(flush, 20);
+        return;
+      }
+      ws.send(
+        JSON.stringify({ command: 'control', settings: pendingControl.current })
+      );
+      pendingControl.current = {};
+      lastControlSent.current = performance.now();
+    }
+
+    const delay = 20 - (performance.now() - lastControlSent.current);
+    if (delay <= 0) flush();
+    else controlTimer.current = setTimeout(flush, delay);
+  }, []);
+  const stopMotors = useCallback(() => {
+    cancelControl();
+    setStopEpoch((previous) => previous + 1);
+    if (socket.current?.readyState === WebSocket.OPEN) {
+      socket.current.send(JSON.stringify({ command: 'stop' }));
+    }
+  }, [cancelControl]);
 
   const sendActuator = useCallback(
     (command: 'servo' | 'throttle', side: Side, value: number) => {
@@ -160,22 +257,13 @@ export default function Page() {
     []
   );
 
-  const sendControl = useCallback((settings: Partial<ControlSettings>) => {
-    if (socket.current?.readyState === WebSocket.OPEN) {
-      socket.current.send(JSON.stringify({ command: 'control', settings }));
-    }
-  }, []);
-
   useEffect(() => {
     function stop(event: KeyboardEvent) {
       if (event.code !== 'Space') return;
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat) return;
-      setStopEpoch((previous) => previous + 1);
-      if (socket.current?.readyState === WebSocket.OPEN) {
-        socket.current.send(JSON.stringify({ command: 'stop' }));
-      }
+      stopMotors();
     }
     function close() {
       socket.current?.close();
@@ -186,7 +274,7 @@ export default function Page() {
       window.removeEventListener('keydown', stop, true);
       window.removeEventListener('pagehide', close);
     };
-  }, []);
+  }, [stopMotors]);
 
   const { label, icon: StatusIcon, color } = statuses[status];
 
@@ -223,54 +311,59 @@ export default function Page() {
         </div>
       </header>
       <main className="grid min-h-[calc(100dvh-4rem)] divide-y divide-border lg:h-[calc(100dvh-4rem)] lg:grid-cols-[repeat(3,minmax(0,28rem))] lg:divide-x lg:divide-y-0 lg:overflow-hidden">
-        <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
-          {reading?.control && (
-            <ControlPanel
-              settings={reading.control}
-              connected={status === 'connected' && reading.imu != null}
-              onChange={sendControl}
-            />
-          )}
+        <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
           <Suspense>
-            <RollHistoryPanel
+            <ImuPanel
+              reading={reading?.imu}
               samples={samples}
-              reading={reading}
+              time={samples.at(-1)?.time ?? 0}
+              onCalibrate={calibrateImu}
               connected={status === 'connected'}
-              onClear={() => setSamples([])}
             />
           </Suspense>
-          <ImuPanel reading={reading?.imu} connected={status === 'connected'} />
-          <LoadCellPanel reading={reading} connected={status === 'connected'} />
+          {/* <LoadCellPanel reading={reading} connected={status === 'connected'} /> */}
           <ADCPanel
             raw={reading?.adc_raw}
             voltage={reading?.adc_voltage}
             connected={status === 'connected'}
           />
         </div>
-        {(['left', 'right'] as const).map((side) => (
-          <div
-            key={side}
-            className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain"
-          >
-            <ActuatorPanel
-              key={`${side}-servo-${status}`}
-              side={side}
-              kind="servo"
-              value={reading?.actuators?.[side].servo_angle}
-              connected={status === 'connected'}
-              onChange={sendActuator}
+        <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
+          {(['left', 'right'] as const).flatMap((side) =>
+            (['servo', 'throttle'] as const).map((kind) => (
+              <ActuatorPanel
+                key={`${side}-${kind}-${status}-${stopEpoch}-${reading?.control?.enabled}`}
+                side={side}
+                kind={kind}
+                locked={reading?.control?.enabled}
+                value={
+                  kind === 'servo'
+                    ? reading?.actuators &&
+                      Math.round(reading.actuators[side].servo_angle * 10) / 10
+                    : reading?.actuators?.[side].throttle
+                }
+                connected={status === 'connected'}
+                onChange={sendActuator}
+              />
+            ))
+          )}
+        </div>
+        <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
+          {reading?.control && (
+            <ControlPanel
+              key={`${status}-${stopEpoch}-${reading.control.enabled}`}
+              settings={reading.control}
+              status={reading.control_status}
+              connected={
+                status === 'connected' &&
+                reading.imu != null &&
+                !reading.imu.calibrating
+              }
+              onChange={sendControl}
+              onStop={stopMotors}
             />
-            <ActuatorPanel
-              key={`${side}-esc-${status}-${stopEpoch}-${reading?.control?.enabled}`}
-              side={side}
-              kind="throttle"
-              locked={reading?.control?.enabled}
-              value={reading?.actuators?.[side].throttle}
-              connected={status === 'connected'}
-              onChange={sendActuator}
-            />
-          </div>
-        ))}
+          )}
+        </div>
       </main>
     </>
   );
