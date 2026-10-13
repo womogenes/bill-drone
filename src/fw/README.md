@@ -95,3 +95,5 @@ To run without resetting, run
 ```sh
 mpremote resume mount . run test.py repl
 ```
+
+## Ok so how do we actually do this control thing

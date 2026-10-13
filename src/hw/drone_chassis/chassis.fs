@@ -29,7 +29,7 @@ precondition { annotation {"Name":"Show hardware"} definition.refs is boolean; }
 {
 const blue=color(0.16,0.48,0.67); const orange=color(0.92,0.51,0.12);
 // Compact backbone: beam clamp, two upper landing rails and two battery hangers.
-// The deck attaches to the removable beam cap, so no tall deck posts are needed.
+// The electronics deck is now the beam cap; existing bridge and frame are unchanged.
 smBlock(context,id+"tray",-25,25,-14,14,-12,-5.3);
 const body=smSolid(context,id+"tray");
 for(var y in [-14,5.5]) {
@@ -49,58 +49,50 @@ for(var sx in [-1,1]) {
  smPoly(context,sid+"hanger",[[-12,-51],[12,-51],[12,-42],[6,-36],[6,-20],[14,-12],[-14,-12],[-6,-20],[-6,-36],[-12,-42]],vector(sx==1?18.5:-22.5,0,0),vector(1,0,0),vector(0,1,0),4);
  smJoin(context,sid+"hangerJoin",qUnion([body,smSolid(context,sid+"hanger")]));
 }
-// Removable electronics platform; preserve the existing beam-cap attachment.
-smBlock(context,id+"deck",-39,39,-111,7.5,11,14);const deck=smSolid(context,id+"deck");
-for(var x in [-26,26])for(var y in [-75.5,-55.5]) {
- const dy=y+65.5;
- smHole(context,id+("deckHole"~x~"y"~y),deck,vector(x,y,10),vector(0,0,1),x*dy>0?3.5:4.6,x*dy>0?5:3);
+// Single flat-bottom platform replaces the old IMU cap and directly clamps the beam.
+// Original M3 clamp centers (0,+/-10), underside z=5.3, and screw seats z=9.3 preserved.
+smPoly(context,id+"deck",[[-23,-45.5],[23,-45.5],[25,-43.5],[25,-18],[38,-14],[40,-12],[40,82],[38,84],[-38,84],[-40,82],[-40,-12],[-38,-14],[-25,-18],[-25,-43.5]],vector(0,0,5.3),vector(0,0,1),vector(1,0,0),3);
+const deck=smSolid(context,id+"deck");
+for(var y in [-10,10]) {
+ const sid=id+("tubeBolt0y"~y);
+ smHole(context,sid,body,vector(0,y,-13),vector(0,0,1),3.5,23);
+ smHex(context,sid+"nut",body,vector(0,y,-12.1),vector(0,0,1),vector(1,0,0),6.2,4.3);
+ smCyl(context,sid+"deckBoss",vector(0,y,8.3),vector(0,0,1),5,2.7);
+ smJoin(context,sid+"deckBossJoin",qUnion([deck,smSolid(context,sid+"deckBoss")]));
+ smHole(context,sid+"deckBolt",deck,vector(0,y,5),vector(0,0,1),3.5,7);
+ smHole(context,sid+"deckHead",deck,vector(0,y,9.3),vector(0,0,1),6.6,3);
+}
+// Perfboard 90 mm front/back (Y), 70 mm across (X). 66 x 86 mm M2 pattern.
+for(var x in [-33,33])for(var y in [-8,78]) {
+ const pid=id+("perfboardMount"~x~"y"~y);
+ smCyl(context,pid,vector(x,y,8.3),vector(0,0,1),4,5);
+ smJoin(context,pid+"join",qUnion([deck,smSolid(context,pid)]));
+ smHole(context,pid+"bolt",deck,vector(x,y,5),vector(0,0,1),2.4,9);
+ smHex(context,pid+"nut",deck,vector(x,y,9.3),vector(0,0,1),vector(1,0,0),4.5,2);
+ smBlock(context,pid+"entry",x>0?x:x-4.1,x>0?x+4.1:x,y-2.25,y+2.25,9.3,11.3);
+ smCut(context,pid+"entryCut",deck,smSolid(context,pid+"entry"));
+}
+for(var x in [-19,19])for(var y in [-36,-24])
+ smHole(context,id+("futureCameraHole"~x~"y"~y),deck,vector(x,y,5),vector(0,0,1),3.5,4);
+// Two windows retain a 14 mm central spine beneath the beam-clamping screws.
+for(var sx in [-1,1]) {
+ const wid=id+("deckWindow"~sx);
+ smBlock(context,wid,sx>0?7:-28,sx>0?28:-7,0,68,5,9);
+ smCut(context,wid+"cut",deck,smSolid(context,wid));
+}
+// Rear deck braces share the existing rear landing-leg screw holes and nuts.
+// 5.2-mm tabs move the M3 x 20 tips clear of the existing frame rail.
+smBlock(context,id+"deckRearTie",-35,35,58.7,63.9,5.3,8.3);
+smJoin(context,id+"deckRearTieJoin",qUnion([deck,smSolid(context,id+"deckRearTie")]));
+for(var sx in [-1,1]) {
+ const sid=id+("deckLegBrace"~sx);const x=sx*24;
+ smBlock(context,sid+"tab",x-5,x+5,58.7,63.9,-18,8.3);
+ smPoly(context,sid+"rib",[[63.9,-8],[77.2,5.3],[63.9,5.3]],vector(sx>0?26:-29,0,0),vector(1,0,0),vector(0,1,0),3);
+ smJoin(context,sid+"join",qUnion([deck,smSolid(context,sid+"tab"),smSolid(context,sid+"rib")]));
+ smHole(context,sid+"bolt",deck,vector(x,64.2,-12),vector(0,-1,0),3.5,6);
+ smBevel(context,sid+"bottomCorners",deck,[vector(x-5,61.3,-18),vector(x+5,61.3,-18)],1);
 }
 smLabel(context,deck,"Electronics deck",orange);
-
-opTransform(context,id+"centerDeck",{"bodies":deck,"transform":transform(vector(0,65.5,0)*millimeter)});
-// Four accessible M3 clearance holes for a future camera bracket: 38 x 12 mm.
-// Plain through holes allow screw heads below and nuts in the future bracket.
-for(var x in [-19,19])for(var y in [-36,-24])
- smHole(context,id+("futureCameraHole"~x~"y"~y),deck,vector(x,y,10),vector(0,0,1),3.5,5);
-// Raised tape rails keep the perfboard above M3 deck-screw heads. Fit screws before taping the board.
-for(var x in [-32,29]) {
- smBlock(context,id+("boardRail"~x),x,x+3,18,68,14,18);
- smJoin(context,id+("boardRailJoin"~x),qUnion([deck,smSolid(context,id+("boardRail"~x))]));
-}
-// Lighten the unused floor beneath the perfboard; retain both full tape rails.
-smPoly(context,id+"deckLightWindow",[[-21,22],[21,22],[25,26],[25,60],[21,64],[-21,64],[-25,60],[-25,26]],vector(0,0,10),vector(0,0,1),vector(1,0,0),5);
-smCut(context,id+"deckLightWindowCut",deck,smSolid(context,id+"deckLightWindow"));
-// IMU remains on the centered tube cap, accessible through its own deck window.
-smBlock(context,id+"imuWindow",-20,20,-14,14,10,16);
-smCut(context,id+"imuWindowCut",deck,smSolid(context,id+"imuWindow"));
-smBlock(context,id+"cap",-32,32,-14,14,5.3,11);const cap=smSolid(context,id+"cap");
-for(var x in [0])for(var y in [-10,10]){
- const sid=id+("tubeBolt"~x~"y"~y);
- smHole(context,sid,body,vector(x,y,-13),vector(0,0,1),3.5,23);
- smHex(context,sid+"nut",body,vector(x,y,-12.1),vector(0,0,1),vector(1,0,0),6.2,4.3);
- smHole(context,sid+"cap",cap,vector(x,y,5),vector(0,0,1),3.5,7);
- // Recess the original clamp screw heads to their previous seat height.
- smHole(context,sid+"head",cap,vector(x,y,9.3),vector(0,0,1),6.2,3);
-}
-for(var x in [-7.5,7.5]){
- smCyl(context,id+("imuBoss"~x),vector(x,0,11),vector(0,0,1),3.5,4);
- smJoin(context,id+("imuBossJoin"~x),qUnion([cap,smSolid(context,id+("imuBoss"~x))]));
- smHole(context,id+("imuPilot"~x),cap,vector(x,0,8.5),vector(0,0,1),2.6,6.6);
-}
-// Two diagonal deck screws and two locating pegs on the central cap.
-for(var x in [-26,26])for(var y in [-10,10]) {
- const did=id+("deckMount"~x~"y"~y);
- if(x*y>0) {
-  smHole(context,did+"bolt",cap,vector(x,y,5),vector(0,0,1),3.5,7);
-  smHex(context,did+"nut",cap,vector(x,y,5.3),vector(0,0,1),vector(1,0,0),6.2,3.2);
-  smBlock(context,did+"slot",x>0?x:-33,x>0?33:x,y-3.1,y+3.1,5.3,8.5);
-  smCut(context,did+"slotCut",cap,smSolid(context,did+"slot"));
- } else {
-  smCyl(context,did+"peg",vector(x,y,11),vector(0,0,1),2,1.5);
-  smJoin(context,did+"pegJoin",qUnion([cap,smSolid(context,did+"peg")]));
- }
-}
-smLabel(context,cap,"IMU tube cap",blue);
 // Slender diagonal webs grow at 45 degrees from the central hanger feet.
 // They brace the landing rails and reduce the unsupported underside during printing.
 for(var sx in [-1,1])for(var sy in [-1,1]) {
@@ -176,7 +168,6 @@ for(var x in [-28,28]) {
 }
 // Larger battery-contact lead-ins; tiny edge chamfers omitted.
 // Clip only the four vertical outside corners; keep the top perimeter square.
-smBevel(context,id+"deckCornerBevel",deck,[vector(-39,-45.5,12.5),vector(39,-45.5,12.5),vector(-39,73,12.5),vector(39,73,12.5)],5);
 var padEdges=[];
 for(var x in [-17,11])padEdges=concatenateArrays([padEdges,[vector(x,0,-48),vector(x+6,0,-48),vector(x+3,-32,-48),vector(x+3,32,-48)]]);
 smBevel(context,id+"hatchPadBevel",hatch,padEdges,0.4);
@@ -229,18 +220,103 @@ smLabel(context,bridge,"Beam bridge",blue);
 smLabel(context,leftFrame,"Left side frame",blue);
 smLabel(context,rightFrame,"Right side frame",blue);
 
+// Camera frame: two flat uprights joined below the lens by a shallow split clamp.
+// Print front face (y=-47.7) down. Feet and tapered corner contacts grow from it.
+smBlock(context,id+"cameraCollar",-22,22.4,-47.7,-44.9,37.5,39.5);
+const cameraMount=smSolid(context,id+"cameraCollar");
+for(var side in [-1,1]) {
+ const cid=id+("cameraFixture"~side);const dx=side==-1?0:0.4;
+ smBlock(context,cid+"foot",side==-1?-24:14,side==-1?-14:24,-47.7,-20,8.3,11.3);
+ smBlock(context,cid+"leg",(side==-1?-22:14.9)+dx,(side==-1?-14.9:22)+dx,-47.7,-40.5,10.3,61);
+ smJoin(context,cid+"join",qUnion([cameraMount,smSolid(context,cid+"foot"),smSolid(context,cid+"leg")]));
+}
+for(var x in [-19,19])for(var y in [-36,-24])
+ smHole(context,id+("cameraFootHole"~x~"y"~y),cameraMount,vector(x,y,8),vector(0,0,1),3.5,4);
+// Antenna end DOWN; both clear 2.5 mm squares are at the upper PCB corners.
+// Only 2.0 x 2.0 rear and <=2.2 x 2.0 front patches touch each clear corner.
+// The right pattern is offset 0.4 mm to match the measured lens/PCB asymmetry.
+for(var side in [-1,1]) {
+ const cid=id+("cameraUpper"~side);const dx=side==-1?0:0.4;
+ const cx=side*18+dx;const cz=51.9;const screwZ=57.5;
+ smBlock(context,cid+"boss",(side==-1?-22:14.9)+dx,(side==-1?-14.9:22)+dx,-47.7,-40.5,cz-1,61);
+ var pad=[];
+ for(var pt in [[14.9,-47.7],[22,-47.7],[22,-40],[11.2,-40],[11.2,-42],[14.9,-45.7]])
+  pad=append(pad,[side*pt[0]+dx,pt[1]]);
+ smPoly(context,cid+"frontPad",pad,vector(0,0,cz-1),vector(0,0,1),vector(1,0,0),2);
+ smJoin(context,cid+"postJoin",qUnion([cameraMount,smSolid(context,cid+"boss"),smSolid(context,cid+"frontPad")]));
+ // L-shaped edge stops capture each upper corner with 0.3 mm lateral/top clearance.
+ smBlock(context,cid+"edgeStop",(side==-1?-14.9:13.7)+dx,(side==-1?-13.7:14.9)+dx,-40.2,-38.9,cz-1,53.4);
+ var stop=[];
+ for(var pt in [[14.9,-47.7],[22,-47.7],[22,-38.9],[10.9,-38.9],[10.9,-40.2],[14.9,-44.2]])
+  stop=append(stop,[side*pt[0]+dx,pt[1]]);
+ smPoly(context,cid+"endStop",stop,vector(0,0,53.4),vector(0,0,1),vector(1,0,0),1.9);
+ smJoin(context,cid+"stopJoin",qUnion([cameraMount,smSolid(context,cid+"edgeStop"),smSolid(context,cid+"endStop")]));
+ smHole(context,cid+"bolt",cameraMount,vector(cx,-47,screwZ),vector(0,1,0),2.4,20);
+ smHex(context,cid+"nut",cameraMount,vector(cx,-44.5,screwZ),vector(0,1,0),vector(1,0,0),4.5,2);
+ smBlock(context,cid+"nutEntry",(side==-1?-23:18)+dx,(side==-1?-18:23)+dx,-44.5,-42.5,screwZ-2.25,screwZ+2.25);
+ smCut(context,cid+"nutEntryCut",cameraMount,smSolid(context,cid+"nutEntry"));
+ // Rear-access M2 x 10 screw above the PCB pulls a removable pressure tab forward.
+ smBlock(context,cid+"tab",(side==-1?-22:14.9)+dx,(side==-1?-14.9:22)+dx,-37.2,-34.7,cz-1,61);
+ const tab=smSolid(context,cid+"tab");
+ smBlock(context,cid+"tongue",(side==-1?-15.5:11.2)+dx,(side==-1?-11.2:15.5)+dx,-37.2,-34.7,cz-1,cz+1);
+ smBlock(context,cid+"rearPad",(side==-1?-13.2:11.2)+dx,(side==-1?-11.2:13.2)+dx,-37.7,-37.2,cz-1,cz+1);
+ smJoin(context,cid+"tabJoin",qUnion([tab,smSolid(context,cid+"tongue"),smSolid(context,cid+"rearPad")]));
+ smHole(context,cid+"tabHole",tab,vector(cx,-38,screwZ),vector(0,1,0),2.4,5);
+
+}
+// Lower fork supports the fixed 8 mm lens barrel. Rear face is 0.3 mm
+// ahead of the measured square camera housing; front is behind the lens tip.
+smBlock(context,id+"lensFork",-22,22.4,-47.7,-44.9,37.5,43.9);
+smJoin(context,id+"lensForkJoin",qUnion([cameraMount,smSolid(context,id+"lensFork")]));
+smHole(context,id+"forkBore",cameraMount,vector(0,-48,43.9),vector(0,1,0),8.9,3.2);
+// Bolts sit beside the lens, clear of the tall posts and rear header area.
+for(var side in [-1,1]) {
+ const kid=id+("lensClamp"~side);const x=side*10;
+ smBlock(context,kid+"lug",x-3,x+3,-47.7,-42,37.5,43.9);
+ smJoin(context,kid+"lugJoin",qUnion([cameraMount,smSolid(context,kid+"lug")]));
+ smHole(context,kid+"bolt",cameraMount,vector(x,-44.7,37),vector(0,0,1),2.4,7);
+ smHex(context,kid+"nut",cameraMount,vector(x,-44.7,40.1),vector(0,0,1),vector(1,0,0),4.5,2);
+ smBlock(context,kid+"nutEntry",x-2.6,x+2.6,-44.7,-41.9,40.1,42.1);
+ smCut(context,kid+"nutEntryCut",cameraMount,smSolid(context,kid+"nutEntry"));
+}
+smBlock(context,id+"lensKeeper",-13,13,-47.7,-44.9,44.9,50.5);
+const keeper=smSolid(context,id+"lensKeeper");
+for(var side in [-1,1]) {
+ const kid=id+("keeperEar"~side);const x=side*10;
+ smBlock(context,kid,x-3,x+3,-47.7,-42,44.9,50.5);
+ smJoin(context,kid+"join",qUnion([keeper,smSolid(context,kid)]));
+ smHole(context,kid+"bolt",keeper,vector(x,-44.7,44),vector(0,0,1),2.4,8);
+}
+smHole(context,id+"keeperBore",keeper,vector(0,-48,43.9),vector(0,1,0),8.9,3.2);
+smLabel(context,keeper,"Camera lens keeper",orange);
+// One rear retaining bar replaces the two loose tabs. Bridge is above PCB top.
+const cameraRetainer=smSolid(context,id+"cameraUpper-1"+"tab");
+smBlock(context,id+"cameraRetainerBridge",-18,18.4,-37.2,-34.7,55.5,58.5);
+smJoin(context,id+"cameraRetainerJoin",qUnion([cameraRetainer,smSolid(context,id+"cameraUpper1"+"tab"),smSolid(context,id+"cameraRetainerBridge")]));
+smLabel(context,cameraRetainer,"Camera retaining bar",orange);
+smLabel(context,cameraMount,"Camera lens fixture",blue);
+
+
+// Chamfer exposed outline corners, not the lens bore, clamp faces or PCB pads.
+smBevel(context,id+"cameraPostTopCorners",cameraMount,[vector(-22,-46,61),vector(-14.9,-46,61),vector(15.3,-46,61),vector(22.4,-46,61)],1);
+smBevel(context,id+"cameraFootRearCorners",cameraMount,[vector(-24,-20,9.5),vector(-14,-20,9.5),vector(14,-20,9.5),vector(24,-20,9.5)],1.2);
+smBevel(context,id+"cameraFootFrontCorners",cameraMount,[vector(-24,-47.7,9.5),vector(-14,-47.7,9.5),vector(14,-47.7,9.5),vector(24,-47.7,9.5)],0.7);
+smBevel(context,id+"cameraPostFrontEdges",cameraMount,[vector(-22,-47.7,25),vector(22.4,-47.7,25)],0.5);
+smBevel(context,id+"cameraRetainerTopCorners",cameraRetainer,[vector(-22,-36,61),vector(-14.9,-36,61),vector(15.3,-36,61),vector(22.4,-36,61)],1);
+smBevel(context,id+"cameraRetainerOuterBottom",cameraRetainer,[vector(-22,-36,50.9),vector(22.4,-36,50.9)],0.7);
+smBevel(context,id+"cameraKeeperCorners",keeper,[vector(-13,-46,50.5),vector(13,-46,50.5),vector(-13,-46,44.9),vector(13,-46,44.9)],0.8);
+
 if(definition.refs){
  smBlock(context,id+"bar",-210,210,-5.25,5.25,-5,5);smLabel(context,smSolid(context,id+"bar"),"Carbon crossbar",color(0.12,0.13,0.14));
  smBlock(context,id+"battery",-18,18,-37,37,-48,-13);smLabel(context,smSolid(context,id+"battery"),"Battery envelope",color(0.35,0.35,0.38));
  for(var px in [-172,172]){
   smCyl(context,id+("prop"~px),vector(px,0,94),vector(0,0,1),114.3,0.8);smLabel(context,smSolid(context,id+("prop"~px)),"Propeller swept envelope",color(0.7,0.75,0.8,0.18));
  }
- smBlock(context,id+"camBoard",-13.5,13.5,-42.5,-40.9,18,58.5);smLabel(context,smSolid(context,id+"camBoard"),"ESP32-CAM envelope",color(0.15,0.3,0.2));
- smCyl(context,id+"lens",vector(0,-42.5,42),vector(0,-1,0),4,5);smLabel(context,smSolid(context,id+"lens"),"Camera lens envelope",color(0.12,0.12,0.13));
- smBlock(context,id+"imu",-11,11,-8,8,15,16.6);smLabel(context,smSolid(context,id+"imu"),"IMU envelope",color(0.2,0.4,0.75));
- smBlock(context,id+"board",-32,32,10,70,18,19.6);smLabel(context,smSolid(context,id+"board"),"Perfboard placeholder",color(0.21,0.5,0.25));
- smBlock(context,id+"espMain",-27.5,27.5,15,44,19.6,33.6);smLabel(context,smSolid(context,id+"espMain"),"ESP32 placeholder",color(0.12,0.3,0.2));
- smBlock(context,id+"regulator",-22.5,22.5,45,70,19.6,34.6);smLabel(context,smSolid(context,id+"regulator"),"Regulator placeholder",color(0.15,0.35,0.65));
+ smBlock(context,id+"camBoard",-13.4,13.8,-40,-38.8,13.3,53.1);smLabel(context,smSolid(context,id+"camBoard"),"ESP32-CAM envelope",color(0.15,0.3,0.2));
+ smCyl(context,id+"lens",vector(0,-44.6,43.9),vector(0,-1,0),4,3.4);smLabel(context,smSolid(context,id+"lens"),"Camera lens envelope",color(0.12,0.12,0.13));
+ smBlock(context,id+"cameraHousing",-4.05,4.05,-44.6,-40,39.85,47.95);smLabel(context,smSolid(context,id+"cameraHousing"),"Camera housing envelope",color(0.12,0.12,0.13));
+ smBlock(context,id+"board",-35,35,-10,80,13.3,14.9);smLabel(context,smSolid(context,id+"board"),"Perfboard placeholder",color(0.21,0.5,0.25));
+ smBlock(context,id+"espMain",-14.5,14.5,-7.5,47.5,14.9,28.9);smLabel(context,smSolid(context,id+"espMain"),"ESP32 placeholder",color(0.12,0.3,0.2));
  for(var sx in [-65,65]){smBlock(context,id+("esc"~sx),sx-13,sx+13,-25,25,5,12);smLabel(context,smSolid(context,id+("esc"~sx)),"ESC envelope",color(0.25,0.25,0.27));}
 }
 });
