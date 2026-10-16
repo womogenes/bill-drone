@@ -1,5 +1,7 @@
 # 3D printing workflow
 
+- When supports are needed, always use tree supports with the organic style (user preference). Do not enable supports for parts that do not need them.
+
 - Use the Creality Print GUI through available computer-use tools to prepare and launch prints. Do not substitute a slicer CLI or direct printer API for this workflow.
 - Before starting a print, inspect and confirm all applicable printer, filament, process, object-specific, and print-dialog settings, and review the sliced preview. Present the confirmed settings to the user before launch; resolve any unconfirmed choices first.
 - Read `~/README.md` for the machine's computer-use setup. On the host inspected on 2026-10-06, `/home/willi/README.md` contained system notes but no Creality/CUA instructions; do not assume native GUI control is available without checking the active host/tools.

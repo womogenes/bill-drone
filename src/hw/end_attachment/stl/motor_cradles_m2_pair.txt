@@ -1,0 +1,8 @@
+Two updated motor cradles with four attachment-side M2 hex nut recesses each.
+Pocket: 4.5 mm across flats, 2.2 mm deep. Standard M2 nuts modeled at 4 mm AF, 1.6 mm thick.
+Outer screws: heads on servo side; nuts on attachment side. Center M3 socket head remains on attachment side in original 6 mm counterbore.
+Install four M2 screws through horn from servo side before fixing horn to servo if access is blocked. Seat nuts on cradle side; fit center screw before opposite pivot/retainer blocks driver access.
+Measured horn 2.3 mm + remaining cradle wall 3.8 mm + modeled nut 1.6 mm = 7.7 mm stack; M2x8 nominal minimum, verify actual hardware and full engagement.
+Print pair: 0.20 mm, 4 walls, 25% gyroid, 5 top/bottom, 6 mm brim; organic tree supports, build plate only.
+Unsliced: review support placement and remove all support material from nut pockets before assembly. Prior combined legs_and_motor_cradles.3mf has old head recesses; use this attachment-only project.
+CAD fit checks passed; physical fit depends on printer and hardware tolerances.

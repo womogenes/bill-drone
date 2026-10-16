@@ -18,7 +18,7 @@ function smHole(context is Context,id is Id,t is Query,o is Vector,n is Vector,d
 function smHex(context is Context,id is Id,t is Query,o is Vector,n is Vector,xd is Vector,af is number,h is number) {var p=[];for(var i=0;i<6;i+=1)p=append(p,[af/sqrt(3)*cos(i*60*degree),af/sqrt(3)*sin(i*60*degree)]);smPoly(context,id+"tool",p,o,n,xd,h);smCut(context,id+"cut",t,smSolid(context,id+"tool"));}
 function smLabel(context is Context,q is Query,name is string,c) {setProperty(context,{"entities":q,"propertyType":PropertyType.NAME,"value":name});setProperty(context,{"entities":q,"propertyType":PropertyType.APPEARANCE,"value":c});}
 
-annotation {"Feature Type Name":"Tube motor tilt", "Feature Type Description":"Split clamp for a rectangular carbon tube (default 10.5 mm wide, 10 mm high); MG995 servo and retained X bracket. Horn fit remains a measured parameter. No load cell. Rigid servo mounting uses bare ears without rubber. M3 tube bolts x20, pivot-foot bolts x10, journal retainer bolt x20. Horn: four 14 mm cardinal holes, enlarge to 3.2 mm, M3 bolts/nuts. Horn screws M3 x 10 for the measured 2.3 mm horn. Attach horn centre screw with a <=4 mm shaft through empty 4.5 mm journal bore BEFORE loading the journal nut, retainer or pivot support. Adjust sliding support without axial preload. Limit commanded tilt to +/-45 degrees. Reference bodies are not for printing."}
+annotation {"Feature Type Name":"Tube motor tilt", "Feature Type Description":"Rectangular carbon-tube mount. Four M2 horn holes on the measured cardinal pattern; no horn drilling. M3 center clearance with a 6 mm socket-head seat; verify center screw thread and length against the actual servo. Install center screw before journal nut, retainer and pivot support. Keep sliding support free of axial preload. Reference bodies are not for printing."}
 export const tubeTilt=defineFeature(function(context is Context,id is Id,definition is map)
  precondition {
   annotation {"Name":"Tube width - horizontal"} isLength(definition.tube,{(millimeter):[9,10.5,12]} as LengthBoundSpec);
@@ -125,13 +125,16 @@ export const tubeTilt=defineFeature(function(context is Context,id is Id,definit
   smHole(context,id+("motorHole"~i),cradle,vector(c[0],c[1],42),vector(0,0,1),3.5,8);
   smHex(context,id+("motorNut"~i),cradle,vector(c[0],c[1],42.9),vector(0,0,1),vector(1,0,0),6.2,3.2);
  }
- smHole(context,id+"hornCentre",cradle,vector(-26,0,32),vector(1,0,0),6.5,8);
+ smHole(context,id+"hornCentre",cradle,vector(-26,0,32),vector(1,0,0),3.5,8);
  smHole(context,id+"hornHubRelief",cradle,vector(-25.1,0,32),vector(1,0,0),9.5,2.1);
- // Horn attachment through holes. Open the four measured horn holes to 3.2 mm; M3 screws and nuts.
- // Use M3 x 10 with nuts behind the 2.3 mm horn; longer bolts approach the servo case. Fit the centre screw with a <=4 mm shaft through the empty journal BEFORE inserting its nut or retainer.
+ // M3 center socket-head seat: 2 mm shoulder remains above the horn hub relief.
+ smHole(context,id+"hornCentreHead",cradle,vector(-21,0,32),vector(1,0,0),6,4);
+ // Four M2 horn screws; preserve the measured 14 mm opposite-hole spacing.
+ // Attachment-side M2 hex pockets: 4.5 mm across flats, 2.2 mm deep.
+ // Screw heads face the servo; pocket floors leave 3.8 mm to the horn face.
  for(var i=0;i<4;i+=1) {
-  smHole(context,id+("hornHole"~i),cradle,vector(-26,hp*cos(i*90*degree),32+hp*sin(i*90*degree)),vector(1,0,0),3.5,7);
-  smHole(context,id+("hornHead"~i),cradle,vector(-20.1,hp*cos(i*90*degree),32+hp*sin(i*90*degree)),vector(1,0,0),6.2,4);
+  smHole(context,id+("hornHole"~i),cradle,vector(-26,hp*cos(i*90*degree),32+hp*sin(i*90*degree)),vector(1,0,0),2.4,7);
+  smHex(context,id+("hornNut"~i),cradle,vector(-21.2,hp*cos(i*90*degree),32+hp*sin(i*90*degree)),vector(1,0,0),vector(0,1,0),4.5,4);
  }
  smHole(context,id+"axleBolt",cradle,vector(18,0,32),vector(1,0,0),4.5,16);
  smHex(context,id+"axleNut",cradle,vector(18.9,0,32),vector(1,0,0),vector(0,1,0),6.2,3.2);
