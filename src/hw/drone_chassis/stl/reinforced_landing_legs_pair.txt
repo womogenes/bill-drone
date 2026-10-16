@@ -1,0 +1,10 @@
+Two replacement landing frames, revised after photographed root fracture (2026-10-13).
+Extended tapered roots: inner junctions X +/-8, Z -24; 8 mm inside fillets.
+Flat 7 x 8 mm bottom tie; original mounting holes and 8 mm mounting thickness unchanged.
+Print flat. 0.20 mm, 6 walls, 35% gyroid, 5 top/bottom layers, 6 mm brim, supports off.
+Unsliced; inspect actual toolpaths in Creality Print. No impact strength validation.
+46.31 g each solid PLA equivalent; this is NOT sliced filament usage.
+Only landing frames need reprinting. Existing chassis and deck hardware unchanged.
+Old side_frames_and_landing_legs.3mf contains obsolete legs; use reinforced_landing_legs_pair.3mf.
+
+Flush-crossbar revision: top raised 2 mm to Z -2, sides widened 1 mm each to X +/-29 to align with existing frame bosses. Corner profile matches square frame corners. Bolt holes and mounting thickness unchanged.

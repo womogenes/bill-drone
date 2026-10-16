@@ -100,11 +100,14 @@ for(var sx in [-1,1])for(var sy in [-1,1]) {
  smPoly(context,bid,[[sy*14,-50],[sy*50.7,-13.3],[sy*50.7,-7.3],[sy*14,-44]],vector(sx==1?18.5:-21.5,0,0),vector(1,0,0),vector(0,1,0),3);
  smJoin(context,bid+"join",qUnion([body,smSolid(context,bid)]));
 }
-// Two planar inverted-V frames; the four feet are integral and unconnected.
+// Closed landing frames with extended tapered haunches and a flat foot tie.
+// Keep the 8 mm mounting thickness and all shared deck/frame bolt interfaces.
 for(var side in [-1,1]){
  const sid=id+("gear"~side); const gy=side==-1?-50.7:58.7;
- smPoly(context,sid+"shape",[[-28,-4],[28,-4],[28,-18],[78,-80],[78,-87],[62,-87],[62,-80],[20,-20],[-20,-20],[-62,-80],[-62,-87],[-78,-87],[-78,-80],[-28,-18]],vector(0,gy,0),vector(0,-1,0),vector(1,0,0),8);
+ smPoly(context,sid+"shape",[[-29,-2],[29,-2],[29,-19],[78,-80],[78,-87],[62,-87],[62,-80],[8,-24],[-8,-24],[-62,-80],[-62,-87],[-78,-87],[-78,-80],[-29,-19]],vector(0,gy,0),vector(0,-1,0),vector(1,0,0),8);
  const gear=smSolid(context,sid+"shape");
+ smBlock(context,sid+"footTie",-62,62,gy-8,gy,-87,-80);
+ smJoin(context,sid+"footTieJoin",qUnion([gear,smSolid(context,sid+"footTie")]));
  for(var x in [-24,24]){
   const bid=sid+("mount"~x);
   smBlock(context,bid,x-5,x+5,side==-1?-50.7:44.7,side==-1?-44.7:50.7,-19,-2);
@@ -117,10 +120,9 @@ for(var side in [-1,1]){
   smCut(context,bid+"nutAccessCut",body,smSolid(context,bid+"nutAccess"));
   // Same depth for the hex and access slot removes the narrow internal step.
  }
- opFillet(context,sid+"roots",{"entities":qUnion([qContainsPoint(qOwnedByBody(gear,EntityType.EDGE),vector(-20,gy-4,-20)*millimeter),qContainsPoint(qOwnedByBody(gear,EntityType.EDGE),vector(20,gy-4,-20)*millimeter)]),"radius":3*millimeter});
- // Substantial top-corner chamfers on the exposed landing crossbar.
- smBevel(context,sid+"crossbarCorners",gear,[vector(-28,gy-4,-4),vector(28,gy-4,-4)],2);
- smBevel(context,sid+"footBevel",gear,[vector(-78,gy-4,-87),vector(-62,gy-4,-87),vector(62,gy-4,-87),vector(78,gy-4,-87)],0.6);
+ opFillet(context,sid+"roots",{"entities":qUnion([qContainsPoint(qOwnedByBody(gear,EntityType.EDGE),vector(-8,gy-4,-24)*millimeter),qContainsPoint(qOwnedByBody(gear,EntityType.EDGE),vector(8,gy-4,-24)*millimeter)]),"radius":8*millimeter});
+ // Match frame bosses at X +/-29 and Z -2; keep the mating silhouette square.
+ smBevel(context,sid+"footBevel",gear,[vector(-78,gy-4,-87),vector(78,gy-4,-87)],0.6);
  smLabel(context,gear,side==-1?"Front landing legs":"Rear landing legs",blue);
 }
 // Two bottom-up hatch screws remain threaded in side-loaded nuts during battery changes.

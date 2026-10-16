@@ -1,0 +1,50 @@
+[
+  {
+    "name": "M2 shaft 0",
+    "pass": true
+  },
+  {
+    "name": "M2 nut 0",
+    "pass": true
+  },
+  {
+    "name": "M2 shaft 1",
+    "pass": true
+  },
+  {
+    "name": "M2 nut 1",
+    "pass": true
+  },
+  {
+    "name": "M2 shaft 2",
+    "pass": true
+  },
+  {
+    "name": "M2 nut 2",
+    "pass": true
+  },
+  {
+    "name": "M2 shaft 3",
+    "pass": true
+  },
+  {
+    "name": "M2 nut 3",
+    "pass": true
+  },
+  {
+    "name": "M3 center shaft",
+    "pass": true
+  },
+  {
+    "name": "M3 center socket head",
+    "pass": true
+  },
+  {
+    "name": "M3 head cannot pass shoulder",
+    "pass": true
+  },
+  {
+    "name": "Center driver via empty journal",
+    "pass": true
+  }
+]

@@ -1,3 +1,21 @@
+## Flush leg crossbar — 2026-10-13
+
+Leg crossbars now align with the existing frame bosses: top Z −2 (raised 2 mm), side edges X ±29 (1 mm wider each side), matching square top corners. Screw centers, 8 mm mounting thickness, roots and foot tie are preserved. Only the two leg bodies changed; live regeneration and collision checks passed. Solid PLA equivalent is 46.31 g per frame, not sliced usage.
+
+Both `stl/reinforced_landing_legs_pair.3mf` and `stl/legs_and_motor_cradles.3mf` are refreshed. The combined project now includes current M2 nut-recess cradles with organic tree supports. Both projects are unsliced.
+
+## Horn screw direction and captive nuts — 2026-10-13
+
+The four M2 horn screws now enter from the servo side and thread into attachment-side hex nuts. Recesses are 4.5 mm across flats and 2.2 mm deep; clearance holes remain 2.4 mm. Center M3 socket-head screw direction and retaining shoulder are unchanged. Fit the outer screws to the horn before mounting it to the servo when rear access is obstructed. Install the center screw before closing the opposite journal/retainer.
+
+Use `../end_attachment/stl/motor_cradles_m2_nut_recesses_pair.3mf` for two attachments only. Organic tree supports enabled, build-plate-only. Unsliced; inspect pocket support cleanup and actual print fit. The earlier combined legs project has the previous cradle geometry.
+
+## Landing root revision — 2026-10-13
+
+Following the photographed root fracture, the unprinted replacement frames now have extended tapered roots (inner junctions X ±8, Z −24) and 8 mm inside fillets. The bottom tie, 8 mm frame thickness, mounting holes, and rear electronics-deck interface remain unchanged. Only the two leg parts changed in the live model; regeneration and assembly interference checks passed.
+
+Use `stl/reinforced_landing_legs_pair.3mf`: two frames flat, 0.20 mm layers, six walls, 35% gyroid, five top/bottom layers, 6 mm brim, supports off. The project is unsliced and has not been checked in the slicer GUI. Roots do not have separate solid-infill modifiers. Solid-PLA equivalent is 44.71 g each (+5.17 g versus the previous tied design), not a sliced mass estimate. Test physically with propellers removed before powered tests; geometry checks do not establish landing-impact strength.
+
 # Drone assembly
 
 Updated 2026-10-12. CAD source snapshots: `chassis.fs` and
@@ -6,6 +24,47 @@ https://cad.onshape.com/documents/d7e760af3cc2197cafa5a123/w/0a0eede3b0e261a3b55
 
 The assembly retains two linked instances of the servo-mount Part Studio.
 Re-export modified parts before slicing; old STLs do not update themselves.
+
+## M2 horn interface and reinforced landing frames — 2026-10-13
+
+Reprint only the two Motor cradles and two landing frames for this revision.
+The servo frames, pivot supports, electronics deck (including rear braces),
+side frames and existing landing-frame attachment holes remain unchanged.
+
+The cradle now has four 2.4 mm clearance holes on the existing 14 mm cardinal
+horn pattern, with 4.4 mm head counterbores for M2 socket screws. Do not enlarge
+the horn to M3. The M2 head seats leave 3.8 mm of printed material to the horn
+face. If the horn is threaded M2, an M2 x 6 screw projects 2.2 mm into it; check
+actual usable thread depth and servo-case clearance. If it uses through holes
+and nuts, M2 x 8 leaves about 1.9 mm beyond the measured 2.3 mm horn for a nut.
+Choose the applicable arrangement for the real horn, not both.
+
+The center hole is 3.5 mm with a 6 mm counterbore for an M3 socket head. A 2 mm
+thick shoulder between the head seat and hub relief retains the head. The
+counterbore is 2 mm deep; a standard 3 mm tall socket head protrudes 1 mm into
+the open cradle. Select center-screw length from actual servo thread engagement;
+the new seat is 4 mm outward from the horn contact face. Do not assume the
+original center screw remains long enough. Install the center screw before the
+journal nut, pivot retainer and support obstruct the axial driver path.
+
+Landing-frame root width at the crossbar is increased from roughly 8 to 16 mm
+by moving the inner root corners from x=+/-20 to +/-12. Root fillets increase
+from 3 to 5 mm. A 7 mm tall, 8 mm deep ground-level tie joins the feet of each
+pair, resisting splay. Overall footprint, height, mounting-hole centers and
+front/rear interchangeability are retained. This does not certify crash strength.
+Test progressively with the assembled vehicle before another powered test.
+
+Replacement projects:
+- stl/reinforced_landing_legs_pair.3mf: two identical frames, flat, supports off.
+- ../end_attachment/stl/motor_cradles_m2_pair.3mf: two cradles, motor-plate face
+  down, normal automatic build-plate supports enabled for overhangs.
+Both: 0.20 mm layers, 4 walls, 25% gyroid, 5 top/bottom layers and 6 mm brims.
+These are unsliced projects; inspect the sliced preview before printing.
+Solid-PLA equivalents are 16.84 g per cradle and 39.54 g per landing frame;
+actual sliced use will differ. The leg changes add 13.38 g per frame by solid
+volume. CAD regeneration, collision checks and all 12 horn hardware/access
+checks passed. The central head-retention check intentionally confirms that a
+head pushed through its shoulder collides with the retaining material.
 
 ## Direct-mount electronics platform and camera fixture (current)
 
