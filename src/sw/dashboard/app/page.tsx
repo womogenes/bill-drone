@@ -214,32 +214,44 @@ export default function Page() {
     socket.current?.send(JSON.stringify({ command: 'calibrate_imu' }));
   }, []);
 
-  const sendControl = useCallback((settings: Partial<ControlSettings>) => {
-    pendingControl.current = { ...pendingControl.current, ...settings };
-    if (controlTimer.current !== undefined) return;
+  const sendControl = useCallback(
+    (settings: Partial<ControlSettings>, immediate = false) => {
+      pendingControl.current = { ...pendingControl.current, ...settings };
+      if (controlTimer.current !== undefined) {
+        if (!immediate) return;
+        clearTimeout(controlTimer.current);
+        controlTimer.current = undefined;
+      }
 
-    function flush() {
-      controlTimer.current = undefined;
-      const ws = socket.current;
-      if (ws?.readyState !== WebSocket.OPEN) {
+      function flush() {
+        controlTimer.current = undefined;
+        const ws = socket.current;
+        if (ws?.readyState !== WebSocket.OPEN) {
+          pendingControl.current = {};
+          return;
+        }
+        if (ws.bufferedAmount > 0) {
+          controlTimer.current = setTimeout(flush, 4);
+          return;
+        }
+        ws.send(
+          JSON.stringify({
+            command: 'control',
+            settings: pendingControl.current,
+          })
+        );
         pendingControl.current = {};
-        return;
+        lastControlSent.current = performance.now();
       }
-      if (ws.bufferedAmount > 0) {
-        controlTimer.current = setTimeout(flush, 20);
-        return;
-      }
-      ws.send(
-        JSON.stringify({ command: 'control', settings: pendingControl.current })
-      );
-      pendingControl.current = {};
-      lastControlSent.current = performance.now();
-    }
 
-    const delay = 20 - (performance.now() - lastControlSent.current);
-    if (delay <= 0) flush();
-    else controlTimer.current = setTimeout(flush, delay);
-  }, []);
+      const delay = immediate
+        ? 0
+        : 10 - (performance.now() - lastControlSent.current);
+      if (delay <= 0) flush();
+      else controlTimer.current = setTimeout(flush, delay);
+    },
+    []
+  );
   const stopMotors = useCallback(() => {
     cancelControl();
     setStopEpoch((previous) => previous + 1);

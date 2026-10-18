@@ -34,6 +34,7 @@ def init():
             # Original ESP32: GPIO matrix selects LEDC high-speed channels 71..78.
             channel = (mem32[0x3FF44530 + 4 * pin] & 0x1FF) - 71
             assert 0 <= channel < 8, "PWM requires an ESP32 high-speed LEDC channel"
+
             register = 0x3FF59000 + 20 * channel
             timer = mem32[register] & 3
             resolution = mem32[0x3FF59140 + 8 * timer] & 31

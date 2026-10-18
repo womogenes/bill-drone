@@ -17,16 +17,17 @@ export type ControlSettings = {
   pitch: number;
   yaw_rate: number;
   base_throttle: number;
-  attitude_kp: number;
-  roll_kp: number;
-  roll_ki: number;
-  roll_kd: number;
-  pitch_kp: number;
-  pitch_ki: number;
-  pitch_kd: number;
-  yaw_kp: number;
-  yaw_ki: number;
-  yaw_kd: number;
+  roll_p: number;
+  roll_i: number;
+  roll_damping: number;
+  pitch_p: number;
+  pitch_i: number;
+  pitch_damping: number;
+  yaw_damping: number;
+  integral_limit: number;
+  pitch_trim: number;
+  left_trim: number;
+  right_trim: number;
 };
 
 export type Reading = {

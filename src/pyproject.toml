@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 dependencies = [
     "ipykernel>=7.4.0",
     "matplotlib>=3.11.2",
+    "mujoco>=3.16.0",
     "opencv-python>=5.0.0.93",
     "pandas>=3.0.6",
     "pyserial>=3.5",
@@ -17,3 +18,10 @@ dev = [
     "microdot>=2.7.0",
     "micropython-esp32-stubs>=1.29.0.post1",
 ]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["sw", "sw.sim", "sw.sim.slop", "fw", "fw.drivers"]

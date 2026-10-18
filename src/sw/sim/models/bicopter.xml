@@ -1,0 +1,91 @@
+<mujoco model="Bill bicopter">
+  <!-- SI units. Body X forward, Y left, Z up; origin at tube midpoint. -->
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <visual><global offwidth="800" offheight="600"/></visual>
+  <default>
+    <geom friction="0.8 0.005 0.0001" rgba="0.25 0.45 0.55 1"/>
+    <default class="cad">
+      <geom type="mesh" quat="0.70710678 0 0 0.70710678" contype="0" conaffinity="0"/>
+    </default>
+  </default>
+  <asset>
+    <!-- Local CAD exports are in millimetres. Exact mesh inertia preserves holes. -->
+    <mesh name="deck" file="../../../hw/drone_chassis/stl/electronics_deck.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+    <mesh name="front_legs" file="../../../hw/drone_chassis/stl/landing_legs.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+    <mesh name="rear_legs" file="../../../hw/drone_chassis/stl/rear_landing_legs.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+    <mesh name="side" file="../../../hw/drone_chassis/stl/side_frame.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+    <mesh name="hatch" file="../../../hw/drone_chassis/stl/battery_hatch.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+    <mesh name="camera" file="../../../hw/drone_chassis/stl/camera_fixture.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+    <!-- Fixed pieces recovered from the original print-layout STL; cradle is the M2 revision. -->
+    <mesh name="fixed_mount" file="meshes/fixed_mount.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+    <mesh name="motor_cradle" file="../../../hw/end_attachment/stl/motor_cradle_m2.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+    <mesh name="pivot_retainer" file="meshes/pivot_retainer.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+  </asset>
+  <worldbody>
+    <light pos="1 -1 3" dir="-1 1 -3"/>
+    <geom name="floor" type="plane" size="3 3 0.1" rgba="0.85 0.85 0.85 1"/>
+    <camera name="overview" mode="targetbody" target="drone" pos="0.75 -1.0 1.0" fovy="35"/>
+    <body name="drone" pos="0 0 0.6">
+      <freejoint/>
+      <geom name="tube" type="box" size="0.00525 0.210 0.005" mass="0.025" rgba="0.15 0.15 0.15 1"/>
+      <geom name="deck" class="cad" mesh="deck" mass="0.024"/>
+      <geom name="front_legs" class="cad" mesh="front_legs" mass="0.035"/>
+      <geom name="rear_legs" class="cad" mesh="rear_legs" mass="0.035"/>
+      <geom name="left_side" class="cad" mesh="side" mass="0.01656"/>
+      <geom name="right_side" class="cad" mesh="side" quat="0.70710678 0 0 -0.70710678" mass="0.01656"/>
+      <geom name="hatch" class="cad" mesh="hatch" mass="0.017"/>
+      <geom name="camera_mount" class="cad" mesh="camera" mass="0.008"/>
+      <geom name="bridge" type="box" pos="0 0 -0.009" size="0.014 0.025 0.0035" mass="0.014"/>
+      <geom name="battery" type="box" pos="0 0 -0.0305" size="0.037 0.018 0.0175" mass="0.193" rgba="0.2 0.2 0.2 1"/>
+      <geom name="electronics" type="box" pos="-0.035 0 0.025" size="0.045 0.035 0.010" mass="0.055" rgba="0.2 0.45 0.25 1"/>
+      <geom name="camera_board" type="box" pos="0.040 0 0.033" size="0.002 0.014 0.020" mass="0.010" rgba="0.2 0.45 0.25 1"/>
+      <geom name="left_esc" type="box" pos="0 0.065 0.0085" size="0.025 0.013 0.0035" mass="0.025"/>
+      <geom name="right_esc" type="box" pos="0 -0.065 0.0085" size="0.025 0.013 0.0035" mass="0.025"/>
+      <!-- 39.20 g residual closes the mass budget to the reported 900 g. -->
+      <geom name="wiring_hardware" type="box" pos="0 0 0.020" size="0.030 0.080 0.010" mass="0.03920" rgba="0.3 0.3 0.3 0" contype="0" conaffinity="0"/>
+      <!-- Foot pads approximate landing contact. CAD meshes are visual/inertial. -->
+      <geom type="sphere" pos="0.055 0.070 -0.084" size="0.003" mass="0"/>
+      <geom type="sphere" pos="0.055 -0.070 -0.084" size="0.003" mass="0"/>
+      <geom type="sphere" pos="-0.055 0.070 -0.084" size="0.003" mass="0"/>
+      <geom type="sphere" pos="-0.055 -0.070 -0.084" size="0.003" mass="0"/>
+      <site name="imu" pos="0 0 0.015" size="0.003"/>
+
+      <!-- CAD: tilt pivot 37.2 mm above tube; motor axis at Y +/-172 mm. -->
+      <geom name="left_frame" type="mesh" mesh="fixed_mount" quat="0.70710678 0 0 0.70710678" pos="0 0.1785 0.0052" mass="0.040" contype="0" conaffinity="0"/>
+      <geom name="left_servo_case" type="box" pos="0 0.1215 0.04755" size="0.010 0.019 0.02035" mass="0.055" rgba="0.25 0.25 0.25 1"/>
+      <body name="left_motor" pos="0 0.172 0.0372">
+        <!-- Positive left command tilts backward, matching the observed hardware. -->
+        <joint name="left_tilt" axis="0 -1 0" range="-1.0472 1.0472"/>
+        <geom name="left_cradle" type="mesh" mesh="motor_cradle" quat="0.70710678 0 0 0.70710678" pos="0 0.0065 -0.032" mass="0.01684" rgba="0.8 0.45 0.15 1" contype="0" conaffinity="0"/>
+        <geom type="mesh" mesh="pivot_retainer" quat="0.70710678 0 0 0.70710678" pos="0 0.0065 -0.032" mass="0" rgba="0.8 0.45 0.15 1" contype="0" conaffinity="0"/>
+        <geom name="left_motor_case" type="cylinder" pos="0 0 0.0335" size="0.014 0.015" mass="0.057" rgba="0.55 0.55 0.55 1"/>
+        <geom name="left_prop" type="ellipsoid" pos="0 0 0.0568" size="0.012 0.1143 0.0015" mass="0.012" rgba="0.15 0.15 0.15 1" contype="0" conaffinity="0"/>
+        <site name="left_thrust" pos="0 0 0.0568" size="0.004"/>
+      </body>
+      <geom name="right_frame" type="mesh" mesh="fixed_mount" quat="0.70710678 0 0 -0.70710678" pos="0 -0.1785 0.0052" mass="0.040" contype="0" conaffinity="0"/>
+      <geom name="right_servo_case" type="box" pos="0 -0.1215 0.04755" size="0.010 0.019 0.02035" mass="0.055" rgba="0.25 0.25 0.25 1"/>
+      <body name="right_motor" pos="0 -0.172 0.0372">
+        <joint name="right_tilt" axis="0 1 0" range="-1.0472 1.0472"/>
+        <geom name="right_cradle" type="mesh" mesh="motor_cradle" quat="0.70710678 0 0 -0.70710678" pos="0 -0.0065 -0.032" mass="0.01684" rgba="0.8 0.45 0.15 1" contype="0" conaffinity="0"/>
+        <geom type="mesh" mesh="pivot_retainer" quat="0.70710678 0 0 -0.70710678" pos="0 -0.0065 -0.032" mass="0" rgba="0.8 0.45 0.15 1" contype="0" conaffinity="0"/>
+        <geom name="right_motor_case" type="cylinder" pos="0 0 0.0335" size="0.014 0.015" mass="0.057" rgba="0.55 0.55 0.55 1"/>
+        <geom name="right_prop" type="ellipsoid" pos="0 0 0.0568" size="0.012 0.1143 0.0015" mass="0.012" rgba="0.15 0.15 0.15 1" contype="0" conaffinity="0"/>
+        <site name="right_thrust" pos="0 0 0.0568" size="0.004"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <!-- Commands: thrust in N, tilt in radians. Thrust cap from October 4 sweep median,
+         using the user-observed approximate zero thrust at command 200. Notebook converts ESC throttle to N.
+         Dynamics are starting estimates. -->
+    <general name="left_thrust" site="left_thrust" gear="0 0 1 0 0 -0.015" ctrllimited="true" ctrlrange="0 11.21682713" dyntype="filterexact" dynprm="0.05"/>
+    <general name="right_thrust" site="right_thrust" gear="0 0 1 0 0 0.015" ctrllimited="true" ctrlrange="0 11.21682713" dyntype="filterexact" dynprm="0.05"/>
+    <position name="left_servo" joint="left_tilt" kp="5" kv="0.15" timeconst="0.06" ctrlrange="-1.0472 1.0472" forcerange="-0.8 0.8"/>
+    <position name="right_servo" joint="right_tilt" kp="5" kv="0.15" timeconst="0.06" ctrlrange="-1.0472 1.0472" forcerange="-0.8 0.8"/>
+  </actuator>
+  <sensor>
+    <gyro name="gyro" site="imu"/>
+    <accelerometer name="accel" site="imu"/>
+  </sensor>
+</mujoco>

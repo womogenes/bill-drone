@@ -59,18 +59,20 @@ const controls = [
   },
 ] as const;
 type Setpoint = (typeof controls)[number]['key'];
-const gainKeys = [
-  'attitude_kp',
-  'roll_kp',
-  'roll_ki',
-  'roll_kd',
-  'pitch_kp',
-  'pitch_ki',
-  'pitch_kd',
-  'yaw_kp',
-  'yaw_ki',
-  'yaw_kd',
+const tuningFields = [
+  { key: 'roll_p', label: 'Roll P', min: 0 },
+  { key: 'roll_i', label: 'Roll I', min: 0 },
+  { key: 'roll_damping', label: 'Roll damping', min: 0 },
+  { key: 'pitch_p', label: 'Pitch P', min: 0 },
+  { key: 'pitch_i', label: 'Pitch I', min: 0 },
+  { key: 'pitch_damping', label: 'Pitch damping', min: 0 },
+  { key: 'yaw_damping', label: 'Yaw damping', min: 0 },
+  { key: 'integral_limit', label: 'Integral limit', min: 0 },
+  { key: 'pitch_trim', label: 'Pitch trim (°)', min: -15 },
+  { key: 'left_trim', label: 'Left servo trim (°)', min: -15 },
+  { key: 'right_trim', label: 'Right servo trim (°)', min: -15 },
 ] as const;
+const gainKeys = tuningFields.map(({ key }) => key);
 
 export const ControlPanel = memo(function ControlPanel({
   settings,
@@ -82,9 +84,10 @@ export const ControlPanel = memo(function ControlPanel({
   settings: ControlSettings;
   status: Reading['control_status'];
   connected: boolean;
-  onChange: (settings: Partial<ControlSettings>) => void;
+  onChange: (settings: Partial<ControlSettings>, immediate?: boolean) => void;
   onStop: () => void;
 }) {
+  const available = connected && settings.pitch_p !== undefined;
   const [draft, setDraft] = useState<Partial<Record<Setpoint, number>>>({});
   const [gains, setGains] = useState<Record<string, string>>({});
   const [open, setOpen] = useState(false);
@@ -104,7 +107,7 @@ export const ControlPanel = memo(function ControlPanel({
   }, [draft.base_throttle, settings.base_throttle]);
 
   useEffect(() => {
-    if (!connected || !settings.enabled || open) return;
+    if (!available || !settings.enabled || open) return;
 
     const held = new Set<string>();
     let timer: ReturnType<typeof setInterval> | undefined;
@@ -119,14 +122,14 @@ export const ControlPanel = memo(function ControlPanel({
       );
       throttle.current = next;
       setDraft((previous) => ({ ...previous, base_throttle: next }));
-      onChange({ base_throttle: next });
+      onChange({ base_throttle: next }, true);
     }
 
     function changeYaw() {
       const yaw_rate =
         KEY_YAW_RATE * (Number(held.has('KeyA')) - Number(held.has('KeyD')));
       setDraft((previous) => ({ ...previous, yaw_rate }));
-      onChange({ yaw_rate });
+      onChange({ yaw_rate }, true);
     }
 
     function changeTilt(code: keyof typeof tiltKeys) {
@@ -139,7 +142,7 @@ export const ControlPanel = memo(function ControlPanel({
       );
       const value = KEY_TILT * direction;
       setDraft((previous) => ({ ...previous, [axis]: value }));
-      onChange({ [axis]: value });
+      onChange({ [axis]: value }, true);
     }
 
     function keydown(event: KeyboardEvent) {
@@ -206,7 +209,7 @@ export const ControlPanel = memo(function ControlPanel({
       window.removeEventListener('keyup', keyup);
       window.removeEventListener('blur', blur);
     };
-  }, [connected, settings.enabled, open, onChange, onStop]);
+  }, [available, settings.enabled, open, onChange, onStop]);
 
   return (
     <section
@@ -235,7 +238,7 @@ export const ControlPanel = memo(function ControlPanel({
                 variant="ghost"
                 size="icon"
                 aria-label="Control gains"
-                disabled={settings.enabled}
+                disabled={!available || settings.enabled}
               />
             }
           >
@@ -257,40 +260,33 @@ export const ControlPanel = memo(function ControlPanel({
                 setOpen(false);
               }}
             >
-              <label className="flex items-center justify-between gap-4">
-                Attitude P
-                <Input
-                  className="w-24"
-                  type="number"
-                  min={0}
-                  step="any"
-                  required
-                  value={gains.attitude_kp ?? ''}
-                  onChange={(event) =>
-                    setGains({ ...gains, attitude_kp: event.target.value })
-                  }
-                />
-              </label>
-              <div className="grid grid-cols-4 items-center gap-2">
-                <span />
-                <span>P</span>
-                <span>I</span>
-                <span>D</span>
-                {(['roll', 'pitch', 'yaw'] as const).map((axis) => (
-                  <GainRow
-                    key={axis}
-                    axis={axis}
-                    gains={gains}
-                    onChange={(key, value) =>
-                      setGains({ ...gains, [key]: value })
-                    }
-                  />
+              <div className="grid grid-cols-2 gap-3">
+                {tuningFields.map(({ key, label, min }) => (
+                  <label
+                    key={key}
+                    className="flex items-center justify-between gap-3"
+                  >
+                    {label}
+                    <Input
+                      className="w-24"
+                      aria-label={label}
+                      type="number"
+                      min={min}
+                      max={key.endsWith('_trim') ? 15 : undefined}
+                      step="any"
+                      required
+                      value={gains[key] ?? ''}
+                      onChange={(event) =>
+                        setGains({ ...gains, [key]: event.target.value })
+                      }
+                    />
+                  </label>
                 ))}
               </div>
               <Button
                 type="submit"
                 variant="outline"
-                disabled={!connected || settings.enabled}
+                disabled={!available || settings.enabled}
               >
                 Apply
               </Button>
@@ -299,7 +295,7 @@ export const ControlPanel = memo(function ControlPanel({
         </Dialog>
         <Button
           variant="outline"
-          disabled={!connected || !status?.mapping_confirmed}
+          disabled={!available || !status?.mapping_confirmed}
           aria-pressed={settings.enabled}
           onClick={() =>
             settings.enabled
@@ -347,6 +343,9 @@ export const ControlPanel = memo(function ControlPanel({
           </div>
         ))}
       </div>
+      {connected && !available && (
+        <p className="text-red-700">Firmware update required</p>
+      )}
       {status?.reason && (
         <p role="status" className="text-red-700">
           {status.reason}
@@ -357,16 +356,16 @@ export const ControlPanel = memo(function ControlPanel({
           key={control.key}
           control={control}
           value={draft[control.key] ?? settings[control.key]}
-          disabled={!connected || !settings.enabled}
+          disabled={!available || !settings.enabled}
           onChange={changeSetpoint}
         />
       ))}
       <Button
         variant="outline"
-        disabled={!connected || !settings.enabled}
+        disabled={!available || !settings.enabled}
         onClick={() => {
           setDraft((previous) => ({ ...previous, roll: 0, pitch: 0 }));
-          onChange({ roll: 0, pitch: 0 });
+          onChange({ roll: 0, pitch: 0 }, true);
         }}
       >
         Level
@@ -409,34 +408,3 @@ const SetpointSlider = memo(function SetpointSlider({
     </div>
   );
 });
-
-function GainRow({
-  axis,
-  gains,
-  onChange,
-}: {
-  axis: string;
-  gains: Record<string, string>;
-  onChange: (key: string, value: string) => void;
-}) {
-  return (
-    <>
-      <span className="capitalize">{axis} rate</span>
-      {['kp', 'ki', 'kd'].map((gain) => {
-        const key = `${axis}_${gain}`;
-        return (
-          <Input
-            key={key}
-            aria-label={`${axis} ${gain}`}
-            type="number"
-            min={0}
-            step="any"
-            required
-            value={gains[key] ?? ''}
-            onChange={(event) => onChange(key, event.target.value)}
-          />
-        );
-      })}
-    </>
-  );
-}
