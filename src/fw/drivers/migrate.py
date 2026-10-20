@@ -1,9 +1,10 @@
 """
-One-time import of the settings, servo offsets and IMU calibration that the application used to keep in JSON files into the native settings store (native/runtime/settings.c). The files stay in place, unused.
+One-time import of JSON settings into the native store. After NVS restores the migration flag on the next boot, remove the old copies so a lost store cannot revive stale calibration.
 """
 
 import errno
 import json
+import os
 import settings
 from drivers.calibration import SENSOR_TO_BODY
 
@@ -23,6 +24,12 @@ def load(path):
 
 def run():
     if settings.migrated():
+        for path in (TUNING_FILE, CALIBRATION_FILE):
+            try:
+                os.remove(path)
+            except OSError as error:
+                if error.errno != errno.ENOENT:
+                    raise
         return
     tuning = load(TUNING_FILE)
     values = {key: value for key, value in tuning.items() if key != "servo_offsets"}

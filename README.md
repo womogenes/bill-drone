@@ -65,7 +65,7 @@ Each armed session becomes one recording, `src/sw/recordings/<time>_<session>.bi
 
 Sampling and control run at 100 Hz. Log batches of four samples go out every 40 ms. The rate and batch size are defined in `src/fw/drivers/log_format.py`.
 
-IMU calibration averages two seconds of gyro and gravity readings, then saves gyro bias and the zero-pose reference in NVS. Startup restores calibration when its sensor coordinate frame matches the firmware. Arming requires saved calibration; the calibration button stays busy until saving finishes. Recordings include calibration validity, gyro bias, and `pose_zero_deg`. Existing JSON calibration and tuning files are imported once during migration.
+IMU calibration averages two seconds of gyro and gravity readings, then saves gyro bias and the zero-pose reference in NVS. Startup restores calibration when its sensor coordinate frame matches the firmware. Arming requires saved calibration; the calibration button stays busy until saving finishes. Recordings include calibration validity, gyro bias, and `pose_zero_deg`. Existing JSON calibration and tuning files are imported once during migration and removed after NVS restores the migration flag on the next boot, preventing a lost store from reviving stale calibration.
 
 ## Tuning from a terminal
 
