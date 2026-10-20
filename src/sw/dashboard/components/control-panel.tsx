@@ -72,22 +72,73 @@ const tuningFields = [
   { key: 'left_trim', label: 'Left servo trim (°)', min: -15 },
   { key: 'right_trim', label: 'Right servo trim (°)', min: -15 },
 ] as const;
-const gainKeys = tuningFields.map(({ key }) => key);
+const modelFields = [
+  { key: 'pivot_height', label: 'Pivot height (m)', min: 0, max: undefined },
+  { key: 'com_x', label: 'CoM x (m)', min: -0.02, max: 0.02 },
+  {
+    key: 'roll_inertia',
+    label: 'Roll inertia (kg·m²)',
+    min: 0,
+    max: undefined,
+  },
+  {
+    key: 'pitch_inertia',
+    label: 'Pitch inertia (kg·m²)',
+    min: 0,
+    max: undefined,
+  },
+  { key: 'yaw_inertia', label: 'Yaw inertia (kg·m²)', min: 0, max: undefined },
+  {
+    key: 'reaction_torque_ratio',
+    label: 'Reaction torque ratio',
+    min: -0.1,
+    max: 0.1,
+  },
+  { key: 'arm', label: 'Arm (m)', min: 0, max: undefined },
+] as const;
+const gainKeys = [...tuningFields, ...modelFields].map(({ key }) => key);
 
 export const ControlPanel = memo(function ControlPanel({
   settings,
+  recorderReady,
+  recorderError,
+  imu,
   status,
   connected,
   onChange,
   onStop,
 }: {
   settings: ControlSettings;
+  recorderReady: boolean;
+  recorderError?: string;
+  imu: 'offline' | 'calibrating' | 'uncalibrated' | 'calibrated';
   status: Reading['control_status'];
   connected: boolean;
   onChange: (settings: Partial<ControlSettings>, immediate?: boolean) => void;
   onStop: () => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
+  const ready =
+    available &&
+    !!status?.mapping_confirmed &&
+    recorderReady &&
+    imu === 'calibrated';
+  const problem = !connected
+    ? 'Disconnected'
+    : !available
+      ? 'Firmware update required'
+      : imu === 'calibrating'
+        ? 'Calibrating IMU'
+        : status?.reason ||
+          (imu === 'offline'
+            ? 'IMU offline'
+            : imu === 'uncalibrated'
+              ? 'Calibrate IMU before enabling'
+              : !status?.mapping_confirmed
+                ? 'IMU mounting needs confirmation'
+                : !recorderReady
+                  ? (recorderError ?? 'Flight recorder not ready')
+                  : '');
   const [draft, setDraft] = useState<Partial<Record<Setpoint, number>>>({});
   const [gains, setGains] = useState<Record<string, string>>({});
   const [open, setOpen] = useState(false);
@@ -227,7 +278,12 @@ export const ControlPanel = memo(function ControlPanel({
             if (value)
               setGains(
                 Object.fromEntries(
-                  gainKeys.map((key) => [key, String(settings[key])])
+                  gainKeys
+                    .filter((key) => settings[key] !== undefined)
+                    .map((key) => [
+                      key,
+                      String(Number(settings[key].toPrecision(5))),
+                    ])
                 )
               );
           }}
@@ -244,7 +300,7 @@ export const ControlPanel = memo(function ControlPanel({
           >
             <Settings2 />
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="sm:max-w-3xl">
             <DialogHeader>
               <DialogTitle>Control gains</DialogTitle>
             </DialogHeader>
@@ -254,7 +310,10 @@ export const ControlPanel = memo(function ControlPanel({
                 event.preventDefault();
                 onChange(
                   Object.fromEntries(
-                    gainKeys.map((key) => [key, Number(gains[key])])
+                    Object.entries(gains).map(([key, value]) => [
+                      key,
+                      Number(value),
+                    ])
                   )
                 );
                 setOpen(false);
@@ -268,7 +327,7 @@ export const ControlPanel = memo(function ControlPanel({
                   >
                     {label}
                     <Input
-                      className="w-24"
+                      className="w-32"
                       aria-label={label}
                       type="number"
                       min={min}
@@ -283,6 +342,34 @@ export const ControlPanel = memo(function ControlPanel({
                   </label>
                 ))}
               </div>
+              {settings.arm !== undefined && (
+                <section className="space-y-3">
+                  <h3 className="font-medium">Model</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    {modelFields.map(({ key, label, min, max }) => (
+                      <label
+                        key={key}
+                        className="flex items-center justify-between gap-3"
+                      >
+                        {label}
+                        <Input
+                          className="w-32"
+                          aria-label={label}
+                          type="number"
+                          min={min}
+                          max={max}
+                          step="any"
+                          required
+                          value={gains[key] ?? ''}
+                          onChange={(event) =>
+                            setGains({ ...gains, [key]: event.target.value })
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </section>
+              )}
               <Button
                 type="submit"
                 variant="outline"
@@ -295,7 +382,7 @@ export const ControlPanel = memo(function ControlPanel({
         </Dialog>
         <Button
           variant="outline"
-          disabled={!available || !status?.mapping_confirmed}
+          disabled={!connected || (!settings.enabled && !ready)}
           aria-pressed={settings.enabled}
           onClick={() =>
             settings.enabled
@@ -343,14 +430,12 @@ export const ControlPanel = memo(function ControlPanel({
           </div>
         ))}
       </div>
-      {connected && !available && (
-        <p className="text-red-700">Firmware update required</p>
-      )}
-      {status?.reason && (
-        <p role="status" className="text-red-700">
-          {status.reason}
-        </p>
-      )}
+      <p
+        role="status"
+        className={`h-6 truncate ${problem ? 'text-red-700' : 'text-green-700'}`}
+      >
+        {problem || 'Good to fly.'}
+      </p>
       {controls.map((control) => (
         <SetpointSlider
           key={control.key}

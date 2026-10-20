@@ -15,8 +15,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "ar>=1.0.1",
     "microdot>=2.7.0",
     "micropython-esp32-stubs>=1.29.0.post1",
+    "pyelftools>=0.33",
 ]
 
 [build-system]

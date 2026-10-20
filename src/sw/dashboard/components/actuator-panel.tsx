@@ -17,12 +17,16 @@ export const ActuatorPanel = memo(function ActuatorPanel({
   connected,
   locked = false,
   onChange,
+  onZero,
+  zeroDisabled,
 }: {
   side: Side;
   kind: 'servo' | 'throttle';
   value: number | undefined;
   connected: boolean;
   locked?: boolean;
+  onZero: (side: Side) => void;
+  zeroDisabled: boolean;
   onChange: (kind: 'servo' | 'throttle', side: Side, value: number) => void;
 }) {
   const isServo = kind === 'servo';
@@ -79,17 +83,34 @@ export const ActuatorPanel = memo(function ActuatorPanel({
           <StatusIcon aria-hidden="true" className="size-4" />
           {disabled ? 'Offline' : 'Online'}
         </span>
-        <Button
-          className="ml-auto"
-          variant="ghost"
-          size="icon"
-          aria-label={isServo ? `Reset ${title}` : `Stop ${title}`}
-          title={isServo ? `Reset ${title}` : `Stop ${title}`}
-          disabled={disabled || locked}
-          onClick={() => commit(0)}
-        >
-          <ResetIcon />
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          {isServo && (
+            <Button
+              variant="outline"
+              className="cursor-pointer"
+              aria-label={`Set ${title} zero`}
+              disabled={disabled || locked || zeroDisabled || dragging}
+              onClick={() => {
+                sendLatest();
+                onZero(side);
+                setDraft(0);
+              }}
+            >
+              Set zero
+            </Button>
+          )}
+          <Button
+            className="cursor-pointer"
+            variant="ghost"
+            size="icon"
+            aria-label={isServo ? `Reset ${title}` : `Stop ${title}`}
+            title={isServo ? `Reset ${title}` : `Stop ${title}`}
+            disabled={disabled || locked}
+            onClick={() => commit(0)}
+          >
+            <ResetIcon />
+          </Button>
+        </div>
       </div>
       <div>
         <p className="text-sm text-muted-foreground">

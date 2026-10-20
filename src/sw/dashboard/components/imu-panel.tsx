@@ -9,6 +9,7 @@ import { ImuAxisChart } from '@/components/imu-axis-chart';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -39,11 +40,13 @@ const ImuRange = memo(function ImuRange({ seconds }: { seconds: number }) {
         <SelectValue />
       </SelectTrigger>
       <SelectContent align="start" alignItemWithTrigger={false}>
-        {ranges.map((range) => (
-          <SelectItem key={range.value} value={range.value}>
-            {range.label}
-          </SelectItem>
-        ))}
+        <SelectGroup>
+          {ranges.map((range) => (
+            <SelectItem key={range.value} value={range.value}>
+              {range.label}
+            </SelectItem>
+          ))}
+        </SelectGroup>
       </SelectContent>
     </Select>
   );

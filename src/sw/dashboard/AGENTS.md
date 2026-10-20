@@ -15,6 +15,7 @@ Never use monospace font unless asked. Default to use tabular nums in default fo
 Use plain sections, not cards, unless explicitly requested. Keep colors muted.
 Do not add unsolicited qualifiers, implementation caveats, or obvious usage instructions to the UI.
 Prefer shadcn/ui components and their default styling, including charts and selects.
+Use shadcn components natively, exactly as the shadcn docs show for this project's style: no hand-rolled substitutes or custom restyling. For example, pass `items` to `Select` so the trigger shows the item label rather than the raw value.
 Never introduce custom colors without explicit user approval. Prefer shadcn theme color tokens; otherwise use Tailwind's built-in palette.
 Use Tailwind red-700 for offline/error status text and icons.
 

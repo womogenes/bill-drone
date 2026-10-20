@@ -74,8 +74,14 @@ def main():
     fig, ax = plt.subplots()
     ax.scatter(df.throttle, df.force, s=12, alpha=0.5, label="Readings")
     ax.plot(x, m * x + b, color="red", label=f"Fit: y = {m:.1f}x + {b:.0f}")
-    ax.set(xlabel="Throttle", ylabel="Load cell reading (raw counts)",
-           title="Static motor test — " + (f"{bottle_mass_kg:g} kg bottle attached" if bottle_attached else "no bottle"))
+    ax.set(
+        xlabel="Throttle",
+        ylabel="Load cell reading (raw counts)",
+        title="Static motor test — "
+        + (
+            f"{bottle_mass_kg:g} kg bottle attached" if bottle_attached else "no bottle"
+        ),
+    )
     ax.legend()
     fig.tight_layout()
     output = Path(__file__).with_name("plot.png")

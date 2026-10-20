@@ -13,8 +13,8 @@ import mujoco
 import numpy as np
 from PIL import Image, ImageDraw
 
-# These same files are copied to the ESP by the normal firmware upload.
-from fw.drivers.calibration import THRUSTS, thrust, throttle, GyroCalibration
+# Simulation and firmware share the native math kernel and calibration data.
+from fw.drivers.calibration import THRUST_TABLE, thrust, throttle, GyroCalibration
 from fw.drivers.flight import Attitude, Controller, DEFAULT_TUNING
 
 ROOT = Path(__file__).resolve().parent
@@ -23,7 +23,7 @@ data = mujoco.MjData(model)
 mujoco.mj_forward(model, data)
 mass = model.body_mass.sum()
 
-model.actuator_ctrlrange[:2] = [0, max(THRUSTS)]
+model.actuator_ctrlrange[:2] = [0, max(point[1] for point in THRUST_TABLE)]
 
 
 def run(controller, seconds=60, seed=7):
@@ -53,8 +53,7 @@ def run(controller, seconds=60, seed=7):
     filtered_gyro = data.sensor("gyro").data.copy()
 
     thrust_queue = deque(
-        np.zeros(2)
-        for step in range(round(thrust_delay / model.opt.timestep))
+        np.zeros(2) for step in range(round(thrust_delay / model.opt.timestep))
     )
     requested = np.zeros(4)
     servo_target = np.zeros(2)
@@ -77,9 +76,7 @@ def run(controller, seconds=60, seed=7):
             filtered_accel += alpha * (
                 data.sensor("accel").data / 9.81 - filtered_accel
             )
-            filtered_gyro += alpha * (
-                data.sensor("gyro").data - filtered_gyro
-            )
+            filtered_gyro += alpha * (data.sensor("gyro").data - filtered_gyro)
 
             if step % 5 == 0:  # MPU and controller at 100 Hz.
                 accel = filtered_accel + rng.normal(0, accel_noise, 3)
@@ -88,9 +85,7 @@ def run(controller, seconds=60, seed=7):
                 )
 
                 accel = np.clip(np.round(accel * 16384), -32768, 32767) / 16384
-                gyro = np.deg2rad(
-                    np.clip(np.round(gyro * 131), -32768, 32767) / 131
-                )
+                gyro = np.deg2rad(np.clip(np.round(gyro * 131), -32768, 32767) / 131)
                 gyro = calibration.update(gyro)
 
                 requested[:] = controller(data.time, accel, gyro)
@@ -126,12 +121,14 @@ def run(controller, seconds=60, seed=7):
                     np.arctan2(rotation[2, 1], rotation[2, 2]),
                     np.arcsin(-rotation[2, 0]),
                 ]
-                readings.append([
-                    data.time,
-                    *data.xpos[1],
-                    *data.sensor("gyro").data.copy(),
-                    *true_angles,
-                ])
+                readings.append(
+                    [
+                        data.time,
+                        *data.xpos[1],
+                        *data.sensor("gyro").data.copy(),
+                        *true_angles,
+                    ]
+                )
 
     gif = ROOT / "hover.gif"
     frames[0].save(

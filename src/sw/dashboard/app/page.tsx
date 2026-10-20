@@ -9,18 +9,35 @@ import {
   useState,
 } from 'react';
 import { LoaderCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import Link from 'next/link';
 
 import { ControlPanel } from '@/components/control-panel';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { ActuatorPanel } from '@/components/actuator-panel';
 import { ADCPanel } from '@/components/adc-panel';
 import { ImuPanel } from '@/components/imu-panel';
+import { encodeCommand, decodeReading } from '@/lib/protocol';
+import { EspConnection } from '@/lib/esp-connection';
 import type {
   ImuSample,
   Reading,
   Side,
   ControlSettings,
+  RecorderStatus,
 } from '@/lib/telemetry';
+
+const routes = [
+  { value: 'router', label: 'Router' },
+  { value: 'usb', label: 'USB controller' },
+];
 
 const statuses = {
   offline: {
@@ -60,16 +77,28 @@ function reuseUnchanged<T extends object>(
 export default function Page() {
   const [status, setStatus] = useState<keyof typeof statuses>('offline');
   const [address, setAddress] = useState('');
+  const [recording, setRecording] = useState<RecorderStatus>({ ready: false });
   const [reading, setReading] = useState<Reading | null>(null);
   const [samples, setSamples] = useState<ImuSample[]>([]);
   const latestReading = useRef<Reading | null>(null);
   const history = useRef<ImuSample[]>([]);
+  const displayFrame = useRef<number | undefined>(undefined);
+  const publishReading = useCallback(() => {
+    if (displayFrame.current !== undefined) return;
+    displayFrame.current = requestAnimationFrame(() => {
+      displayFrame.current = undefined;
+      const current = latestReading.current;
+      const points = [...history.current];
+      startTransition(() => {
+        setReading(current);
+        setSamples(points);
+      });
+    });
+  }, []);
   const [stopEpoch, setStopEpoch] = useState(0);
-  const heartbeat = useRef<ReturnType<typeof setInterval> | undefined>(
-    undefined
-  );
-  const socket = useRef<WebSocket | null>(null);
-  const watchdog = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [fps, setFps] = useState<number | null>(null);
+  const packetCount = useRef(0);
+  const socket = useRef<EspConnection | null>(null);
 
   const lookup = useRef<AbortController | null>(null);
   const pendingControl = useRef<Partial<ControlSettings>>({});
@@ -86,11 +115,12 @@ export default function Page() {
 
   const connect = useCallback(async () => {
     cancelControl();
+    if (displayFrame.current !== undefined)
+      cancelAnimationFrame(displayFrame.current);
+    displayFrame.current = undefined;
     lookup.current?.abort();
     const controller = new AbortController();
     lookup.current = controller;
-    clearTimeout(watchdog.current);
-    clearInterval(heartbeat.current);
     socket.current?.close();
     socket.current = null;
     setStatus('connecting');
@@ -98,120 +128,150 @@ export default function Page() {
     latestReading.current = null;
 
     try {
-      const response = await fetch(
-        'https://kv.wfeng.dev/bill-esp32-drone-addr',
-        {
-          cache: 'no-store',
-          signal: AbortSignal.any([
-            controller.signal,
-            AbortSignal.timeout(10000),
-          ]),
-        }
-      );
-      if (!response.ok)
-        throw new Error(`Address lookup failed: ${response.status}`);
-      const address = (await response.text()).trim();
+      const direct = new URLSearchParams(window.location.search).get('controller') === 'usb';
+      let address = '127.0.0.1:8765';
+      if (!direct) {
+        const response = await fetch(
+          'https://kv.wfeng.dev/bill-esp32-drone-addr',
+          {
+            cache: 'no-store',
+            signal: AbortSignal.any([
+              controller.signal,
+              AbortSignal.timeout(10000),
+            ]),
+          }
+        );
+        if (!response.ok)
+          throw new Error(`Address lookup failed: ${response.status}`);
+        address = (await response.text()).trim();
+      }
       if (controller.signal.aborted) return;
       setAddress(address);
-      const ws = new WebSocket(`ws://${address}/ws`);
-      socket.current = ws;
+      let reason = '';
       const session = Date.now();
       function offline() {
         if (socket.current !== ws) return;
         cancelControl();
-        clearTimeout(watchdog.current);
         socket.current = null;
         setStatus('offline');
-        clearInterval(heartbeat.current);
         ws.close();
       }
 
-      function received() {
-        if (socket.current !== ws) return;
-        clearTimeout(watchdog.current);
-        // Silence means the telemetry link is stale.
-        watchdog.current = setTimeout(offline, 3000);
-      }
-
-      watchdog.current = setTimeout(offline, 10000);
-
-      ws.onopen = () => {
-        if (socket.current !== ws) return;
-        setStatus('connected');
-        heartbeat.current = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ command: 'heartbeat' }));
+      const ws = new EspConnection(
+        address,
+        () => {
+          if (socket.current === ws) setStatus('connected');
+        },
+        (packet) => {
+          if (socket.current !== ws) return;
+          if (new Uint8Array(packet)[0] === 82) {
+            reason = new TextDecoder().decode(packet.slice(1));
+            return;
           }
-        }, 200);
-        received();
-      };
-      ws.onmessage = (event) => {
-        if (socket.current !== ws) return;
-        received();
-        const data: Reading = JSON.parse(event.data);
-        data.control = reuseUnchanged(
-          latestReading.current?.control,
-          data.control
-        );
-        data.control_status = reuseUnchanged(
-          latestReading.current?.control_status,
-          data.control_status
-        );
-        const time = Date.now();
-        latestReading.current = { ...data, time };
-        if (data.imu == null) return;
-        history.current.push({ ...data.imu, time, session });
-        while (
-          history.current.length &&
-          (history.current[0].time < time - 60000 ||
-            history.current.length > 3000)
-        ) {
-          history.current.shift();
-        }
-      };
-      ws.onerror = offline;
-      ws.onclose = offline;
+          const data = decodeReading(packet, reason);
+          packetCount.current++;
+          data.control = reuseUnchanged(
+            latestReading.current?.control,
+            data.control
+          );
+          data.control_status = reuseUnchanged(
+            latestReading.current?.control_status,
+            data.control_status
+          );
+          const time = Date.now();
+          latestReading.current = { ...data, time };
+          publishReading();
+          if (data.imu == null) return;
+          history.current.push({ ...data.imu, time, session });
+          // Trim in batches: shifting re-indexes every sample, which makes React's dev profiler deep-diff the whole array each frame.
+          if (
+            history.current[0].time < time - 120000 ||
+            history.current.length > 6000
+          ) {
+            history.current = history.current
+              .filter((sample) => sample.time >= time - 60000)
+              .slice(-3000);
+          }
+        },
+        offline
+      );
+      socket.current = ws;
     } catch (error) {
       if (controller.signal.aborted) return;
       console.error(error);
       setStatus('offline');
     }
-  }, [cancelControl]);
+  }, [cancelControl, publishReading]);
 
   useEffect(() => {
     const start = setTimeout(() => void connect(), 0);
     return () => {
       clearTimeout(start);
+      if (displayFrame.current !== undefined)
+        cancelAnimationFrame(displayFrame.current);
+      displayFrame.current = undefined;
       cancelControl();
       lookup.current?.abort();
-      clearTimeout(watchdog.current);
-      clearInterval(heartbeat.current);
       socket.current?.close();
       socket.current = null;
     };
   }, [connect, cancelControl]);
 
   useEffect(() => {
-    let frame = 0;
-    let displayed: Reading | null = null;
-    function update() {
-      const current = latestReading.current;
-      if (current !== displayed) {
-        displayed = current;
-        const points = [...history.current];
-        startTransition(() => {
-          setReading(current);
-          setSamples(points);
-        });
+    if (!address || status !== 'connected') return;
+    let cancelled = false;
+    async function update(start = false) {
+      try {
+        const response = await fetch(
+          '/api/recording',
+          start
+            ? {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ address }),
+              }
+            : { cache: 'no-store' }
+        );
+        if (!response.ok) throw new Error('Laptop recorder unavailable');
+        const result: RecorderStatus = await response.json();
+        if (!cancelled) setRecording(result);
+      } catch (error) {
+        if (!cancelled) setRecording({ ready: false, error: String(error) });
       }
-      frame = requestAnimationFrame(update);
     }
-    frame = requestAnimationFrame(update);
-    return () => cancelAnimationFrame(frame);
-  }, []);
+    void update(true);
+    const timer = setInterval(() => void update(), 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [address, status]);
+
+  useEffect(() => {
+    if (status !== 'connected') return;
+    const marks = [{ time: performance.now(), count: packetCount.current }];
+    const timer = setInterval(() => {
+      const time = performance.now();
+      marks.push({ time, count: packetCount.current });
+      if (marks.length > 5) marks.shift();
+      setFps(
+        ((marks.at(-1)!.count - marks[0].count) * 1000) / (time - marks[0].time)
+      );
+    }, 500);
+    return () => {
+      clearInterval(timer);
+      setFps(null);
+    };
+  }, [status]);
+
+  useEffect(() => {
+    if (status !== 'offline') return;
+    const timer = setTimeout(() => void connect(), 1000);
+    return () => clearTimeout(timer);
+  }, [status, connect]);
 
   const calibrateImu = useCallback(() => {
-    socket.current?.send(JSON.stringify({ command: 'calibrate_imu' }));
+    socket.current?.send(encodeCommand({ command: 'calibrate_imu' }));
   }, []);
 
   const sendControl = useCallback(
@@ -226,16 +286,12 @@ export default function Page() {
       function flush() {
         controlTimer.current = undefined;
         const ws = socket.current;
-        if (ws?.readyState !== WebSocket.OPEN) {
+        if (!ws?.connected) {
           pendingControl.current = {};
           return;
         }
-        if (ws.bufferedAmount > 0) {
-          controlTimer.current = setTimeout(flush, 4);
-          return;
-        }
         ws.send(
-          JSON.stringify({
+          encodeCommand({
             command: 'control',
             settings: pendingControl.current,
           })
@@ -252,22 +308,46 @@ export default function Page() {
     },
     []
   );
+
+  // Local tools tune gains and model parameters through this page's connection.
+  useEffect(() => {
+    if (status !== 'connected') return;
+    const timer = setInterval(async () => {
+      const control = latestReading.current?.control;
+      if (!control) return;
+      const response = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ control }),
+      });
+      const { settings } = await response.json();
+      if (Object.keys(settings).length) sendControl(settings, true);
+    }, 300);
+    return () => clearInterval(timer);
+  }, [status, sendControl]);
+
   const stopMotors = useCallback(() => {
     cancelControl();
     setStopEpoch((previous) => previous + 1);
-    if (socket.current?.readyState === WebSocket.OPEN) {
-      socket.current.send(JSON.stringify({ command: 'stop' }));
+    if (socket.current?.connected) {
+      socket.current.send(encodeCommand({ command: 'stop' }));
     }
   }, [cancelControl]);
 
   const sendActuator = useCallback(
     (command: 'servo' | 'throttle', side: Side, value: number) => {
-      if (socket.current?.readyState === WebSocket.OPEN) {
-        socket.current.send(JSON.stringify({ command, side, value }));
+      if (socket.current?.connected) {
+        socket.current.send(encodeCommand({ command, side, value }));
       }
     },
     []
   );
+
+  const zeroServo = useCallback((side: Side) => {
+    if (socket.current?.connected) {
+      socket.current.send(encodeCommand({ command: 'zero_servo', side }));
+    }
+  }, []);
 
   useEffect(() => {
     function stop(event: KeyboardEvent) {
@@ -295,9 +375,42 @@ export default function Page() {
       <header className="flex h-16 items-center justify-between border-b px-6">
         <h1 className="text-lg font-semibold">Drone dashboard</h1>
         <div className="flex items-center gap-3">
+          <Link href="/camera" className="text-sm underline">
+            Camera
+          </Link>
+          <Select
+            value={address === '127.0.0.1:8765' ? 'usb' : 'router'}
+            items={routes}
+            disabled={status === 'connecting' || reading?.control?.enabled}
+            onValueChange={(value) => {
+              const url = new URL(window.location.href);
+              if (value === 'usb') url.searchParams.set('controller', 'usb');
+              else url.searchParams.delete('controller');
+              window.history.replaceState(null, '', url);
+              void connect();
+            }}
+          >
+            <SelectTrigger aria-label="Connection route">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start" alignItemWithTrigger={false}>
+              <SelectGroup>
+                {routes.map((route) => (
+                  <SelectItem key={route.value} value={route.value}>
+                    {route.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
           {address && (
             <span className="text-sm text-muted-foreground tabular-nums">
               {address}
+            </span>
+          )}
+          {fps !== null && (
+            <span className="text-sm text-muted-foreground tabular-nums">
+              {Math.round(fps)} FPS
             </span>
           )}
           <span
@@ -356,20 +469,52 @@ export default function Page() {
                 }
                 connected={status === 'connected'}
                 onChange={sendActuator}
+                onZero={zeroServo}
+                zeroDisabled={
+                  !!(
+                    reading?.actuators?.left.throttle ||
+                    reading?.actuators?.right.throttle
+                  )
+                }
               />
             ))
           )}
         </div>
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
+          <p
+            className={`px-4 pt-4 ${recording.error || (reading?.logging?.dropped ?? 0) > 0 ? 'text-red-700' : 'text-muted-foreground'}`}
+          >
+            {recording.error ??
+              (reading?.logging?.active
+                ? `Recording · ${reading.logging.samples} samples · ${reading.logging.dropped} dropped`
+                : recording.ready && reading?.logging?.connected
+                  ? recording.writing
+                    ? 'Saving recording'
+                    : recording.file
+                      ? 'Recording saved'
+                      : 'Recorder ready'
+                  : 'Recorder connecting')}
+          </p>
           {reading?.control && (
             <ControlPanel
               key={`${status}-${stopEpoch}-${reading.control.enabled}`}
               settings={reading.control}
+              recorderReady={
+                recording.ready &&
+                recording.address === address &&
+                !!reading.logging?.ready
+              }
+              recorderError={recording.error}
               status={reading.control_status}
-              connected={
-                status === 'connected' &&
-                reading.imu != null &&
-                !reading.imu.calibrating
+              connected={status === 'connected'}
+              imu={
+                !reading.imu
+                  ? 'offline'
+                  : reading.imu.calibrating
+                    ? 'calibrating'
+                    : reading.imu.calibrated
+                      ? 'calibrated'
+                      : 'uncalibrated'
               }
               onChange={sendControl}
               onStop={stopMotors}
