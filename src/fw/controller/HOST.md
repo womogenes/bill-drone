@@ -16,7 +16,14 @@ pnpm build
 pnpm start
 ```
 
-Open `http://localhost:3000`. Rebuild and restart the dashboard after code changes, with the drone disarmed. Development mode's hot reload can close the control connection.
+Open `http://localhost:3000`. To run both in the background instead, from the repository root:
+
+```sh
+systemd-run --user --unit=bill-drone-controller -p Restart=on-failure --working-directory=$PWD $(which uv) run src/fw/controller/bridge.py --port /dev/ttyUSB0
+(cd src/sw/dashboard && pnpm build) && systemd-run --user --unit=bill-drone-dashboard -p Restart=on-failure --working-directory=$PWD/src/sw/dashboard $(which pnpm) start
+```
+
+Restart with `systemctl --user restart bill-drone-dashboard` and read logs with `journalctl --user -u bill-drone-controller -f`. These units last until logout or reboot. Rebuild and restart the dashboard after code changes, with the drone disarmed. Development mode's hot reload can close the control connection.
 
 | Endpoint | Use |
 | --- | --- |
