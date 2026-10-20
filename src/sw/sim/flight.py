@@ -1,45 +1,91 @@
 """
-Shared native attitude estimator and flight controller. Angles are radians internally;
-dashboard targets and trims are degrees. Build with `make -C fw/native host` for simulation.
+The drone's attitude estimator and flight controller for the host simulation, through ctypes on the firmware's own C math (fw/drone/main/flight_math.c), compiled here on first use. Angles are radians internally; dashboard targets and trims are degrees.
 """
 
+import ctypes
 import math
 import struct
-import sys
+import subprocess
 from array import array
-from .calibration import THRUST_TABLE
+from pathlib import Path
 
-if sys.implementation.name == "micropython":
-    from .flight_native import attitude_step, control_step
-else:
-    import ctypes
-    from pathlib import Path
+SOURCE = Path(__file__).resolve().parents[2] / "fw/drone/main/flight_math.c"
+LIBRARY = Path(__file__).with_name("flight_math.so")
+if not LIBRARY.exists() or LIBRARY.stat().st_mtime < SOURCE.stat().st_mtime:
+    subprocess.run(["cc", "-O2", "-fPIC", "-shared", str(SOURCE), "-o", str(LIBRARY), "-lm"], check=True)
+library = ctypes.CDLL(str(LIBRARY))
+library.flight_attitude.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+library.flight_attitude.restype = None
+library.flight_control.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+library.flight_control.restype = None
+count = ctypes.c_size_t.in_dll(library, "flight_thrust_count").value
+THRUST_BUFFER = array("f", (ctypes.c_float * (2 * count)).in_dll(library, "flight_thrust"))
+# [throttle, thrust_N] rows, as the drone uses them; thrust declines above 1100.
+THRUST_TABLE = [[int(THRUST_BUFFER[2 * index]), THRUST_BUFFER[2 * index + 1]] for index in range(count)]
+PEAK = max(range(len(THRUST_TABLE)), key=lambda index: THRUST_TABLE[index][1])
 
-    library = ctypes.CDLL(str(Path(__file__).parents[1] / "native/flight_native.so"))
-    library.flight_attitude.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    library.flight_attitude.restype = None
-    library.flight_control.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_size_t,
-    ]
-    library.flight_control.restype = None
 
-    def attitude_step(state, accel, gyro, dt, tau):
-        motion = array("f", list(accel) + list(gyro) + [dt, tau])
-        library.flight_attitude(state.buffer_info()[0], motion.buffer_info()[0])
-        return state[0], state[1]
+def attitude_step(state, accel, gyro, dt, tau):
+    motion = array("f", list(accel) + list(gyro) + [dt, tau])
+    library.flight_attitude(state.buffer_info()[0], motion.buffer_info()[0])
+    return state[0], state[1]
 
-    def control_step(state, command, table, attitude, gyro, dt):
-        struct.pack_into("<6f", command, 0, *attitude, *gyro, dt)
-        library.flight_control(
-            state.buffer_info()[0],
-            command.buffer_info()[0],
-            table.buffer_info()[0],
-            len(table) // 2,
-        )
-        return int(state[2]), int(state[3]), state[4], state[5]
+
+def control_step(state, command, table, attitude, gyro, dt):
+    struct.pack_into("<6f", command, 0, *attitude, *gyro, dt)
+    library.flight_control(state.buffer_info()[0], command.buffer_info()[0], table.buffer_info()[0], len(table) // 2)
+    return int(state[2]), int(state[3]), state[4], state[5]
+
+
+def interpolate(value, points, input_column=0):
+    """
+    Interpolate between table rows; clamp to the endpoint values.
+    """
+    output_column = 1 - input_column
+    if value <= points[0][input_column]:
+        return points[0][output_column]
+
+    for before, after in zip(points, points[1:]):
+        if value <= after[input_column]:
+            fraction = (value - before[input_column]) / (after[input_column] - before[input_column])
+            return before[output_column] + fraction * (after[output_column] - before[output_column])
+
+    return points[-1][output_column]
+
+
+def thrust(throttle):
+    """
+    Convert an ESC command to newtons, including the measured decline above 1100.
+    """
+    return interpolate(throttle, THRUST_TABLE)
+
+
+def throttle(force):
+    """
+    Convert newtons to an ESC command using the rising curve, capped at 1100.
+    """
+    return interpolate(force, THRUST_TABLE[:PEAK + 1], input_column=1)
+
+
+class GyroCalibration:
+    def __init__(self):
+        self.bias = [0.0, 0.0, 0.0]
+        self.remaining = 0
+
+    def start(self, samples=200):
+        self.samples = samples
+        self.total = [0.0, 0.0, 0.0]
+        self.remaining = samples
+
+    def update(self, gyro):
+        if self.remaining:
+            for axis in range(3):
+                self.total[axis] += gyro[axis]
+            self.remaining -= 1
+            count = self.samples - self.remaining
+            self.bias = [value / count for value in self.total]
+
+        return [value - bias for value, bias in zip(gyro, self.bias)]
 
 
 DEFAULT_TUNING = {
@@ -111,7 +157,6 @@ TUNING_LAYOUT = COMMAND_KEYS + FEEDFORWARD_KEYS
 MODEL_OFFSET = 6 + len(TUNING_LAYOUT)
 # Dashboard field IDs and TEL1 order. Append only; this is independent of TUNING_LAYOUT.
 CONTROL_KEYS = COMMAND_KEYS + MODEL_TUNING_KEYS + FEEDFORWARD_KEYS
-THRUST_BUFFER = array("f", [value for pair in THRUST_TABLE for value in pair])
 
 
 class Attitude:

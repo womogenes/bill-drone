@@ -3,6 +3,16 @@
 
 #include "flight_math.h"
 
+// (throttle, thrust in N): the median of three calibrated sweeps in sw/slop/comparison.csv. Throttle 200 is treated as approximately zero thrust, from the bench observation; thrust declines above 1100.
+const float flight_thrust[][2] = {
+    {0, 0.0f}, {200, 0.0f}, {250, 0.758689175f}, {300, 1.140325966f}, {350, 1.544788528f}, {400, 1.955279404f},
+    {450, 2.353557228f}, {500, 2.775707658f}, {550, 3.261558474f}, {600, 3.673818136f}, {650, 4.264941843f},
+    {700, 4.898708952f}, {750, 5.566624474f}, {800, 6.313341249f}, {850, 7.172694844f}, {900, 8.00416899f},
+    {950, 8.815765343f}, {1000, 9.61023936f}, {1050, 10.438741463f}, {1100, 11.216827129f}, {1150, 11.052149476f},
+    {1200, 10.992227314f},
+};
+const size_t flight_thrust_count = sizeof(flight_thrust) / sizeof(flight_thrust[0]);
+
 static float clamp(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
 }
@@ -92,75 +102,3 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     state->left = roundf(interpolate(hypotf(left_horizontal, left_vertical) / c->left_thrust_scale, table, count, 1));
     state->right = roundf(interpolate(hypotf(right_horizontal, right_vertical) / c->right_thrust_scale, table, count, 1));
 }
-
-#ifdef MICROPY_ENABLE_DYNRUNTIME
-#include "py/dynruntime.h"
-
-// libm's errno ABI; this module has no dependency on the C library's thread state.
-static int math_error;
-int *math_errno(void) __asm__("__errno");
-int *math_errno(void) { return &math_error; }
-
-static void *buffer(mp_obj_t object, size_t size, int flags) {
-    mp_buffer_info_t data;
-    mp_get_buffer_raise(object, &data, flags);
-    if (data.len != size) mp_raise_ValueError(MP_ERROR_TEXT("Invalid flight buffer size"));
-    return data.buf;
-}
-
-static mp_obj_t *vector(mp_obj_t object, size_t expected) {
-    size_t count;
-    mp_obj_t *items;
-    mp_obj_get_array(object, &count, &items);
-    if (count != expected) mp_raise_ValueError(MP_ERROR_TEXT("Invalid vector size"));
-    return items;
-}
-
-static mp_obj_t attitude_step(size_t count, const mp_obj_t *args) {
-    Attitude *state = buffer(args[0], sizeof(Attitude), MP_BUFFER_WRITE);
-    mp_obj_t *accel = vector(args[1], 3);
-    mp_obj_t *gyro = vector(args[2], 3);
-    Motion motion = {
-        mp_obj_get_float(accel[0]), mp_obj_get_float(accel[1]), mp_obj_get_float(accel[2]),
-        mp_obj_get_float(gyro[0]), mp_obj_get_float(gyro[1]), mp_obj_get_float(gyro[2]),
-        mp_obj_get_float(args[3]), mp_obj_get_float(args[4]),
-    };
-    flight_attitude(state, &motion);
-    mp_obj_t result[] = {
-        mp_obj_new_float(state->roll), mp_obj_new_float(state->pitch),
-    };
-    return mp_obj_new_tuple(2, result);
-}
-static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(attitude_step_obj, 5, 5, attitude_step);
-
-static mp_obj_t control_step(size_t count, const mp_obj_t *args) {
-    Controller *state = buffer(args[0], sizeof(Controller), MP_BUFFER_WRITE);
-    Command *command = buffer(args[1], sizeof(Command), MP_BUFFER_WRITE);
-    mp_buffer_info_t table;
-    mp_get_buffer_raise(args[2], &table, MP_BUFFER_READ);
-    if (table.len < 16 || table.len % 8) mp_raise_ValueError(MP_ERROR_TEXT("Invalid thrust table"));
-
-    mp_obj_t *attitude = vector(args[3], 2);
-    mp_obj_t *gyro = vector(args[4], 3);
-    command->roll = mp_obj_get_float(attitude[0]);
-    command->pitch = mp_obj_get_float(attitude[1]);
-    command->gx = mp_obj_get_float(gyro[0]);
-    command->gy = mp_obj_get_float(gyro[1]);
-    command->gz = mp_obj_get_float(gyro[2]);
-    command->dt = mp_obj_get_float(args[5]);
-    flight_control(state, command, table.buf, table.len / 8);
-    mp_obj_t result[] = {
-        mp_obj_new_int((int)state->left), mp_obj_new_int((int)state->right),
-        mp_obj_new_float(state->left_angle), mp_obj_new_float(state->right_angle),
-    };
-    return mp_obj_new_tuple(4, result);
-}
-static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(control_step_obj, 6, 6, control_step);
-
-mp_obj_t mpy_init(mp_obj_fun_bc_t *self, size_t n_args, size_t n_kw, mp_obj_t *args) {
-    MP_DYNRUNTIME_INIT_ENTRY
-    mp_store_global(MP_QSTR_attitude_step, MP_OBJ_FROM_PTR(&attitude_step_obj));
-    mp_store_global(MP_QSTR_control_step, MP_OBJ_FROM_PTR(&control_step_obj));
-    MP_DYNRUNTIME_INIT_EXIT
-}
-#endif

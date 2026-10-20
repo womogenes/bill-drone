@@ -4,7 +4,7 @@
 
 `sw.sim.slop.simulation.run()` calls the controller at 100 Hz and renders a 10 FPS GIF. The notebook runs a timed takeoff sequence. The firmware takes collective throttle from the dashboard.
 
-Firmware and simulation use `fw/drivers/flight.py` for attitude estimation and motor commands, and `calibration.py` for thrust conversion and gyro calibration. The controller receives accelerometer and gyro readings. It uses fixed geometry and inertia estimates; position and altitude are recorded for evaluation.
+Firmware and simulation share the C attitude estimator, controller and thrust table in `fw/drone/main/flight_math.c`; `sw/sim/flight.py` wraps it for the simulation and adds thrust conversion and gyro calibration. The controller receives accelerometer and gyro readings. It uses fixed geometry and inertia estimates; position and altitude are recorded for evaluation.
 
 `control.py` manages settings, shutdown conditions, and PWM output. `imu.py` reads the MPU6050. Tuning is saved in `flight-tuning.json`; the older `control-gains.json` has different gain units and is ignored. Flight trim and physical servo-center offsets in `actuators.py` are separate adjustments to check on the assembled drone.
 
@@ -16,7 +16,7 @@ Throttle 200 is treated as approximately zero thrust, based on the bench observa
 
 ## Sensor and actuator response
 
-The MPU settings match `fw/drivers/imu.py`: 100 Hz sampling, ±2 g acceleration, ±250°/s gyro range, and DLPF setting 3 (44 Hz accel / 42 Hz gyro bandwidth). The [InvenSense specification, sections 6.1–6.2](https://www.haoyuelectronics.com/Attachment/GY-521/mpu6050.pdf) gives noise densities of 0.005°/s/√Hz for the gyro and 400 µg/√Hz for acceleration. The simulation estimates RMS noise as density × √bandwidth and approximates sensor latency with a 5 ms filter. It also applies ADC quantization and clipping.
+The MPU settings match `fw/drone/main/flight_rt.c`: 100 Hz sampling, ±2 g acceleration, ±250°/s gyro range, and DLPF setting 3 (44 Hz accel / 42 Hz gyro bandwidth). The [InvenSense specification, sections 6.1–6.2](https://www.haoyuelectronics.com/Attachment/GY-521/mpu6050.pdf) gives noise densities of 0.005°/s/√Hz for the gyro and 400 µg/√Hz for acceleration. The simulation estimates RMS noise as density × √bandwidth and approximates sensor latency with a 5 ms filter. It also applies ADC quantization and clipping.
 
 Gyro bias is `[0.02, 1.10, -1.95]` °/s, from an earlier stationary dashboard observation. The simulation averages the first 200 stationary samples to estimate that bias. Accelerometer offsets are zero because tilt and bias were not measured independently. Powered logs contain both sensor noise and mechanical motion. Motor vibration, temperature drift, and sampling jitter are omitted.
 

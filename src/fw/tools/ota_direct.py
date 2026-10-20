@@ -3,12 +3,10 @@
 # dependencies = ["websockets>=15,<17"]
 # ///
 """
-Update the drone over the direct ESP-NOW link through the controller bridge.
+Update the drone's application over the direct ESP-NOW link through the laptop service.
 
-firmware: diff the new image against the images this laptop last installed in each OTA
-slot; send only changed sectors, have the drone copy sectors the running image already
-has, then boot and confirm it.
-files: replace changed Python files, then reset.
+firmware: diff the new image against the images this laptop last installed in each OTA slot; send only changed sectors, have the drone copy sectors the running image already has, then boot and confirm it.
+confirm: keep the running image after a manual check.
 """
 
 import argparse
@@ -22,15 +20,11 @@ import time
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.sync.client import connect
 
-from mpy import compile_driver
-
 FIRMWARE = Path(__file__).resolve().parents[1]
 # The last image installed in each slot, by slot label; the drone reports each slot's ELF SHA-256 prefix to check it.
-INSTALLED = FIRMWARE / "native/build-runtime-ota/installed"
+INSTALLED = FIRMWARE / "drone/installed"
 SECTOR = 4096
 HASH_SIZE = 8
-FILE_CHUNK = 3840  # The drone reassembles requests of up to 4176 bytes.
-HASH_BATCH = 7  # 32-byte file hashes per reply; a reply is one 232-byte radio frame.
 
 
 class Drone:
@@ -142,54 +136,12 @@ def write(drone, local, indices, copies):
     print()
 
 
-def files(drone, names, reset):
-    names = names or [
-        "config.py",
-        "main.py",
-        *sorted(str(path.relative_to(FIRMWARE)) for path in (FIRMWARE / "drivers").glob("*.py")),
-        "drivers/flight_native.mpy",
-    ]
-    names = [compile_driver(name) for name in names]
-    contents = {name: (FIRMWARE / name).read_bytes() for name in names}
-    shadows = [name[:-4] + ".py" for name in names if name.endswith(".mpy")]
-    paths = names + shadows
-    hashes = b"".join(drone.request(b"F", "\n".join(paths[first:first + HASH_BATCH]).encode())
-                      for first in range(0, len(paths), HASH_BATCH))
-    hashes = {name: hashes[index * 32:(index + 1) * 32] for index, name in enumerate(paths)}
-    changed = 0
-    removed = 0
-    for name in names:
-        data = contents[name]
-        digest = hashlib.sha256(data).digest()
-        if hashes[name] != digest:
-            encoded = name.encode()
-            for offset in range(0, max(len(data), 1), FILE_CHUNK):
-                drone.request(b"P", struct.pack("<IB", offset, len(encoded)) + encoded + data[offset:offset + FILE_CHUNK])
-            drone.request(b"M", digest + encoded)
-            print(f"Updated {name} ({len(data)} bytes)", flush=True)
-            changed += 1
-        if name.endswith(".mpy"):
-            shadow = name[:-4] + ".py"
-            if hashes[shadow] != bytes(32):
-                drone.request(b"K", shadow.encode())
-                print(f"Removed {shadow}", flush=True)
-                removed += 1
-    print(f"{changed}/{len(names)} files updated; {removed} source shadows removed")
-    if (changed or removed) and reset:
-        drone.restart()
-        drone.request(b"I", patience=60)
-        print("Drone restarted")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bridge", default="ws://127.0.0.1:8765/update")
     commands = parser.add_subparsers(dest="command", required=True)
     image = commands.add_parser("firmware")
     image.add_argument("image", type=Path)
-    upload = commands.add_parser("files")
-    upload.add_argument("--no-reset", action="store_true")
-    upload.add_argument("names", nargs="*", help="Paths relative to src/fw")
     commands.add_parser("confirm", help="Keep the running OTA image after a manual check")
     args = parser.parse_args()
 
@@ -197,8 +149,6 @@ def main():
     drone = Drone(args.bridge)
     if args.command == "firmware":
         firmware(drone, args.image)
-    elif args.command == "files":
-        files(drone, args.names, not args.no_reset)
     else:
         drone.request(b"V")
     print(f"Done in {time.monotonic() - started:.1f}s")

@@ -47,13 +47,13 @@ Static laptop is streaming go2rtc over port 8555. On my tailnet, that's `http://
 
 ## Drone link
 
-One laptop service, `src/fw/controller/bridge.py`, owns the controller's USB port (see [HOST.md](src/fw/controller/HOST.md)). It serves the dashboard, records flights and relays updates; nothing else talks to the drone. The drone side is native: `src/fw/native/runtime/radio.c` with `flight_rt.c`.
+One laptop service, `src/fw/controller/bridge.py`, owns the controller's USB port (see [HOST.md](src/fw/controller/HOST.md)). It serves the dashboard, records flights and relays updates; nothing else talks to the drone. The drone runs one ESP-IDF C application, `src/fw/drone/`: `main/radio.c` for the link and `main/flight_rt.c` for control.
 
 | Direct channel | Direction | Content |
 | -------------- | --------- | ------- |
-| 0 | drone | Status every 50 ms (`runtime.h` `Status`): IMU, attitude, outputs, targets, armed state, stop reason, last target sequence, recorder state, and the application's block (force, battery, settings version). It also carries the boot session and time token that make the link fresh. |
+| 0 | drone | Status every 50 ms (`runtime.h` `Status`): IMU, attitude, outputs, targets, armed state, stop reason, last target sequence, recorder state, load cell, battery and settings version. It also carries the boot session and time token that make the link fresh. |
 | 1 | laptop | Targets, sent immediately when controls change and every 50 ms while connected: collective, roll, pitch, yaw rate, and the servo angles and throttles used while disarmed. The newest wins; a late one is dropped. Each accepted packet is the controller heartbeat, so the native 500 ms watchdog stops the motors when they stop arriving. |
-| 2, 3 | drone | The flight log: `LGS1` start, `FLG1` batches, `LGE1` stop, and the application's metadata JSON. One message is in flight at a time; it is resent until acknowledged. |
+| 2, 3 | drone | The flight log: `LGS1` start, `FLG1` batches, `LGE1` stop, and the metadata JSON. One message is in flight at a time; it is resent until acknowledged. |
 | 4, 5 | laptop | Recorder subscription (every second) and log acknowledgements. |
 | 6 | both | Id-tagged requests with cached replies: `X` stop, `A` arm, `G` calibrate, `Z` zero a servo, `T` tune, `S` read settings, and the update ops. |
 
@@ -63,7 +63,7 @@ The dashboard's `/ws` carries JSON: readings from the service, and `targets`, `s
 
 Each armed session becomes one recording, `src/sw/recordings/<time>_<session>.bin` and `.jsonl`, even across link hiccups. The first JSON line holds the session, calibration and metadata. Gaps in sample sequence, log stalls, resumed streams and the stop record are written as events. A bounded worker queue handles file writes and syncs them once per second without blocking control forwarding. The drone keeps 2 s of samples while the link stalls. Decode a recording with `uv run -m sw.flight_log sw/recordings/<flight>.bin`.
 
-Sampling and control run at 100 Hz. Log batches of four samples go out every 40 ms. The rate and batch size are defined in `src/fw/drivers/log_format.py`.
+Sampling and control run at 100 Hz. Log batches of four samples go out every 40 ms. The rate and batch size are defined in `src/fw/drone/main/runtime.h`; the laptop decodes records with `src/fw/controller/log_format.py`.
 
 IMU calibration averages two seconds of gyro and gravity readings, then saves gyro bias and the zero-pose reference in NVS. Startup restores calibration when its sensor coordinate frame matches the firmware. Arming requires saved calibration; the calibration button stays busy until saving finishes. Recordings include calibration validity, gyro bias, and `pose_zero_deg`.
 
@@ -78,45 +78,30 @@ curl localhost:8765/schema
 curl -X POST localhost:8765/settings -H 'Content-Type: application/json' -d '{"settings":{"pitch_p":45}}'
 ```
 
-## Native math
+## Firmware
 
-The drone's tunable settings, defaults and ranges are defined in `src/fw/native/runtime/settings.def`. The host simulation configures its controller through `src/fw/drivers/flight.py`; both run the estimator/controller math in `src/fw/native/flight_native.c`.
+The drone's tunable settings, defaults and ranges are defined in `src/fw/drone/main/settings.def`. The estimator, controller and thrust table are in `src/fw/drone/main/flight_math.c`; the host simulation runs the same C through `src/sw/sim/flight.py`, which compiles it on first use.
 
-The custom firmware runs MicroPython, Wi-Fi and the native radio on core 0. `src/fw/native/runtime/flight_rt.c` runs sensor reads, control, PWM, the 500 ms motor watchdog and binary log capture on core 1. It owns a bounded log queue. Native `settings.c` owns settings, servo offsets and calibration, committing them to NVS while disarmed. Python handles the load cell, battery ADC and one-time import of the old JSON settings.
+`app_main` (`main/main.c`) loads the settings from NVS, sets the outputs to zero throttle and centred servos, starts the radio and then the control task. Wi-Fi, the radio and the update service run on core 0. `main/flight_rt.c` runs sensor reads, control, PWM, the 500 ms motor watchdog and binary log capture on core 1. It owns a bounded log queue. `main/settings.c` owns settings, servo offsets and calibration, committing them to NVS while disarmed. The main loop reads the load cell and battery every 50 ms and refreshes the recording metadata when the settings change.
 
 Run these from `src/fw`:
 
-| Change                     | Command                                                            |
-| -------------------------- | ------------------------------------------------------------------ |
-| Python over USB            | `make flash`                                                       |
-| One file                   | `make upload FILES="main.py"`                                      |
-| Python over the radio      | `make flash_direct`                                                |
-| Native firmware over radio | `make flash_runtime_direct`                                        |
-| Build native firmware only | `make ota_runtime`                                                 |
+| Change | Command |
+| --- | --- |
+| Build | `make` |
+| Install over the radio | `make deploy` |
+| USB recovery | `make usb PORT=/dev/ttyUSB1` |
 
-`flash` resets and opens the REPL; `upload` resets and exits. Both reuse one connection and skip unchanged files, and compile drivers to `.mpy` (removing a `.py` that would shadow it). USB uploads automatically select a port only when exactly one USB serial device is present. With both boards connected, set `ESP_PORT` to the drone's port explicitly. File updates preserve saved tuning.
+Builds use ESP-IDF 5.5.2 from `$IDF_PATH` or `~/esp/esp-idf`. The partition table has two 1,900,544-byte application slots, NVS and an unused 320 KiB data partition on the 4 MiB ESP32. Bootloader rollback is enabled.
 
-Native builds use ESP-IDF 5.5.2 from `$IDF_PATH` or `~/esp/esp-idf`, reuse Ninja's build directory, and initialize submodules on the first build. Factory and OTA builds share a lock before changing their MicroPython checkout. Build dates are reproducible, so crossing midnight does not trigger recompilation.
+Our code is linked last in each flash segment and padded to a 4 KiB boundary (`src/fw/drone/main/flight.lf`), with its constants kept out of the shared string pool, so ESP-IDF keeps its addresses when our code changes. A small edit typically changes a handful of sectors (app header, our code and rodata, image hash); growing our code past a 4 KiB boundary rewrites more.
 
-Use `flash_runtime_direct` for native application updates. It selects the inactive OTA slot, preserves the filesystem and NVS, and verifies changed sectors. The old factory-address USB uploader has been retired because it could overwrite the wrong OTA slot.
+`make usb` is for recovery only: it writes the image to `ota_0` and resets the OTA selection to it, leaving the bootloader and NVS alone. Opening the drone's serial port resets it.
 
-Our C code is linked last in each flash segment and padded to a 4 KiB boundary (`src/fw/native/runtime/flight.lf`, archive `libzflight.a`), so MicroPython and ESP-IDF keep their addresses when it changes. A small edit to `flight_rt.c` or `flight_native.c` typically changes 3–7 sectors (app header, our code and rodata, image hash). Growing our code past a 4 KiB boundary, resizing static arrays (moves the heap start) or adding a qstr rewrites more, up to about 50 sectors; new qstrs and `MP_ERROR_TEXT` wording can renumber MicroPython-wide tables.
+### Radio updates
 
-Python-only updates do not rebuild the runtime. For simulation, run `make -C src/fw/native host` and restart the notebook kernel after rebuilding.
+With the service running, `make deploy` updates the drone over ESP-NOW through `ws://127.0.0.1:8765/update` (`src/fw/tools/ota_direct.py`). The service only adds fragmentation and pacing. The controller MAC and channel are compiled into `radio.c`. Requests travel on direct channel 6. Each one carries a random id; the drone answers each id once and replays the reply to retries. The drone refuses every write and reset while armed or with a throttle nonzero, holds the outputs at zero during flash writes, and does not touch the native watchdog.
 
-### Optional native OTA layout
+The CLI keeps the last image it installed in each slot in `src/fw/drone/installed/` and diffs against it, so the drone hashes nothing in bulk. The drone reports each slot's ELF SHA-256 prefix from its app description; an unknown or different slot counts as unknown. Sectors already right in the inactive slot are skipped, sectors the running image has are copied on the drone (checked against an 8-byte SHA-256 prefix), and only the rest cross the radio, each checked by hash and read back after writing. ESP-IDF then checks the image while selecting it. The drone restarts, and the CLI confirms the new slot once the drone answers over the link again. An image still unconfirmed 90 s after boot restarts while disarmed, and the bootloader rolls back to the previous one. Starting a write also confirms the running image, so the fallback slot is never the one being overwritten. After flashing a slot by another route, the next radio update to that slot sends it whole.
 
-`make ota_runtime` builds a separate image in `src/fw/native/build-runtime-ota/`. The default `runtime` build keeps the existing factory partition layout. The OTA variant has two 1,900,544-byte application slots and a 320 KiB filesystem on the 4 MiB ESP32. Bootloader rollback is enabled.
-
-`make flash_runtime_direct` uploads the native application to the inactive OTA slot. The new boot must be confirmed before the next restart; an unconfirmed boot rolls back to the previous application.
-
-### Direct-link updates
-
-With the service running, `make flash_runtime_direct` and `make flash_direct` (optionally `FILES=…`) update the drone over ESP-NOW through `ws://127.0.0.1:8765/update`. The service only adds fragmentation and pacing.
-
-The drone's radio link and update service are native (`src/fw/native/runtime/radio.c`). The firmware starts them before `boot.py` and `main.py`, so the drone keeps reporting status, stops, and accepts firmware updates and resets even when the Python application is broken or has crashed. The controller MAC and channel are compiled into `radio.c`. Requests travel on direct channel 6. Each one carries a random id; the drone answers each id once and replays the reply to retries. The drone refuses every write and reset while the native runtime is armed or a throttle is nonzero, and does not touch the native watchdog.
-
-- Firmware: the CLI keeps the last image it installed in each slot in `native/build-runtime-ota/installed/` and diffs against it, so the drone hashes nothing in bulk. The drone reports each slot's ELF SHA-256 prefix from its app description; an unknown or different slot counts as unknown. Sectors already right in the inactive slot are skipped, sectors the running image has are copied on the drone (checked against an 8-byte SHA-256 prefix), and only the rest cross the radio, each checked by hash and read back after writing. ESP-IDF then checks the whole image while selecting it. The drone restarts, and the CLI confirms the new slot once the drone answers over the link again. Without that confirmation, the next reset rolls back. Starting a write also confirms the running image, so the fallback slot is never the one being overwritten. After flashing a slot by another route, the next direct update to that slot sends it whole.
-- Files: changed files only, written as `<path>.upload`, hash-checked, renamed, then a reset. The CLI removes a `.py` that would shadow an uploaded `.mpy`. The native service hands these requests to `src/fw/drivers/update.py`, so they need the Python application running. This also works on the factory layout.
-
-Expect roughly 25 KB/s on the radio (about 150 ms per sector, including the flash write). A small C change (measured: 8 sectors sent, 3 copied) takes about 10 s to build and 3–4 s to install, restart and confirm. A full image (430 sectors) takes about 70 s.
+Measured on the drone: the first image (173 sectors, all sent) installed, restarted and confirmed in 28 s, about 6 KB/s with flash writes. A one-line C change (5 sectors sent, 168 copied) took 20 s including the build, 14.5 s of it to install, restart and confirm.

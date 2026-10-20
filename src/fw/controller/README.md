@@ -23,9 +23,9 @@ Both endpoints use fixed station MAC addresses and channel 6:
 | Setting | Source |
 | --- | --- |
 | Drone station MAC | `native/main/relay.c`: `drone_mac` |
-| Controller station MAC | `../native/runtime/radio.c`: `peer` |
+| Controller station MAC | `../drone/main/radio.c`: `peer` |
 | Controller radio channel | `native/main/relay.c`: `CHANNEL` |
-| Drone radio channel | `../native/runtime/radio.c`: `WIFI_CHANNEL` |
+| Drone radio channel | `../drone/main/radio.c`: `WIFI_CHANNEL` |
 
 Replacing either board requires updating its peer's MAC and rebuilding that peer's firmware. Keep the channels equal. Inspect a replacement ESP's MAC with `esptool read-mac` while its serial port is free.
 
@@ -45,4 +45,4 @@ ESP-NOW packets are at most 250 bytes. The envelope `<3sBIIIBB>` contains `DC1`,
 
 The relay bounds its outgoing queue to eight packets and permits four sends awaiting callbacks. It does not generate targets, refresh their timestamps, or arm the drone.
 
-Firmware updates verify written chunks or changed files only. Skip firmware backups and whole-image verification.
+Firmware updates verify written chunks only. Skip firmware backups and whole-image verification.

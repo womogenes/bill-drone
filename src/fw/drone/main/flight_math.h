@@ -3,8 +3,7 @@
 
 #include <stddef.h>
 
-// Persistent float buffers hold state and tuning.
-// Angles/rates are radians. Model and filter parameters come from Python.
+// Angles/rates are radians. Shared by the drone and the host simulation (sw/sim/flight.py).
 typedef struct { float roll, pitch; } Attitude;
 typedef struct { float ax, ay, az, gx, gy, gz, dt, gravity_tau; } Motion;
 typedef struct { float roll_i, pitch_i, left, right, left_angle, right_angle; } Controller;
@@ -25,6 +24,9 @@ typedef struct {
     Model model;
 } Command;
 
+// Rows of (throttle, thrust in N); flight_control takes it flattened.
+extern const float flight_thrust[][2];
+extern const size_t flight_thrust_count;
 
 void flight_attitude(Attitude *state, const Motion *motion);
 void flight_reset(Controller *state, const Command *command);

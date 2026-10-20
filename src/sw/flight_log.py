@@ -10,7 +10,7 @@ import struct
 from pathlib import Path
 
 import pandas as pd
-from fw.drivers.log_format import HEADER_FORMAT, HEADER_SIZE, SAMPLE_FORMAT, RECORD_SIZE, MAX_BATCH
+from fw.controller.log_format import HEADER_FORMAT, HEADER_SIZE, SAMPLE_FORMAT, RECORD_SIZE, MAX_BATCH
 
 
 def read_flight(path):

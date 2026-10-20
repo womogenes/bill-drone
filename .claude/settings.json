@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(journalctl *)",
+      "Bash(curl -s localhost:8765/status)",
+      "Bash(curl -s localhost:8765/settings)",
+      "Bash(curl -s localhost:8765/schema)",
+      "Bash(systemctl --user status *)",
+      "Bash(systemctl --user is-active *)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx eslint app components lib)",
+      "Bash(uvx ruff check *)"
+    ]
+  }
+}

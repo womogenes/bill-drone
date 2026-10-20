@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "../flight_math.h"
+#include "flight_math.h"
 
 enum {
 #define TUNE(name, member, scale, min, max, value) SETTING_##name,

@@ -29,15 +29,6 @@ wheels = [
 ]
 
 [[package]]
-name = "ar"
-version = "1.0.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2b/0f/13f26fda15101f3415fab75456f5abc967a8c848287cf0b3dabc4b64d65a/ar-1.0.1.tar.gz", hash = "sha256:8fc8e64ac2fd157b9f285b1c981083f2e906258322ff5e4413c0096f67fc2003", size = 8523, upload-time = "2025-10-08T09:41:48.514Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/b9/919ec85022e3b4c7b8bdf7729720666fe4d5eaff016a85b301bf0ce67798/ar-1.0.1-py3-none-any.whl", hash = "sha256:ee6b676acbe1c31b28e108361f23e44432324dafc87a782e9286896bf77dec8e", size = 12463, upload-time = "2025-10-08T09:41:47.47Z" },
-]
-
-[[package]]
 name = "asttokens"
 version = "3.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -726,35 +717,6 @@ wheels = [
 ]
 
 [[package]]
-name = "microdot"
-version = "2.7.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b2/b9/04cb0f0aef0643c6beea7b72729a1cb6057b18ca9c68263f01c0cd046d4a/microdot-2.7.0.tar.gz", hash = "sha256:e11f39f0f5564bb5db69f728902740ed592d632ae7a03e24ca3a88cd59ad2f53", size = 91362, upload-time = "2026-09-18T09:14:48.599Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/87/734a5d5a38bda98b822eeb3abdb2de3449f0782d3d114b2f037986c08629/microdot-2.7.0-py3-none-any.whl", hash = "sha256:1e9b7b825372e1ba8ebd4c59b6180e15c71f4b5200ec4bcbf8c9f9b5652db379", size = 53756, upload-time = "2026-09-18T09:14:47.338Z" },
-]
-
-[[package]]
-name = "micropython-esp32-stubs"
-version = "1.29.0.post1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "micropython-stdlib-stubs" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/a3/81f0baef74756712543ddcac1c593e5a114f5efdc43ea3579bbb3a58f4f9/micropython_esp32_stubs-1.29.0.post1.tar.gz", hash = "sha256:bd458e03eaa5c9b5986f08f63ccbd6254e6d72289dbf2a9896cdb7b1df6978fc", size = 105710, upload-time = "2026-08-30T14:50:42.843Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ed/8c/b8193d108bbfd6208f7797b2765510578c223887526d2baa50a5feaa3564/micropython_esp32_stubs-1.29.0.post1-py2.py3-none-any.whl", hash = "sha256:c0a72410b9924f51b520534de0dc7f1839ff8f108689aa1e935a0c2b9fcbd96b", size = 134423, upload-time = "2026-08-30T14:50:41.579Z" },
-]
-
-[[package]]
-name = "micropython-stdlib-stubs"
-version = "1.29.0.post2"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3a/e6/3edc7601ecbfb1deaee29e7e8beadb7e2d4877b5ed4f71f0c6644bb7493d/micropython_stdlib_stubs-1.29.0.post2-py3-none-any.whl", hash = "sha256:bdcd54d9896d8e1d455b3a99995d82a8399e1e2c9cb94eacabe278e5c2397783", size = 154274, upload-time = "2026-08-31T11:34:33.329Z" },
-]
-
-[[package]]
 name = "mujoco"
 version = "3.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1102,15 +1064,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pyelftools"
-version = "0.33"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a3/11/767522582afab1b884d277de0e6e011640cb9d7292a38694b4b1a1df1ae8/pyelftools-0.33.tar.gz", hash = "sha256:660d82dcbeb8e83d1702bd97f223f761625da06111c0cc988eac6b8ab0c1b61f", size = 15068655, upload-time = "2026-05-29T12:56:22.553Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/46/2a/f9697576603dae937727827505a6126a066affb227034e77e6f9068910da/pyelftools-0.33-py3-none-any.whl", hash = "sha256:f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036", size = 201178, upload-time = "2026-05-29T12:56:20.587Z" },
-]
-
-[[package]]
 name = "pygments"
 version = "2.21.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1245,14 +1198,6 @@ dependencies = [
     { name = "websocket-client" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "ar" },
-    { name = "microdot" },
-    { name = "micropython-esp32-stubs" },
-    { name = "pyelftools" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "ipykernel", specifier = ">=7.4.0" },
@@ -1263,14 +1208,6 @@ requires-dist = [
     { name = "pyserial", specifier = ">=3.5" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "websocket-client", specifier = ">=1.9.2" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "ar", specifier = ">=1.0.1" },
-    { name = "microdot", specifier = ">=2.7.0" },
-    { name = "micropython-esp32-stubs", specifier = ">=1.29.0.post1" },
-    { name = "pyelftools", specifier = ">=0.33" },
 ]
 
 [[package]]

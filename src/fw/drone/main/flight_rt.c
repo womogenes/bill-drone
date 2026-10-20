@@ -1,23 +1,34 @@
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
-#include "py/runtime.h"
-#include "py/mphal.h"
-#include "py/mperrno.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/idf_additions.h"
 #include "driver/i2c.h"
+#include "driver/ledc.h"
+#include "esp_err.h"
 #include "esp_random.h"
 #include "esp_timer.h"
-#include "../flight_math.h"
+#include "soc/ledc_struct.h"
+#include "flight_math.h"
 #include "runtime.h"
 #include "settings.h"
 #include "arming.h"
 
 #define LOG_CAPACITY 200
-#define TABLE_CAPACITY 64
 #define DEG (180.0f / 3.14159265358979323846f)
+// MPU6050 on I2C: SDA, SCL and address.
+#define SDA 19
+#define SCL 22
+#define MPU 0x68
+// Motor watchdog: the laptop's targets must keep arriving.
+#define HEARTBEAT_MS 500
+// Tolerate one missed control tick; a second consecutive miss stops the motors.
+#define MAX_SAMPLE_MS (2500 / SAMPLE_HZ)
+// Degrees.
+#define TIP_LIMIT 45
+#define SERVO_LIMIT 60
+#define THROTTLE_MAX 1200
+#define PWM_BITS 16
 // Streamed target limits: degrees and degrees per second.
 #define TARGET_TILT 15
 #define TARGET_RATE 45
@@ -31,12 +42,16 @@ typedef struct __attribute__((packed)) {
 } Record;
 _Static_assert(sizeof(Record) == 48, "Flight record layout");
 
+// Output channels, in this order: left servo, left ESC, right servo, right ESC (index side * 2 + ESC).
+static const int pins[4] = {14, 25, 16, 18};
+// LEDC ticks per microsecond of pulse.
+static const float ticks[4] = {
+    (1 << PWM_BITS) * SERVO_HZ / 1e6f, (1 << PWM_BITS) * ESC_HZ / 1e6f,
+    (1 << PWM_BITS) * SERVO_HZ / 1e6f, (1 << PWM_BITS) * ESC_HZ / 1e6f,
+};
+
 typedef struct {
-    int sda, scl, address, sample_hz, heartbeat_ms, throttle_max, max_sample_ms, dlpf;
-    float accel_scale[3], gyro_scale[3], temperature_scale, temperature_offset;
-    float gravity_tau, powered_tau, tip_limit, servo_limit;
-    uintptr_t pwm[4];
-    float ticks[4];
+    float accel_scale[3], gyro_scale[3], gravity_tau, powered_tau, tip_limit;
 } Config;
 
 typedef struct {
@@ -44,25 +59,23 @@ typedef struct {
     // servo_held: a zeroed servo ignores streamed angles until the laptop sends zero for it.
     // calibration_ready: a finished calibration waits for the radio's update task to store it.
     bool online, enabled, calibrated, latched, servo_held[2], calibration_ready;
-    int reason, core, calibration_left, calibration_count;
+    int reason, calibration_left, calibration_count;
     float accel[3], gyro[3], bias[3], calibration_sum[3], gravity_sum[3];
     float temperature, servo[2], offsets[2];
     int throttle[2];
     Attitude attitude, pose_zero;
     Controller controller;
-    uint64_t sample_us, heartbeat_us, samples, total_control_us;
-    uint32_t max_control_us;
+    uint64_t sample_us, heartbeat_us;
 } State;
 
 static Config config;
 static State state;
 static Command command;
-static float thrust[TABLE_CAPACITY * 2];
-static size_t thrust_count;
 static Record records[LOG_CAPACITY];
 static uint32_t log_head, log_tail, log_samples, log_dropped, log_elapsed, log_session;
 static uint64_t log_started;
-static bool log_active, running, i2c_installed, sensor_configured;
+// running: the control task has started; until then targets, arming and calibration are refused.
+static bool log_active, running, sensor_configured;
 // maintenance: a flash or NVS write is in progress, so outputs are held at zero and arming is refused.
 static bool maintenance;
 // Counts every stop; an arm request carries the count from when it arrived.
@@ -70,7 +83,6 @@ static uint32_t stop_generation;
 // The newest laptop STOP since boot (each boot is a new radio session).
 static StopBarrier stop_barrier;
 static uint16_t voltage_mv;
-static TaskHandle_t task;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
 static float limit(float value, float low, float high) {
@@ -78,12 +90,11 @@ static float limit(float value, float low, float high) {
 }
 
 // Caller holds lock so an emergency stop cannot race a later duty write.
+// Latches a duty update without waiting for the previous transition.
 static void pulse(int index, float us) {
-    if (!config.pwm[index]) return;
-    volatile uint32_t *reg = (volatile uint32_t *)config.pwm[index];
-    reg[3] &= 0x7fffffff;
-    reg[2] = (uint32_t)lroundf(us * config.ticks[index]) << 4;
-    reg[3] |= 1U << 31;
+    LEDC.channel_group[LEDC_HIGH_SPEED_MODE].channel[index].conf1.duty_start = 0;
+    LEDC.channel_group[LEDC_HIGH_SPEED_MODE].channel[index].duty.duty = (uint32_t)lroundf(us * ticks[index]) << 4;
+    LEDC.channel_group[LEDC_HIGH_SPEED_MODE].channel[index].conf1.duty_start = 1;
 }
 
 static void write_servo(int side) {
@@ -107,10 +118,10 @@ static void stop_locked(int reason) {
 
 static esp_err_t write_mpu(uint8_t reg, uint8_t value) {
     uint8_t data[] = {reg, value};
-    return i2c_master_write_to_device(I2C_NUM_0, config.address, data, sizeof(data), pdMS_TO_TICKS(10));
+    return i2c_master_write_to_device(I2C_NUM_0, MPU, data, sizeof(data), pdMS_TO_TICKS(10));
 }
 
-// Sign bits (x 1, y 2, z 4) of the sensor-to-body mapping, as the IMU scales from Python carry it.
+// Sign bits (x 1, y 2, z 4) of the sensor-to-body mapping.
 static float frame(void) {
     return (config.accel_scale[0] < 0) | (config.accel_scale[1] < 0) << 1 | (config.accel_scale[2] < 0) << 2;
 }
@@ -150,28 +161,19 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
 
 static void runtime_task(void *arg) {
     TickType_t deadline = xTaskGetTickCount();
-    TickType_t period = configTICK_RATE_HZ / config.sample_hz;
+    TickType_t period = configTICK_RATE_HZ / SAMPLE_HZ;
     uint64_t previous = 0;
     while (true) {
-        portENTER_CRITICAL(&lock);
-        bool active = running;
-        portEXIT_CRITICAL(&lock);
-        if (!active) break;
-
         uint8_t reg = 0x3a, data[15];
         esp_err_t result = sensor_configured
-            ? i2c_master_write_read_device(I2C_NUM_0, config.address, &reg, 1,
+            ? i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1,
                                           data, sizeof(data), pdMS_TO_TICKS(10))
             : ESP_ERR_INVALID_STATE;
         uint64_t now = esp_timer_get_time();
         portENTER_CRITICAL(&lock);
-        if (!running) {
-            portEXIT_CRITICAL(&lock);
-            break;
-        }
         bool recording = log_active;
         if ((state.enabled || state.throttle[0] || state.throttle[1]) &&
-            now - state.heartbeat_us > config.heartbeat_ms * 1000ULL) stop_locked(2);
+            now - state.heartbeat_us > HEARTBEAT_MS * 1000ULL) stop_locked(2);
 
         if (result != ESP_OK) {
             state.online = false;
@@ -185,7 +187,7 @@ static void runtime_task(void *arg) {
         }
         // The MPU updates at 1 kHz, so every control tick sees a new sample unless the sensor stalled.
         if (!(data[0] & 1)) {
-            if (state.sample_us && now - state.sample_us > config.max_sample_ms * 1000ULL) {
+            if (state.sample_us && now - state.sample_us > MAX_SAMPLE_MS * 1000ULL) {
                 state.online = false;
                 if (state.enabled) stop_locked(5);
             }
@@ -196,8 +198,8 @@ static void runtime_task(void *arg) {
 
         int16_t raw[7];
         for (int i = 0; i < 7; i++) raw[i] = (int16_t)((data[1 + i * 2] << 8) | data[2 + i * 2]);
-        float dt = previous ? (now - previous) / 1000000.0f : 1.0f / config.sample_hz;
-        if (state.enabled && previous && now - previous > config.max_sample_ms * 1000ULL) stop_locked(5);
+        float dt = previous ? (now - previous) / 1000000.0f : 1.0f / SAMPLE_HZ;
+        if (state.enabled && previous && now - previous > MAX_SAMPLE_MS * 1000ULL) stop_locked(5);
         for (int i = 0; i < 3; i++) {
             state.accel[i] = raw[i] * config.accel_scale[i];
             state.gyro[i] = raw[4 + i] * config.gyro_scale[i];
@@ -232,9 +234,8 @@ static void runtime_task(void *arg) {
                          state.throttle[0] || state.throttle[1] ? config.powered_tau : config.gravity_tau};
         flight_attitude(&state.attitude, &motion);
         state.online = true;
-        state.temperature = raw[3] * config.temperature_scale + config.temperature_offset;
+        state.temperature = raw[3] / 340.0f + 36.53f;
         state.sample_us = now;
-        state.core = xPortGetCoreID();
         previous = now;
         uint64_t started = esp_timer_get_time();
         Attitude pose = relative_attitude(&state);
@@ -245,47 +246,21 @@ static void runtime_task(void *arg) {
             command.pitch = pose.pitch;
             command.gx = state.gyro[0]; command.gy = state.gyro[1]; command.gz = state.gyro[2];
             command.dt = dt;
-            flight_control(&state.controller, &command, thrust, thrust_count);
-            state.servo[0] = limit(state.controller.left_angle * DEG, -config.servo_limit, config.servo_limit);
-            state.servo[1] = limit(state.controller.right_angle * DEG, -config.servo_limit, config.servo_limit);
-            state.throttle[0] = lroundf(limit(state.controller.left, 0, config.throttle_max));
-            state.throttle[1] = lroundf(limit(state.controller.right, 0, config.throttle_max));
+            flight_control(&state.controller, &command, &flight_thrust[0][0], flight_thrust_count);
+            state.servo[0] = limit(state.controller.left_angle * DEG, -SERVO_LIMIT, SERVO_LIMIT);
+            state.servo[1] = limit(state.controller.right_angle * DEG, -SERVO_LIMIT, SERVO_LIMIT);
+            state.throttle[0] = lroundf(limit(state.controller.left, 0, THROTTLE_MAX));
+            state.throttle[1] = lroundf(limit(state.controller.right, 0, THROTTLE_MAX));
             for (int side = 0; side < 2; side++) {
                 write_servo(side);
                 pulse(side * 2 + 1, 1000 + state.throttle[side]);
             }
         }
         uint32_t duration = esp_timer_get_time() - started;
-        state.samples++;
-        state.total_control_us += duration;
-        if (duration > state.max_control_us) state.max_control_us = duration;
         if (recording) capture(now, raw, duration);
         portEXIT_CRITICAL(&lock);
         vTaskDelayUntil(&deadline, period);
     }
-    portENTER_CRITICAL(&lock);
-    task = NULL;
-    portEXIT_CRITICAL(&lock);
-    vTaskDelete(NULL);
-}
-
-void flight_runtime_stop(void) {
-    portENTER_CRITICAL(&lock);
-    running = false;
-    stop_locked(1);
-    portEXIT_CRITICAL(&lock);
-    while (true) {
-        portENTER_CRITICAL(&lock);
-        bool alive = task != NULL;
-        portEXIT_CRITICAL(&lock);
-        if (!alive) break;
-        vTaskDelay(1);
-    }
-    if (i2c_installed) {
-        i2c_driver_delete(I2C_NUM_0);
-        i2c_installed = false;
-    }
-    memset(config.pwm, 0, sizeof(config.pwm));
 }
 
 // The update service writes flash only while this holds: flash writes stall this core's code fetches.
@@ -305,10 +280,8 @@ bool flight_runtime_targets(const float *targets) {
         fabsf(targets[3]) > TARGET_RATE || targets[6] < 0 || targets[7] < 0)
         return false;
     portENTER_CRITICAL(&lock);
-    // The limits come from start(), which clears running while it changes them.
-    bool active = running && targets[0] <= config.throttle_max && targets[6] <= config.throttle_max &&
-                  targets[7] <= config.throttle_max && fabsf(targets[4]) <= config.servo_limit &&
-                  fabsf(targets[5]) <= config.servo_limit;
+    bool active = running && targets[0] <= THROTTLE_MAX && targets[6] <= THROTTLE_MAX && targets[7] <= THROTTLE_MAX &&
+                  fabsf(targets[4]) <= SERVO_LIMIT && fabsf(targets[5]) <= SERVO_LIMIT;
     if (active) {
         state.heartbeat_us = esp_timer_get_time();
         command.base = targets[0];
@@ -414,7 +387,7 @@ const char *flight_runtime_calibrate(void) {
         state.calibrated = state.calibration_ready = false;
         memset(state.calibration_sum, 0, sizeof(state.calibration_sum));
         memset(state.gravity_sum, 0, sizeof(state.gravity_sum));
-        state.calibration_left = state.calibration_count = 2 * config.sample_hz;
+        state.calibration_left = state.calibration_count = 2 * SAMPLE_HZ;
     }
     portEXIT_CRITICAL(&lock);
     return active ? NULL : "IMU offline";
@@ -504,86 +477,61 @@ void flight_runtime_status(Status *status) {
     status->log_dropped = dropped;
 }
 
-static mp_obj_t field(mp_obj_t dict, qstr key) {
-    return mp_obj_dict_get(dict, MP_OBJ_NEW_QSTR(key));
-}
-static void floats(mp_obj_t object, float *values, size_t expected) {
-    size_t count; mp_obj_t *items;
-    mp_obj_get_array(object, &count, &items);
-    if (count != expected) mp_raise_ValueError(MP_ERROR_TEXT("Invalid vector length"));
-    for (size_t i = 0; i < count; i++) {
-        values[i] = mp_obj_get_float(items[i]);
-        if (!isfinite(values[i])) mp_raise_ValueError(MP_ERROR_TEXT("Expected finite values"));
-    }
-}
-
-// Gains, trims and model only: arming, setpoints and stops never come from here.
-static mp_obj_t configure(mp_obj_t buffer, mp_obj_t table) {
-    mp_buffer_info_t a, b;
-    mp_get_buffer_raise(buffer, &a, MP_BUFFER_READ);
-    mp_get_buffer_raise(table, &b, MP_BUFFER_READ);
-    if (a.len != sizeof(Command) || b.len < 16 || b.len % 8 || b.len > sizeof(thrust))
-        mp_raise_ValueError(MP_ERROR_TEXT("Invalid controller buffers"));
-    Command next; memcpy(&next, a.buf, sizeof(next));
-    for (size_t i = 0; i < sizeof(next) / sizeof(float); i++) {
-        float value; memcpy(&value, (uint8_t *)&next + i * sizeof(float), sizeof(float));
-        if (!isfinite(value)) mp_raise_ValueError(MP_ERROR_TEXT("Invalid controller value"));
-    }
-    float values[SETTINGS];
-    settings_copy(values);
+void flight_runtime_set_voltage(uint16_t millivolts) {
     portENTER_CRITICAL(&lock);
-    next.enabled = command.enabled;
-    next.base = command.base;
-    next.target_roll = command.target_roll;
-    next.target_pitch = command.target_pitch;
-    next.target_yaw = command.target_yaw;
-    command = next;
-    // Python supplies the thrust table and the fixed model; tunable values come from the settings store.
-    settings_apply(&command, values);
-    memcpy(thrust, b.buf, b.len);
-    thrust_count = b.len / 8;
+    voltage_mv = millivolts;
     portEXIT_CRITICAL(&lock);
-    return mp_const_none;
 }
-static MP_DEFINE_CONST_FUN_OBJ_2(configure_obj, configure);
 
-
-static mp_obj_t start(mp_obj_t settings) {
-    flight_runtime_stop();
-    Config next = {0};
-#define INT_FIELD(name) next.name = mp_obj_get_int(field(settings, MP_QSTR_##name))
-#define FLOAT_FIELD(name) next.name = mp_obj_get_float(field(settings, MP_QSTR_##name))
-    INT_FIELD(max_sample_ms); INT_FIELD(dlpf);
-    INT_FIELD(sda); INT_FIELD(scl); INT_FIELD(address); INT_FIELD(sample_hz); INT_FIELD(heartbeat_ms); INT_FIELD(throttle_max);
-    FLOAT_FIELD(temperature_scale); FLOAT_FIELD(temperature_offset); FLOAT_FIELD(gravity_tau); FLOAT_FIELD(powered_tau);
-    FLOAT_FIELD(tip_limit); FLOAT_FIELD(servo_limit);
-#undef INT_FIELD
-#undef FLOAT_FIELD
-    floats(field(settings, MP_QSTR_accel_scale), next.accel_scale, 3);
-    floats(field(settings, MP_QSTR_gyro_scale), next.gyro_scale, 3);
-    size_t count; mp_obj_t *items;
-    mp_obj_get_array(field(settings, MP_QSTR_pwm), &count, &items);
-    // The control period is a whole number of RTOS ticks; the tick ISR paces it with microsecond jitter.
-    if (count != 4 || next.sample_hz < 1 || next.sample_hz > configTICK_RATE_HZ ||
-        configTICK_RATE_HZ % next.sample_hz || next.dlpf < 1 || next.dlpf > 6 ||
-        next.max_sample_ms * next.sample_hz <= 1000)
-        mp_raise_ValueError(MP_ERROR_TEXT("Invalid runtime configuration"));
-    for (int i = 0; i < 4; i++) {
-        size_t n; mp_obj_t *pair;
-        mp_obj_get_array(items[i], &n, &pair);
-        if (n != 2) mp_raise_ValueError(MP_ERROR_TEXT("Invalid PWM configuration"));
-        next.pwm[i] = mp_obj_get_int_truncated(pair[0]);
-        next.ticks[i] = mp_obj_get_float(pair[1]);
-        if (next.pwm[i] < 0x3ff59000 || next.pwm[i] > 0x3ff5908c ||
-            (next.pwm[i] - 0x3ff59000) % 20 || !(next.ticks[i] > 0))
-            mp_raise_ValueError(MP_ERROR_TEXT("Invalid LEDC channel"));
-    }
-    config = next;
-    memset(&state, 0, sizeof(state));
+void flight_runtime_outputs(void) {
     float values[SETTINGS];
     settings_copy(values);
     state.offsets[0] = values[SETTING_servo_offset_left];
     state.offsets[1] = values[SETTING_servo_offset_right];
+    for (int kind = 0; kind < 2; kind++) {
+        ledc_timer_config_t timer = {.speed_mode = LEDC_HIGH_SPEED_MODE, .duty_resolution = PWM_BITS,
+                                     .timer_num = kind, .freq_hz = kind ? ESC_HZ : SERVO_HZ, .clk_cfg = LEDC_AUTO_CLK};
+        ESP_ERROR_CHECK(ledc_timer_config(&timer));
+    }
+    for (int index = 0; index < 4; index++) {
+        int side = index / 2, esc = index % 2;
+        float us = esc ? 1000 : 1500 + state.offsets[side] * 1000 / 90;
+        ledc_channel_config_t channel = {.gpio_num = pins[index], .speed_mode = LEDC_HIGH_SPEED_MODE, .channel = index,
+                                         .timer_sel = esc, .duty = lroundf(us * ticks[index])};
+        ESP_ERROR_CHECK(ledc_channel_config(&channel));
+    }
+}
+
+// Wakes the MPU6050 with 1 kHz output, so each control tick reads a sample at most 1 ms old; the DLPF is the anti-alias filter.
+static bool configure_sensor(void) {
+    i2c_config_t bus = {.mode = I2C_MODE_MASTER, .sda_io_num = SDA, .scl_io_num = SCL,
+                        .sda_pullup_en = GPIO_PULLUP_ENABLE, .scl_pullup_en = GPIO_PULLUP_ENABLE,
+                        .master.clk_speed = 400000};
+    ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &bus));
+    ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
+    bool ok = write_mpu(0x6b, 1) == ESP_OK;
+    vTaskDelay(pdMS_TO_TICKS(100));
+    uint8_t registers[][2] = {
+        {0x19, 0}, {0x1a, IMU_DLPF}, {0x1b, 0}, {0x1c, 0}, {0x37, 0x20}, {0x38, 1},
+    };
+    for (size_t i = 0; i < sizeof(registers) / sizeof(registers[0]); i++) {
+        if (write_mpu(registers[i][0], registers[i][1]) != ESP_OK) ok = false;
+    }
+    return ok;
+}
+
+void flight_runtime_start(void) {
+    // Accelerometer at ±2 g (16384 per g), gyro at ±250 °/s (131 per °/s), both mapped to body axes.
+    for (int i = 0; i < 3; i++) {
+        config.accel_scale[i] = sensor_to_body[i] / 16384.0f;
+        config.gyro_scale[i] = sensor_to_body[i] * 3.14159265358979323846 / (180 * 131);
+    }
+    // Equivalent to retaining 0.99 / 0.9998 of gyro integration every 10 ms.
+    config.gravity_tau = -0.01 / log(0.99);
+    config.powered_tau = -0.01 / log(0.9998);
+    config.tip_limit = TIP_LIMIT / DEG;
+    float values[SETTINGS];
+    settings_copy(values);
     // A calibration is valid only in the sensor frame it was taken in. Arming and the status both read
     // state.calibrated, so a rejected calibration blocks arming.
     float pose_zero[2];
@@ -591,102 +539,23 @@ static mp_obj_t start(mp_obj_t settings) {
         state.pose_zero = (Attitude){pose_zero[0] / DEG, pose_zero[1] / DEG};
         state.calibrated = true;
     }
+    // The fixed model; the settings store supplies every tunable value.
+    command.model.servo_min = -SERVO_LIMIT / DEG;
+    command.model.servo_max = SERVO_LIMIT / DEG;
+    command.model.left_servo_direction = 1;
+    command.model.right_servo_direction = -1;
     settings_apply(&command, values);
-    command.enabled = command.base = 0;
     state.heartbeat_us = esp_timer_get_time();
-    i2c_config_t bus = {.mode = I2C_MODE_MASTER, .sda_io_num = config.sda, .scl_io_num = config.scl,
-                        .sda_pullup_en = GPIO_PULLUP_ENABLE, .scl_pullup_en = GPIO_PULLUP_ENABLE,
-                        .master.clk_speed = 400000};
-    esp_err_t error = i2c_param_config(I2C_NUM_0, &bus);
-    if (error == ESP_OK) error = i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0);
-    if (error != ESP_OK) mp_raise_OSError(error);
-    i2c_installed = true;
-    sensor_configured = write_mpu(0x6b, 1) == ESP_OK;
-    mp_hal_delay_ms(100);
-    // 1 kHz output so each control tick reads a sample at most 1 ms old; the DLPF is the anti-alias filter.
-    uint8_t registers[][2] = {
-        {0x19, 0}, {0x1a, config.dlpf}, {0x1b, 0}, {0x1c, 0}, {0x37, 0x20}, {0x38, 1},
-    };
-    for (size_t i = 0; i < sizeof(registers) / sizeof(registers[0]); i++) {
-        if (write_mpu(registers[i][0], registers[i][1]) != ESP_OK) sensor_configured = false;
+    // An initial I2C timeout can leave the sensor idle; one fresh driver install and configuration recovers it.
+    sensor_configured = configure_sensor();
+    if (!sensor_configured) {
+        ESP_ERROR_CHECK(i2c_driver_delete(I2C_NUM_0));
+        sensor_configured = configure_sensor();
     }
     portENTER_CRITICAL(&lock);
     stop_locked(0);
     for (int side = 0; side < 2; side++) write_servo(side);
     running = true;
     portEXIT_CRITICAL(&lock);
-    if (xTaskCreatePinnedToCore(runtime_task, "flight", 4096, NULL, 5, &task, 1) != pdPASS) {
-        flight_runtime_stop();
-        mp_raise_OSError(MP_ENOMEM);
-    }
-    return mp_const_none;
+    if (xTaskCreatePinnedToCore(runtime_task, "flight", 4096, NULL, 5, NULL, 1) != pdPASS) abort();
 }
-static MP_DEFINE_CONST_FUN_OBJ_1(start_obj, start);
-
-static mp_obj_t stop(size_t n, const mp_obj_t *args) {
-    int reason = n ? mp_obj_get_int(args[0]) : 1;
-    portENTER_CRITICAL(&lock); stop_locked(reason); portEXIT_CRITICAL(&lock);
-    return mp_const_none;
-}
-static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(stop_obj, 0, 1, stop);
-static void put(mp_obj_t dict, qstr key, mp_obj_t value) { mp_obj_dict_store(dict, MP_OBJ_NEW_QSTR(key), value); }
-static mp_obj_t float_tuple(const float *values, int n, float scale) {
-    mp_obj_t items[3];
-    for (int i = 0; i < n; i++) items[i] = mp_obj_new_float(values[i] * scale);
-    return mp_obj_new_tuple(n, items);
-}
-static mp_obj_t snapshot(void) {
-    State copy;
-    portENTER_CRITICAL(&lock); copy = state; portEXIT_CRITICAL(&lock);
-    mp_obj_t dict = mp_obj_new_dict(0);
-    put(dict, MP_QSTR_online, mp_obj_new_bool(copy.online));
-    put(dict, MP_QSTR_calibrated, mp_obj_new_bool(copy.calibrated));
-    put(dict, MP_QSTR_calibrating, mp_obj_new_bool(copy.calibration_left > 0));
-    put(dict, MP_QSTR_accel, float_tuple(copy.accel, 3, 1));
-    put(dict, MP_QSTR_gyro, float_tuple(copy.gyro, 3, DEG));
-    put(dict, MP_QSTR_gyro_bias, float_tuple(copy.bias, 3, 1));
-    Attitude pose = relative_attitude(&copy);
-    put(dict, MP_QSTR_roll, mp_obj_new_float(pose.roll * DEG));
-    put(dict, MP_QSTR_pitch, mp_obj_new_float(pose.pitch * DEG));
-    float zero[] = {copy.pose_zero.roll, copy.pose_zero.pitch};
-    put(dict, MP_QSTR_pose_zero, float_tuple(zero, 2, DEG));
-    put(dict, MP_QSTR_temperature, mp_obj_new_float(copy.temperature));
-    put(dict, MP_QSTR_servo, float_tuple(copy.servo, 2, 1));
-    put(dict, MP_QSTR_offsets, float_tuple(copy.offsets, 2, 1));
-    mp_obj_t throttles[] = {mp_obj_new_int(copy.throttle[0]), mp_obj_new_int(copy.throttle[1])};
-    put(dict, MP_QSTR_throttle, mp_obj_new_tuple(2, throttles));
-    put(dict, MP_QSTR_enabled, mp_obj_new_bool(copy.enabled));
-    put(dict, MP_QSTR_reason, mp_obj_new_int(copy.reason));
-    put(dict, MP_QSTR_age_ms, mp_obj_new_int_from_ull(copy.sample_us ? (esp_timer_get_time() - copy.sample_us) / 1000 : 0));
-    put(dict, MP_QSTR_samples, mp_obj_new_int_from_ull(copy.samples));
-    put(dict, MP_QSTR_total_control_us, mp_obj_new_int_from_ull(copy.total_control_us));
-    put(dict, MP_QSTR_max_control_us, mp_obj_new_int_from_uint(copy.max_control_us));
-    put(dict, MP_QSTR_core, mp_obj_new_int(copy.core));
-    put(dict, MP_QSTR_vm_core, mp_obj_new_int(xPortGetCoreID()));
-    put(dict, MP_QSTR_sample_hz, mp_obj_new_int(config.sample_hz));
-    return dict;
-}
-static MP_DEFINE_CONST_FUN_OBJ_0(snapshot_obj, snapshot);
-static mp_obj_t reset(void) {
-    portENTER_CRITICAL(&lock); state.controller = (Controller){0}; flight_reset(&state.controller, &command); portEXIT_CRITICAL(&lock);
-    return mp_const_none;
-}
-static MP_DEFINE_CONST_FUN_OBJ_0(reset_obj, reset);
-static mp_obj_t set_voltage(mp_obj_t value) {
-    int voltage = mp_obj_get_int(value);
-    portENTER_CRITICAL(&lock); voltage_mv = voltage; portEXIT_CRITICAL(&lock);
-    return mp_const_none;
-}
-static MP_DEFINE_CONST_FUN_OBJ_1(set_voltage_obj, set_voltage);
-static mp_obj_t shutdown(void) { flight_runtime_stop(); return mp_const_none; }
-static MP_DEFINE_CONST_FUN_OBJ_0(shutdown_obj, shutdown);
-
-static const mp_rom_map_elem_t globals_table[] = {
-    {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_flight_rt)},
-#define EXPORT(name) {MP_ROM_QSTR(MP_QSTR_##name), MP_ROM_PTR(&name##_obj)}
-    EXPORT(configure), EXPORT(start), EXPORT(stop), EXPORT(snapshot), EXPORT(reset), EXPORT(set_voltage), EXPORT(shutdown),
-#undef EXPORT
-};
-static MP_DEFINE_CONST_DICT(globals, globals_table);
-const mp_obj_module_t flight_rt_module = {.base = {&mp_type_module}, .globals = (mp_obj_dict_t *)&globals};
-MP_REGISTER_MODULE(MP_QSTR_flight_rt, flight_rt_module);

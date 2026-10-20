@@ -11,8 +11,4 @@ node_modules/
 
 src/sw/recordings/
 
-src/fw/native/.micropython/
-src/fw/native/.mpy_ld_cache*/
-src/fw/native/build-*/
-src/fw/native/*.so
-src/fw/native/*.so.tmp
+src/sw/sim/flight_math.so

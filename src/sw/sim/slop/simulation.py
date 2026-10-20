@@ -13,9 +13,8 @@ import mujoco
 import numpy as np
 from PIL import Image, ImageDraw
 
-# Simulation and firmware share the native math kernel and calibration data.
-from fw.drivers.calibration import THRUST_TABLE, thrust, throttle, GyroCalibration
-from fw.drivers.flight import Attitude, Controller, DEFAULT_TUNING
+# Simulation and firmware share the native math kernel and thrust table.
+from sw.sim.flight import THRUST_TABLE, thrust, throttle, GyroCalibration, Attitude, Controller, DEFAULT_TUNING
 
 ROOT = Path(__file__).resolve().parent
 model = mujoco.MjModel.from_xml_path(str(ROOT / "../models/bicopter.xml"))

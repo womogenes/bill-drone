@@ -72,7 +72,6 @@ export type Reading = {
   control_status?: {
     reason: string;
     throttle_latched?: boolean;
-    app_age_ms?: number | null;
   };
   recorder?: RecorderStatus;
   imu?: ImuReading | null;

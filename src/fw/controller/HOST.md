@@ -21,7 +21,7 @@ Open `http://localhost:3000`. Rebuild and restart the dashboard after code chang
 | Endpoint | Use |
 | --- | --- |
 | WebSocket `/ws` | Dashboard status, targets and commands |
-| WebSocket `/update` | Firmware and file updates through `tools/ota_direct.py` |
+| WebSocket `/update` | Firmware updates through `tools/ota_direct.py` |
 | GET `/status` | Current connection and sensor state |
 | GET `/settings` | Current cached settings |
 | GET `/schema` | Native setting names, defaults, ranges and write permissions |

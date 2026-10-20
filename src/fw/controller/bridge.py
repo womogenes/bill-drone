@@ -26,17 +26,15 @@ import time
 from aiohttp import WSMsgType, web
 import serial
 
+from log_format import HEADER_FORMAT, HEADER_SIZE, STOP_REASONS
 from wire import PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from drivers.log_format import HEADER_FORMAT, HEADER_SIZE, STOP_REASONS  # noqa: E402
 
 RECORDINGS = Path(__file__).resolve().parents[2] / "sw/recordings"
 
-# native/runtime/runtime.h Status, then drivers/protocol.py APP_FORMAT.
-STATUS_FORMAT = "<4sIIHBB3f3f3f2f2H4f2I" + "iIIIfHBx"
+# drone/main/runtime.h Status.
+STATUS_FORMAT = "<4sIIHB3f3f3f2f2H4f2IiIIHHf"
 REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T"}
-# Schema entries per D reply (native/runtime/settings.h SCHEMA_PAGE).
+# Schema entries per D reply (drone/main/settings.h SCHEMA_PAGE).
 SCHEMA_PAGE = 12
 
 
@@ -44,16 +42,15 @@ def decode_status(payload, settings):
     """
     The dashboard's reading (sw/dashboard/lib/telemetry.ts Reading) from a status message.
     """
-    (magic, time_ms, target_sequence, flags, reason, app_age, *values) = struct.unpack(STATUS_FORMAT, payload)
+    (magic, time_ms, target_sequence, flags, reason, *values) = struct.unpack(STATUS_FORMAT, payload)
     accel, gyro = values[0:3], values[3:6]
     roll, pitch, temperature, left_servo, right_servo, left_throttle, right_throttle = values[6:13]
     target_roll, target_pitch, target_yaw, base = values[13:17]
-    samples, dropped, force, force_age, force_sequence, adc_raw, voltage, version, app_flags = values[17:]
-    fresh_app = app_age < 255
-    return version if fresh_app else None, {
+    samples, dropped, force, force_age, force_sequence, adc_raw, version, voltage = values[17:]
+    return version, {
         "time": time_ms,
-        "force": force if fresh_app and app_flags & 1 else None,
-        "force_age_ms": force_age if fresh_app and app_flags & 1 else None,
+        "force": force if flags & 128 else None,
+        "force_age_ms": force_age if flags & 128 else None,
         "force_sequence": force_sequence,
         "adc_raw": adc_raw,
         "adc_voltage": voltage,
@@ -82,7 +79,6 @@ def decode_status(payload, settings):
         "control_status": {
             "reason": STOP_REASONS[reason],
             "throttle_latched": bool(flags & 64),
-            "app_age_ms": app_age * 10 if fresh_app else None,
             "target_sequence": target_sequence,
         },
         "logging": {
@@ -198,7 +194,7 @@ class Recorder:
 
 def encode_targets(message):
     """
-    A 'T' target packet (native/runtime/flight_rt.c flight_runtime_targets) from the browser's current controls.
+    A 'T' target packet (drone/main/flight_rt.c flight_runtime_targets) from the browser's current controls.
     """
     values = [message[key] for key in ("base_throttle", "roll", "pitch", "yaw_rate")]
     return b"T" + struct.pack("<8f", *values, *message["servo"], *message["throttle"])
@@ -474,7 +470,7 @@ class Service:
             self.session, self.token, self.last_status = session, token, time.monotonic()
             version, self.reading = decode_status(payload, self.settings)
             self.reading["recorder"] = self.recorder.status()
-            if (version is not None and version != self.settings_version
+            if (version != self.settings_version
                     and time.monotonic() >= self.settings_retry
                     and (self.settings_task is None or self.settings_task.done())):
                 self.settings_task = asyncio.create_task(self.refresh_settings(version))
@@ -657,7 +653,7 @@ class Service:
 
     async def schema(self, request):
         """
-        Every setting as {name, min, max, default, tunable}, collected page by page (native/runtime/settings.c).
+        Every setting as {name, min, max, default, tunable}, collected page by page (drone/main/settings.c).
         """
         entries = []
         try:

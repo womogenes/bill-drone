@@ -13,17 +13,9 @@ dependencies = [
     "websocket-client>=1.9.2",
 ]
 
-[dependency-groups]
-dev = [
-    "ar>=1.0.1",
-    "microdot>=2.7.0",
-    "micropython-esp32-stubs>=1.29.0.post1",
-    "pyelftools>=0.33",
-]
-
 [build-system]
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["sw", "sw.sim", "sw.sim.slop", "fw", "fw.drivers"]
+packages = ["sw", "sw.sim", "sw.sim.slop", "fw"]

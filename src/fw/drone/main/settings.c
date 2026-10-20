@@ -5,8 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "settings.h"
-#include "py/runtime.h"
-#include "py/objstr.h"
 #include "freertos/FreeRTOS.h"
 #include "nvs.h"
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
@@ -348,35 +346,3 @@ void settings_commit(int64_t now) {
     UNLOCK();
     if (error) printf("Settings: NVS write failed: %s\n", esp_err_to_name(error));
 }
-
-// Python API, for recording metadata.
-static mp_obj_t get_python(mp_obj_t name) {
-    size_t length;
-    const char *text = mp_obj_str_get_data(name, &length);
-    int index = settings_index(text, length);
-    if (index < 0) mp_raise_ValueError(MP_ERROR_TEXT("Unknown setting"));
-    return mp_obj_new_float(settings_get(index));
-}
-static MP_DEFINE_CONST_FUN_OBJ_1(get_obj, get_python);
-
-static mp_obj_t json_python(void) {
-    char text[1536];
-    size_t size = settings_json(text, sizeof(text));
-    return mp_obj_new_str(text, size);
-}
-static MP_DEFINE_CONST_FUN_OBJ_0(json_obj, json_python);
-
-static mp_obj_t version_python(void) {
-    return mp_obj_new_int_from_uint(settings_version());
-}
-static MP_DEFINE_CONST_FUN_OBJ_0(version_obj, version_python);
-
-static const mp_rom_map_elem_t globals_table[] = {
-    {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_settings)},
-    {MP_ROM_QSTR(MP_QSTR_get), MP_ROM_PTR(&get_obj)},
-    {MP_ROM_QSTR(MP_QSTR_json), MP_ROM_PTR(&json_obj)},
-    {MP_ROM_QSTR(MP_QSTR_version), MP_ROM_PTR(&version_obj)},
-};
-static MP_DEFINE_CONST_DICT(globals, globals_table);
-const mp_obj_module_t settings_module = {.base = {&mp_type_module}, .globals = (mp_obj_dict_t *)&globals};
-MP_REGISTER_MODULE(MP_QSTR_settings, settings_module);

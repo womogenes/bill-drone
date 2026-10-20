@@ -2,7 +2,7 @@
 // TUNE(name, Command member, scale to the member, min, max, default): changed by the T request.
 // STATE(name, min, max, default): set only by IMU calibration (G) and servo zeroing (Z); read-only to T.
 // Every entry is persisted in NVS. Angles are degrees here; RAD converts trims to the controller's radians.
-// Defaults match drivers/flight.py DEFAULT_TUNING and MODEL, which the host simulation still uses.
+// Defaults match sw/sim/flight.py DEFAULT_TUNING and MODEL, which the host simulation uses.
 TUNE(roll_p, roll_p, 1, 0, 1000, 20)
 TUNE(roll_i, roll_i, 1, 0, 1000, 3)
 TUNE(roll_damping, roll_damping, 1, 0, 1000, 6)
@@ -29,7 +29,7 @@ TUNE(right_thrust_scale, right_thrust_scale, 1, 0.5, 1.5, 1)
 STATE(servo_offset_left, -60, 60, -3)
 STATE(servo_offset_right, -60, 60, 0)
 // Gyro bias in rad/s and the stationary pose in degrees, valid only for the sensor frame they were taken in:
-// calibration_frame holds the sign bits (x 1, y 2, z 4) of drivers/calibration.py SENSOR_TO_BODY.
+// calibration_frame holds the sign bits (x 1, y 2, z 4) of runtime.h sensor_to_body.
 STATE(gyro_bias_x, -1, 1, 0)
 STATE(gyro_bias_y, -1, 1, 0)
 STATE(gyro_bias_z, -1, 1, 0)

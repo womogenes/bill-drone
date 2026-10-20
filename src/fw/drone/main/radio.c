@@ -1,18 +1,15 @@
 // Direct ESP-NOW link: status messages, streamed targets, stop, and the request service for updates and
-// transactions. Started by the firmware before boot.py/main.py, so the drone keeps reporting, stops, and accepts
-// native image updates and resets even when the Python application is broken. Framing: src/fw/controller/wire.py.
+// transactions. Framing: src/fw/controller/wire.py.
 //
 // Channels: 0 status (drone, every 50 ms), 1 targets (laptop, newest wins; each one is the controller heartbeat),
 // 2/3 binary/JSON flight log (one message in flight, resent until acknowledged), 4 recorder subscription,
 // 5 log acknowledgement, 6 requests and replies (id-tagged, fragmented).
 #include <stdio.h>
 #include <string.h>
-#include "py/runtime.h"
-#include "py/binary.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_event.h"
 #include "esp_now.h"
-#include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_random.h"
@@ -38,34 +35,28 @@ static const uint8_t peer[ESP_NOW_ETH_ALEN] = {0x04, 0xb2, 0x47, 0x54, 0x80, 0x4
 #define SECTOR 4096
 #define HASH 8
 #define TARGETS 8
-// Records per FLG1 batch (drivers/log_format.py BATCH_SIZE and MAX_BATCH) and the batch header size.
-#define LOG_BATCH 4
+// An image that is still unconfirmed this long after boot restarts, so the bootloader rolls back to the previous one.
+#define CONFIRM_US 90000000
+// Most records per FLG1 batch (controller/log_format.py MAX_BATCH) and the batch header size.
 #define LOG_MAX 8
 #define LOG_HEADER 12
-#define META 2048
-
-void esp_initialise_wifi(void);
 
 // Request states, each with one owner of the request and reply buffers: the receive callback fills IDLE,
-// the update task handles READY and sends REPLIED, Python handles PYTHON and writes its reply in WRITING.
-enum { IDLE, READY, PYTHON, WRITING, REPLIED };
+// the update task handles READY and sends REPLIED.
+enum { IDLE, READY, REPLIED };
 
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
-static bool started;
 static uint32_t session, sequence, ticks;
 static int inflight;
-static uint32_t sent, refused, received, rejected;
 static uint32_t latest[CHANNELS];
 static bool seen[CHANNELS];
 static uint32_t target_sequence;
 static uint8_t stop_id[4];
 static bool stop_pending;
-static uint8_t app[STATUS_APP];
-static int64_t app_us = -1;
 static bool log_requested;
 static int64_t log_us;
 static uint32_t log_acks[CHANNELS];
-// The flight-log streamer runs in tick(); meta is the application's latest metadata JSON.
+// The flight-log streamer runs in tick(); meta is the latest metadata JSON (main.c).
 static uint8_t log_message[LOG_HEADER + LOG_MAX * RECORD_SIZE];
 static const uint8_t *log_data;
 static size_t log_length, log_records;
@@ -81,17 +72,14 @@ static uint8_t request[REQUEST] __attribute__((aligned(4)));
 static uint32_t request_sequence, request_mask, request_length;
 // The runtime's stop count when the request arrived: an arm request is refused after any later stop.
 static uint32_t request_generation;
-// Python holds the outputs at zero while it writes a file.
-static bool python_maintenance;
 static ArmHistory arm_history;
 static int request_state;
-static int64_t request_us;
 static uint8_t reply[REPLY];
 static size_t reply_length;
 static bool has_reply;
 static TaskHandle_t update_task;
-static StaticTask_t update_tcb;
-static StackType_t update_stack[4096];
+// The running image awaits confirmation (V) after an update.
+static bool unconfirmed;
 
 static uint32_t now_ms(void) {
     return esp_timer_get_time() / 1000;
@@ -120,15 +108,15 @@ static bool transmit(uint8_t channel, uint32_t number, const uint8_t *data, size
     portENTER_CRITICAL(&lock);
     bool open = inflight < WINDOW;
     if (open) inflight++;
-    else refused++;
     portEXIT_CRITICAL(&lock);
     if (!open) return false;
     // The send callback may run before esp_now_send returns, so the slot is taken first.
     bool ok = esp_now_send(peer, packet, HEADER + length) == ESP_OK;
-    portENTER_CRITICAL(&lock);
-    if (ok) sent++;
-    else { inflight--; refused++; }
-    portEXIT_CRITICAL(&lock);
+    if (!ok) {
+        portENTER_CRITICAL(&lock);
+        inflight--;
+        portEXIT_CRITICAL(&lock);
+    }
     return ok;
 }
 
@@ -168,10 +156,8 @@ static void collect(uint32_t number, uint8_t index, uint8_t count, const uint8_t
 // Runs in the Wi-Fi task: parse, check freshness and order, and queue; never sends.
 static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, int size) {
     if (memcmp(info->src_addr, peer, ESP_NOW_ETH_ALEN) || size < HEADER || size > HEADER + PAYLOAD ||
-        memcmp(packet, "DC1", 3) || packet[3] >= CHANNELS || packet[17] > 32 || packet[16] >= packet[17]) {
-        portENTER_CRITICAL(&lock); rejected++; portEXIT_CRITICAL(&lock);
+        memcmp(packet, "DC1", 3) || packet[3] >= CHANNELS || packet[17] > 32 || packet[16] >= packet[17])
         return;
-    }
     uint8_t channel = packet[3], index = packet[16], count = packet[17];
     uint32_t packet_session, number, token;
     memcpy(&packet_session, packet + 4, 4);
@@ -180,11 +166,7 @@ static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, 
     const uint8_t *data = packet + HEADER;
     size_t length = size - HEADER;
     int32_t age = (int32_t)(now_ms() - token);
-    if (packet_session != session || age < 0 || age > 200) {
-        portENTER_CRITICAL(&lock); rejected++; portEXIT_CRITICAL(&lock);
-        return;
-    }
-    portENTER_CRITICAL(&lock); received++; portEXIT_CRITICAL(&lock);
+    if (packet_session != session || age < 0 || age > 200) return;
     if (channel == 6) {
         // Stop preempts everything, including a request in progress; the laptop repeats it until answered.
         if (count == 1 && length == 5 && data[4] == 'X') {
@@ -342,13 +324,14 @@ static void tick(void *arg) {
     }
     Status status = {.magic = {'S', 'T', 'A', '1'}};
     flight_runtime_status(&status);
+    sensors_status(&status);
     int64_t now = esp_timer_get_time();
     status.time_ms = now / 1000;
+    status.settings_version = settings_version();
+    status.flags |= settings_calibration_unsaved() << 1;
     portENTER_CRITICAL(&lock);
     status.target_sequence = target_sequence;
-    status.flags |= subscribed(now) << 5 | settings_calibration_unsaved() << 1;
-    status.app_age = app_us < 0 || now - app_us >= 2550000 ? 255 : (now - app_us) / 10000;
-    memcpy(status.app, app, sizeof(app));
+    status.flags |= subscribed(now) << 5;
     portEXIT_CRITICAL(&lock);
     transmit(0, next_sequence(), (const uint8_t *)&status, sizeof(status), 0, 1);
     stream_log(now);
@@ -365,6 +348,7 @@ static const char *write_sector(const esp_partition_t *target, uint32_t sector, 
     if (!flight_runtime_begin_maintenance()) return "Disable control and zero throttle before updating";
     // Writing over the fallback slot requires the running image to stay selected.
     esp_ota_mark_app_valid_cancel_rollback();
+    unconfirmed = false;
     esp_err_t error = esp_partition_erase_range(target, sector * SECTOR, SECTOR);
     if (!error) error = esp_partition_write(target, sector * SECTOR, data, SECTOR);
     const char *failure = error ? esp_err_to_name(error) : NULL;
@@ -389,13 +373,12 @@ static void describe(char *text, size_t size, const esp_partition_t *partition) 
              app.app_elf_sha256[6], app.app_elf_sha256[7]);
 }
 
-// Native requests (all others go to Python): A arm, I info, W write sector, C copy sector from the running slot,
-// B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo.
+// Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset,
+// S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo.
 // Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
-    bool ota = running->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN && running->subtype < ESP_PARTITION_SUBTYPE_APP_OTA_MAX;
-    const esp_partition_t *target = ota ? esp_ota_get_next_update_partition(NULL) : NULL;
+    const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
     char *text = (char *)reply + 5;
     static char error[96];
     if (op == 'S' || op == 'D') {
@@ -454,10 +437,10 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
     }
     if (op == 'V') {
         esp_err_t error = esp_ota_mark_app_valid_cancel_rollback();
+        if (!error) unconfirmed = false;
         return error ? esp_err_to_name(error) : NULL;
     }
     if (op == 'R') return flight_runtime_idle() ? NULL : "Disable control and zero throttle before resetting";
-    if (!target) return "Running from the factory slot; migrate over USB first";
     if (op == 'W') {
         if (length != 2 + HASH + SECTOR) return "Malformed sector write";
         if (!hash_matches(body + 2 + HASH, body + 2)) return "Sector arrived corrupted";
@@ -514,19 +497,11 @@ static void store_settings(void) {
 static void update_loop(void *arg) {
     while (true) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
+        if (unconfirmed && esp_timer_get_time() > CONFIRM_US && flight_runtime_idle()) esp_restart();
         store_settings();
         portENTER_CRITICAL(&lock);
         int state = request_state;
-        // Python may have crashed while holding a request; give the link back.
-        bool abandoned = state == PYTHON && esp_timer_get_time() - request_us > 5000000;
-        if (abandoned) request_state = state = REPLIED;
         portEXIT_CRITICAL(&lock);
-        if (abandoned) {
-            memcpy(reply, request, 4);
-            has_reply = true;
-            reply[4] = 1;
-            reply_length = 5 + snprintf((char *)reply + 5, REPLY - 5, "Python did not answer");
-        }
         if (state == READY) {
             if (request_length < 5) {
                 portENTER_CRITICAL(&lock); request_state = IDLE; portEXIT_CRITICAL(&lock);
@@ -536,12 +511,6 @@ static void update_loop(void *arg) {
             if (has_reply && !memcmp(reply, request, 4)) {
                 // A retry: replay the reply instead of repeating the request.
                 state = REPLIED;
-            } else if (!strchr("AIWCBVRSTDGZ", op)) {
-                portENTER_CRITICAL(&lock);
-                request_state = PYTHON;
-                request_us = esp_timer_get_time();
-                portEXIT_CRITICAL(&lock);
-                continue;
             } else {
                 size_t size = 0;
                 const char *error = handle(op, request + 5, request_length - 5, &size);
@@ -564,152 +533,46 @@ static void update_loop(void *arg) {
     }
 }
 
-static bool check(esp_err_t error, const char *step) {
-    if (error) printf("Direct radio: %s failed: %s\n", step, esp_err_to_name(error));
-    return !error;
-}
-
-// Called before boot.py on every (soft) reset; the radio survives soft resets.
-void flight_radio_start(void) {
-    if (started) return;
-    started = true;
-    // Before any Python runs: the store's servo offsets and calibration are needed when the runtime starts.
-    settings_load();
-    nlr_buf_t nlr;
-    if (nlr_push(&nlr) == 0) {
-        check(esp_netif_init(), "netif");
-        esp_initialise_wifi();
-        nlr_pop();
-    } else {
-        mp_obj_print_exception(&mp_plat_print, MP_OBJ_FROM_PTR(nlr.ret_val));
-        return;
-    }
+void radio_start(void) {
     esp_now_peer_info_t peer_info = {.ifidx = WIFI_IF_STA};
     memcpy(peer_info.peer_addr, peer, sizeof(peer));
     session = esp_random() | 1;
-    update_task = xTaskCreateStaticPinnedToCore(update_loop, "update", sizeof(update_stack), NULL, 2,
-                                                update_stack, &update_tcb, 0);
+    // A slot written over USB with blank OTA data has no state.
+    esp_ota_img_states_t image;
+    unconfirmed = esp_ota_get_state_partition(esp_ota_get_running_partition(), &image) == ESP_OK &&
+                  image == ESP_OTA_IMG_PENDING_VERIFY;
+    if (xTaskCreatePinnedToCore(update_loop, "update", 4096, NULL, 2, &update_task, 0) != pdPASS) abort();
+    wifi_init_config_t wifi = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(esp_wifi_init(&wifi));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    ESP_ERROR_CHECK(esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK(esp_now_init());
+    ESP_ERROR_CHECK(esp_now_register_recv_cb(on_received));
+    ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
+    ESP_ERROR_CHECK(esp_now_add_peer(&peer_info));
     const esp_timer_create_args_t timer_args = {.callback = tick, .name = "radio"};
     esp_timer_handle_t timer;
-    if (check(esp_wifi_set_mode(WIFI_MODE_STA), "mode") && check(esp_wifi_start(), "start") &&
-        check(esp_wifi_set_ps(WIFI_PS_NONE), "power save") &&
-        check(esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE), "channel") &&
-        check(esp_now_init(), "ESP-NOW") && check(esp_now_register_recv_cb(on_received), "receive") &&
-        check(esp_now_register_send_cb(on_sent), "send") && check(esp_now_add_peer(&peer_info), "peer") &&
-        check(esp_timer_create(&timer_args, &timer), "timer") && check(esp_timer_start_periodic(timer, 10000), "timer start")) {
-        printf("Direct radio on channel %d after reset reason %d\n", WIFI_CHANNEL, esp_reset_reason());
-    }
+    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(timer, 10000));
+    printf("Radio on channel %d; reset reason %d\n", WIFI_CHANNEL, esp_reset_reason());
 }
 
-// Python API. status(data) sets the application block of the status message (runtime.h STATUS_APP bytes).
-static mp_obj_t status(mp_obj_t data) {
-    mp_buffer_info_t info;
-    mp_get_buffer_raise(data, &info, MP_BUFFER_READ);
-    if (info.len != STATUS_APP) mp_raise_ValueError(MP_ERROR_TEXT("Invalid status block"));
-    int64_t now = esp_timer_get_time();
-    portENTER_CRITICAL(&lock);
-    memcpy(app, info.buf, STATUS_APP);
-    app_us = now;
-    portEXIT_CRITICAL(&lock);
-    return mp_const_none;
-}
-static MP_DEFINE_CONST_FUN_OBJ_1(status_obj, status);
-
-// log_meta(data) replaces the metadata JSON sent to the recorder after each start; False while it is being sent.
-static mp_obj_t log_meta(mp_obj_t data) {
-    mp_buffer_info_t info;
-    mp_get_buffer_raise(data, &info, MP_BUFFER_READ);
-    if (info.len < 1 || info.len > META) mp_raise_ValueError(MP_ERROR_TEXT("Metadata too long"));
+bool radio_log_meta(const char *data, size_t length) {
+    if (length < 1 || length > META) abort();
     portENTER_CRITICAL(&lock);
     bool sending = meta_sending;
     if (!sending) meta_writing = true;
     portEXIT_CRITICAL(&lock);
-    if (sending) return mp_const_false;
+    if (sending) return false;
     // tick() starts sending meta only while nobody writes it, and nobody writes it while it is sent.
-    memcpy(meta, info.buf, info.len);
+    memcpy(meta, data, length);
     portENTER_CRITICAL(&lock);
-    meta_length = info.len;
+    meta_length = length;
     meta_dirty = true;
     meta_writing = false;
     portEXIT_CRITICAL(&lock);
-    return mp_const_true;
+    return true;
 }
-static MP_DEFINE_CONST_FUN_OBJ_1(log_meta_obj, log_meta);
-
-// (session, sent, refused, received, rejected, in flight)
-static mp_obj_t stats(void) {
-    portENTER_CRITICAL(&lock);
-    uint32_t values[] = {session, sent, refused, received, rejected, inflight};
-    portEXIT_CRITICAL(&lock);
-    mp_obj_t items[6];
-    for (int i = 0; i < 6; i++) items[i] = mp_obj_new_int_from_uint(values[i]);
-    return mp_obj_new_tuple(6, items);
-}
-static MP_DEFINE_CONST_FUN_OBJ_0(stats_obj, stats);
-
-// The waiting request for Python (op byte and body) as a view into the native buffer, or None.
-static mp_obj_t request_python(void) {
-    portENTER_CRITICAL(&lock);
-    bool waiting = request_state == PYTHON;
-    bool writes = waiting && (request[4] == 'P' || request[4] == 'M' || request[4] == 'K');
-    portEXIT_CRITICAL(&lock);
-    // File writes stall flash access on both cores, so they hold the outputs at zero until Python replies; a Python
-    // crash mid-write keeps them held until a reset.
-    if (writes && !python_maintenance) python_maintenance = flight_runtime_begin_maintenance();
-    bool refuse = false;
-    if (writes && !python_maintenance) {
-        portENTER_CRITICAL(&lock);
-        refuse = request_state == PYTHON;
-        if (refuse) request_state = WRITING;
-        portEXIT_CRITICAL(&lock);
-    }
-    if (refuse) {
-        memcpy(reply, request, 4);
-        reply[4] = 1;
-        reply_length = 5 + snprintf((char *)reply + 5, REPLY - 5, "Disable control and zero throttle before updating");
-        has_reply = true;
-        portENTER_CRITICAL(&lock); request_state = REPLIED; portEXIT_CRITICAL(&lock);
-        xTaskNotifyGive(update_task);
-        return mp_const_none;
-    }
-    return waiting ? mp_obj_new_memoryview(BYTEARRAY_TYPECODE, request_length - 4, request + 4) : mp_const_none;
-}
-static MP_DEFINE_CONST_FUN_OBJ_0(request_obj, request_python);
-
-// Reply to the request: status byte and data. False if the request was abandoned.
-static mp_obj_t reply_python(mp_obj_t data) {
-    mp_buffer_info_t info;
-    mp_get_buffer_raise(data, &info, MP_BUFFER_READ);
-    if (info.len < 1 || info.len > REPLY - 4) mp_raise_ValueError(MP_ERROR_TEXT("Reply too long"));
-    portENTER_CRITICAL(&lock);
-    bool waiting = request_state == PYTHON;
-    if (waiting) request_state = WRITING;
-    portEXIT_CRITICAL(&lock);
-    if (python_maintenance) {
-        flight_runtime_end_maintenance();
-        python_maintenance = false;
-    }
-    if (!waiting) return mp_const_false;
-    memcpy(reply, request, 4);
-    memcpy(reply + 4, info.buf, info.len);
-    reply_length = 4 + info.len;
-    has_reply = true;
-    portENTER_CRITICAL(&lock);
-    request_state = REPLIED;
-    portEXIT_CRITICAL(&lock);
-    xTaskNotifyGive(update_task);
-    return mp_const_true;
-}
-static MP_DEFINE_CONST_FUN_OBJ_1(reply_obj, reply_python);
-
-static const mp_rom_map_elem_t globals_table[] = {
-    {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_radio)},
-    {MP_ROM_QSTR(MP_QSTR_status), MP_ROM_PTR(&status_obj)},
-    {MP_ROM_QSTR(MP_QSTR_log_meta), MP_ROM_PTR(&log_meta_obj)},
-    {MP_ROM_QSTR(MP_QSTR_stats), MP_ROM_PTR(&stats_obj)},
-    {MP_ROM_QSTR(MP_QSTR_request), MP_ROM_PTR(&request_obj)},
-    {MP_ROM_QSTR(MP_QSTR_reply), MP_ROM_PTR(&reply_obj)},
-};
-static MP_DEFINE_CONST_DICT(globals, globals_table);
-const mp_obj_module_t radio_module = {.base = {&mp_type_module}, .globals = (mp_obj_dict_t *)&globals};
-MP_REGISTER_MODULE(MP_QSTR_radio, radio_module);
