@@ -144,11 +144,7 @@ export const ControlPanel = memo(function ControlPanel({
   onStop: () => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
-  const ready =
-    available &&
-    !!status?.mapping_confirmed &&
-    recorderReady &&
-    imu === 'calibrated';
+  const ready = available && recorderReady && imu === 'calibrated';
   const problem = !connected
     ? 'Disconnected'
     : !available
@@ -160,11 +156,9 @@ export const ControlPanel = memo(function ControlPanel({
             ? 'IMU offline'
             : imu === 'uncalibrated'
               ? 'Calibrate IMU before enabling'
-              : !status?.mapping_confirmed
-                ? 'IMU mounting needs confirmation'
-                : !recorderReady
-                  ? (recorderError ?? 'Flight recorder not ready')
-                  : '');
+              : !recorderReady
+                ? (recorderError ?? 'Flight recorder not ready')
+                : '');
   const [draft, setDraft] = useState<Partial<Record<Setpoint, number>>>({});
   const [gains, setGains] = useState<Record<string, string>>({});
   const [open, setOpen] = useState(false);

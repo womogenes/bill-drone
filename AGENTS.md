@@ -23,3 +23,9 @@
 
 - Never prefix variable or function names with underscores.
 - Double quotes for Python strings.
+- Don't hard-wrap prose. In Markdown, comments and docs, write each paragraph as one line and let the editor soft-wrap. Only break lines between paragraphs, list items or code.
+
+## Firmware updates
+
+- Skip firmware backups.
+- Never perform whole-image verification. Verify only changed files or written chunks.

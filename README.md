@@ -65,7 +65,7 @@ Each armed session becomes one recording, `src/sw/recordings/<time>_<session>.bi
 
 Sampling and control run at 100 Hz. Log batches of four samples go out every 40 ms. The rate and batch size are defined in `src/fw/drivers/log_format.py`.
 
-IMU calibration averages two seconds of gyro and gravity readings, then saves gyro bias and the zero-pose reference in NVS. Startup restores calibration when its sensor coordinate frame matches the firmware. Arming requires saved calibration; the calibration button stays busy until saving finishes. Recordings include calibration validity, gyro bias, and `pose_zero_deg`. Existing JSON calibration and tuning files are imported once during migration and removed after NVS restores the migration flag on the next boot, preventing a lost store from reviving stale calibration.
+IMU calibration averages two seconds of gyro and gravity readings, then saves gyro bias and the zero-pose reference in NVS. Startup restores calibration when its sensor coordinate frame matches the firmware. Arming requires saved calibration; the calibration button stays busy until saving finishes. Recordings include calibration validity, gyro bias, and `pose_zero_deg`.
 
 ## Tuning from a terminal
 
@@ -108,15 +108,7 @@ Python-only updates do not rebuild the runtime. For simulation, run `make -C src
 
 `make ota_runtime` builds a separate image in `src/fw/native/build-runtime-ota/`. The default `runtime` build keeps the existing factory partition layout. The OTA variant has two 1,900,544-byte application slots and a 320 KiB filesystem on the 4 MiB ESP32. Bootloader rollback is enabled.
 
-Switching layouts is a one-time USB migration, `make migrate_ota DRONE_PORT=/dev/ttyUSBn` from `src/fw`, with motor power disconnected. `DRONE_PORT` must explicitly identify the drone. This migration is for the old factory firmware with JSON settings; it erases NVS and must not be used to reinstall a drone whose current settings live in NVS. The tool:
-
-1. interrupts the application, refuses unless the drone runs the factory layout, and exports every file with SHA-256 checks into `~/.local/state/bill-drone/fs-<time>/` (mode 700). It stops if `config.py`, `main.py`, `flight-tuning.json` or `imu-calibration.json` is missing or the files would not fit in 320 KiB;
-2. asks you to type `MIGRATE`, then erases NVS, otadata and the new filesystem region, and writes the OTA bootloader, partition table and runtime into `ota_0` (about two minutes at 115200 baud);
-3. lets MicroPython format the new filesystem, restores every file (`main.py` last), checks each hash, and restarts.
-
-Nothing on the ESP changes before the confirmation. If a later step fails, the export remains; `uv run --with esptool==5.6.0 --with mpremote python tools/migrate_ota.py --port … --restore <export>` repeats step 3. A failed bootloader write is recoverable over USB because the ROM download mode is untouched. Current firmware imports the old JSON values once into NVS and subsequently preserves tuning, servo offsets and calibration there.
-
-After migration, `make flash_runtime_direct` uploads the native application to the inactive OTA slot. The new boot must be confirmed before the next restart; an unconfirmed boot rolls back to the previous application.
+`make flash_runtime_direct` uploads the native application to the inactive OTA slot. The new boot must be confirmed before the next restart; an unconfirmed boot rolls back to the previous application.
 
 ### Direct-link updates
 
@@ -124,7 +116,7 @@ With the service running, `make flash_runtime_direct` and `make flash_direct` (o
 
 The drone's radio link and update service are native (`src/fw/native/runtime/radio.c`). The firmware starts them before `boot.py` and `main.py`, so the drone keeps reporting status, stops, and accepts firmware updates and resets even when the Python application is broken or has crashed. The controller MAC and channel are compiled into `radio.c`. Requests travel on direct channel 6. Each one carries a random id; the drone answers each id once and replays the reply to retries. The drone refuses every write and reset while the native runtime is armed or a throttle is nonzero, and does not touch the native watchdog.
 
-- Firmware: the CLI keeps the last image it installed in each slot in `native/build-runtime-ota/installed/` and diffs against it, so the drone hashes nothing in bulk. The drone reports each slot's ELF SHA-256 prefix from its app description; an unknown or different slot counts as unknown. Sectors already right in the inactive slot are skipped, sectors the running image has are copied on the drone (checked against an 8-byte SHA-256 prefix), and only the rest cross the radio, each checked by hash and read back after writing. ESP-IDF then checks the whole image while selecting it; if that fails, the CLI sends every sector and tries again. The drone restarts, and the CLI confirms the new slot once the drone answers over the link again. Without that confirmation, the next reset rolls back. Starting a write also confirms the running image, so the fallback slot is never the one being overwritten. After flashing a slot by another route, the next direct update to that slot sends it whole.
-- Files: changed files only, written as `<path>.upload`, hash-checked, renamed, then a reset. The native service hands these requests to `src/fw/drivers/update.py`, so they need the Python application running. This also works on the factory layout.
+- Firmware: the CLI keeps the last image it installed in each slot in `native/build-runtime-ota/installed/` and diffs against it, so the drone hashes nothing in bulk. The drone reports each slot's ELF SHA-256 prefix from its app description; an unknown or different slot counts as unknown. Sectors already right in the inactive slot are skipped, sectors the running image has are copied on the drone (checked against an 8-byte SHA-256 prefix), and only the rest cross the radio, each checked by hash and read back after writing. ESP-IDF then checks the whole image while selecting it. The drone restarts, and the CLI confirms the new slot once the drone answers over the link again. Without that confirmation, the next reset rolls back. Starting a write also confirms the running image, so the fallback slot is never the one being overwritten. After flashing a slot by another route, the next direct update to that slot sends it whole.
+- Files: changed files only, written as `<path>.upload`, hash-checked, renamed, then a reset. The CLI removes a `.py` that would shadow an uploaded `.mpy`. The native service hands these requests to `src/fw/drivers/update.py`, so they need the Python application running. This also works on the factory layout.
 
 Expect roughly 25 KB/s on the radio (about 150 ms per sector, including the flash write). A small C change (measured: 8 sectors sent, 3 copied) takes about 10 s to build and 3–4 s to install, restart and confirm. A full image (430 sectors) takes about 70 s.

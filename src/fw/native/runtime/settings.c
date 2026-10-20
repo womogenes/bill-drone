@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include "settings.h"
-#ifndef SETTINGS_HOST
 #include "py/runtime.h"
 #include "py/objstr.h"
 #include "freertos/FreeRTOS.h"
@@ -13,16 +12,11 @@
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 #define LOCK() portENTER_CRITICAL(&lock)
 #define UNLOCK() portEXIT_CRITICAL(&lock)
-#else
-#define LOCK()
-#define UNLOCK()
-#endif
 
 #define RAD (3.14159265358979323846f / 180.0f)
-// NVS blob: "FS1", a flags byte (1: the old JSON files were imported), then (name length, name, float32) pairs.
-// Names rather than positions let entries be added or removed later without losing the rest.
+// NVS blob: "FS1", a reserved byte, then (name length, name, float32) pairs. Names rather than positions let
+// entries be added or removed without losing the rest.
 #define BLOB 1024
-#define MIGRATED 1
 
 static const char *const names[SETTINGS] = {
 #define TUNE(name, member, scale, min, max, value) #name,
@@ -65,7 +59,7 @@ static const int calibration[] = {
 };
 
 static float values[SETTINGS];
-static bool migrated, dirty, calibration_unsaved;
+static bool dirty, calibration_unsaved;
 static uint32_t version;
 static int64_t changed_us;
 
@@ -74,22 +68,18 @@ bool settings_valid(int index, float value) {
     return isfinite(value) && value >= minimum[index] && value <= maximum[index];
 }
 
-static bool valid(int index, float value) {
-    return settings_valid(index, value);
-}
-
 // NULL if value fits the table entry, otherwise why not; error is scratch space.
 const char *settings_validate(int index, float value, char *error, size_t size) {
-    if (valid(index, value)) return NULL;
+    if (settings_valid(index, value)) return NULL;
     snprintf(error, size, "%s would be %g, outside %g..%g", names[index], value, minimum[index], maximum[index]);
     return error;
 }
 
 // A finished calibration fits the table: gyro bias in rad/s, pose zero in degrees.
 bool settings_calibration_fits(const float *bias, const float *pose_zero) {
-    return valid(SETTING_gyro_bias_x, bias[0]) && valid(SETTING_gyro_bias_y, bias[1]) &&
-           valid(SETTING_gyro_bias_z, bias[2]) && valid(SETTING_pose_zero_roll, pose_zero[0]) &&
-           valid(SETTING_pose_zero_pitch, pose_zero[1]);
+    return settings_valid(SETTING_gyro_bias_x, bias[0]) && settings_valid(SETTING_gyro_bias_y, bias[1]) &&
+           settings_valid(SETTING_gyro_bias_z, bias[2]) && settings_valid(SETTING_pose_zero_roll, pose_zero[0]) &&
+           settings_valid(SETTING_pose_zero_pitch, pose_zero[1]);
 }
 
 int settings_index(const char *name, size_t length) {
@@ -105,16 +95,14 @@ void settings_decode(const uint8_t *data, size_t size) {
     float loaded[SETTINGS];
     bool present[SETTINGS] = {false};
     memcpy(loaded, defaults, sizeof(loaded));
-    bool imported = false;
     if (size >= 4 && !memcmp(data, "FS1", 3)) {
-        imported = data[3] & MIGRATED;
         for (size_t at = 4; at < size;) {
             size_t length = data[at];
             if (at + 1 + length + 4 > size) break;
             int index = settings_index((const char *)data + at + 1, length);
             float value;
             memcpy(&value, data + at + 1 + length, 4);
-            if (index >= 0 && valid(index, value)) {
+            if (index >= 0 && settings_valid(index, value)) {
                 loaded[index] = value;
                 present[index] = true;
             }
@@ -128,7 +116,6 @@ void settings_decode(const uint8_t *data, size_t size) {
     }
     LOCK();
     memcpy(values, loaded, sizeof(values));
-    migrated = imported;
     dirty = calibration_unsaved = false;
     version++;
     UNLOCK();
@@ -138,10 +125,8 @@ size_t settings_encode(uint8_t *data, size_t size) {
     float copy[SETTINGS];
     LOCK();
     memcpy(copy, values, sizeof(copy));
-    bool imported = migrated;
     UNLOCK();
-    memcpy(data, "FS1", 3);
-    data[3] = imported ? MIGRATED : 0;
+    memcpy(data, "FS1", 4);
     size_t at = 4;
     for (int i = 0; i < SETTINGS; i++) {
         size_t length = strlen(names[i]);
@@ -171,7 +156,7 @@ float settings_get(int index) {
 // dashboard waits for.
 bool settings_change(const int *indices, const float *changes, int count, int64_t now) {
     for (int i = 0; i < count; i++) {
-        if (!valid(indices[i], changes[i])) return false;
+        if (!settings_valid(indices[i], changes[i])) return false;
     }
     LOCK();
     for (int i = 0; i < count; i++) {
@@ -296,7 +281,7 @@ const char *settings_tune(const char *json, size_t length, int64_t now, char *er
             snprintf(error, size, "%s needs a number", names[index]);
             return error;
         }
-        if (!valid(index, value)) {
+        if (!settings_valid(index, value)) {
             snprintf(error, size, "%s must be between %g and %g", names[index], minimum[index], maximum[index]);
             return error;
         }
@@ -317,7 +302,6 @@ const char *settings_tune(const char *json, size_t length, int64_t now, char *er
     return "Unterminated JSON object";
 }
 
-#ifndef SETTINGS_HOST
 static uint8_t blob[BLOB];
 
 void settings_load(void) {
@@ -365,41 +349,7 @@ void settings_commit(int64_t now) {
     if (error) printf("Settings: NVS write failed: %s\n", esp_err_to_name(error));
 }
 
-// Python API, for the one-time import of the old JSON files and for recording metadata.
-static mp_obj_t migrated_python(void) {
-    LOCK();
-    bool value = migrated;
-    UNLOCK();
-    return mp_obj_new_bool(value);
-}
-static MP_DEFINE_CONST_FUN_OBJ_0(migrated_obj, migrated_python);
-
-// migrate({name: value}) imports every given value exactly and marks the import done; unknown names and values
-// outside the table's range raise.
-static mp_obj_t migrate_python(mp_obj_t dict) {
-    mp_map_t *map = mp_obj_dict_get_map(dict);
-    int indices[SETTINGS];
-    float changes[SETTINGS];
-    int count = 0;
-    for (size_t i = 0; i < map->alloc; i++) {
-        if (!mp_map_slot_is_filled(map, i)) continue;
-        size_t length;
-        const char *name = mp_obj_str_get_data(map->table[i].key, &length);
-        int index = settings_index(name, length);
-        float value = mp_obj_get_float(map->table[i].value);
-        if (index < 0 || !valid(index, value) || count == SETTINGS)
-            mp_raise_msg_varg(&mp_type_ValueError, MP_ERROR_TEXT("Cannot import %s = %f"), name, (double)value);
-        indices[count] = index;
-        changes[count++] = value;
-    }
-    LOCK();
-    migrated = true;
-    UNLOCK();
-    settings_change(indices, changes, count, 0);
-    return mp_const_none;
-}
-static MP_DEFINE_CONST_FUN_OBJ_1(migrate_obj, migrate_python);
-
+// Python API, for recording metadata.
 static mp_obj_t get_python(mp_obj_t name) {
     size_t length;
     const char *text = mp_obj_str_get_data(name, &length);
@@ -423,8 +373,6 @@ static MP_DEFINE_CONST_FUN_OBJ_0(version_obj, version_python);
 
 static const mp_rom_map_elem_t globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_settings)},
-    {MP_ROM_QSTR(MP_QSTR_migrated), MP_ROM_PTR(&migrated_obj)},
-    {MP_ROM_QSTR(MP_QSTR_migrate), MP_ROM_PTR(&migrate_obj)},
     {MP_ROM_QSTR(MP_QSTR_get), MP_ROM_PTR(&get_obj)},
     {MP_ROM_QSTR(MP_QSTR_json), MP_ROM_PTR(&json_obj)},
     {MP_ROM_QSTR(MP_QSTR_version), MP_ROM_PTR(&version_obj)},
@@ -432,4 +380,3 @@ static const mp_rom_map_elem_t globals_table[] = {
 static MP_DEFINE_CONST_DICT(globals, globals_table);
 const mp_obj_module_t settings_module = {.base = {&mp_type_module}, .globals = (mp_obj_dict_t *)&globals};
 MP_REGISTER_MODULE(MP_QSTR_settings, settings_module);
-#endif

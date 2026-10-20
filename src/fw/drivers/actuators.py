@@ -16,7 +16,6 @@ THROTTLE_MAX = 1200
 SERVO_PWM_HZ = 50
 ESC_PWM_HZ = 400
 PWM_HZ = {"servo": SERVO_PWM_HZ, "esc": ESC_PWM_HZ}
-assert 1_000_000 / ESC_PWM_HZ >= 1000 + THROTTLE_MAX + 100, "ESC period must exceed the longest pulse"
 
 
 def init():

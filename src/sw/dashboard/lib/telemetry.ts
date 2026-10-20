@@ -63,7 +63,6 @@ export type Targets = {
 
 export type Reading = {
   logging?: {
-    connected: boolean;
     active: boolean;
     ready: boolean;
     samples: number;
@@ -72,7 +71,6 @@ export type Reading = {
   control?: ControlSettings;
   control_status?: {
     reason: string;
-    mapping_confirmed: boolean;
     throttle_latched?: boolean;
     app_age_ms?: number | null;
   };

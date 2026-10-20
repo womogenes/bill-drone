@@ -27,17 +27,13 @@ def file_hash(path):
 
 def handle(request):
     """
-    F: SHA-256 of each newline-separated path. P: append data at an offset to <path>.upload. M: check <path>.upload's hash and rename it. Y: up to 900 bytes of a file from an offset. L: a directory's names. K: remove a file if it exists.
+    F: SHA-256 of each newline-separated path. P: append data at an offset to <path>.upload. M: check <path>.upload's hash and rename it. Y: up to 900 bytes of a file from an offset. L: a directory's names. K: remove a file.
     """
     op, body = request[0], request[1:]
     if op == ord("L"):
         return "\n".join(os.listdir(bytes(body).decode())).encode()
     if op == ord("K"):
-        try:
-            os.remove(bytes(body).decode())
-        except OSError as error:
-            if error.errno != 2:
-                raise
+        os.remove(bytes(body).decode())
         return b""
     if op == ord("Y"):
         offset = struct.unpack_from("<I", body)[0]
@@ -57,8 +53,6 @@ def handle(request):
                 except OSError as error:
                     if error.errno != 17:
                         raise
-        elif os.stat(path)[6] != offset:
-            raise ValueError(f"{path} is not {offset} bytes long")
         with open(path, "ab" if offset else "wb") as stream:
             stream.write(body[5 + length:])
         return b""
@@ -66,11 +60,4 @@ def handle(request):
     if file_hash(path + ".upload") != expected:
         raise ValueError(f"{path} verification failed")
     os.rename(path + ".upload", path)
-    if path.endswith(".mpy"):
-        # MicroPython imports a .py before the .mpy beside it.
-        try:
-            os.remove(path[:-4] + ".py")
-        except OSError as error:
-            if error.errno != 2:
-                raise
     return b""

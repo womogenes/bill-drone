@@ -60,14 +60,3 @@ class LoadCell:
         self.sequence += 1
 
         return value
-
-
-if __name__ == "__main__":
-    # Test manually
-    load_cell = LoadCell()
-
-    import time
-
-    while True:
-        print(load_cell.read())
-        time.sleep(0.15)

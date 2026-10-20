@@ -125,10 +125,6 @@ def main():
         "drivers/flight_native.mpy",
     ]
     files = [FIRMWARE / compile_driver(name) for name in names]
-    for path in files:
-        path.resolve().relative_to(FIRMWARE)
-        if not path.is_file():
-            parser.error(f"Missing file: {path}")
 
     started = time.monotonic()
     board = SerialTransport(select_port(args.port), timeout=1)

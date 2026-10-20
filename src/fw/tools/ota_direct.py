@@ -7,7 +7,7 @@ Update the drone over the direct ESP-NOW link through the controller bridge.
 
 firmware: diff the new image against the images this laptop last installed in each OTA
 slot; send only changed sectors, have the drone copy sectors the running image already
-has, then boot and confirm it. If ESP-IDF rejects the image, send every sector.
+has, then boot and confirm it.
 files: replace changed Python files, then reset.
 """
 
@@ -103,13 +103,7 @@ def sectors(image, count):
 
 def firmware(drone, path):
     image = path.read_bytes()
-    if image[:1] != b"\xe9":
-        raise SystemExit("Expected an ESP application image (micropython.bin)")
     info = json.loads(drone.request(b"I"))
-    if info["target"] is None:
-        raise SystemExit("Drone runs the factory layout; run make migrate_ota over USB first")
-    if len(image) > info["size"]:
-        raise SystemExit(f"Image is {len(image)} bytes; {info['target']} holds {info['size']}")
     if info["running_sha"] == elf_sha(image):
         print(f"{info['running']} already runs this image")
         return
@@ -126,12 +120,7 @@ def firmware(drone, path):
     # The slot no longer holds a known image once writing starts.
     record.unlink(missing_ok=True)
     write(drone, local, stale, copies)
-    try:
-        drone.request(b"B", timeout=10)
-    except RuntimeError as error:
-        print(f"{error}; sending every sector", flush=True)
-        write(drone, local, range(count), set())
-        drone.request(b"B", timeout=10)
+    drone.request(b"B", timeout=10)
     record.write_bytes(image)
     print(f"Booting {info['target']}; it rolls back on the next reset unless confirmed", flush=True)
     drone.restart()
@@ -145,14 +134,9 @@ def firmware(drone, path):
 def write(drone, local, indices, copies):
     for done, index in enumerate(indices, 1):
         digest = hashlib.sha256(local[index]).digest()[:HASH_SIZE]
-        copied = False
         if index in copies:
-            try:
-                drone.request(b"C", struct.pack("<H", index) + digest)
-                copied = True
-            except RuntimeError as error:
-                print(f"\n{error}; sending sector {index}", flush=True)
-        if not copied:
+            drone.request(b"C", struct.pack("<H", index) + digest)
+        else:
             drone.request(b"W", struct.pack("<H", index) + digest + local[index])
         print(f"\rWrote {done}/{len(indices)} sectors", end="", flush=True)
     print()

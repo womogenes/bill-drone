@@ -29,13 +29,12 @@ import serial
 from wire import PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from drivers.log_format import HEADER_FORMAT, HEADER_SIZE, RECORD_SIZE, STOP_REASONS  # noqa: E402
+from drivers.log_format import HEADER_FORMAT, HEADER_SIZE, STOP_REASONS  # noqa: E402
 
 RECORDINGS = Path(__file__).resolve().parents[2] / "sw/recordings"
 
 # native/runtime/runtime.h Status, then drivers/protocol.py APP_FORMAT.
 STATUS_FORMAT = "<4sIIHBB3f3f3f2f2H4f2I" + "iIIIfHBx"
-STATUS_SIZE = struct.calcsize(STATUS_FORMAT)
 REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T"}
 # Schema entries per D reply (native/runtime/settings.h SCHEMA_PAGE).
 SCHEMA_PAGE = 12
@@ -46,8 +45,6 @@ def decode_status(payload, settings):
     The dashboard's reading (sw/dashboard/lib/telemetry.ts Reading) from a status message.
     """
     (magic, time_ms, target_sequence, flags, reason, app_age, *values) = struct.unpack(STATUS_FORMAT, payload)
-    if magic != b"STA1":
-        raise ValueError("Unknown status message")
     accel, gyro = values[0:3], values[3:6]
     roll, pitch, temperature, left_servo, right_servo, left_throttle, right_throttle = values[6:13]
     target_roll, target_pitch, target_yaw, base = values[13:17]
@@ -83,13 +80,12 @@ def decode_status(payload, settings):
             "base_throttle": base,
         },
         "control_status": {
-            "reason": STOP_REASONS[reason] if reason < len(STOP_REASONS) else f"Stop {reason}",
+            "reason": STOP_REASONS[reason],
             "throttle_latched": bool(flags & 64),
             "app_age_ms": app_age * 10 if fresh_app else None,
             "target_sequence": target_sequence,
         },
         "logging": {
-            "connected": bool(flags & 32),
             "active": bool(flags & 16),
             "ready": bool(flags & 32),
             "samples": samples,
@@ -100,10 +96,6 @@ def decode_status(payload, settings):
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-def reason_text(reason):
-    return STOP_REASONS[reason] if reason < len(STOP_REASONS) else f"Stop {reason}"
 
 
 class Recorder:
@@ -150,8 +142,6 @@ class Recorder:
             self.next_sequence = 0
         elif magic == b"FLG1":
             _, session, count, size = struct.unpack_from(HEADER_FORMAT, payload)
-            if size != RECORD_SIZE or len(payload) != HEADER_SIZE + count * size:
-                raise ValueError("Malformed flight-log batch")
             if session != self.session or self.data is None:
                 # This service started during the session and missed its start record.
                 self.begin(session, {"resumed": True})
@@ -164,7 +154,7 @@ class Recorder:
         elif magic == b"LGE1":
             session, reason, samples, dropped, elapsed = struct.unpack_from("<IBIII", payload, 4)
             if session == self.session and self.data is not None:
-                self.event({"type": "stop", "session": session, "reason": reason_text(reason) or "Disarmed",
+                self.event({"type": "stop", "session": session, "reason": STOP_REASONS[reason] or "Disarmed",
                             "time_us": elapsed, "samples": samples, "dropped": dropped})
                 self.close(None)
         else:
@@ -210,11 +200,8 @@ def encode_targets(message):
     """
     A 'T' target packet (native/runtime/flight_rt.c flight_runtime_targets) from the browser's current controls.
     """
-    values = [float(message[key]) for key in ("base_throttle", "roll", "pitch", "yaw_rate")]
-    values += [float(value) for value in message["servo"]] + [float(value) for value in message["throttle"]]
-    if len(values) != 8:
-        raise ValueError("Expected two servo angles and two throttles")
-    return b"T" + struct.pack("<8f", *values)
+    values = [message[key] for key in ("base_throttle", "roll", "pitch", "yaw_rate")]
+    return b"T" + struct.pack("<8f", *values, *message["servo"], *message["throttle"])
 
 
 class ClientSender:
@@ -485,8 +472,6 @@ class Service:
                 self.queue_record("close", "Drone restarted")
                 self.settings_version = None
             self.session, self.token, self.last_status = session, token, time.monotonic()
-            if len(payload) != STATUS_SIZE:
-                return
             version, self.reading = decode_status(payload, self.settings)
             self.reading["recorder"] = self.recorder.status()
             if (version is not None and version != self.settings_version
@@ -634,7 +619,7 @@ class Service:
             data = await self.request(REQUESTS[kind], body)
             if kind == "tune":
                 self.settings = json.loads(data)
-        except (RuntimeError, TimeoutError, KeyError, ValueError, TypeError) as failure:
+        except (RuntimeError, TimeoutError) as failure:
             error = str(failure)
         result = {"type": "result", "request": kind, "error": error}
         if kind == "zero":
@@ -662,8 +647,6 @@ class Service:
 
     async def post_settings(self, request):
         body = await request.json()
-        if not isinstance(body.get("settings"), dict):
-            raise web.HTTPBadRequest(text="Expected {\"settings\": {...}}")
         try:
             self.settings = json.loads(await self.request(b"T", json.dumps(body["settings"]).encode()))
         except RuntimeError as error:
@@ -681,7 +664,7 @@ class Service:
             while True:
                 page = json.loads(await self.request(b"D", bytes([len(entries) // SCHEMA_PAGE])))
                 entries += page["settings"]
-                if len(entries) >= page["total"] or not page["settings"]:
+                if len(entries) >= page["total"]:
                     break
         except TimeoutError as error:
             return web.json_response({"error": str(error)}, status=504)
@@ -739,14 +722,9 @@ if __name__ == "__main__":
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument("--listen", type=int, default=8765)
     parser.add_argument("--recordings", type=Path, default=RECORDINGS)
-    args = parser.parse_args()
-    # The service outlives USB hiccups: after any failure it reopens the port; clients reconnect on their own.
-    while True:
-        try:
-            asyncio.run(main(args))
-        except KeyboardInterrupt:
-            break
-        except (OSError, serial.SerialException) as error:
-            print(error, flush=True)
-        print("Restarting service", flush=True)
-        time.sleep(1)
+    try:
+        asyncio.run(main(parser.parse_args()))
+    except KeyboardInterrupt:
+        pass
+    else:
+        sys.exit("Service failed")

@@ -158,10 +158,7 @@ export default function Page() {
         );
         data.control_status = reuseUnchanged(
           latestReading.current?.control_status,
-          data.control_status && {
-            ...data.control_status,
-            mapping_confirmed: true,
-          }
+          data.control_status
         );
         const time = Date.now();
         latestReading.current = { ...data, time };
@@ -282,11 +279,7 @@ export default function Page() {
 
   const recorder = reading?.recorder;
   const reason = requestError || reading?.control_status?.reason || '';
-  const mappingConfirmed = reading?.control_status?.mapping_confirmed ?? false;
-  const controlStatus = useMemo(
-    () => ({ reason, mapping_confirmed: mappingConfirmed }),
-    [reason, mappingConfirmed]
-  );
+  const controlStatus = useMemo(() => ({ reason }), [reason]);
 
   const { label, icon: StatusIcon, color } = statuses[status];
 

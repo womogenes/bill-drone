@@ -9,10 +9,9 @@ import flight_rt
 import radio
 import settings
 
-from drivers import actuators, direct, imu, migrate, protocol
+from drivers import actuators, direct, imu, protocol
 from drivers.load_cell import LoadCell
 
-migrate.run()
 actuators.init()
 load_cell = LoadCell()
 imu.init()
