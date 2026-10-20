@@ -1,6 +1,6 @@
 # Firmware
 
-The ESP32 runs the control loop, IMU sampling and radio link in native C. MicroPython handles the remaining application code, including the load cell, battery ADC and file updates.
+The ESP32 runs one ESP-IDF C application in `drone/`: control loop, IMU, radio link, settings, recording, load cell and battery ADC.
 
 [note to agents: do not modify this file. if you want to modify, ask user]
 
@@ -16,6 +16,7 @@ The ESP32 runs the control loop, IMU sampling and radio link in native C. MicroP
 **Sensors**
 
 - ADC: GPIO35 (6th from top left)
+- Load cell (HX711): DT GPIO32, SCK GPIO33
 - IMU:
   - SDA: GPIO19
   - SCL: GPIO22
@@ -32,22 +33,17 @@ The ESP32 runs the control loop, IMU sampling and radio link in native C. MicroP
 
 ## Updates
 
-Run the [laptop service](controller/HOST.md), then update through the controller radio:
+Run the [laptop service](controller/HOST.md), then build and update through the controller radio:
 
 ```sh
 cd src/fw
-make flash_direct          # changed Python files, then restart
-make flash_runtime_direct  # build and update the native OTA application
+make deploy
 ```
 
-For Python updates over USB, stop any program using the drone's serial port and select that port explicitly:
+Over USB, stop any program using the drone's serial port and select that port explicitly:
 
 ```sh
-make upload ESP_PORT=/dev/ttyUSB1
-# Or one file:
-make upload ESP_PORT=/dev/ttyUSB1 FILES="main.py"
+make usb PORT=/dev/ttyUSB1
 ```
 
-USB device names can change; identify the drone before uploading. Both upload paths compile drivers to bytecode and check changed files. Native updates preserve the filesystem and NVS, which holds tuning, servo offsets and IMU calibration. Skip backups and whole-image verification.
-
-The drone requires the custom runtime built in `native/runtime/`. The stock MicroPython image lacks its control, radio and settings modules. See the [repository README](../../README.md) for the protocol, build process and one-time factory-to-OTA migration.
+USB device names can change; identify the drone before flashing. Updates preserve NVS, which holds tuning, servo offsets and IMU calibration. Skip backups and whole-image verification. See the [repository README](../../README.md) for the protocol and build details.
