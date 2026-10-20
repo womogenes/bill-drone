@@ -4,6 +4,8 @@
 # would change size whenever our constants did.
 set(flight_sources
     ${CMAKE_CURRENT_LIST_DIR}/flight_rt.c
+    ${CMAKE_CURRENT_LIST_DIR}/radio.c
+    ${CMAKE_CURRENT_LIST_DIR}/settings.c
     ${CMAKE_CURRENT_LIST_DIR}/../flight_native.c
 )
 list(APPEND MICROPY_SOURCE_USERMOD ${flight_sources})

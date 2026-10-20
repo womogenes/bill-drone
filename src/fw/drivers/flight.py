@@ -157,8 +157,9 @@ class Controller:
         struct.pack_into("<2f", self.state, 0, *bias)
 
     def configure(self, settings):
+        # Setpoints and the enable flag are native-owned on the drone; missing ones are zero.
         values = [
-            math.radians(settings[key]) if key in ANGULAR_KEYS else settings[key]
+            math.radians(settings.get(key, 0.0)) if key in ANGULAR_KEYS else settings.get(key, 0.0)
             for key in TUNING_LAYOUT
         ]
         struct.pack_into("<%df" % len(TUNING_LAYOUT), self.command, 24, *values)

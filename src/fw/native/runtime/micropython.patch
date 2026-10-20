@@ -17,10 +17,21 @@ index e6c17fd..0e76e3d 100644
  
  #endif
 diff --git a/ports/esp32/main.c b/ports/esp32/main.c
-index 697f4ef..1d7a4f0 100644
+index 697f4ef..38daf4e 100644
 --- a/ports/esp32/main.c
 +++ b/ports/esp32/main.c
-@@ -184,6 +184,10 @@ soft_reset:
+@@ -151,6 +151,10 @@ soft_reset:
+     #endif
+ 
+     // run boot-up scripts
++    #ifdef MICROPY_BOARD_BEFORE_PYTHON
++    MICROPY_BOARD_BEFORE_PYTHON();
++    #endif
++
+     pyexec_frozen_module("_boot.py", false);
+     int ret = pyexec_file_if_exists("boot.py");
+ 
+@@ -184,6 +188,10 @@ soft_reset:
  
  soft_reset_exit:
  

@@ -1,0 +1,39 @@
+// The drone's settings: the one list that names, bounds, defaults and persists every value (settings.c).
+// TUNE(name, Command member, scale to the member, min, max, default): changed by the T request.
+// STATE(name, min, max, default): set only by IMU calibration (G) and servo zeroing (Z); read-only to T.
+// Every entry is persisted in NVS. Angles are degrees here; RAD converts trims to the controller's radians.
+// Defaults match drivers/flight.py DEFAULT_TUNING and MODEL, which the host simulation still uses.
+TUNE(roll_p, roll_p, 1, 0, 1000, 20)
+TUNE(roll_i, roll_i, 1, 0, 1000, 3)
+TUNE(roll_damping, roll_damping, 1, 0, 1000, 6)
+TUNE(pitch_p, pitch_p, 1, 0, 1000, 20)
+TUNE(pitch_i, pitch_i, 1, 0, 1000, 3)
+TUNE(pitch_damping, pitch_damping, 1, 0, 1000, 10)
+TUNE(yaw_damping, yaw_damping, 1, 0, 1000, 4)
+TUNE(integral_limit, integral_limit, 1, 0, 1000, 3)
+TUNE(pitch_trim, pitch_trim, RAD, -15, 15, 0)
+TUNE(left_trim, left_trim, RAD, -15, 15, 0.9)
+TUNE(right_trim, right_trim, RAD, -15, 15, -0.9)
+TUNE(pivot_height, model.pivot_height, 1, 0.000001, 1, 0.0253692458911615)
+TUNE(com_x, model.com_x, 1, -0.02, 0.02, 0)
+TUNE(roll_inertia, model.roll_inertia, 1, 0.000001, 1, 0.0118483264434811)
+TUNE(pitch_inertia, model.pitch_inertia, 1, 0.000001, 1, 0.0023030647846826)
+TUNE(yaw_inertia, model.yaw_inertia, 1, 0.000001, 1, 0.0106709253540914)
+TUNE(reaction_torque_ratio, model.reaction_torque_ratio, 1, -0.1, 0.1, 0.015)
+TUNE(arm, model.arm, 1, 0.001, 1, 0.172)
+TUNE(roll_bias, roll_bias, 1, -10, 10, 0)
+TUNE(pitch_bias, pitch_bias, 1, -10, 10, 0)
+TUNE(yaw_bias, yaw_bias, 1, -10, 10, 0)
+TUNE(left_thrust_scale, left_thrust_scale, 1, 0.5, 1.5, 1)
+TUNE(right_thrust_scale, right_thrust_scale, 1, 0.5, 1.5, 1)
+STATE(servo_offset_left, -60, 60, -3)
+STATE(servo_offset_right, -60, 60, 0)
+// Gyro bias in rad/s and the stationary pose in degrees, valid only for the sensor frame they were taken in:
+// calibration_frame holds the sign bits (x 1, y 2, z 4) of drivers/calibration.py SENSOR_TO_BODY.
+STATE(gyro_bias_x, -1, 1, 0)
+STATE(gyro_bias_y, -1, 1, 0)
+STATE(gyro_bias_z, -1, 1, 0)
+STATE(pose_zero_roll, -180, 180, 0)
+STATE(pose_zero_pitch, -90, 90, 0)
+STATE(calibrated, 0, 1, 0)
+STATE(calibration_frame, 0, 7, 0)

@@ -4,3 +4,7 @@
 
 void flight_runtime_stop(void);
 #define MICROPY_BOARD_SOFT_RESET() flight_runtime_stop()
+
+// The native radio (radio.c) owns ESP-NOW and starts before any Python runs; Python must not activate espnow.
+void flight_radio_start(void);
+#define MICROPY_BOARD_BEFORE_PYTHON() flight_radio_start()

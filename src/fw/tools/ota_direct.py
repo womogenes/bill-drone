@@ -5,8 +5,9 @@
 """
 Update the drone over the direct ESP-NOW link through the controller bridge.
 
-firmware: write the sectors of the inactive OTA slot that differ from the new
-image, copying sectors the running image already has, then boot and confirm it.
+firmware: diff the new image against the images this laptop last installed in each OTA
+slot; send only changed sectors, have the drone copy sectors the running image already
+has, then boot and confirm it. If ESP-IDF rejects the image, send every sector.
 files: replace changed Python files, then reset.
 """
 
@@ -16,16 +17,20 @@ import json
 import os
 from pathlib import Path
 import struct
-import subprocess
 import time
 
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.sync.client import connect
 
+from mpy import compile_driver
+
 FIRMWARE = Path(__file__).resolve().parents[1]
+# The last image installed in each slot, by slot label; the drone reports each slot's ELF SHA-256 prefix to check it.
+INSTALLED = FIRMWARE / "native/build-runtime-ota/installed"
 SECTOR = 4096
 HASH_SIZE = 8
-FILE_CHUNK = 1024  # Five radio fragments; the drone receive buffer holds 4096 bytes.
+FILE_CHUNK = 3840  # The drone reassembles requests of up to 4176 bytes.
+HASH_BATCH = 7  # 32-byte file hashes per reply; a reply is one 232-byte radio frame.
 
 
 class Drone:
@@ -50,8 +55,8 @@ class Drone:
                     reply = self.ws.recv(timeout=max(0.01, answer - time.monotonic()))
             except TimeoutError:
                 continue
-            except ConnectionClosed:
-                # The bridge refuses or drops clients while the radio link is down.
+            except (ConnectionClosed, InvalidStatus):
+                # The service refuses or drops clients while the radio link is down, as while the drone restarts.
                 self.ws = None
                 time.sleep(0.5)
                 continue
@@ -70,6 +75,32 @@ class Drone:
             self.ws = None
 
 
+def elf_sha(image):
+    """
+    The ELF SHA-256 prefix from the image's app description, as the drone reports it.
+    """
+    return image[0xB0:0xB8].hex()
+
+
+def installed(label, sha):
+    path = INSTALLED / f"{label}.bin"
+    if not path.exists():
+        return None
+    image = path.read_bytes()
+    return image if elf_sha(image) == sha else None
+
+
+def sectors(image, count):
+    """
+    The image's sectors as written, padded with 0xff; sectors past its end are unknown (None).
+    """
+    if image is None:
+        return [None] * count
+    known = (len(image) + SECTOR - 1) // SECTOR
+    image = image.ljust(known * SECTOR, b"\xff")
+    return [image[index * SECTOR:(index + 1) * SECTOR] if index < known else None for index in range(count)]
+
+
 def firmware(drone, path):
     image = path.read_bytes()
     if image[:1] != b"\xe9":
@@ -79,30 +110,29 @@ def firmware(drone, path):
         raise SystemExit("Drone runs the factory layout; run make migrate_ota over USB first")
     if len(image) > info["size"]:
         raise SystemExit(f"Image is {len(image)} bytes; {info['target']} holds {info['size']}")
-    image += b"\xff" * (-len(image) % SECTOR)
-    count = len(image) // SECTOR
-    sectors = [image[index * SECTOR:(index + 1) * SECTOR] for index in range(count)]
-    local = [hashlib.sha256(sector).digest()[:HASH_SIZE] for sector in sectors]
-    # Small replies: the drone heap cannot always allocate one hash list for the whole image.
-    remote = [b"".join(drone.request(b"H", struct.pack("<BHH", slot, first, min(32, count - first)), timeout=10)
-                       for first in range(0, count, 32)) for slot in (0, 1)]
-    running, target = ([hashes[index * HASH_SIZE:(index + 1) * HASH_SIZE] for index in range(count)]
-                       for hashes in remote)
-    if running == local:
+    if info["running_sha"] == elf_sha(image):
         print(f"{info['running']} already runs this image")
         return
+    count = (len(image) + SECTOR - 1) // SECTOR
+    local = sectors(image, count)
+    target = sectors(installed(info["target"], info["target_sha"]), count)
+    running = sectors(installed(info["running"], info["running_sha"]), count)
     stale = [index for index in range(count) if target[index] != local[index]]
-    copies = [index for index in stale if running[index] == local[index]]
-    writes = [index for index in stale if running[index] != local[index]]
-    print(f"{info['target']}: {len(writes)} sectors to send, {len(copies)} to copy from {info['running']}, "
-          f"{count - len(stale)} already current", flush=True)
-    for index in copies:
-        drone.request(b"C", struct.pack("<H", index))
-    for done, index in enumerate(writes, 1):
-        drone.request(b"W", struct.pack("<H", index) + local[index] + sectors[index])
-        print(f"\rSent {done}/{len(writes)} sectors", end="", flush=True)
-    print()
-    drone.request(b"B", timeout=10)
+    copies = {index for index in stale if running[index] == local[index]}
+    print(f"{info['target']}: {len(stale) - len(copies)} sectors to send, {len(copies)} to copy from "
+          f"{info['running']}, {count - len(stale)} already current", flush=True)
+    INSTALLED.mkdir(parents=True, exist_ok=True)
+    record = INSTALLED / f"{info['target']}.bin"
+    # The slot no longer holds a known image once writing starts.
+    record.unlink(missing_ok=True)
+    write(drone, local, stale, copies)
+    try:
+        drone.request(b"B", timeout=10)
+    except RuntimeError as error:
+        print(f"{error}; sending every sector", flush=True)
+        write(drone, local, range(count), set())
+        drone.request(b"B", timeout=10)
+    record.write_bytes(image)
     print(f"Booting {info['target']}; it rolls back on the next reset unless confirmed", flush=True)
     drone.restart()
     booted = json.loads(drone.request(b"I", patience=60))
@@ -112,13 +142,20 @@ def firmware(drone, path):
     print(f"Confirmed {info['target']}")
 
 
-def compile_driver(name):
-    if not (name.startswith("drivers/") and name.endswith(".py")) or name == "drivers/__init__.py":
-        return name
-    target = name[:-3] + ".mpy"
-    subprocess.run(["uvx", "-q", "--from", "mpy-cross==1.29.0.post2", "mpy-cross", "-march=xtensawin",
-                    str(FIRMWARE / name), "-o", str(FIRMWARE / target)], check=True)
-    return target
+def write(drone, local, indices, copies):
+    for done, index in enumerate(indices, 1):
+        digest = hashlib.sha256(local[index]).digest()[:HASH_SIZE]
+        copied = False
+        if index in copies:
+            try:
+                drone.request(b"C", struct.pack("<H", index) + digest)
+                copied = True
+            except RuntimeError as error:
+                print(f"\n{error}; sending sector {index}", flush=True)
+        if not copied:
+            drone.request(b"W", struct.pack("<H", index) + digest + local[index])
+        print(f"\rWrote {done}/{len(indices)} sectors", end="", flush=True)
+    print()
 
 
 def files(drone, names, reset):
@@ -127,26 +164,34 @@ def files(drone, names, reset):
         "main.py",
         *sorted(str(path.relative_to(FIRMWARE)) for path in (FIRMWARE / "drivers").glob("*.py")),
         "drivers/flight_native.mpy",
-        *sorted(str(path.relative_to(FIRMWARE)) for path in (FIRMWARE / "lib/microdot").glob("*.mpy")),
     ]
-    # Drivers run as bytecode: compiling on the drone at boot exhausts its heap.
     names = [compile_driver(name) for name in names]
     contents = {name: (FIRMWARE / name).read_bytes() for name in names}
-    hashes = drone.request(b"F", "\n".join(names).encode())
+    shadows = [name[:-4] + ".py" for name in names if name.endswith(".mpy")]
+    paths = names + shadows
+    hashes = b"".join(drone.request(b"F", "\n".join(paths[first:first + HASH_BATCH]).encode())
+                      for first in range(0, len(paths), HASH_BATCH))
+    hashes = {name: hashes[index * 32:(index + 1) * 32] for index, name in enumerate(paths)}
     changed = 0
-    for index, name in enumerate(names):
+    removed = 0
+    for name in names:
         data = contents[name]
         digest = hashlib.sha256(data).digest()
-        if hashes[index * 32:(index + 1) * 32] == digest:
-            continue
-        encoded = name.encode()
-        for offset in range(0, max(len(data), 1), FILE_CHUNK):
-            drone.request(b"P", struct.pack("<IB", offset, len(encoded)) + encoded + data[offset:offset + FILE_CHUNK])
-        drone.request(b"M", digest + encoded)
-        print(f"Updated {name} ({len(data)} bytes)", flush=True)
-        changed += 1
-    print(f"{changed}/{len(names)} files updated")
-    if changed and reset:
+        if hashes[name] != digest:
+            encoded = name.encode()
+            for offset in range(0, max(len(data), 1), FILE_CHUNK):
+                drone.request(b"P", struct.pack("<IB", offset, len(encoded)) + encoded + data[offset:offset + FILE_CHUNK])
+            drone.request(b"M", digest + encoded)
+            print(f"Updated {name} ({len(data)} bytes)", flush=True)
+            changed += 1
+        if name.endswith(".mpy"):
+            shadow = name[:-4] + ".py"
+            if hashes[shadow] != bytes(32):
+                drone.request(b"K", shadow.encode())
+                print(f"Removed {shadow}", flush=True)
+                removed += 1
+    print(f"{changed}/{len(names)} files updated; {removed} source shadows removed")
+    if (changed or removed) and reset:
         drone.restart()
         drone.request(b"I", patience=60)
         print("Drone restarted")

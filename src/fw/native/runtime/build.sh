@@ -6,6 +6,11 @@ native_dir="$(dirname "$runtime_dir")"
 mpy_dir="$native_dir/.micropython"
 idf_dir="${IDF_PATH:-$HOME/esp/esp-idf}"
 
+# Both layouts share the MicroPython checkout and generated sources.
+mkdir -p "$native_dir/build-lock"
+exec 8>"$native_dir/build-lock/runtime.lock"
+flock 8
+
 if [ ! -d "$mpy_dir" ]; then
     git clone --depth 1 --branch v1.29.0 https://github.com/micropython/micropython.git "$mpy_dir"
 fi
@@ -16,10 +21,10 @@ set -u
 # Keep unchanged firmware byte-identical across days.
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$mpy_dir" show -s --format=%ct HEAD)}"
 
-if git -C "$mpy_dir" apply --check "$runtime_dir/micropython.patch" 2>/dev/null; then
+# An edited patch replaces the previously applied one.
+if ! git -C "$mpy_dir" apply --reverse --check "$runtime_dir/micropython.patch" 2>/dev/null; then
+    git -C "$mpy_dir" checkout -- ports/esp32
     git -C "$mpy_dir" apply "$runtime_dir/micropython.patch"
-else
-    git -C "$mpy_dir" apply --reverse --check "$runtime_dir/micropython.patch"
 fi
 
 port_dir="$mpy_dir/ports/esp32"
@@ -42,6 +47,11 @@ if [ ! -f "$build_dir/submodules/CMakeCache.txt" ]; then
         "${cmake_args[@]}" -DUPDATE_SUBMODULES=1 reconfigure
 fi
 if [ -f "$build_dir/build.ninja" ]; then
+    # makemanifest.py only regenerates frozen content when a frozen module changes, but its qstr list depends on ours.
+    ninja -C "$build_dir" genhdr/qstrdefs.generated.h
+    if [ "$build_dir/genhdr/qstrdefs.generated.h" -nt "$build_dir/frozen_content.c" ]; then
+        rm -f "$build_dir/frozen_content.c"
+    fi
     ninja -C "$build_dir"
 else
     idf.py -C "$port_dir" -B "$build_dir" "${cmake_args[@]}" build

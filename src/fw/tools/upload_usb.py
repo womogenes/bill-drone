@@ -12,6 +12,8 @@ from mpremote.transport import TransportError
 from mpremote.transport_serial import SerialTransport
 from serial.tools import list_ports, miniterm
 
+from mpy import compile_driver
+
 
 FIRMWARE = Path(__file__).resolve().parents[1]
 HASH_CODE = """
@@ -77,28 +79,34 @@ def upload(board, files):
     for source, path in zip(files, paths):
         data = source.read_bytes()
         digest = hashlib.sha256(data).hexdigest()
-        if hashes[path] == digest:
-            continue
+        if hashes[path] != digest:
+            for parent in reversed(Path(path).parents):
+                if parent == Path("."):
+                    continue
+                board.exec(
+                    f"try:\n os.mkdir({parent.as_posix()!r})\n"
+                    "except OSError as error:\n"
+                    " if error.errno != 17: raise"
+                )
 
-        for parent in reversed(Path(path).parents):
-            if parent == Path("."):
-                continue
+            temporary = path + ".upload"
+            board.fs_writefile(temporary, data, chunk_size=2048)
+            actual = board.exec(f"print(file_hash({temporary!r}))").decode().strip()
+            if actual != digest:
+                raise RuntimeError(f"Upload verification failed: {path}")
+
+            board.exec(f"os.rename({temporary!r}, {path!r})")
+            print(f"Updated {path} ({len(data)} bytes)")
+            changed += 1
+            transferred += len(data)
+
+        if path.endswith(".mpy"):
+            # Remove shadowing source even when the bytecode already matches.
             board.exec(
-                f"try:\n os.mkdir({parent.as_posix()!r})\n"
+                f"try:\n os.remove({path[:-4] + '.py'!r})\n"
                 "except OSError as error:\n"
-                " if error.errno != 17: raise"
+                " if error.errno != 2: raise"
             )
-
-        temporary = path + ".upload"
-        board.fs_writefile(temporary, data, chunk_size=2048)
-        actual = board.exec(f"print(file_hash({temporary!r}))").decode().strip()
-        if actual != digest:
-            raise RuntimeError(f"Upload verification failed: {path}")
-
-        board.exec(f"os.rename({temporary!r}, {path!r})")
-        print(f"Updated {path} ({len(data)} bytes)")
-        changed += 1
-        transferred += len(data)
 
     return changed, transferred
 
@@ -115,9 +123,8 @@ def main():
         "main.py",
         *sorted(str(path.relative_to(FIRMWARE)) for path in (FIRMWARE / "drivers").glob("*.py")),
         "drivers/flight_native.mpy",
-        *sorted(str(path.relative_to(FIRMWARE)) for path in (FIRMWARE / "lib/microdot").glob("*.mpy")),
     ]
-    files = [FIRMWARE / name for name in names]
+    files = [FIRMWARE / compile_driver(name) for name in names]
     for path in files:
         path.resolve().relative_to(FIRMWARE)
         if not path.is_file():

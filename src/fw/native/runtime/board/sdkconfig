@@ -1,2 +1,4 @@
 CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0=y
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+# Boot at full speed: changing the CPU frequency after the native radio starts Wi-Fi stalls ESP-NOW send callbacks.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y

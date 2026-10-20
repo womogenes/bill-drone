@@ -12,7 +12,7 @@ HEADER_SIZE = struct.calcsize(HEADER_FORMAT)  # 12 bytes
 SAMPLE_HZ = 100
 # Send a batch every 40 ms: 25 messages/s of 204 bytes (one direct-link frame each) at 100 Hz.
 BATCH_SIZE = max(1, SAMPLE_HZ // 25)
-MAX_BATCH = 16  # 780 bytes: four direct-link fragments per acknowledgement; the 200-record native ring covers 2 s of stalls
+MAX_BATCH = 8  # 396 bytes: small enough to send without large allocations; the 200-record native ring covers 2 s of stalls
 
 STOP_REASONS = (
     "", "Stopped", "Controller heartbeat lost", "IMU read failed",
