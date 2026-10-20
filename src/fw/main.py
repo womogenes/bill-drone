@@ -3,12 +3,14 @@ MicroPython firmware for everything
 """
 
 from machine import ADC, Pin, freq
+import config
 from config import WIFI_SSID, WIFI_PASSWORD
 
 import network
 import time
 import asyncio
-import json
+import socket
+import flight_rt
 
 freq(240_000_000)
 
@@ -19,17 +21,27 @@ wifi = network.WLAN(network.STA_IF)
 wifi.active(True)
 wifi.config(pm=network.WLAN.PM_NONE)
 
-print("Connecting to wifi...")
-wifi.connect(WIFI_SSID, WIFI_PASSWORD)
+direct_peer = getattr(config, "DIRECT_CONTROLLER_MAC", None)
+if direct_peer is not None:
+    wifi.disconnect()
+    wifi.config(channel=getattr(config, "DIRECT_CHANNEL", 6))
+    lan_addr = None
+    # Allocate the radio buffers before other modules fragment the heap.
+    from drivers import direct
+    direct_link = direct.Link(direct_peer)
+    print("Direct ESP-NOW controller enabled")
+else:
+    print("Connecting to wifi...")
+    wifi.connect(WIFI_SSID, WIFI_PASSWORD)
 
-while not wifi.isconnected():
-    time.sleep(0.1)
+    while not wifi.isconnected():
+        time.sleep(0.1)
 
-lan_addr = wifi.ifconfig()[0]
-print(f"Connected! LAN address: {lan_addr}")
+    lan_addr = wifi.ifconfig()[0]
+    print(f"Connected! LAN address: {lan_addr}")
 
 
-from drivers import actuators, control
+from drivers import actuators, control, recorder, protocol, ota
 
 actuators.init()
 control.load_gains()
@@ -56,7 +68,11 @@ def get_sensor_data():
     """
     Read sensors yay
     """
+    state = flight_rt.snapshot()
+    control.sync(state)
     force = load_cell.read()
+    voltage = adc.read_uv() * VOLTAGE_DIVIDER_RATIO / 1_000_000
+    flight_rt.set_voltage(round(voltage * 1000))
 
     return {
         "force": force,
@@ -66,12 +82,13 @@ def get_sensor_data():
             else None
         ),
         "force_sequence": load_cell.sequence,
-        "actuators": actuators.read(),
+        "actuators": actuators.read(state),
         "control": control.settings,
         "control_status": control.status,
+        "logging": recorder.status(),
         "adc_raw": adc.read_u16(),
-        "adc_voltage": adc.read_uv() * VOLTAGE_DIVIDER_RATIO / 1_000_000,
-        "imu": imu.read(),
+        "adc_voltage": voltage,
+        "imu": imu.read(state),
     }
 
 
@@ -83,7 +100,7 @@ def get_sensor_data():
 # We do this by GETting kv.wfeng.dev/_/key/value
 
 SEND_IP_ADDR = True
-if SEND_IP_ADDR:
+if SEND_IP_ADDR and lan_addr:
     import requests
 
     print("Sending IP address...")
@@ -97,7 +114,6 @@ from microdot.websocket import with_websocket
 
 app = Microdot()
 command_owner = None
-last_command_ms = 0
 
 
 @app.get("/")
@@ -109,33 +125,38 @@ async def receive_commands(ws):
     """
     Dispatch servo and throttle commands.
     """
-    global command_owner, last_command_ms
+    global command_owner
 
     while True:
-        command = json.loads(await ws.receive())
+        # Buffered frames can complete without yielding; give other clients a turn.
+        await asyncio.sleep_ms(0)
+        command = protocol.decode_command(await ws.receive())
         op = command["command"]
 
         if op == "stop":
-            control.stop("Stopped from dashboard")
+            control.stop("E-stop triggered.")
             command_owner = None
             continue
 
         if op == "heartbeat":
             if command_owner is ws:
-                last_command_ms = time.ticks_ms()
+                flight_rt.heartbeat()
             continue
 
         if command_owner is not None and command_owner is not ws:
             continue
 
         command_owner = ws
-        last_command_ms = time.ticks_ms()
+        flight_rt.heartbeat()
 
         if op == "calibrate_imu":
             imu.calibrate()
 
         elif imu.calibration_count:
             continue
+
+        elif op == "zero_servo":
+            control.zero_servo(command["side"])
 
         elif op == "control":
             if command["settings"].get("enabled") and (
@@ -157,38 +178,47 @@ async def receive_commands(ws):
             commands[op](command["side"], command["value"])
 
 
-async def heartbeat_esc():
-    """
-    Stop outputs when their controlling connection stops sending commands.
-    """
-    global command_owner
-
-    while True:
-        now = time.ticks_ms()
-        if command_owner is not None and time.ticks_diff(now, last_command_ms) >= 500:
-            control.stop("Controller heartbeat lost")
-            command_owner = None
-
-        if control.settings["enabled"] and time.ticks_diff(now, imu.last_read_ms) > 100:
-            control.stop("IMU samples stopped")
-
-        await asyncio.sleep_ms(50)
-
-
 TELEMETRY_HZ = 24
+telemetry_packet = None
+telemetry_reason = ""
+telemetry_subscribers = []
+
+
+async def sample_telemetry():
+    """
+    Read and encode one snapshot for all dashboards.
+    """
+    global telemetry_packet, telemetry_reason
+    while True:
+        started = time.ticks_ms()
+        if telemetry_subscribers:
+            telemetry_packet = protocol.encode_reading(get_sensor_data())
+            telemetry_reason = control.status["reason"]
+            for ready in telemetry_subscribers:
+                ready.set()
+
+        elapsed = time.ticks_diff(time.ticks_ms(), started)
+        await asyncio.sleep_ms(max(0, round(1000 / TELEMETRY_HZ) - elapsed))
 
 
 async def send_sensor_data(ws):
     """
-    Stream sensor readings at a target of 24 Hz.
+    Send the newest snapshot; a slow client never queues stale readings.
     """
-    while True:
-        started = time.ticks_ms()
-        readings = get_sensor_data()
-        await ws.send(json.dumps(readings))
-
-        elapsed = time.ticks_diff(time.ticks_ms(), started)
-        await asyncio.sleep_ms(max(0, round(1000 / TELEMETRY_HZ) - elapsed))
+    ready = asyncio.Event()
+    telemetry_subscribers.append(ready)
+    previous_reason = None
+    try:
+        while True:
+            await ready.wait()
+            ready.clear()
+            packet, reason = telemetry_packet, telemetry_reason
+            if reason != previous_reason:
+                await ws.send(b"R" + reason.encode())
+                previous_reason = reason
+            await ws.send(packet)
+    finally:
+        telemetry_subscribers.remove(ready)
 
 
 @app.route("/ws")
@@ -197,6 +227,12 @@ async def md_websocket(req, ws):
     """
     Fires on a new websocket connection
     """
+    global command_owner
+    req.sock[1].s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    await serve_connection(ws)
+
+
+async def serve_connection(ws):
     global command_owner
     tasks = [
         asyncio.create_task(send_sensor_data(ws)),
@@ -213,19 +249,42 @@ async def md_websocket(req, ws):
 
         for task in tasks:
             task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def receive_log_heartbeat(ws):
+    while True:
+        await asyncio.wait_for_ms(ws.receive(), 3000)
+
+
+@app.route("/log")
+@with_websocket
+async def flight_log(req, ws):
+    req.sock[1].s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    tasks = [asyncio.create_task(recorder.stream(ws)), asyncio.create_task(receive_log_heartbeat(ws))]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def main():
     """
-    Sample the IMU independently of dashboard connections.
+    Serve commands and telemetry while the native core handles sampling and control.
     """
     try:
-        await asyncio.gather(
-            imu.sample(), heartbeat_esc(), control.save_gains(), app.start_server(port=80)
-        )
+        tasks = [sample_telemetry(), control.save_gains(), imu.save_calibration()]
+        if direct_peer is not None:
+            tasks.append(direct.run(direct_link, serve_connection, recorder.stream))
+        else:
+            tasks.extend([app.start_server(port=80), ota.confirm_boot(app)])
+        await asyncio.gather(*tasks)
 
     finally:
         control.stop()
+        imu.stop()
 
 
 if __name__ == "__main__":

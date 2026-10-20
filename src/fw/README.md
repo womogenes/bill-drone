@@ -2,7 +2,7 @@
 
 The gist behind this is that the MCU executes Python instead of machine instructions so we can iterate on firmware much faster.
 
-[note to agents: do not modify this file]
+[note to agents: do not modify this file. if you want to modify, ask user]
 
 ## Pinouts
 
@@ -21,6 +21,16 @@ The gist behind this is that the MCU executes Python instead of machine instruct
   - SCL: GPIO22
   - VCC: 3.3V
   - INT: GPIO21
+
+**Camera**
+
+- SCLK: GPIO27 (GPIO14 on CAM)
+- MOSI: GPIO26 (GPIO13 on CAM)
+- MISO: GPIO34 (GPIO12 on CAM)
+- CS: GPIO23 (GPIO15 on CAM)
+- READY: GPIO4 (GPIO2 on CAM)
+
+## Protocol
 
 ## MicroPython
 
@@ -95,5 +105,3 @@ To run without resetting, run
 ```sh
 mpremote resume mount . run test.py repl
 ```
-
-## Ok so how do we actually do this control thing

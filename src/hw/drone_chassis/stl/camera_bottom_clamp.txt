@@ -1,0 +1,21 @@
+Symmetric four-bolt camera bottom clamp — 2026-10-19
+
+One printed continuous slotted bar on a 48 x 24 x 3 mm base; total height 11.3 mm.
+Uses all four existing M3 deck holes, 38 x 12 mm pattern (X +/-19; Y -36/-24).
+Mount is mirrored front-to-back about Y=-30; both jaws have identical nut pockets and screw bores.
+Install only TWO M2 x 8 mm flat-ended set screws and TWO standard M2 nuts in the non-antenna/camera-facing jaw. Leave the opposite jaw's screw pockets empty.
+Four M3 x 10 screws and matching nuts attach it to the unchanged deck; check actual nut engagement.
+
+PCB measured 39.8 x 27.2 x 1.2 mm. Only central 18 mm of lower 6 mm has 2.0 mm total thickness.
+Outer slot width 1.8 mm; central relief width 19 mm in X and 3.8 mm through Y.
+Slot floor Z13.3; jaw top Z19.6: 6.3 mm capture height.
+Rear outer jaw supports the thin PCB strips; the 0.8 mm antenna buildup has 0.2 mm rear clearance when the outer board face is seated.
+Central relief is duplicated on both jaws to preserve front/back symmetry.
+Screw centers X +/-10.5 and Z16.3 act on the thin outer PCB strips.
+Camera board moved 9.7 mm rearward from the original bottom clamp to center it on the deck pattern. Lens still faces forward. Modeled 20 mm rear connector clearance above the jaws passes.
+
+Assembly: mount base, insert nuts from above, retract set screws, insert board fully, gently snug the two screws on the non-antenna side. Use flat tips and avoid overtightening the PCB.
+Print base flat on bed; designed for support-free printing, subject to slicer preview. No current 3MF or sliced project was generated for this redesign.
+Solid PLA equivalent 7.46 g; actual sliced weight may differ.
+39 modeled fastener/insertion/clearance checks passed. Live assembly regenerates OK. Actual component layout and print fit still need physical verification.
+Current STL: camera_bottom_clamp.stl. Older camera 3MFs predate this design.

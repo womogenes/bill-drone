@@ -71,7 +71,11 @@ class WebSocket:
         frame = self._encode_websocket_frame(
             opcode or (self.TEXT if isinstance(data, str) else self.BINARY), data
         )
-        await self.request.sock[1].awrite(frame)
+        # Callers pace their loops; yield only when TCP has buffered data.
+        writer = self.request.sock[1]
+        writer.write(frame)
+        if writer.out_buf:
+            await writer.drain()
 
     async def close(self):
         """Close the websocket connection."""
@@ -145,16 +149,33 @@ class WebSocket:
         frame.extend(payload)
         return frame
 
+    async def read_bytes(self, size):
+        # MicroPython sockets are nonblocking. Consume buffered bytes before yielding.
+        if size == 0:
+            return b""
+        reader = self.request.sock[0]
+        data = reader.s.read(size)
+        if data == b"":
+            raise WebSocketError("Websocket connection closed")
+        if data is None:
+            data = b""
+        if len(data) < size:
+            try:
+                data += await reader.readexactly(size - len(data))
+            except EOFError:
+                raise WebSocketError("Websocket connection closed")
+        return data
+
     async def _read_frame(self):
-        header = await self.request.sock[0].read(2)
+        header = await self.read_bytes(2)
         if len(header) != 2:  # pragma: no cover
             raise WebSocketError("Websocket connection closed")
         fin, opcode, has_mask, length = self._parse_frame_header(header)
         if length == -2:
-            length = await self.request.sock[0].readexactly(2)
+            length = await self.read_bytes(2)
             length = int.from_bytes(length, "big")
         elif length == -8:
-            length = await self.request.sock[0].readexactly(8)
+            length = await self.read_bytes(8)
             length = int.from_bytes(length, "big")
         max_allowed_length = (
             Request.max_body_length
@@ -164,8 +185,8 @@ class WebSocket:
         if length > max_allowed_length:
             raise WebSocketError("Message too large")
         if has_mask:  # pragma: no cover
-            mask = await self.request.sock[0].readexactly(4)
-        payload = await self.request.sock[0].readexactly(length)
+            mask = await self.read_bytes(4)
+        payload = await self.read_bytes(length)
         if has_mask:  # pragma: no cover
             payload = bytes(x ^ mask[i % 4] for i, x in enumerate(payload))
         return opcode, payload

@@ -152,6 +152,16 @@
     },
     {
       "a": "Electronics deck",
+      "b": "Rear landing legs",
+      "type": "ABUT_NO_CLASS"
+    },
+    {
+      "a": "Electronics deck",
+      "b": "Rear landing legs",
+      "type": "ABUT_NO_CLASS"
+    },
+    {
+      "a": "Electronics deck",
       "b": "Camera lens fixture",
       "type": "ABUT_NO_CLASS"
     },
@@ -1431,22 +1441,21 @@
       "type": "ABUT_NO_CLASS"
     }
   ],
-  "solidCount": 21.0,
   "volumes": [
     {
       "mm3": 24101.572846098177,
       "name": "Electronics deck"
     },
     {
-      "mm3": 37346.85131691921,
+      "mm3": 37343.97131691923,
       "name": "Front landing legs"
     },
     {
-      "mm3": 37346.85131691921,
+      "mm3": 37343.97131691921,
       "name": "Rear landing legs"
     },
     {
-      "mm3": 17095.845542007602,
+      "mm3": 17095.84554200761,
       "name": "Battery hatch"
     },
     {
@@ -1454,7 +1463,7 @@
       "name": "Left side frame"
     },
     {
-      "mm3": 16505.241971338557,
+      "mm3": 16505.241971338568,
       "name": "Right side frame"
     },
     {
@@ -1462,7 +1471,7 @@
       "name": "Beam bridge"
     },
     {
-      "mm3": 7159.000498778765,
+      "mm3": 7159.000498778766,
       "name": "Camera lens fixture"
     },
     {
@@ -1470,7 +1479,7 @@
       "name": "Camera retaining bar"
     },
     {
-      "mm3": 482.2090938236705,
+      "mm3": 482.2090938236704,
       "name": "Camera lens keeper"
     },
     {
@@ -1494,7 +1503,7 @@
       "name": "ESP32-CAM envelope"
     },
     {
-      "mm3": 170.90264035528446,
+      "mm3": 170.90264035528443,
       "name": "Camera lens envelope"
     },
     {

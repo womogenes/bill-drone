@@ -8,3 +8,5 @@ Only landing frames need reprinting. Existing chassis and deck hardware unchange
 Old side_frames_and_landing_legs.3mf contains obsolete legs; use reinforced_landing_legs_pair.3mf.
 
 Flush-crossbar revision: top raised 2 mm to Z -2, sides widened 1 mm each to X +/-29 to align with existing frame bosses. Corner profile matches square frame corners. Bolt holes and mounting thickness unchanged.
+
+2026-10-18: 0.6 mm top outside corner chamfers added to both leg frames.
