@@ -5,6 +5,7 @@ import {
   startTransition,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -13,31 +14,30 @@ import Link from 'next/link';
 
 import { ControlPanel } from '@/components/control-panel';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { ActuatorPanel } from '@/components/actuator-panel';
 import { ADCPanel } from '@/components/adc-panel';
 import { ImuPanel } from '@/components/imu-panel';
-import { encodeCommand, decodeReading } from '@/lib/protocol';
-import { EspConnection } from '@/lib/esp-connection';
+import { EspConnection, type DroneRequest } from '@/lib/esp-connection';
+import { createHistory } from '@/lib/history';
 import type {
   ImuSample,
   Reading,
   Side,
   ControlSettings,
-  RecorderStatus,
+  Targets,
 } from '@/lib/telemetry';
 
-const routes = [
-  { value: 'router', label: 'Router' },
-  { value: 'usb', label: 'USB controller' },
-];
+// The drone service (src/fw/controller/bridge.py) owns the controller USB link on this laptop.
+const SERVICE = '127.0.0.1:8765';
+const SETPOINTS = ['base_throttle', 'roll', 'pitch', 'yaw_rate'] as const;
+const ZERO_TARGETS: Targets = {
+  base_throttle: 0,
+  roll: 0,
+  pitch: 0,
+  yaw_rate: 0,
+  servo: [0, 0],
+  throttle: [0, 0],
+};
 
 const statuses = {
   offline: {
@@ -76,22 +76,19 @@ function reuseUnchanged<T extends object>(
 
 export default function Page() {
   const [status, setStatus] = useState<keyof typeof statuses>('offline');
-  const [address, setAddress] = useState('');
-  const [recording, setRecording] = useState<RecorderStatus>({ ready: false });
   const [reading, setReading] = useState<Reading | null>(null);
-  const [samples, setSamples] = useState<ImuSample[]>([]);
+  const [requestError, setRequestError] = useState('');
+  const [calibrationPending, setCalibrationPending] = useState(false);
   const latestReading = useRef<Reading | null>(null);
-  const history = useRef<ImuSample[]>([]);
+  const [history] = useState(() => createHistory<ImuSample>());
   const displayFrame = useRef<number | undefined>(undefined);
   const publishReading = useCallback(() => {
     if (displayFrame.current !== undefined) return;
     displayFrame.current = requestAnimationFrame(() => {
       displayFrame.current = undefined;
       const current = latestReading.current;
-      const points = [...history.current];
       startTransition(() => {
         setReading(current);
-        setSamples(points);
       });
     });
   }, []);
@@ -99,153 +96,95 @@ export default function Page() {
   const [fps, setFps] = useState<number | null>(null);
   const packetCount = useRef(0);
   const socket = useRef<EspConnection | null>(null);
+  const targets = useRef<Targets>(ZERO_TARGETS);
 
-  const lookup = useRef<AbortController | null>(null);
-  const pendingControl = useRef<Partial<ControlSettings>>({});
-  const controlTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined
-  );
-  const lastControlSent = useRef(0);
-
-  const cancelControl = useCallback(() => {
-    clearTimeout(controlTimer.current);
-    controlTimer.current = undefined;
-    pendingControl.current = {};
+  const setTargets = useCallback((update: Partial<Targets>) => {
+    targets.current = { ...targets.current, ...update };
+    socket.current?.targets(targets.current);
   }, []);
 
-  const connect = useCallback(async () => {
-    cancelControl();
+  const request = useCallback((message: DroneRequest) => {
+    socket.current?.send(message);
+  }, []);
+
+  const connect = useCallback(() => {
     if (displayFrame.current !== undefined)
       cancelAnimationFrame(displayFrame.current);
     displayFrame.current = undefined;
-    lookup.current?.abort();
-    const controller = new AbortController();
-    lookup.current = controller;
     socket.current?.close();
     socket.current = null;
+    // A new connection starts from zero targets; arming needs an explicit request.
+    targets.current = ZERO_TARGETS;
     setStatus('connecting');
     setReading(null);
+    setRequestError('');
+    setCalibrationPending(false);
     latestReading.current = null;
+    const session = Date.now();
+    function offline() {
+      if (socket.current !== ws) return;
+      socket.current = null;
+      setStatus('offline');
+      setCalibrationPending(false);
+      ws.close();
+    }
 
-    try {
-      const direct = new URLSearchParams(window.location.search).get('controller') === 'usb';
-      let address = '127.0.0.1:8765';
-      if (!direct) {
-        const response = await fetch(
-          'https://kv.wfeng.dev/bill-esp32-drone-addr',
-          {
-            cache: 'no-store',
-            signal: AbortSignal.any([
-              controller.signal,
-              AbortSignal.timeout(10000),
-            ]),
+    const ws = new EspConnection(
+      SERVICE,
+      targets.current,
+      () => {
+        if (socket.current === ws) setStatus('connected');
+      },
+      (message) => {
+        if (socket.current !== ws) return;
+        if (message.type === 'result') {
+          if (message.request === 'calibrate') setCalibrationPending(false);
+          if (message.request === 'zero' && !message.error) {
+            // The drone has captured the old angle and holds it until this zero target arrives.
+            const servo = [...targets.current.servo] as [number, number];
+            servo[message.side === 'left' ? 0 : 1] = 0;
+            setTargets({ servo });
+          }
+          setRequestError(
+            message.error ? `${message.request}: ${message.error}` : ''
+          );
+          return;
+        }
+        const data = message as unknown as Reading;
+        packetCount.current++;
+        data.control = reuseUnchanged(
+          latestReading.current?.control,
+          data.control
+        );
+        data.control_status = reuseUnchanged(
+          latestReading.current?.control_status,
+          data.control_status && {
+            ...data.control_status,
+            mapping_confirmed: true,
           }
         );
-        if (!response.ok)
-          throw new Error(`Address lookup failed: ${response.status}`);
-        address = (await response.text()).trim();
-      }
-      if (controller.signal.aborted) return;
-      setAddress(address);
-      let reason = '';
-      const session = Date.now();
-      function offline() {
-        if (socket.current !== ws) return;
-        cancelControl();
-        socket.current = null;
-        setStatus('offline');
-        ws.close();
-      }
-
-      const ws = new EspConnection(
-        address,
-        () => {
-          if (socket.current === ws) setStatus('connected');
-        },
-        (packet) => {
-          if (socket.current !== ws) return;
-          if (new Uint8Array(packet)[0] === 82) {
-            reason = new TextDecoder().decode(packet.slice(1));
-            return;
-          }
-          const data = decodeReading(packet, reason);
-          packetCount.current++;
-          data.control = reuseUnchanged(
-            latestReading.current?.control,
-            data.control
-          );
-          data.control_status = reuseUnchanged(
-            latestReading.current?.control_status,
-            data.control_status
-          );
-          const time = Date.now();
-          latestReading.current = { ...data, time };
-          publishReading();
-          if (data.imu == null) return;
-          history.current.push({ ...data.imu, time, session });
-          // Trim in batches: shifting re-indexes every sample, which makes React's dev profiler deep-diff the whole array each frame.
-          if (
-            history.current[0].time < time - 120000 ||
-            history.current.length > 6000
-          ) {
-            history.current = history.current
-              .filter((sample) => sample.time >= time - 60000)
-              .slice(-3000);
-          }
-        },
-        offline
-      );
-      socket.current = ws;
-    } catch (error) {
-      if (controller.signal.aborted) return;
-      console.error(error);
-      setStatus('offline');
-    }
-  }, [cancelControl, publishReading]);
+        const time = Date.now();
+        latestReading.current = { ...data, time };
+        publishReading();
+        if (data.imu == null) return;
+        history.append({ ...data.imu, time, session });
+      },
+      offline
+    );
+    socket.current = ws;
+  }, [history, publishReading, setTargets]);
 
   useEffect(() => {
-    const start = setTimeout(() => void connect(), 0);
+    const start = setTimeout(connect, 0);
     return () => {
       clearTimeout(start);
       if (displayFrame.current !== undefined)
         cancelAnimationFrame(displayFrame.current);
       displayFrame.current = undefined;
-      cancelControl();
-      lookup.current?.abort();
       socket.current?.close();
       socket.current = null;
     };
-  }, [connect, cancelControl]);
-
-  useEffect(() => {
-    if (!address || status !== 'connected') return;
-    let cancelled = false;
-    async function update(start = false) {
-      try {
-        const response = await fetch(
-          '/api/recording',
-          start
-            ? {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ address }),
-              }
-            : { cache: 'no-store' }
-        );
-        if (!response.ok) throw new Error('Laptop recorder unavailable');
-        const result: RecorderStatus = await response.json();
-        if (!cancelled) setRecording(result);
-      } catch (error) {
-        if (!cancelled) setRecording({ ready: false, error: String(error) });
-      }
-    }
-    void update(true);
-    const timer = setInterval(() => void update(), 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [address, status]);
+  }, [connect]);
 
   useEffect(() => {
     if (status !== 'connected') return;
@@ -266,88 +205,56 @@ export default function Page() {
 
   useEffect(() => {
     if (status !== 'offline') return;
-    const timer = setTimeout(() => void connect(), 1000);
+    const timer = setTimeout(connect, 1000);
     return () => clearTimeout(timer);
   }, [status, connect]);
 
   const calibrateImu = useCallback(() => {
-    socket.current?.send(encodeCommand({ command: 'calibrate_imu' }));
-  }, []);
-
-  const sendControl = useCallback(
-    (settings: Partial<ControlSettings>, immediate = false) => {
-      pendingControl.current = { ...pendingControl.current, ...settings };
-      if (controlTimer.current !== undefined) {
-        if (!immediate) return;
-        clearTimeout(controlTimer.current);
-        controlTimer.current = undefined;
-      }
-
-      function flush() {
-        controlTimer.current = undefined;
-        const ws = socket.current;
-        if (!ws?.connected) {
-          pendingControl.current = {};
-          return;
-        }
-        ws.send(
-          encodeCommand({
-            command: 'control',
-            settings: pendingControl.current,
-          })
-        );
-        pendingControl.current = {};
-        lastControlSent.current = performance.now();
-      }
-
-      const delay = immediate
-        ? 0
-        : 10 - (performance.now() - lastControlSent.current);
-      if (delay <= 0) flush();
-      else controlTimer.current = setTimeout(flush, delay);
-    },
-    []
-  );
-
-  // Local tools tune gains and model parameters through this page's connection.
-  useEffect(() => {
-    if (status !== 'connected') return;
-    const timer = setInterval(async () => {
-      const control = latestReading.current?.control;
-      if (!control) return;
-      const response = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ control }),
-      });
-      const { settings } = await response.json();
-      if (Object.keys(settings).length) sendControl(settings, true);
-    }, 300);
-    return () => clearInterval(timer);
-  }, [status, sendControl]);
+    setCalibrationPending(true);
+    request({ type: 'calibrate' });
+  }, [request]);
 
   const stopMotors = useCallback(() => {
-    cancelControl();
+    setTargets(ZERO_TARGETS);
     setStopEpoch((previous) => previous + 1);
-    if (socket.current?.connected) {
-      socket.current.send(encodeCommand({ command: 'stop' }));
-    }
-  }, [cancelControl]);
+    request({ type: 'stop' });
+  }, [request, setTargets]);
+
+  // Setpoints become streamed targets, Enable an arm request, and everything else a tuning request.
+  const sendControl = useCallback(
+    (settings: Partial<ControlSettings>) => {
+      const { enabled, ...rest } = settings;
+      const setpoints: Partial<Targets> = {};
+      const tuning: Record<string, number> = {};
+      for (const [key, value] of Object.entries(rest)) {
+        if ((SETPOINTS as readonly string[]).includes(key))
+          setpoints[key as (typeof SETPOINTS)[number]] = Number(value);
+        else tuning[key] = Number(value);
+      }
+      setTargets(setpoints);
+      if (enabled === true) request({ type: 'arm' });
+      if (enabled === false) stopMotors();
+      if (Object.keys(tuning).length)
+        request({ type: 'tune', settings: tuning });
+    },
+    [request, setTargets, stopMotors]
+  );
 
   const sendActuator = useCallback(
     (command: 'servo' | 'throttle', side: Side, value: number) => {
-      if (socket.current?.connected) {
-        socket.current.send(encodeCommand({ command, side, value }));
-      }
+      const values = [...targets.current[command]] as [number, number];
+      values[side === 'left' ? 0 : 1] = value;
+      setTargets({ [command]: values });
     },
-    []
+    [setTargets]
   );
 
-  const zeroServo = useCallback((side: Side) => {
-    if (socket.current?.connected) {
-      socket.current.send(encodeCommand({ command: 'zero_servo', side }));
-    }
-  }, []);
+  const zeroServo = useCallback(
+    (side: Side) => {
+      request({ type: 'zero', side });
+    },
+    [request]
+  );
 
   useEffect(() => {
     function stop(event: KeyboardEvent) {
@@ -360,13 +267,26 @@ export default function Page() {
     function close() {
       socket.current?.close();
     }
+    function restore(event: PageTransitionEvent) {
+      if (event.persisted) connect();
+    }
     window.addEventListener('keydown', stop, true);
     window.addEventListener('pagehide', close);
+    window.addEventListener('pageshow', restore);
     return () => {
       window.removeEventListener('keydown', stop, true);
       window.removeEventListener('pagehide', close);
+      window.removeEventListener('pageshow', restore);
     };
-  }, [stopMotors]);
+  }, [connect, stopMotors]);
+
+  const recorder = reading?.recorder;
+  const reason = requestError || reading?.control_status?.reason || '';
+  const mappingConfirmed = reading?.control_status?.mapping_confirmed ?? false;
+  const controlStatus = useMemo(
+    () => ({ reason, mapping_confirmed: mappingConfirmed }),
+    [reason, mappingConfirmed]
+  );
 
   const { label, icon: StatusIcon, color } = statuses[status];
 
@@ -378,36 +298,9 @@ export default function Page() {
           <Link href="/camera" className="text-sm underline">
             Camera
           </Link>
-          <Select
-            value={address === '127.0.0.1:8765' ? 'usb' : 'router'}
-            items={routes}
-            disabled={status === 'connecting' || reading?.control?.enabled}
-            onValueChange={(value) => {
-              const url = new URL(window.location.href);
-              if (value === 'usb') url.searchParams.set('controller', 'usb');
-              else url.searchParams.delete('controller');
-              window.history.replaceState(null, '', url);
-              void connect();
-            }}
-          >
-            <SelectTrigger aria-label="Connection route">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="start" alignItemWithTrigger={false}>
-              <SelectGroup>
-                {routes.map((route) => (
-                  <SelectItem key={route.value} value={route.value}>
-                    {route.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          {address && (
-            <span className="text-sm text-muted-foreground tabular-nums">
-              {address}
-            </span>
-          )}
+          <span className="text-sm text-muted-foreground tabular-nums">
+            {SERVICE}
+          </span>
           {fps !== null && (
             <span className="text-sm text-muted-foreground tabular-nums">
               {Math.round(fps)} FPS
@@ -440,13 +333,13 @@ export default function Page() {
           <Suspense>
             <ImuPanel
               reading={reading?.imu}
-              samples={samples}
-              time={samples.at(-1)?.time ?? 0}
+              history={history.read}
+              time={reading?.time ?? 0}
               onCalibrate={calibrateImu}
+              calibrationPending={calibrationPending}
               connected={status === 'connected'}
             />
           </Suspense>
-          {/* <LoadCellPanel reading={reading} connected={status === 'connected'} /> */}
           <ADCPanel
             raw={reading?.adc_raw}
             voltage={reading?.adc_voltage}
@@ -482,30 +375,24 @@ export default function Page() {
         </div>
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
           <p
-            className={`px-4 pt-4 ${recording.error || (reading?.logging?.dropped ?? 0) > 0 ? 'text-red-700' : 'text-muted-foreground'}`}
+            className={`px-4 pt-4 tabular-nums ${recorder?.error || (reading?.logging?.dropped ?? 0) > 0 ? 'text-red-700' : 'text-muted-foreground'}`}
           >
-            {recording.error ??
+            {recorder?.error ??
               (reading?.logging?.active
                 ? `Recording · ${reading.logging.samples} samples · ${reading.logging.dropped} dropped`
-                : recording.ready && reading?.logging?.connected
-                  ? recording.writing
-                    ? 'Saving recording'
-                    : recording.file
-                      ? 'Recording saved'
-                      : 'Recorder ready'
+                : reading?.logging?.ready
+                  ? recorder?.file
+                    ? `Saved ${recorder.file}`
+                    : 'Recorder ready'
                   : 'Recorder connecting')}
           </p>
           {reading?.control && (
             <ControlPanel
               key={`${status}-${stopEpoch}-${reading.control.enabled}`}
               settings={reading.control}
-              recorderReady={
-                recording.ready &&
-                recording.address === address &&
-                !!reading.logging?.ready
-              }
-              recorderError={recording.error}
-              status={reading.control_status}
+              recorderReady={!!reading.logging?.ready}
+              recorderError={recorder?.error ?? undefined}
+              status={controlStatus}
               connected={status === 'connected'}
               imu={
                 !reading.imu

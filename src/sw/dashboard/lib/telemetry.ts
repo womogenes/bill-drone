@@ -43,13 +43,22 @@ export type ControlSettings = {
   right_thrust_scale: number;
 };
 
+// The drone service's recorder (src/fw/controller/bridge.py).
 export type RecorderStatus = {
-  ready: boolean;
-  address?: string;
-  file?: string;
-  error?: string;
-  bytes?: number;
-  writing?: boolean;
+  file: string | null;
+  error: string | null;
+  bytes: number;
+  writing: boolean;
+};
+
+// Streamed to the drone every 50 ms; each packet is the controller heartbeat. Servos and throttles apply while disarmed.
+export type Targets = {
+  base_throttle: number;
+  roll: number;
+  pitch: number;
+  yaw_rate: number;
+  servo: [number, number];
+  throttle: [number, number];
 };
 
 export type Reading = {
@@ -61,7 +70,13 @@ export type Reading = {
     dropped: number;
   };
   control?: ControlSettings;
-  control_status?: { reason: string; mapping_confirmed: boolean };
+  control_status?: {
+    reason: string;
+    mapping_confirmed: boolean;
+    throttle_latched?: boolean;
+    app_age_ms?: number | null;
+  };
+  recorder?: RecorderStatus;
   imu?: ImuReading | null;
   adc_raw?: number;
   adc_voltage?: number;
@@ -71,7 +86,5 @@ export type Reading = {
   force_age_ms?: number | null;
   force_sequence?: number;
 };
-
-export type RollSample = { time: number; roll: number; session: number };
 
 export type ImuSample = ImuReading & { time: number; session: number };

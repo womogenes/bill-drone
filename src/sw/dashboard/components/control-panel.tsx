@@ -37,11 +37,23 @@ const keyIcons: Record<string, LucideIcon> = {
 
 const THROTTLE_STEP = 10;
 const KEY_REPEAT_MS = 100;
-const KEY_YAW_RATE = 20;
-const KEY_TILT = 15;
+// Keyboard setpoint sizes are a local preference, not drone settings.
+const MANUAL_KEY = 'manual-inputs';
+const MANUAL_DEFAULT = { tilt: 15, yaw: 20 };
+function readManual() {
+  try {
+    return {
+      ...MANUAL_DEFAULT,
+      ...JSON.parse(localStorage.getItem(MANUAL_KEY) ?? '{}'),
+    };
+  } catch {
+    return MANUAL_DEFAULT;
+  }
+}
+// Positive pitch is nose down, so the up arrow tilts forward.
 const tiltKeys = {
-  ArrowUp: { axis: 'pitch', direction: -1 },
-  ArrowDown: { axis: 'pitch', direction: 1 },
+  ArrowUp: { axis: 'pitch', direction: 1 },
+  ArrowDown: { axis: 'pitch', direction: -1 },
   ArrowLeft: { axis: 'roll', direction: -1 },
   ArrowRight: { axis: 'roll', direction: 1 },
 } as const;
@@ -96,7 +108,21 @@ const modelFields = [
   },
   { key: 'arm', label: 'Arm (m)', min: 0, max: undefined },
 ] as const;
-const gainKeys = [...tuningFields, ...modelFields].map(({ key }) => key);
+const biasFields = [
+  { key: 'roll_bias', label: 'Roll bias (rad/s²)', min: -10, max: 10 },
+  { key: 'pitch_bias', label: 'Pitch bias (rad/s²)', min: -10, max: 10 },
+  { key: 'yaw_bias', label: 'Yaw bias (rad/s²)', min: -10, max: 10 },
+  { key: 'left_thrust_scale', label: 'Left thrust scale', min: 0.5, max: 1.5 },
+  {
+    key: 'right_thrust_scale',
+    label: 'Right thrust scale',
+    min: 0.5,
+    max: 1.5,
+  },
+] as const;
+const gainKeys = [...tuningFields, ...modelFields, ...biasFields].map(
+  ({ key }) => key
+);
 
 export const ControlPanel = memo(function ControlPanel({
   settings,
@@ -114,7 +140,7 @@ export const ControlPanel = memo(function ControlPanel({
   imu: 'offline' | 'calibrating' | 'uncalibrated' | 'calibrated';
   status: Reading['control_status'];
   connected: boolean;
-  onChange: (settings: Partial<ControlSettings>, immediate?: boolean) => void;
+  onChange: (settings: Partial<ControlSettings>) => void;
   onStop: () => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
@@ -142,6 +168,9 @@ export const ControlPanel = memo(function ControlPanel({
   const [draft, setDraft] = useState<Partial<Record<Setpoint, number>>>({});
   const [gains, setGains] = useState<Record<string, string>>({});
   const [open, setOpen] = useState(false);
+  const [manual, setManual] = useState(MANUAL_DEFAULT);
+  const [manualDraft, setManualDraft] = useState(MANUAL_DEFAULT);
+  useEffect(() => setManual(readManual()), []);
   const throttle = useRef(settings.base_throttle);
 
   const changeSetpoint = useCallback(
@@ -173,14 +202,14 @@ export const ControlPanel = memo(function ControlPanel({
       );
       throttle.current = next;
       setDraft((previous) => ({ ...previous, base_throttle: next }));
-      onChange({ base_throttle: next }, true);
+      onChange({ base_throttle: next });
     }
 
     function changeYaw() {
       const yaw_rate =
-        KEY_YAW_RATE * (Number(held.has('KeyA')) - Number(held.has('KeyD')));
+        manual.yaw * (Number(held.has('KeyA')) - Number(held.has('KeyD')));
       setDraft((previous) => ({ ...previous, yaw_rate }));
-      onChange({ yaw_rate }, true);
+      onChange({ yaw_rate });
     }
 
     function changeTilt(code: keyof typeof tiltKeys) {
@@ -191,9 +220,9 @@ export const ControlPanel = memo(function ControlPanel({
           (binding.axis === axis && held.has(key) ? binding.direction : 0),
         0
       );
-      const value = KEY_TILT * direction;
+      const value = manual.tilt * direction;
       setDraft((previous) => ({ ...previous, [axis]: value }));
-      onChange({ [axis]: value }, true);
+      onChange({ [axis]: value });
     }
 
     function keydown(event: KeyboardEvent) {
@@ -260,7 +289,7 @@ export const ControlPanel = memo(function ControlPanel({
       window.removeEventListener('keyup', keyup);
       window.removeEventListener('blur', blur);
     };
-  }, [available, settings.enabled, open, onChange, onStop]);
+  }, [available, settings.enabled, open, onChange, onStop, manual]);
 
   return (
     <section
@@ -275,6 +304,7 @@ export const ControlPanel = memo(function ControlPanel({
           open={open}
           onOpenChange={(value) => {
             setOpen(value);
+            if (value) setManualDraft(manual);
             if (value)
               setGains(
                 Object.fromEntries(
@@ -316,6 +346,14 @@ export const ControlPanel = memo(function ControlPanel({
                     ])
                   )
                 );
+                const next = {
+                  tilt: Number(manualDraft.tilt),
+                  yaw: Number(manualDraft.yaw),
+                };
+                setManual(next);
+                try {
+                  localStorage.setItem(MANUAL_KEY, JSON.stringify(next));
+                } catch {}
                 setOpen(false);
               }}
             >
@@ -370,6 +408,77 @@ export const ControlPanel = memo(function ControlPanel({
                   </div>
                 </section>
               )}
+              {settings.roll_bias !== undefined && (
+                <section className="space-y-3">
+                  <h3 className="font-medium">Bias and thrust scale</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    {biasFields.map(({ key, label, min, max }) => (
+                      <label
+                        key={key}
+                        className="flex items-center justify-between gap-3"
+                      >
+                        {label}
+                        <Input
+                          className="w-32"
+                          aria-label={label}
+                          type="number"
+                          min={min}
+                          max={max}
+                          step="any"
+                          required
+                          value={gains[key] ?? ''}
+                          onChange={(event) =>
+                            setGains({ ...gains, [key]: event.target.value })
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </section>
+              )}
+              <section className="space-y-3">
+                <h3 className="font-medium">Manual inputs</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="flex items-center justify-between gap-3">
+                    Pitch/roll step (°)
+                    <Input
+                      className="w-32"
+                      aria-label="Pitch/roll step (°)"
+                      type="number"
+                      min={0}
+                      max={15}
+                      step="any"
+                      required
+                      value={manualDraft.tilt}
+                      onChange={(event) =>
+                        setManualDraft({
+                          ...manualDraft,
+                          tilt: Number(event.target.value),
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-3">
+                    Yaw rate (°/s)
+                    <Input
+                      className="w-32"
+                      aria-label="Yaw rate (°/s)"
+                      type="number"
+                      min={0}
+                      max={45}
+                      step="any"
+                      required
+                      value={manualDraft.yaw}
+                      onChange={(event) =>
+                        setManualDraft({
+                          ...manualDraft,
+                          yaw: Number(event.target.value),
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+              </section>
               <Button
                 type="submit"
                 variant="outline"
@@ -450,7 +559,7 @@ export const ControlPanel = memo(function ControlPanel({
         disabled={!available || !settings.enabled}
         onClick={() => {
           setDraft((previous) => ({ ...previous, roll: 0, pitch: 0 }));
-          onChange({ roll: 0, pitch: 0 }, true);
+          onChange({ roll: 0, pitch: 0 });
         }}
       >
         Level

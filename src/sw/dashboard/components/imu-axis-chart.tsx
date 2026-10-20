@@ -35,13 +35,13 @@ function relativeTime(time: number, end: number) {
 }
 
 export const ImuAxisChart = memo(function ImuAxisChart({
-  samples,
+  history,
   field,
   start,
   end,
   digits,
 }: {
-  samples: ImuSample[];
+  history: (start: number, end: number) => ImuSample[];
   field: 'accel' | 'gyro';
   start: number;
   end: number;
@@ -49,7 +49,7 @@ export const ImuAxisChart = memo(function ImuAxisChart({
 }) {
   return (
     <FastChart
-      data={samples}
+      history={history}
       series={series[field]}
       time={time}
       start={start}

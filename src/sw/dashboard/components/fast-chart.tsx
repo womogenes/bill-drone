@@ -9,7 +9,7 @@ export type ChartSeries<T> = {
 };
 
 export function FastChart<T>({
-  data,
+  history,
   series,
   time,
   start,
@@ -19,7 +19,7 @@ export function FastChart<T>({
   gap,
   label,
 }: {
-  data: readonly T[];
+  history: (start: number, end: number) => readonly T[];
   series: readonly ChartSeries<T>[];
   time: (point: T) => number;
   start: number;
@@ -35,7 +35,7 @@ export function FastChart<T>({
   const pointer = useRef<number | null>(null);
 
   const current = useRef({
-    data,
+    history,
     series,
     time,
     start,
@@ -59,7 +59,7 @@ export function FastChart<T>({
     function draw() {
       frame = 0;
       const {
-        data: visible,
+        history,
         series,
         time,
         start,
@@ -68,6 +68,7 @@ export function FastChart<T>({
         formatValue,
         gap,
       } = current.current;
+      const visible = history(start, end);
       const width = host.clientWidth;
       const height = host.clientHeight;
       const ratio = window.devicePixelRatio || 1;
@@ -254,7 +255,7 @@ export function FastChart<T>({
 
   useEffect(() => {
     current.current = {
-      data: data.filter((point) => time(point) >= start && time(point) <= end),
+      history,
       series,
       time,
       start,
@@ -264,7 +265,7 @@ export function FastChart<T>({
       gap,
     };
     redraw.current();
-  }, [data, series, time, start, end, formatTime, formatValue, gap]);
+  }, [history, series, time, start, end, formatTime, formatValue, gap]);
 
   return (
     <div ref={container} className="relative h-40 w-full">
