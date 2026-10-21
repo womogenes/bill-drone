@@ -25,7 +25,7 @@ Actuator parameters are estimates:
 - Thrust-command delay: 20 ms, followed by a 50 ms response time constant.
 - Servo play: ±0.5°, implemented by holding the target until the command takes up
   the slack. Load-driven movement inside the gear clearance is omitted.
-- Servo command filter: 60 ms; stiffness: 5 N·m/rad; damping: 0.15 N·m·s/rad.
+- Servo PWM is 100 Hz (was 50 Hz until 2026-10-21). Servo command filter: 60 ms; stiffness: 5 N·m/rad; damping: 0.15 N·m·s/rad.
 - Servo torque limit: ±0.8 N·m; travel: ±60°.
 - Maximum thrust: approximately 11.22 N per motor, from the calibrated curve.
 - Propeller reaction torque: ±0.015 N·m per newton of thrust, with opposite spins.

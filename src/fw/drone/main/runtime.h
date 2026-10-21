@@ -11,7 +11,7 @@
 // MPU6050 DLPF_CFG: 3 is 42 Hz gyro bandwidth with 4.8 ms delay, 2 is 98 Hz with 2.8 ms but aliases vibration above the 50 Hz Nyquist rate.
 #define IMU_DLPF 3
 // MG995 analog servos stay at the standard 50 Hz. ESC refresh is independent; 50 and 400 Hz both use 1000–2200 us pulses.
-#define SERVO_HZ 50
+#define SERVO_HZ 100
 #define ESC_HZ 400
 // Raw sensor axes to body X forward, Y left, Z up. Confirmed by nose-down and left-side-up checks.
 static const int sensor_to_body[3] = {1, -1, -1};
