@@ -14,7 +14,12 @@ from fw.controller.log_format import HEADER_FORMAT, HEADER_SIZE, SAMPLE_FORMAT, 
 
 
 def read_flight(path):
-    metadata = json.loads(path.with_suffix(".jsonl").read_text().splitlines()[0])
+    # The start line, plus the drone's metadata when it arrived after the session started.
+    metadata = {}
+    for line in path.with_suffix(".jsonl").read_text().splitlines():
+        event = json.loads(line)
+        if event["type"] in ("start", "metadata"):
+            metadata = event | metadata
     bias = [math.degrees(value) for value in metadata["gyro_bias_rad_s"]]
     signs = metadata["sensor_to_body"]
     rows = []

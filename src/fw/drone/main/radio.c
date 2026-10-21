@@ -247,6 +247,8 @@ static void next_log_message(void) {
         portENTER_CRITICAL(&lock);
         streamed_session = state.session;
         session_open = true;
+        // Every recording gets the metadata, even when the laptop service restarted since it last arrived.
+        meta_dirty = meta_length > 0;
         portEXIT_CRITICAL(&lock);
     } else if (send_meta) {
         log_channel = 3;
@@ -374,7 +376,8 @@ static void describe(char *text, size_t size, const esp_partition_t *partition) 
 }
 
 // Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset,
-// S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo.
+// S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, Q set the accelerometer
+// correction (offset x, y, z then gain x, y, z as float32).
 // Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
@@ -385,7 +388,7 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         *size = op == 'S' ? settings_json(text, REPLY - 5) : settings_schema(text, REPLY - 5, length ? body[0] : 0);
         return *size ? NULL : "Settings do not fit the reply";
     }
-    if (op == 'T' || op == 'G' || op == 'Z') {
+    if (op == 'T' || op == 'G' || op == 'Z' || op == 'Q') {
         // Each of these ends in an NVS write, which is only allowed while disarmed.
         if (!flight_runtime_idle()) return "Disarm and zero throttle first";
         int64_t now = esp_timer_get_time();
@@ -399,6 +402,17 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
             int index = SETTING_pitch_trim;
             float zero = 0;
             settings_change(&index, &zero, 1, now);
+        } else if (op == 'Q') {
+            if (length != 24) return "Expected six float32 values";
+            int indices[6];
+            float values[6];
+            memcpy(values, body, sizeof(values));
+            for (int i = 0; i < 6; i++) {
+                indices[i] = (i < 3 ? SETTING_accel_offset_x : SETTING_accel_gain_x) + i % 3;
+                const char *failure = settings_validate(indices[i], values[i], error, sizeof(error));
+                if (failure) return failure;
+            }
+            settings_change(indices, values, 6, now);
         } else {
             if (length != 1 || body[0] > 1) return "Expected side 0 or 1";
             float offset;
