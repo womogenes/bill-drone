@@ -54,12 +54,18 @@ void flight_attitude(Attitude *state, const Motion *m) {
 #define MIN_THRUST 0.3f
 // A servo command reverses direction only after moving this far back, so gyro noise cannot toggle the compensation.
 #define COMPENSATION_HYSTERESIS (0.3f * 3.14159265f / 180)
+// Most tilt velocity damping may add to the roll/pitch target.
+#define VELOCITY_TILT (8.0f * 3.14159265f / 180)
 
 // Integrators start from the configured bias so liftoff already counters a known disturbance.
 void flight_reset(Controller *state, const Command *c) {
     state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);
     state->pitch_i = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit);
     state->comp_dir[0] = state->comp_dir[1] = state->comp_ref[0] = state->comp_ref[1] = 0;
+    state->airborne = 0;
+    state->setpoint_roll = c->roll;
+    state->setpoint_pitch = c->pitch;
+    state->velocity[0] = state->velocity[1] = 0;
 }
 
 static float compensate(Controller *state, int side, float angle, float amount) {
@@ -92,8 +98,26 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
         state->right_angle = clamp(c->right_trim, model->servo_min, model->servo_max);
         return;
     }
-    float roll_error = c->target_roll - c->roll;
-    float pitch_error = c->target_pitch + trim - c->pitch;
+    // On the ground the setpoint follows the measured attitude, so a sloped surface is no error. Once collective first
+    // reaches integrate_throttle it ramps to the target at target_rate: liftoff levels off instead of stepping.
+    if (c->base >= c->integrate_throttle) state->airborne = 1;
+    if (!state->airborne) {
+        state->setpoint_roll = c->roll;
+        state->setpoint_pitch = c->pitch;
+    } else {
+        // Dead-reckoned horizontal velocity: tilt accelerates the vehicle at g * tan(tilt); the leak bounds attitude-error drift.
+        // Positive roll (right side down) moves right; positive pitch (nose down) moves forward.
+        float keep = expf(-c->dt / c->velocity_leak);
+        state->velocity[0] = keep * state->velocity[0] + 9.81f * tanf(c->roll) * c->dt;
+        state->velocity[1] = keep * state->velocity[1] + 9.81f * tanf(c->pitch) * c->dt;
+        float brake_roll = clamp(-c->velocity_damping * state->velocity[0], -VELOCITY_TILT, VELOCITY_TILT);
+        float brake_pitch = clamp(-c->velocity_damping * state->velocity[1], -VELOCITY_TILT, VELOCITY_TILT);
+        float step = c->target_rate * c->dt;
+        state->setpoint_roll += clamp(c->target_roll + brake_roll - state->setpoint_roll, -step, step);
+        state->setpoint_pitch += clamp(c->target_pitch + trim + brake_pitch - state->setpoint_pitch, -step, step);
+    }
+    float roll_error = state->setpoint_roll - c->roll;
+    float pitch_error = state->setpoint_pitch - c->pitch;
     // Below integrate_throttle the feet are still down: integrating an error the ground holds would only wind up.
     if (c->base < c->integrate_throttle) {
         state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);

@@ -17,7 +17,7 @@
 #define WINDOW 4
 #define OUTGOING_MAX 8
 
-static const uint8_t drone_mac[6] = {0xb0, 0x3f, 0xd3, 0x52, 0x5c, 0x60};
+static const uint8_t drone_mac[6] = {0x20, 0x50, 0x0d, 0x8b, 0x7e, 0x68};
 
 typedef struct {
     uint8_t length;

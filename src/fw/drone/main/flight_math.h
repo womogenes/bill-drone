@@ -7,7 +7,9 @@
 typedef struct { float roll, pitch; } Attitude;
 typedef struct { float ax, ay, az, gx, gy, gz, dt, gravity_tau; } Motion;
 // comp_dir/comp_ref: each servo's last commanded direction (+1, -1, or 0 before it moved) and its extreme since.
-typedef struct { float roll_i, pitch_i, left, right, left_angle, right_angle, comp_dir[2], comp_ref[2]; } Controller;
+// airborne latches once collective reaches integrate_throttle; setpoint_* is the ramped roll/pitch target (with trim);
+// velocity is the dead-reckoned (rightward, forward) velocity in m/s from g * tan(tilt).
+typedef struct { float roll_i, pitch_i, left, right, left_angle, right_angle, comp_dir[2], comp_ref[2], airborne, setpoint_roll, setpoint_pitch, velocity[2]; } Controller;
 typedef struct {
     float arm, pivot_height, com_x;
     float roll_inertia, pitch_inertia, yaw_inertia, reaction_torque_ratio;
@@ -26,6 +28,10 @@ typedef struct {
     float servo_compensation;
     // Collective throttle below which the integrators hold their biases (on the ground).
     float integrate_throttle;
+    // Fastest change of the roll/pitch setpoint, rad/s: after liftoff it moves from the ground attitude to the target.
+    float target_rate;
+    // Velocity damping: target tilt per m/s of dead-reckoned velocity (rad per m/s, 0 = off), and that estimate's leak time (s).
+    float velocity_damping, velocity_leak;
     Model model;
 } Command;
 

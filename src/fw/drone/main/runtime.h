@@ -13,8 +13,10 @@
 // MG995 analog servos stay at the standard 50 Hz. ESC refresh is independent; 50 and 400 Hz both use 1000–2200 us pulses.
 #define SERVO_HZ 100
 #define ESC_HZ 400
-// Raw sensor axes to body X forward, Y left, Z up. Confirmed by nose-down and left-side-up checks.
-static const int sensor_to_body[3] = {1, -1, -1};
+// Raw sensor axes to body X forward, Y left, Z up: body axis i is sensor_to_body[i] times sensor axis sensor_axis[i].
+// The replacement IMU is turned -90° about body Y, so its X points up and its Z forward.
+static const int sensor_axis[3] = {2, 1, 0};
+static const int sensor_to_body[3] = {1, -1, 1};
 
 // The drone's periodic status message on direct channel 0; decoded by controller/bridge.py STATUS_FORMAT.
 typedef struct __attribute__((packed)) {

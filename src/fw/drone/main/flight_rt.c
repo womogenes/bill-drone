@@ -121,9 +121,10 @@ static esp_err_t write_mpu(uint8_t reg, uint8_t value) {
     return i2c_master_write_to_device(I2C_NUM_0, MPU, data, sizeof(data), pdMS_TO_TICKS(10));
 }
 
-// Sign bits (x 1, y 2, z 4) of the sensor-to-body mapping.
+// Sign bits (x 1, y 2, z 4) of the sensor-to-body mapping, plus its axis order from bit 3; 0 there is the identity order.
 static float frame(void) {
-    return (config.accel_scale[0] < 0) | (config.accel_scale[1] < 0) << 1 | (config.accel_scale[2] < 0) << 2;
+    return (config.accel_scale[0] < 0) | (config.accel_scale[1] < 0) << 1 | (config.accel_scale[2] < 0) << 2 |
+           sensor_axis[0] << 3 | (sensor_axis[1] ^ 1) << 5 | (sensor_axis[2] ^ 2) << 7;
 }
 
 static Attitude relative_attitude(const State *value) {
@@ -196,8 +197,14 @@ static void runtime_task(void *arg) {
             continue;
         }
 
-        int16_t raw[7];
-        for (int i = 0; i < 7; i++) raw[i] = (int16_t)((data[1 + i * 2] << 8) | data[2 + i * 2]);
+        int16_t sensor[7], raw[7];
+        for (int i = 0; i < 7; i++) sensor[i] = (int16_t)((data[1 + i * 2] << 8) | data[2 + i * 2]);
+        // Reordered to body axes, so the log's raw values need only the signs.
+        raw[3] = sensor[3];
+        for (int i = 0; i < 3; i++) {
+            raw[i] = sensor[sensor_axis[i]];
+            raw[4 + i] = sensor[4 + sensor_axis[i]];
+        }
         float dt = previous ? (now - previous) / 1000000.0f : 1.0f / SAMPLE_HZ;
         if (state.enabled && previous && now - previous > MAX_SAMPLE_MS * 1000ULL) stop_locked(5);
         for (int i = 0; i < 3; i++) {
