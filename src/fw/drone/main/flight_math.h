@@ -6,7 +6,8 @@
 // Angles/rates are radians. Shared by the drone and the host simulation (sw/sim/flight.py).
 typedef struct { float roll, pitch; } Attitude;
 typedef struct { float ax, ay, az, gx, gy, gz, dt, gravity_tau; } Motion;
-typedef struct { float roll_i, pitch_i, left, right, left_angle, right_angle; } Controller;
+// comp_dir/comp_ref: each servo's last commanded direction (+1, -1, or 0 before it moved) and its extreme since.
+typedef struct { float roll_i, pitch_i, left, right, left_angle, right_angle, comp_dir[2], comp_ref[2]; } Controller;
 typedef struct {
     float arm, pivot_height, com_x;
     float roll_inertia, pitch_inertia, yaw_inertia, reaction_torque_ratio;
@@ -21,6 +22,8 @@ typedef struct {
     float roll_bias, pitch_bias, yaw_bias;
     // Per-motor thrust multipliers; requested newtons are divided by these before the throttle lookup.
     float left_thrust_scale, right_thrust_scale;
+    // Added to each servo command in the direction it last moved, to take up the servo's deadband and gear play.
+    float servo_compensation;
     Model model;
 } Command;
 

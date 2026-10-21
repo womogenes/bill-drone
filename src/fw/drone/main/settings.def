@@ -26,6 +26,7 @@ TUNE(pitch_bias, pitch_bias, 1, -10, 10, 0)
 TUNE(yaw_bias, yaw_bias, 1, -10, 10, 0)
 TUNE(left_thrust_scale, left_thrust_scale, 1, 0.5, 1.5, 1)
 TUNE(right_thrust_scale, right_thrust_scale, 1, 0.5, 1.5, 1)
+TUNE(servo_compensation, servo_compensation, RAD, 0, 3, 0.75)
 STATE(servo_offset_left, -60, 60, -3)
 STATE(servo_offset_right, -60, 60, 0)
 // Gyro bias in rad/s and the stationary pose in degrees, valid only for the sensor frame they were taken in:

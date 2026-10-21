@@ -18,7 +18,7 @@ def run(gains, plant, seconds=10.0, seed=0):
     rng = random.Random(seed)
     settings = dict(MODEL) | {"roll": 0, "pitch": 0, "yaw_rate": 0, "pitch_trim": 0, "left_trim": 0, "right_trim": 0,
                                "roll_bias": 0, "pitch_bias": 0, "yaw_bias": 0, "left_thrust_scale": 1, "right_thrust_scale": 1,
-                               "reaction_torque_ratio": 0.015} | gains
+                               "reaction_torque_ratio": 0.015, "servo_compensation": 0.75} | gains
     k = plant["thrust_k"]
     settings["base_throttle"] = round(throttle(WEIGHT / 2 / k))
     controller = Controller()
@@ -39,6 +39,9 @@ def run(gains, plant, seconds=10.0, seed=0):
     scales = [k * (1 - plant["imbalance"] / 2), k * (1 + plant["imbalance"] / 2)]
     worst, late = 0.0, []
     gyro_filter = [0.0, 0.0, 0.0]
+    # The servo electronics ignore a command until it differs from the last accepted one by more than the deadband.
+    accepted = [0.0, 0.0]
+    deadband = math.radians(plant["deadband"])
     for step in range(int(seconds / DT)):
         noise = [rng.gauss(0, math.radians(plant["gyro_noise"])) for _ in range(3)]
         gyro_filter = [g + 0.7 * (r + n - g) for g, r, n in zip(gyro_filter, rate, noise)]
@@ -46,7 +49,10 @@ def run(gains, plant, seconds=10.0, seed=0):
         motor_queue.append((left, right))
         servo_queue.append((left_angle * MODEL["left_servo_direction"], right_angle * MODEL["right_servo_direction"]))
         target_throttle = motor_queue.popleft()
-        target_servo = servo_queue.popleft()
+        for side, angle in enumerate(servo_queue.popleft()):
+            if abs(angle - accepted[side]) > deadband:
+                accepted[side] = angle
+        target_servo = accepted
         for _ in range(SUB):
             h = DT / SUB
             for side in range(2):
@@ -80,7 +86,7 @@ def run(gains, plant, seconds=10.0, seed=0):
 
 
 NOMINAL = {"thrust_k": 0.93, "height": 1.0, "roll_inertia": 1.0, "pitch_inertia": 1.0, "yaw_inertia": 1.0, "motor_delay": 0.02, "motor_tau": 0.05,
-               "servo_delay": 0.04, "servo_tau": 0.06, "backlash": 0.5, "servo_slew": 600, "imbalance": 0.06, "com_x": 0.002, "gyro_noise": 2.0}
+               "servo_delay": 0.04, "servo_tau": 0.06, "backlash": 0.5, "deadband": 0.45, "servo_slew": 600, "imbalance": 0.06, "com_x": 0.002, "gyro_noise": 2.0}
 # Plausible mismatch: pivot height ±40 %, inertia ×0.7–1.5, servo delay 40–70 ms (2026-10-21 bench: motion starts 50–60 ms after the command), motor delay 20–40 ms.
 PLANTS = [NOMINAL | {"height": h, "roll_inertia": i, "pitch_inertia": i, "yaw_inertia": i, "servo_delay": sd, "motor_delay": md}
           for h, i, sd, md in itertools.product((0.6, 1.0, 1.4), (0.7, 1.5), (0.04, 0.07), (0.02, 0.04))]

@@ -52,11 +52,26 @@ void flight_attitude(Attitude *state, const Motion *m) {
 }
 
 #define MIN_THRUST 0.3f
+// A servo command reverses direction only after moving this far back, so gyro noise cannot toggle the compensation.
+#define COMPENSATION_HYSTERESIS (0.3f * 3.14159265f / 180)
 
 // Integrators start from the configured bias so liftoff already counters a known disturbance.
 void flight_reset(Controller *state, const Command *c) {
     state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);
     state->pitch_i = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit);
+    state->comp_dir[0] = state->comp_dir[1] = state->comp_ref[0] = state->comp_ref[1] = 0;
+}
+
+static float compensate(Controller *state, int side, float angle, float amount) {
+    float *direction = &state->comp_dir[side], *extreme = &state->comp_ref[side];
+    if (*direction > 0 ? angle > *extreme : angle > *extreme + COMPENSATION_HYSTERESIS) {
+        *direction = 1;
+        *extreme = angle;
+    } else if (*direction < 0 ? angle < *extreme : angle < *extreme - COMPENSATION_HYSTERESIS) {
+        *direction = -1;
+        *extreme = angle;
+    }
+    return angle + *direction * amount;
 }
 
 void flight_control(Controller *state, const Command *c, const float *table, size_t count) {
@@ -95,10 +110,10 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     float left_horizontal = (forward - yaw_torque / model->arm) / 2;
     float right_horizontal = (forward + yaw_torque / model->arm) / 2;
 
-    state->left_angle = clamp(model->left_servo_direction * atan2f(left_horizontal, left_vertical) + c->left_trim,
-                              model->servo_min, model->servo_max);
-    state->right_angle = clamp(model->right_servo_direction * atan2f(right_horizontal, right_vertical) + c->right_trim,
-                               model->servo_min, model->servo_max);
+    float left_angle = model->left_servo_direction * atan2f(left_horizontal, left_vertical) + c->left_trim;
+    float right_angle = model->right_servo_direction * atan2f(right_horizontal, right_vertical) + c->right_trim;
+    state->left_angle = clamp(compensate(state, 0, left_angle, c->servo_compensation), model->servo_min, model->servo_max);
+    state->right_angle = clamp(compensate(state, 1, right_angle, c->servo_compensation), model->servo_min, model->servo_max);
     state->left = roundf(interpolate(hypotf(left_horizontal, left_vertical) / c->left_thrust_scale, table, count, 1));
     state->right = roundf(interpolate(hypotf(right_horizontal, right_vertical) / c->right_thrust_scale, table, count, 1));
 }

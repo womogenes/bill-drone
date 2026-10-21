@@ -41,6 +41,7 @@ export type ControlSettings = {
   yaw_bias: number;
   left_thrust_scale: number;
   right_thrust_scale: number;
+  servo_compensation: number;
 };
 
 // The drone service's recorder (src/fw/controller/bridge.py).
