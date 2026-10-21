@@ -46,43 +46,61 @@ for(var sx in [-1,1]) {
   smJoin(context,sid+("ribJoin"~sy),qUnion([body,smSolid(context,sid+("rib"~sy))]));
  }
  // Four-mm battery guides are symmetric front-to-back, including both hatch shoulders.
- smPoly(context,sid+"hanger",[[-12,-51],[12,-51],[12,-42],[6,-36],[6,-20],[14,-12],[-14,-12],[-6,-20],[-6,-36],[-12,-42]],vector(sx==1?18.5:-22.5,0,0),vector(1,0,0),vector(0,1,0),4);
+ smPoly(context,sid+"hanger",[[-12,-66],[12,-66],[12,-57],[9,-51],[9,-35],[14,-12],[-14,-12],[-9,-35],[-9,-51],[-12,-57]],vector(sx==1?18.5:-24.5,0,0),vector(1,0,0),vector(0,1,0),6);
  smJoin(context,sid+"hangerJoin",qUnion([body,smSolid(context,sid+"hanger")]));
+
 }
 // Single flat-bottom platform replaces the old IMU cap and directly clamps the beam.
-// Original M3 clamp centers (0,+/-10), underside z=5.3, and screw seats z=9.3 preserved.
-smPoly(context,id+"deck",[[-23,-45.5],[23,-45.5],[25,-43.5],[25,-18],[38,-14],[40,-12],[40,82],[38,84],[-38,84],[-40,82],[-40,-12],[-38,-14],[-25,-18],[-25,-43.5]],vector(0,0,5.3),vector(0,0,1),vector(1,0,0),3);
+// Original M3 clamp centers (0,+/-10) and underside z=5.3 preserved; M3 x 20 heads seat on the flat top (z=8.3).
+smPoly(context,id+"deck",[[-29,-54.7],[29,-54.7],[29,-45.5],[25,-43.5],[25,-18],[38,-14],[40,-12],[40,82],[38,84],[-38,84],[-40,82],[-40,-12],[-38,-14],[-25,-18],[-25,-43.5],[-29,-45.5]],vector(0,0,5.3),vector(0,0,1),vector(1,0,0),3);
 const deck=smSolid(context,id+"deck");
 for(var y in [-10,10]) {
  const sid=id+("tubeBolt0y"~y);
  smHole(context,sid,body,vector(0,y,-13),vector(0,0,1),3.5,23);
  smHex(context,sid+"nut",body,vector(0,y,-12.1),vector(0,0,1),vector(1,0,0),6.2,4.3);
- smCyl(context,sid+"deckBoss",vector(0,y,8.3),vector(0,0,1),5,2.7);
- smJoin(context,sid+"deckBossJoin",qUnion([deck,smSolid(context,sid+"deckBoss")]));
- smHole(context,sid+"deckBolt",deck,vector(0,y,5),vector(0,0,1),3.5,7);
- smHole(context,sid+"deckHead",deck,vector(0,y,9.3),vector(0,0,1),6.6,3);
+ smHole(context,sid+"deckBolt",deck,vector(0,y,5),vector(0,0,1),3.5,4);
 }
-// Perfboard 90 mm front/back (Y), 70 mm across (X). 66 x 86 mm M2 pattern.
+// Perfboard 90 mm front/back (Y), 70 mm across (X). 66 x 86 mm M2 pattern, on loose 5 mm spacers.
+// M2 x 10 from above through board, spacer and deck into a captive nut in the underside, so the top prints flat without supports.
 for(var x in [-33,33])for(var y in [-8,78]) {
  const pid=id+("perfboardMount"~x~"y"~y);
- smCyl(context,pid,vector(x,y,8.3),vector(0,0,1),4,5);
- smJoin(context,pid+"join",qUnion([deck,smSolid(context,pid)]));
- smHole(context,pid+"bolt",deck,vector(x,y,5),vector(0,0,1),2.4,9);
- smHex(context,pid+"nut",deck,vector(x,y,9.3),vector(0,0,1),vector(1,0,0),4.5,2);
- smBlock(context,pid+"entry",x>0?x:x-4.1,x>0?x+4.1:x,y-2.25,y+2.25,9.3,11.3);
- smCut(context,pid+"entryCut",deck,smSolid(context,pid+"entry"));
+ smHole(context,pid+"bolt",deck,vector(x,y,5),vector(0,0,1),2.4,4);
+ smHex(context,pid+"nut",deck,vector(x,y,5.1),vector(0,0,1),vector(1,0,0),4.5,2);
 }
 for(var x in [-19,19])for(var y in [-36,-24])
  smHole(context,id+("futureCameraHole"~x~"y"~y),deck,vector(x,y,5),vector(0,0,1),3.5,4);
 // Two windows retain a 14 mm central spine beneath the beam-clamping screws.
 for(var sx in [-1,1]) {
  const wid=id+("deckWindow"~sx);
- smBlock(context,wid,sx>0?7:-28,sx>0?28:-7,0,68,5,9);
+ smBlock(context,wid,sx>0?7:-28,sx>0?28:-7,16,68,5,9);
  smCut(context,wid+"cut",deck,smSolid(context,wid));
+}
+// Four shared bridge/frame screws: integral sleeves land on the original key seats.
+// 6.0 OD sleeves clear existing 6.6 head wells; 10 mm collars contact frame tops at Z=4.4.
+// M3 x 25 socket heads seat at Z=7.8; tips reach Z=-17.2, through the original M3 nuts.
+for(var x in [-24,24])for(var y in [-10,10]) {
+ const mid=id+("deckOuterMount"~x~"y"~y);
+ smBlock(context,mid+"collar",x-4.5,x+4.5,y-4.4,y+4.4,4.4,5.4);
+ smCyl(context,mid+"sleeve",vector(x,y,-5.3),vector(0,0,1),3,10.7);
+ smJoin(context,mid+"join",qUnion([deck,smSolid(context,mid+"collar"),smSolid(context,mid+"sleeve")]));
+ smHole(context,mid+"bolt",deck,vector(x,y,-5.4),vector(0,0,1),3.5,14);
+ smHole(context,mid+"headSeat",deck,vector(x,y,7.8),vector(0,0,1),6.2,1);
+}
+// Underside perimeter ribs and two cross ties stiffen the perfboard area; top stays flat for printing.
+for(var sx in [-1,1]) {
+ const rid=id+("deckEdgeRib"~sx);
+ smBlock(context,rid,sx>0?30:-35,sx>0?35:-30,16,58.8,2.3,5.4);
+ smJoin(context,rid+"join",qUnion([deck,smSolid(context,rid)]));
+}
+for(var y in [26,46]) {
+ const rid=id+("deckCrossRib"~y);
+ smBlock(context,rid,-31,31,y-2,y+2,3.3,8.3);
+ smJoin(context,rid+"join",qUnion([deck,smSolid(context,rid)]));
 }
 // Rear deck braces share the existing rear landing-leg screw holes and nuts.
 // 5.2-mm tabs move the M3 x 20 tips clear of the existing frame rail.
-smBlock(context,id+"deckRearTie",-35,35,58.7,63.9,5.3,8.3);
+// 8 mm deep so the rear tab roots join a solid bar, not the 3 mm plate.
+smBlock(context,id+"deckRearTie",-35,35,58.7,63.9,0.3,8.3);
 smJoin(context,id+"deckRearTieJoin",qUnion([deck,smSolid(context,id+"deckRearTie")]));
 for(var sx in [-1,1]) {
  const sid=id+("deckLegBrace"~sx);const x=sx*24;
@@ -92,18 +110,30 @@ for(var sx in [-1,1]) {
  smHole(context,sid+"bolt",deck,vector(x,64.2,-12),vector(0,-1,0),3.5,6);
  smBevel(context,sid+"bottomCorners",deck,[vector(x-5,61.3,-18),vector(x+5,61.3,-18)],1);
 }
+// The camera end hangs two 4 mm tabs between the front landing frame and the side-frame mount bosses, clamped by
+// the front landing-leg screws (M3 x 16 -> M3 x 20; the front frame sits 4 mm further forward).
+// Continuous underside ramp: rises 7 mm over 5.2 mm, with 0.3 mm clearance above the blue frame.
+smPoly(context,id+"deckFrontSlab",[[-54.7,-1.7],[-50.7,-1.7],[-45.5,5.3],[-54.7,5.3]],vector(-29,0,0),vector(1,0,0),vector(0,1,0),58);
+smJoin(context,id+"deckFrontSlabJoin",qUnion([deck,smSolid(context,id+"deckFrontSlab")]));
+for(var sx in [-1,1]) {
+ const sid=id+("deckFrontTab"~sx);const x=sx*24;
+ smBlock(context,sid,x-5,x+5,-54.7,-50.7,-19,5.3);
+ smJoin(context,sid+"join",qUnion([deck,smSolid(context,sid)]));
+ smHole(context,sid+"bolt",deck,vector(x,-55,-12),vector(0,1,0),3.5,5);
+}
+smBevel(context,id+"deckFrontEdge",deck,[vector(0,-54.7,8.3)],1);
 smLabel(context,deck,"Electronics deck",orange);
 // Slender diagonal webs grow at 45 degrees from the central hanger feet.
 // They brace the landing rails and reduce the unsupported underside during printing.
 for(var sx in [-1,1])for(var sy in [-1,1]) {
  const bid=id+("landingWeb"~sx~"y"~sy);
- smPoly(context,bid,[[sy*14,-50],[sy*50.7,-13.3],[sy*50.7,-7.3],[sy*14,-44]],vector(sx==1?18.5:-21.5,0,0),vector(1,0,0),vector(0,1,0),3);
+ smPoly(context,bid,[[sy*14,-65],[sy*50.7,-13.3],[sy*50.7,-7.3],[sy*14,-59]],vector(sx==1?18.5:-22.5,0,0),vector(1,0,0),vector(0,1,0),4);
  smJoin(context,bid+"join",qUnion([body,smSolid(context,bid)]));
 }
 // Closed landing frames with extended tapered haunches and a flat foot tie.
 // Keep the 8 mm mounting thickness and all shared deck/frame bolt interfaces.
 for(var side in [-1,1]){
- const sid=id+("gear"~side); const gy=side==-1?-50.7:58.7;
+ const sid=id+("gear"~side); const gy=side==-1?-54.7:58.7;
  smPoly(context,sid+"shape",[[-29,-2],[29,-2],[29,-19],[78,-80],[78,-87],[62,-87],[62,-80],[8,-24],[-8,-24],[-62,-80],[-62,-87],[-78,-87],[-78,-80],[-29,-19]],vector(0,gy,0),vector(0,-1,0),vector(1,0,0),8);
  const gear=smSolid(context,sid+"shape");
  smBlock(context,sid+"footTie",-62,62,gy-8,gy,-87,-80);
@@ -129,14 +159,14 @@ for(var side in [-1,1]){
 // Two bottom-up hatch screws remain threaded in side-loaded nuts during battery changes.
 for(var side in [-1,1]) {
  const hid=id+("hatchBoss"~side);const x=side*28;
- smBlock(context,hid,side==1?18.5:-34,side==1?34:-18.5,-14,14,-51,-38);
+ smBlock(context,hid,side==1?18.5:-34,side==1?34:-18.5,-14,14,-66,-53);
  smJoin(context,hid+"join",qUnion([body,smSolid(context,hid)]));
- smHole(context,hid+"bolt",body,vector(x,0,-52),vector(0,0,1),3.5,15);
- smHex(context,hid+"nut",body,vector(x,0,-45),vector(0,0,1),vector(1,0,0),6.2,3.2);
- smBlock(context,hid+"entry",side==1?28:-34.1,side==1?34.1:-28,-3.1,3.1,-45,-41.8);
+ smHole(context,hid+"bolt",body,vector(x,0,-67),vector(0,0,1),3.5,15);
+ smHex(context,hid+"nut",body,vector(x,0,-60),vector(0,0,1),vector(1,0,0),6.2,3.2);
+ smBlock(context,hid+"entry",side==1?28:-34.1,side==1?34.1:-28,-3.1,3.1,-60,-56.8);
  smCut(context,hid+"entryCut",body,smSolid(context,hid+"entry"));
  // Matching front/rear sockets let either frame accept the unchanged hatch pegs.
- for(var y in [-9,9])smHole(context,hid+("index"~y),body,vector(x,y,-51.1),vector(0,0,1),4.6,1.9);
+ for(var y in [-9,9])smHole(context,hid+("index"~y),body,vector(x,y,-66.1),vector(0,0,1),4.6,1.9);
 }
 // Flat-printing battery hatch: loosen M3 x 16 socket screws four turns, lower 2 mm,
 // slide 7 mm toward the camera, then lower hatch and battery through the large keyholes.
@@ -176,16 +206,18 @@ for(var x in [-17,11])padEdges=concatenateArrays([padEdges,[vector(x,0,-48),vect
 smBevel(context,id+"hatchPadBevel",hatch,padEdges,0.4);
 smBevel(context,id+"hatchStopBevel",hatch,[vector(0,-37.5,-43.8),vector(0,37.5,-43.8)],0.4);
 smLabel(context,hatch,"Battery hatch",orange);
+// Existing hatch is reused unchanged, mounted 15 mm lower.
+opTransform(context,id+"lowerHatch",{"bodies":hatch,"transform":transform(vector(0,0,-15)*millimeter)});
 // Three printable modules. Side frames lie on their broad inner faces; the bridge
 // lies on its bottom face. Split gaps leave 0.3 mm between the assembled modules.
 for(var sx in [-1,1]) {
  const sid=id+("moduleGap"~sx);
- smBlock(context,sid,sx==1?18.2:-18.5,sx==1?18.5:-18.2,-80,80,-60,10);
+ smBlock(context,sid,sx==1?18.2:-18.5,sx==1?18.5:-18.2,-80,80,-80,10);
  smCut(context,sid+"cut",body,smSolid(context,sid));
 }
 const bridge=qContainsPoint(body,vector(5,10,-8)*millimeter);
-const leftFrame=qContainsPoint(body,vector(-20,0,-40)*millimeter);
-const rightFrame=qContainsPoint(body,vector(20,0,-40)*millimeter);
+const leftFrame=qContainsPoint(body,vector(-20,0,-55)*millimeter);
+const rightFrame=qContainsPoint(body,vector(20,0,-55)*millimeter);
 for(var sx in [-1,1])for(var y in [-10,10]) {
  const jid=id+("moduleJoint"~sx~"y"~y);const frame=sx==1?rightFrame:leftFrame;
  // Large shoulders and deep tongues carry vertical/bending loads; screws clamp
@@ -215,13 +247,33 @@ for(var sx in [-1,1]) {
   for(var y in [5.5,15])points=append(points,vector(sx*26,sy*y,4.4));
   for(var y in [5,15])points=append(points,vector(sx*26,sy*y,-20));
   for(var y in [44.7,50.7])for(var z in [-2,-19])points=append(points,vector(sx*26,sy*y,z));
-  for(var z in [-38,-51])points=append(points,vector(sx*30,sy*14,z));
+  for(var z in [-53,-66])points=append(points,vector(sx*30,sy*14,z));
  }
  smBevel(context,id+("frameCornerChamfers"~sx),frame,points,1);
 }
 smLabel(context,bridge,"Beam bridge",blue);
+// Round the widened hanger neck transitions to distribute bending into the upper frame.
+for(var sx in [-1,1]) {
+ const frame=sx==1?rightFrame:leftFrame;
+ opFillet(context,id+("hangerNeckRounds"~sx),{"entities":qUnion([qContainsPoint(qOwnedByBody(frame,EntityType.EDGE),vector(sx*21.5,9,-35)*millimeter),qContainsPoint(qOwnedByBody(frame,EntityType.EDGE),vector(sx*21.5,-9,-35)*millimeter)]),"radius":3*millimeter});
+}
 smLabel(context,leftFrame,"Left side frame",blue);
 smLabel(context,rightFrame,"Right side frame",blue);
+// Separate slide-in battery stops: frames retain a flat inner print face.
+// A rectangular tongue carries upward load; one M3 x 8 screw per stop prevents withdrawal.
+for(var sx in [-1,1]) {
+ const frame=sx==1?rightFrame:leftFrame;const rid=id+("batteryStopSlide"~sx);
+ smPoly(context,rid+"slot",[[-5,-27.8],[5,-27.8],[5.3,-27.5],[5.3,-23.5],[5,-23.2],[-5,-23.2],[-5.3,-23.5],[-5.3,-27.5]],vector(sx>0?18:-25,0,0),vector(1,0,0),vector(0,1,0),7);
+ smCut(context,rid+"slotCut",frame,smSolid(context,rid+"slot"));
+ smHole(context,rid+"bolt",frame,vector(sx>0?18:-25,0,-33.5),vector(1,0,0),3.5,7);
+ smHex(context,rid+"nut",frame,vector(sx>0?18.4:-21.7,0,-33.5),vector(1,0,0),vector(0,1,0),6.2,3.3);
+ smPoly(context,rid+"tab",[[-4.7,-27.5],[4.7,-27.5],[5,-27.2],[5,-23.8],[4.7,-23.5],[-4.7,-23.5],[-5,-23.8],[-5,-27.2]],vector(sx>0?13.5:-27.5,0,0),vector(1,0,0),vector(0,1,0),14);
+ const stop=smSolid(context,rid+"tab");
+ smPoly(context,rid+"flange",[[-4.4,-37.5],[4.4,-37.5],[5,-36.9],[5,-24.1],[4.4,-23.5],[-4.4,-23.5],[-5,-24.1],[-5,-36.9]],vector(sx>0?24.5:-27.5,0,0),vector(1,0,0),vector(0,1,0),3);
+ smJoin(context,rid+"join",qUnion([stop,smSolid(context,rid+"flange")]));
+ smHole(context,rid+"stopBolt",stop,vector(sx>0?24:-28,0,-33.5),vector(1,0,0),3.5,4);
+ smLabel(context,stop,sx>0?"Right battery retaining stop":"Left battery retaining stop",orange);
+}
 
 // Symmetric four-bolt camera clamp, centered on the deck's Y=-30 mounting pattern.
 smPoly(context,id+"cameraCollar",[[-23,-42],[23,-42],[24,-41],[24,-19],[23,-18],[-23,-18],[-24,-19],[-24,-41]],vector(0,0,8.3),vector(0,0,1),vector(1,0,0),3);
@@ -249,9 +301,28 @@ for(var side in [-1,1])for(var x in [-10.5,10.5]) {
 smBevel(context,id+"cameraBarCorners",cameraMount,[vector(-14.9,-37.2,16),vector(14.9,-37.2,16),vector(-14.9,-22.8,16),vector(14.9,-22.8,16)],0.5);
 smLabel(context,cameraMount,"Camera bottom clamp",blue);
 
+// Temporary lightweight bench deck; the perfboard links the narrow mounting rails.
+smBlock(context,id+"quickDeck",-7,7,-14,14,5.3,8.3);
+const quickDeck=smSolid(context,id+"quickDeck");
+for(var y in [-8,78]) {
+ const rid=id+("quickCross"~y);smBlock(context,rid,-37,37,y-3,y+3,6.3,8.3);smJoin(context,rid+"join",qUnion([quickDeck,smSolid(context,rid)]));
+}
+for(var side in [-1,1]) {
+ const rid=id+("quickDiagonal"~side);
+ smPoly(context,rid,[[side*2,8],[side*6,8],[side*35,78],[side*31,78]],vector(0,0,5.3),vector(0,0,1),vector(1,0,0),3);
+ smJoin(context,rid+"join",qUnion([quickDeck,smSolid(context,rid)]));
+}
+for(var x in [-33,33])for(var y in [-8,78]) {
+ const pid=id+("quickBoardPad"~x~"y"~y);smCyl(context,pid,vector(x,y,5.3),vector(0,0,1),4,3);smJoin(context,pid+"join",qUnion([quickDeck,smSolid(context,pid)]));
+ smHole(context,pid+"hole",quickDeck,vector(x,y,5),vector(0,0,1),2.4,4);
+ smHex(context,pid+"nut",quickDeck,vector(x,y,5.1),vector(0,0,1),vector(1,0,0),4.5,2);
+}
+for(var y in [-10,10])smHole(context,id+("quickBeam"~y),quickDeck,vector(0,y,5),vector(0,0,1),3.5,4);
+smLabel(context,quickDeck,"Bench deck - lightweight candidate",color(0.25,0.65,0.35));
+
 if(definition.refs){
  smBlock(context,id+"bar",-210,210,-5.25,5.25,-5,5);smLabel(context,smSolid(context,id+"bar"),"Carbon crossbar",color(0.12,0.13,0.14));
- smBlock(context,id+"battery",-18,18,-37,37,-48,-13);smLabel(context,smSolid(context,id+"battery"),"Battery envelope",color(0.35,0.35,0.38));
+ smBlock(context,id+"battery",-18,18,-37,37,-63,-28);smLabel(context,smSolid(context,id+"battery"),"Battery envelope",color(0.35,0.35,0.38));
  for(var px in [-172,172]){
   smCyl(context,id+("prop"~px),vector(px,0,94),vector(0,0,1),114.3,0.8);smLabel(context,smSolid(context,id+("prop"~px)),"Propeller swept envelope",color(0.7,0.75,0.8,0.18));
  }
