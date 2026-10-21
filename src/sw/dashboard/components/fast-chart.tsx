@@ -18,6 +18,7 @@ export function FastChart<T>({
   formatTime,
   formatValue,
   gap,
+  range,
   label,
 }: {
   history: (start: number, end: number) => readonly T[];
@@ -28,6 +29,7 @@ export function FastChart<T>({
   formatTime: (time: number, end: number) => string;
   formatValue: (value: number) => string;
   gap?: (previous: T, next: T) => boolean;
+  range?: readonly [number, number];
   label: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
@@ -44,6 +46,7 @@ export function FastChart<T>({
     formatTime,
     formatValue,
     gap,
+    range,
   });
   const redraw = useRef<() => void>(() => {});
 
@@ -68,6 +71,7 @@ export function FastChart<T>({
         formatTime,
         formatValue,
         gap,
+        range,
       } = current.current;
       const visible = history(start, end);
       const width = host.clientWidth;
@@ -93,23 +97,26 @@ export function FastChart<T>({
       context.font = font;
       let low = Infinity;
       let high = -Infinity;
-      for (const point of visible) {
-        for (const line of series) {
-          const value = line.value(point);
-          if (value !== null && Number.isFinite(value)) {
-            low = Math.min(low, value);
-            high = Math.max(high, value);
+      if (range) [low, high] = range;
+      else {
+        for (const point of visible) {
+          for (const line of series) {
+            const value = line.value(point);
+            if (value !== null && Number.isFinite(value)) {
+              low = Math.min(low, value);
+              high = Math.max(high, value);
+            }
           }
         }
+        if (low === Infinity) {
+          low = -1;
+          high = 1;
+        }
+        const padding =
+          (high - low) * 0.08 || Math.max(Math.abs(low) * 0.05, 0.01);
+        low -= padding;
+        high += padding;
       }
-      if (low === Infinity) {
-        low = -1;
-        high = 1;
-      }
-      const padding =
-        (high - low) * 0.08 || Math.max(Math.abs(low) * 0.05, 0.01);
-      low -= padding;
-      high += padding;
       const ticks = Array.from(
         { length: 5 },
         (_, index) => low + ((high - low) * index) / 4
@@ -264,9 +271,10 @@ export function FastChart<T>({
       formatTime,
       formatValue,
       gap,
+      range,
     };
     redraw.current();
-  }, [history, series, time, start, end, formatTime, formatValue, gap]);
+  }, [history, series, time, start, end, formatTime, formatValue, gap, range]);
 
   return (
     <div ref={container} className="relative h-40 w-full">

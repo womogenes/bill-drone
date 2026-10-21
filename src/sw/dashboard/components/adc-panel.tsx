@@ -6,10 +6,13 @@ import { FastChart, type ChartSeries } from '@/components/fast-chart';
 import type { VoltageSample } from '@/lib/telemetry';
 
 const RANGE = 60_000;
+// Nominal 4S LiPo span, 3.0 to 4.2 V per cell.
+const VOLTAGE_RANGE = [12, 16.8] as const;
 const series: ChartSeries<VoltageSample>[] = [
   {
     label: 'Raw',
-    color: 'var(--color-muted-foreground)',
+    color:
+      'color-mix(in oklab, var(--color-muted-foreground) 45%, transparent)',
     width: 1,
     value: (point) => point.voltage,
   },
@@ -85,6 +88,7 @@ export const ADCPanel = memo(function ADCPanel({
         start={end - RANGE}
         end={end}
         gap={gap}
+        range={VOLTAGE_RANGE}
         formatTime={relativeTime}
         formatValue={formatValue}
         label="Battery voltage over the last minute, raw and smoothed, in volts"
