@@ -77,6 +77,8 @@ export type Reading = {
   imu?: ImuReading | null;
   adc_raw?: number;
   adc_voltage?: number;
+  // Computed in the dashboard from adc_voltage.
+  voltage_ema?: number;
   actuators?: Record<Side, { servo_angle: number; throttle: number }>;
   time: number;
   force: number | null;
@@ -85,3 +87,10 @@ export type Reading = {
 };
 
 export type ImuSample = ImuReading & { time: number; session: number };
+
+export type VoltageSample = {
+  time: number;
+  session: number;
+  voltage: number;
+  ema: number;
+};

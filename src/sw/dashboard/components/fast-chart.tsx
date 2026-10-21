@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react';
 export type ChartSeries<T> = {
   label: string;
   color: string;
+  width?: number;
   value: (point: T) => number | null;
 };
 
@@ -150,7 +151,7 @@ export function FastChart<T>({
       context.clip();
       series.forEach((line, index) => {
         context.strokeStyle = colors[index + 2];
-        context.lineWidth = 1.5;
+        context.lineWidth = line.width ?? 1.5;
         context.beginPath();
         let previous: T | undefined;
         for (const point of visible) {

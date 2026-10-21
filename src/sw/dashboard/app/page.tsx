@@ -25,6 +25,7 @@ import type {
   Side,
   ControlSettings,
   Targets,
+  VoltageSample,
 } from '@/lib/telemetry';
 
 // The drone service (src/fw/controller/bridge.py) owns the controller USB link on this laptop.
@@ -38,6 +39,8 @@ const ZERO_TARGETS: Targets = {
   servo: [0, 0],
   throttle: [0, 0],
 };
+// Battery voltage EMA time constant; time-based so irregular packet timing doesn't change the smoothing.
+const VOLTAGE_TAU = 1500;
 
 const statuses = {
   offline: {
@@ -81,6 +84,7 @@ export default function Page() {
   const [calibrationPending, setCalibrationPending] = useState(false);
   const latestReading = useRef<Reading | null>(null);
   const [history] = useState(() => createHistory<ImuSample>());
+  const [voltageHistory] = useState(() => createHistory<VoltageSample>());
   const displayFrame = useRef<number | undefined>(undefined);
   const publishReading = useCallback(() => {
     if (displayFrame.current !== undefined) return;
@@ -121,6 +125,7 @@ export default function Page() {
     setCalibrationPending(false);
     latestReading.current = null;
     const session = Date.now();
+    let lastVoltage: VoltageSample | undefined;
     function offline() {
       if (socket.current !== ws) return;
       socket.current = null;
@@ -161,7 +166,22 @@ export default function Page() {
           data.control_status
         );
         const time = Date.now();
-        latestReading.current = { ...data, time };
+        if (data.adc_voltage !== undefined) {
+          const dt = lastVoltage ? time - lastVoltage.time : Infinity;
+          const ema =
+            dt > 1000
+              ? data.adc_voltage
+              : lastVoltage!.ema +
+                (1 - Math.exp(-dt / VOLTAGE_TAU)) *
+                  (data.adc_voltage - lastVoltage!.ema);
+          lastVoltage = { time, session, voltage: data.adc_voltage, ema };
+          voltageHistory.append(lastVoltage);
+        }
+        latestReading.current = {
+          ...data,
+          time,
+          voltage_ema: lastVoltage?.ema,
+        };
         publishReading();
         if (data.imu == null) return;
         history.append({ ...data.imu, time, session });
@@ -169,7 +189,7 @@ export default function Page() {
       offline
     );
     socket.current = ws;
-  }, [history, publishReading, setTargets]);
+  }, [history, voltageHistory, publishReading, setTargets]);
 
   useEffect(() => {
     const start = setTimeout(connect, 0);
@@ -336,6 +356,9 @@ export default function Page() {
           <ADCPanel
             raw={reading?.adc_raw}
             voltage={reading?.adc_voltage}
+            ema={reading?.voltage_ema}
+            history={voltageHistory.read}
+            time={reading?.time ?? 0}
             connected={status === 'connected'}
           />
         </div>
