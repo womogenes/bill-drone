@@ -55,7 +55,7 @@ One laptop service, `src/fw/controller/bridge.py`, owns the controller's USB por
 | 1 | laptop | Targets, sent immediately when controls change and every 50 ms while connected: collective, roll, pitch, yaw rate, and the servo angles and throttles used while disarmed. The newest wins; a late one is dropped. Each accepted packet is the controller heartbeat, so the native 500 ms watchdog stops the motors when they stop arriving. |
 | 2, 3 | drone | The flight log: `LGS1` start, `FLG1` batches, `LGE1` stop, and the metadata JSON. One message is in flight at a time; it is resent until acknowledged. |
 | 4, 5 | laptop | Recorder subscription (every second) and log acknowledgements. |
-| 6 | both | Id-tagged requests with cached replies: `X` stop, `A` arm, `G` calibrate, `Z` zero a servo, `T` tune, `S` read settings, and the update ops. |
+| 6 | both | Id-tagged requests with cached replies: `X` stop, `A` arm, `G` calibrate, `L` level reference, `Q` accel correction, `Z` zero a servo, `T` tune, `S` read settings, and the update ops. |
 
 Stop preempts everything: the drone applies it as it arrives, even during another request, and the service repeats it every 50 ms until the drone answers. Arming needs an explicit `A` after any stop, a calibrated IMU, zero streamed collective, a subscribed recorder and the previous recording fully sent. Target packets never arm. After a stop, manual throttle stays at zero until the laptop sends zero throttle. A zeroed servo holds still until its streamed angle returns to zero.
 
@@ -65,7 +65,7 @@ Each armed session becomes one recording, `src/sw/recordings/<time>_<session>.bi
 
 Sampling and control run at 100 Hz. Log batches of four samples go out every 40 ms. The rate and batch size are defined in `src/fw/drone/main/runtime.h`; the laptop decodes records with `src/fw/controller/log_format.py`.
 
-IMU calibration averages two seconds of gyro and gravity readings, then saves gyro bias and the zero-pose reference in NVS. Startup restores calibration when its sensor coordinate frame matches the firmware. Arming requires saved calibration; the calibration button stays busy until saving finishes. Recordings include calibration validity, gyro bias, and `pose_zero_deg`.
+IMU calibration averages two seconds of gyro readings, then saves the gyro bias in NVS; gravity re-seeds the attitude estimate. The level reference (`pose_zero`) is set separately with `make level` from two readings 180° apart on the same spot, which cancels floor tilt. Startup restores calibration when its sensor coordinate frame matches the firmware. Arming requires saved calibration; the calibration button stays busy until saving finishes. Recordings include calibration validity, gyro bias, and `pose_zero_deg`.
 
 ## Tuning from a terminal
 

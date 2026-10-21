@@ -3,7 +3,7 @@
 IDF_PATH ?= $(HOME)/esp/esp-idf
 IDF = bash -c 'source $(IDF_PATH)/export.sh >/dev/null && "$$@"' idf
 
-.PHONY: build deploy usb accel
+.PHONY: build deploy usb accel level
 build:
 	$(IDF) idf.py -C drone build
 
@@ -19,3 +19,7 @@ usb: build
 # Accelerometer calibration: hold the disarmed drone still in about ten orientations.
 accel:
 	uv run tools/accel_cal.py
+
+# Level reference: two still readings 180° apart on the same spot, which cancels floor tilt.
+level:
+	uv run tools/level.py

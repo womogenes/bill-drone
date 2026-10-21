@@ -1,6 +1,6 @@
 // The drone's settings: the one list that names, bounds, defaults and persists every value (settings.c).
 // TUNE(name, Command member, scale to the member, min, max, default): changed by the T request.
-// STATE(name, min, max, default): set only by IMU calibration (G) and servo zeroing (Z); read-only to T.
+// STATE(name, min, max, default): set only by IMU calibration (G), servo zeroing (Z), accel correction (Q) and the level reference (L); read-only to T.
 // Every entry is persisted in NVS. Angles are degrees here; RAD converts trims to the controller's radians.
 // Defaults match sw/sim/flight.py DEFAULT_TUNING and MODEL, which the host simulation uses.
 TUNE(roll_p, roll_p, 1, 0, 1000, 20)
@@ -33,6 +33,7 @@ STATE(servo_offset_right, -60, 60, 0)
 STATE(gyro_bias_x, -1, 1, 0)
 STATE(gyro_bias_y, -1, 1, 0)
 STATE(gyro_bias_z, -1, 1, 0)
+// The drone's level attitude as the IMU sees it, set by tools/level.py.
 STATE(pose_zero_roll, -180, 180, 0)
 STATE(pose_zero_pitch, -90, 90, 0)
 // Accelerometer correction in body axes, from tools/accel_cal.py: corrected = (measured - offset) * gain, in g.

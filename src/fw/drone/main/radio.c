@@ -388,7 +388,7 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         *size = op == 'S' ? settings_json(text, REPLY - 5) : settings_schema(text, REPLY - 5, length ? body[0] : 0);
         return *size ? NULL : "Settings do not fit the reply";
     }
-    if (op == 'T' || op == 'G' || op == 'Z' || op == 'Q') {
+    if (op == 'T' || op == 'G' || op == 'Z' || op == 'Q' || op == 'L') {
         // Each of these ends in an NVS write, which is only allowed while disarmed.
         if (!flight_runtime_idle()) return "Disarm and zero throttle first";
         int64_t now = esp_timer_get_time();
@@ -398,10 +398,17 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         } else if (op == 'G') {
             const char *failure = flight_runtime_calibrate();
             if (failure) return failure;
+        } else if (op == 'L') {
+            if (length != 8) return "Expected two float32 values";
             // A new zero pose makes the old pitch trim meaningless.
-            int index = SETTING_pitch_trim;
-            float zero = 0;
-            settings_change(&index, &zero, 1, now);
+            int indices[] = {SETTING_pose_zero_roll, SETTING_pose_zero_pitch, SETTING_pitch_trim};
+            float values[3] = {0};
+            memcpy(values, body, 8);
+            for (int i = 0; i < 2; i++) {
+                const char *failure = settings_validate(indices[i], values[i], error, sizeof(error));
+                if (failure) return failure;
+            }
+            settings_change(indices, values, 3, now);
         } else if (op == 'Q') {
             if (length != 24) return "Expected six float32 values";
             int indices[6];

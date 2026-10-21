@@ -211,14 +211,12 @@ static void runtime_task(void *arg) {
         if (state.calibration_left && --state.calibration_left == 0) {
             float bias[3];
             for (int i = 0; i < 3; i++) bias[i] = state.calibration_sum[i] / state.calibration_count;
-            Attitude zero = {atan2f(state.gravity_sum[1], state.gravity_sum[2]),
-                             atan2f(-state.gravity_sum[0], hypotf(state.gravity_sum[1], state.gravity_sum[2]))};
-            float pose_zero[] = {zero.roll * DEG, zero.pitch * DEG};
+            float pose_zero[] = {state.pose_zero.roll * DEG, state.pose_zero.pitch * DEG};
             // A result the settings table cannot hold is dropped: the IMU stays uncalibrated, as calibrate() left it.
             if (settings_calibration_fits(bias, pose_zero)) {
                 memcpy(state.bias, bias, sizeof(bias));
-                state.pose_zero = zero;
-                state.attitude = state.pose_zero;
+                state.attitude = (Attitude){atan2f(state.gravity_sum[1], state.gravity_sum[2]),
+                                            atan2f(-state.gravity_sum[0], hypotf(state.gravity_sum[1], state.gravity_sum[2]))};
                 state.controller = (Controller){0};
                 state.calibrated = true;
                 state.calibration_ready = true;
@@ -383,10 +381,11 @@ void flight_runtime_apply_settings(void) {
     portENTER_CRITICAL(&lock);
     settings_apply(&command, values);
     accel_correction(values);
+    state.pose_zero = (Attitude){values[SETTING_pose_zero_roll] / DEG, values[SETTING_pose_zero_pitch] / DEG};
     portEXIT_CRITICAL(&lock);
 }
 
-// Stops the motors and averages two seconds of gyro and gravity; the result is stored once it completes.
+// Stops the motors and averages two seconds of gyro for the bias, stored once it completes; gravity only re-seeds the attitude estimate.
 const char *flight_runtime_calibrate(void) {
     portENTER_CRITICAL(&lock);
     bool active = running;
