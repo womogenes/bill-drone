@@ -3,6 +3,7 @@
 #include <ArduinoOTA.h>
 #include "esp_camera.h"
 extern bool cameraReady;
+extern volatile bool cameraStopRequested;
 #if __has_include("wifi.h")
 #include "wifi.h"
 #else
@@ -23,11 +24,10 @@ inline void startWifi() {
     // No OTA password, as requested. Wi-Fi credentials are separate.
     ArduinoOTA.setTimeout(10000);
     ArduinoOTA.onStart([]() {
+        // The detection loop stops the camera after its current frame and keeps it stopped until the restart.
+        cameraStopRequested = true;
+        while (cameraReady) delay(10);
         Serial.println("OTA update started; camera stopped.");
-        if (cameraReady) {
-            esp_camera_deinit();
-            cameraReady = false;
-        }
     });
     ArduinoOTA.onError([](ota_error_t error) { Serial.printf("OTA error: %u; restarting camera.\n", error); ESP.restart(); });
 }

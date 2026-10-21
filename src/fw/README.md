@@ -30,6 +30,8 @@ The ESP32 runs one ESP-IDF C application in `drone/`: control loop, IMU, radio l
 - MISO: GPIO34 (GPIO12 on CAM)
 - CS: GPIO23 (GPIO15 on CAM)
 - READY: GPIO4 (GPIO2 on CAM)
+- VCC: 6V
+- GND: GND
 
 ## Updates
 

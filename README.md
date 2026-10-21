@@ -82,7 +82,7 @@ curl -X POST localhost:8765/settings -H 'Content-Type: application/json' -d '{"s
 
 The drone's tunable settings, defaults and ranges are defined in `src/fw/drone/main/settings.def`. The estimator, controller and thrust table are in `src/fw/drone/main/flight_math.c`; the host simulation runs the same C through `src/sw/sim/flight.py`, which compiles it on first use.
 
-`app_main` (`main/main.c`) loads the settings from NVS, sets the outputs to zero throttle and centred servos, starts the radio and then the control task. Wi-Fi, the radio and the update service run on core 0. `main/flight_rt.c` runs sensor reads, control, PWM, the 500 ms motor watchdog and binary log capture on core 1. It owns a bounded log queue. `main/settings.c` owns settings, servo offsets and calibration, committing them to NVS while disarmed. The main loop reads the load cell and battery every 50 ms and refreshes the recording metadata when the settings change.
+`app_main` (`main/main.c`) loads the settings from NVS, sets the outputs to zero throttle and centred servos, starts the radio and then the control task. Wi-Fi, the radio and the update service run on core 0. `main/flight_rt.c` runs sensor reads, control, PWM, the 500 ms motor watchdog and binary log capture on core 1. It owns a bounded log queue. `main/settings.c` owns settings, servo offsets and calibration, committing them to NVS while disarmed. `main/camera.c` receives AprilTag poses and image flow from the ESP32-CAM over SPI (`src/fw/esp32cam/README.md`); it is built but not started, so nothing uses vision yet. The main loop reads the load cell and battery every 50 ms and refreshes the recording metadata when the settings change.
 
 Run these from `src/fw`:
 
