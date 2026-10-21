@@ -3,7 +3,7 @@
 IDF_PATH ?= $(HOME)/esp/esp-idf
 IDF = bash -c 'source $(IDF_PATH)/export.sh >/dev/null && "$$@"' idf
 
-.PHONY: build deploy usb
+.PHONY: build deploy usb accel
 build:
 	$(IDF) idf.py -C drone build
 
@@ -15,3 +15,7 @@ deploy: build
 usb: build
 	$(if $(PORT),,$(error Set PORT to the drone's serial device))
 	$(IDF) esptool.py --chip esp32 --port $(PORT) --baud 460800 write_flash 0xd000 drone/build/ota_data_initial.bin 0x10000 drone/build/drone.bin
+
+# Accelerometer calibration: hold the disarmed drone still in about ten orientations.
+accel:
+	uv run tools/accel_cal.py

@@ -61,7 +61,7 @@ typedef struct {
     bool online, enabled, calibrated, latched, servo_held[2], calibration_ready;
     int reason, calibration_left, calibration_count;
     float accel[3], gyro[3], bias[3], calibration_sum[3], gravity_sum[3];
-    float temperature, servo[2], offsets[2];
+    float temperature, servo[2], offsets[2], accel_offset[3], accel_gain[3];
     int throttle[2];
     Attitude attitude, pose_zero;
     Controller controller;
@@ -201,7 +201,7 @@ static void runtime_task(void *arg) {
         float dt = previous ? (now - previous) / 1000000.0f : 1.0f / SAMPLE_HZ;
         if (state.enabled && previous && now - previous > MAX_SAMPLE_MS * 1000ULL) stop_locked(5);
         for (int i = 0; i < 3; i++) {
-            state.accel[i] = raw[i] * config.accel_scale[i];
+            state.accel[i] = (raw[i] * config.accel_scale[i] - state.accel_offset[i]) * state.accel_gain[i];
             state.gyro[i] = raw[4 + i] * config.gyro_scale[i];
             if (state.calibration_left) {
                 state.calibration_sum[i] += state.gyro[i];
@@ -370,11 +370,19 @@ void flight_runtime_consume_log(size_t count) {
     portEXIT_CRITICAL(&lock);
 }
 
+static void accel_correction(const float *values) {
+    for (int i = 0; i < 3; i++) {
+        state.accel_offset[i] = values[SETTING_accel_offset_x + i];
+        state.accel_gain[i] = values[SETTING_accel_gain_x + i];
+    }
+}
+
 void flight_runtime_apply_settings(void) {
     float values[SETTINGS];
     settings_copy(values);
     portENTER_CRITICAL(&lock);
     settings_apply(&command, values);
+    accel_correction(values);
     portEXIT_CRITICAL(&lock);
 }
 
@@ -545,6 +553,7 @@ void flight_runtime_start(void) {
     command.model.left_servo_direction = 1;
     command.model.right_servo_direction = -1;
     settings_apply(&command, values);
+    accel_correction(values);
     state.heartbeat_us = esp_timer_get_time();
     // An initial I2C timeout can leave the sensor idle; one fresh driver install and configuration recovers it.
     sensor_configured = configure_sensor();
