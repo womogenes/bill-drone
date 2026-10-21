@@ -3,7 +3,7 @@
 # dependencies = ["numpy", "scipy", "websockets>=15,<17"]
 # ///
 """
-Calibrate the accelerometer: rest the disarmed drone still (propped, not hand-held) in different orientations (each axis up and down, then a few in between) until enough poses are collected. Fits per-axis offset and gain so every still pose reads 1 g, then stores them on the drone. Recalibrate the IMU (gyro bias and level) afterwards.
+Calibrate the accelerometer: rest the disarmed drone still (propped, not hand-held) in different orientations (each axis up and down, then a few in between) until enough poses are collected. Fits per-axis offset and gain so every still pose reads 1 g, then stores them on the drone. Then measure the level reference with `make level`.
 """
 
 import argparse
@@ -67,7 +67,7 @@ def main():
     print(f"Offset {np.round(offset, 4)} g, gain {np.round(gain, 4)}")
     print(f"|a| - 1 g: before max {np.abs(before).max() * 1000:.0f} mg, after max {np.abs(after).max() * 1000:.1f} mg")
     Drone(args.service.replace("http", "ws") + "/update").request(b"Q", np.concatenate([offset, gain]).astype("<f4").tobytes())
-    print("Stored; now recalibrate the IMU from the dashboard")
+    print("Stored; now run make level")
 
 
 if __name__ == "__main__":
