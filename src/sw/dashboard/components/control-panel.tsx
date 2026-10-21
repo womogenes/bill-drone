@@ -37,7 +37,7 @@ const keyIcons: Record<string, LucideIcon> = {
 
 const THROTTLE_STEP = 10;
 // T jumps collective straight to about hover, so liftoff doesn't linger half-supported on the feet.
-const TAKEOFF_THROTTLE = 650;
+const TAKEOFF_THROTTLE = 720;
 const KEY_REPEAT_MS = 100;
 // Keyboard setpoint sizes are a local preference, not drone settings.
 const MANUAL_KEY = 'manual-inputs';
@@ -87,6 +87,9 @@ const tuningFields = [
   { key: 'right_trim', label: 'Right servo trim (°)', min: -15 },
   { key: 'servo_compensation', label: 'Servo compensation (°)', min: 0 },
   { key: 'integrate_throttle', label: 'Integrate above throttle', min: 0 },
+  { key: 'target_rate', label: 'Target ramp (°/s)', min: 1 },
+  { key: 'velocity_damping', label: 'Velocity damping (°/(m/s))', min: 0 },
+  { key: 'velocity_leak', label: 'Velocity leak (s)', min: 0.1 },
 ] as const;
 const modelFields = [
   { key: 'pivot_height', label: 'Pivot height (m)', min: 0, max: undefined },

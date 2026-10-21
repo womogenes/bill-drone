@@ -112,6 +112,11 @@ DEFAULT_TUNING = {
     "servo_compensation": 0.75,
     # Collective throttle below which the integrators hold their biases.
     "integrate_throttle": 580,
+    # Degrees per second the roll/pitch setpoint may move; liftoff ramps from the ground attitude.
+    "target_rate": 360,
+    # Degrees of target tilt per m/s of dead-reckoned velocity (0 = off), and its leak time in seconds.
+    "velocity_damping": 8,
+    "velocity_leak": 3,
 }
 
 
@@ -146,7 +151,7 @@ DEFAULT_TUNING.update({key: MODEL[key] for key in MODEL_TUNING_KEYS})
 # Equivalent to retaining 0.99 / 0.9998 of gyro integration every 10 ms.
 GRAVITY_TAU = -0.01 / math.log(0.99)
 POWERED_GRAVITY_TAU = -0.01 / math.log(0.9998)
-ANGULAR_KEYS = ("roll", "pitch", "yaw_rate", "pitch_trim", "left_trim", "right_trim", "servo_compensation")
+ANGULAR_KEYS = ("roll", "pitch", "yaw_rate", "pitch_trim", "left_trim", "right_trim", "servo_compensation", "target_rate", "velocity_damping")
 
 GAIN_KEYS = (
     "roll_p", "roll_i", "roll_damping", "pitch_p", "pitch_i", "pitch_damping",
@@ -157,7 +162,7 @@ BIAS_KEYS = ("roll_bias", "pitch_bias", "yaw_bias")
 THRUST_SCALE_KEYS = ("left_thrust_scale", "right_thrust_scale")
 FEEDFORWARD_KEYS = BIAS_KEYS + THRUST_SCALE_KEYS
 # C Command tuning layout after the six motion floats; the model block follows.
-TUNING_LAYOUT = COMMAND_KEYS + FEEDFORWARD_KEYS + ("servo_compensation", "integrate_throttle")
+TUNING_LAYOUT = COMMAND_KEYS + FEEDFORWARD_KEYS + ("servo_compensation", "integrate_throttle", "target_rate", "velocity_damping", "velocity_leak")
 MODEL_OFFSET = 6 + len(TUNING_LAYOUT)
 # Dashboard field IDs and TEL1 order. Append only; this is independent of TUNING_LAYOUT.
 CONTROL_KEYS = COMMAND_KEYS + MODEL_TUNING_KEYS + FEEDFORWARD_KEYS
@@ -187,8 +192,8 @@ class Attitude:
 
 class Controller:
     def __init__(self, model=MODEL):
-        # Two integrals, the four actuator outputs, then each servo's compensation direction and extreme.
-        self.state = array("f", [0.0] * 10)
+        # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, then the takeoff setpoint state.
+        self.state = array("f", [0.0] * 15)
         # Motion (6 floats), tuning (TUNING_LAYOUT), then model parameters.
         self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS])
         for key in THRUST_SCALE_KEYS:
