@@ -84,6 +84,7 @@ const tuningFields = [
   { key: 'left_trim', label: 'Left servo trim (°)', min: -15 },
   { key: 'right_trim', label: 'Right servo trim (°)', min: -15 },
   { key: 'servo_compensation', label: 'Servo compensation (°)', min: 0 },
+  { key: 'integrate_throttle', label: 'Integrate above throttle', min: 0 },
 ] as const;
 const modelFields = [
   { key: 'pivot_height', label: 'Pivot height (m)', min: 0, max: undefined },

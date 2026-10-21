@@ -110,6 +110,8 @@ DEFAULT_TUNING = {
     "right_thrust_scale": 1.0,
     # Degrees added to each servo command in the direction it last moved (servo deadband and play).
     "servo_compensation": 0.75,
+    # Collective throttle below which the integrators hold their biases.
+    "integrate_throttle": 580,
 }
 
 
@@ -155,7 +157,7 @@ BIAS_KEYS = ("roll_bias", "pitch_bias", "yaw_bias")
 THRUST_SCALE_KEYS = ("left_thrust_scale", "right_thrust_scale")
 FEEDFORWARD_KEYS = BIAS_KEYS + THRUST_SCALE_KEYS
 # C Command tuning layout after the six motion floats; the model block follows.
-TUNING_LAYOUT = COMMAND_KEYS + FEEDFORWARD_KEYS + ("servo_compensation",)
+TUNING_LAYOUT = COMMAND_KEYS + FEEDFORWARD_KEYS + ("servo_compensation", "integrate_throttle")
 MODEL_OFFSET = 6 + len(TUNING_LAYOUT)
 # Dashboard field IDs and TEL1 order. Append only; this is independent of TUNING_LAYOUT.
 CONTROL_KEYS = COMMAND_KEYS + MODEL_TUNING_KEYS + FEEDFORWARD_KEYS

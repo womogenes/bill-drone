@@ -18,7 +18,7 @@ def run(gains, plant, seconds=10.0, seed=0):
     rng = random.Random(seed)
     settings = dict(MODEL) | {"roll": 0, "pitch": 0, "yaw_rate": 0, "pitch_trim": 0, "left_trim": 0, "right_trim": 0,
                                "roll_bias": 0, "pitch_bias": 0, "yaw_bias": 0, "left_thrust_scale": 1, "right_thrust_scale": 1,
-                               "reaction_torque_ratio": 0.015, "servo_compensation": 0.75} | gains
+                               "reaction_torque_ratio": 0.015, "servo_compensation": 0.75, "integrate_throttle": 580} | gains
     k = plant["thrust_k"]
     settings["base_throttle"] = round(throttle(WEIGHT / 2 / k))
     controller = Controller()

@@ -24,6 +24,8 @@ typedef struct {
     float left_thrust_scale, right_thrust_scale;
     // Added to each servo command in the direction it last moved, to take up the servo's deadband and gear play.
     float servo_compensation;
+    // Collective throttle below which the integrators hold their biases (on the ground).
+    float integrate_throttle;
     Model model;
 } Command;
 

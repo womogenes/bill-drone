@@ -94,10 +94,16 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     }
     float roll_error = c->target_roll - c->roll;
     float pitch_error = c->target_pitch + trim - c->pitch;
-    state->roll_i = clamp(state->roll_i + c->roll_i * roll_error * c->dt,
-                          -c->integral_limit, c->integral_limit);
-    state->pitch_i = clamp(state->pitch_i + c->pitch_i * pitch_error * c->dt,
-                           -c->integral_limit, c->integral_limit);
+    // Below integrate_throttle the feet are still down: integrating an error the ground holds would only wind up.
+    if (c->base < c->integrate_throttle) {
+        state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);
+        state->pitch_i = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit);
+    } else {
+        state->roll_i = clamp(state->roll_i + c->roll_i * roll_error * c->dt,
+                              -c->integral_limit, c->integral_limit);
+        state->pitch_i = clamp(state->pitch_i + c->pitch_i * pitch_error * c->dt,
+                               -c->integral_limit, c->integral_limit);
+    }
 
     float roll_torque = model->roll_inertia * (c->roll_p * roll_error + state->roll_i - c->roll_damping * c->gx);
     float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i - c->pitch_damping * c->gy);
