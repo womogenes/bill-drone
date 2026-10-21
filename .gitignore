@@ -12,3 +12,5 @@ node_modules/
 src/sw/recordings/
 
 src/sw/sim/flight_math.so
+
+.env
