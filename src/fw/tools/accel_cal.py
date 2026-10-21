@@ -3,7 +3,7 @@
 # dependencies = ["numpy", "scipy", "websockets>=15,<17"]
 # ///
 """
-Calibrate the accelerometer: hold the disarmed drone still in different orientations (each axis up and down, then a few in between) until enough poses are collected. Fits per-axis offset and gain so every still pose reads 1 g, then stores them on the drone. Recalibrate the IMU (gyro bias and level) afterwards.
+Calibrate the accelerometer: rest the disarmed drone still (propped, not hand-held) in different orientations (each axis up and down, then a few in between) until enough poses are collected. Fits per-axis offset and gain so every still pose reads 1 g, then stores them on the drone. Recalibrate the IMU (gyro bias and level) afterwards.
 """
 
 import argparse
@@ -40,7 +40,8 @@ def collect(url, poses, settings):
     for reading in readings(url):
         window = (window + [reading["imu"]["accel"] + reading["imu"]["gyro"]])[-WINDOW:]
         samples = np.array(window)
-        if len(window) < WINDOW or samples[:, :3].std(0).max() > 0.01 or samples[:, 3:].std(0).max() > 0.01:
+        # At rest the accelerometer noise is about 0.002 g and the gyro's about 0.03 °/s.
+        if len(window) < WINDOW or samples[:, :3].std(0).max() > 0.005 or samples[:, 3:].std(0).max() > 0.2:
             continue
         mean = samples[:, :3].mean(0) / gain + offset
         direction = mean / np.linalg.norm(mean)
