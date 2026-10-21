@@ -36,6 +36,8 @@ const keyIcons: Record<string, LucideIcon> = {
 };
 
 const THROTTLE_STEP = 10;
+// T jumps collective straight to about hover, so liftoff doesn't linger half-supported on the feet.
+const TAKEOFF_THROTTLE = 650;
 const KEY_REPEAT_MS = 100;
 // Keyboard setpoint sizes are a local preference, not drone settings.
 const MANUAL_KEY = 'manual-inputs';
@@ -228,7 +230,7 @@ export const ControlPanel = memo(function ControlPanel({
         return;
       }
       if (
-        !['KeyW', 'KeyS', 'KeyA', 'KeyD'].includes(event.code) &&
+        !['KeyW', 'KeyS', 'KeyA', 'KeyD', 'KeyT'].includes(event.code) &&
         !(event.code in tiltKeys)
       )
         return;
@@ -246,7 +248,12 @@ export const ControlPanel = memo(function ControlPanel({
       if (event.repeat || held.has(event.code)) return;
       held.add(event.code);
 
-      if (event.code === 'KeyW' || event.code === 'KeyS') {
+      if (event.code === 'KeyT') {
+        held.delete('KeyT');
+        throttle.current = TAKEOFF_THROTTLE;
+        setDraft((previous) => ({ ...previous, base_throttle: TAKEOFF_THROTTLE }));
+        onChange({ base_throttle: TAKEOFF_THROTTLE });
+      } else if (event.code === 'KeyW' || event.code === 'KeyS') {
         changeThrottle();
         if (timer === undefined)
           timer = setInterval(changeThrottle, KEY_REPEAT_MS);
@@ -515,6 +522,7 @@ export const ControlPanel = memo(function ControlPanel({
       <div className="flex flex-col gap-2 text-muted-foreground">
         {[
           { keys: ['W', 'S'], label: 'Throttle' },
+          { keys: ['T'], label: `Takeoff (${TAKEOFF_THROTTLE})` },
           { keys: ['A', 'D'], label: 'Yaw' },
           { keys: ['ArrowUp', 'ArrowDown'], label: 'Pitch' },
           { keys: ['ArrowLeft', 'ArrowRight'], label: 'Roll' },
