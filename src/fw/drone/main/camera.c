@@ -1,4 +1,4 @@
-// TAG2 pose and flow packets from the ESP32-CAM over SPI (fw/esp32cam/README.md). The camera raises READY when a packet is queued; its rising edge wakes the receiver, which clocks the 100 bytes at once and adds how long READY was high to the camera's capture-to-ready age.
+// TAG3 pose and flow packets from the ESP32-CAM over SPI (fw/esp32cam/README.md). The camera raises READY when a packet is queued; its rising edge wakes the receiver, which clocks the 164 bytes at once and adds how long READY was high to the camera's capture-to-ready age.
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,17 +27,18 @@ typedef struct __attribute__((packed)) {
     float flow_residual_px;
     uint16_t flow_inliers;
     int16_t flow_offset_us;
-    uint16_t reserved, checksum;
+    float tag_position[3], alt_position[3], alt_rotation[9], alt_reprojection_px;
+    uint16_t trusted, checksum;
 } Packet;
-_Static_assert(sizeof(Packet) == 100, "TAG2 layout");
+_Static_assert(sizeof(Packet) == 164, "TAG3 layout");
 
 static DMA_ATTR Packet packet;
 static spi_device_handle_t device;
 static TaskHandle_t task;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
-static CameraPose latest;
+static CameraPose latest, latest_candidate;
 static CameraFlow latest_flow;
-static bool have_pose, have_flow;
+static bool have_pose, have_candidate, have_flow;
 static CameraStats stats = {.frame_us = -1};
 
 // CRC-16/CCITT-FALSE, as in the camera's packet.h.
@@ -68,14 +69,18 @@ static void receive_task(void *arg) {
         if (!edge && !gpio_get_level(READY)) continue;
         ESP_ERROR_CHECK(spi_device_polling_transmit(device, &transfer));
         int64_t now = esp_timer_get_time();
-        bool intact = !memcmp(packet.magic, "TAG2", 4) &&
+        bool intact = !memcmp(packet.magic, "TAG3", 4) &&
                       crc16((const uint8_t *)&packet, offsetof(Packet, checksum)) == packet.checksum;
         bool repeat = intact && have_sequence && packet.sequence == last_sequence;
         uint32_t age = packet.age_us + ((uint32_t)now - edge_us);
         CameraPose pose = {.sequence = packet.sequence, .capture_us = now - age, .tag_id = packet.tag_id, .valid = packet.valid,
-                           .margin = packet.margin, .reprojection_px = packet.reprojection_px};
+                           .margin = packet.margin, .reprojection_px = packet.reprojection_px,
+                           .alt_reprojection_px = packet.alt_reprojection_px};
         memcpy(pose.position_m, packet.position, sizeof(pose.position_m));
         memcpy(pose.rotation, packet.rotation, sizeof(pose.rotation));
+        memcpy(pose.tag_position_m, packet.tag_position, sizeof(pose.tag_position_m));
+        memcpy(pose.alt_position_m, packet.alt_position, sizeof(pose.alt_position_m));
+        memcpy(pose.alt_rotation, packet.alt_rotation, sizeof(pose.alt_rotation));
         CameraFlow flow = {.sequence = packet.sequence, .capture_us = now - age + packet.flow_offset_us,
                            .interval_us = packet.flow_interval_us, .shift_px = {packet.flow[0], packet.flow[1]},
                            .residual_px = packet.flow_residual_px, .inliers = packet.flow_inliers};
@@ -91,10 +96,12 @@ static void receive_task(void *arg) {
             // The newest frame decides: one without the tag, or too old, clears the previous pose.
             stats.frames++;
             stats.frame_us = now;
-            have_pose = packet.valid && age <= MAX_AGE_US;
+            have_pose = packet.valid && packet.trusted && age <= MAX_AGE_US;
             stats.stale += packet.valid && !have_pose;
             stats.poses += have_pose;
             if (have_pose) latest = pose;
+            have_candidate = packet.trusted && age <= MAX_AGE_US;
+            if (have_candidate) latest_candidate = pose;
             have_flow = packet.flow_interval_us && age <= MAX_AGE_US;
             stats.flows += have_flow;
             if (have_flow) latest_flow = flow;
@@ -129,6 +136,15 @@ bool camera_pose(CameraPose *pose, uint32_t max_age_us) {
     portENTER_CRITICAL(&lock);
     bool fresh = have_pose && now - latest.capture_us <= max_age_us;
     if (fresh) *pose = latest;
+    portEXIT_CRITICAL(&lock);
+    return fresh;
+}
+
+bool camera_candidates(CameraPose *pose, uint32_t max_age_us) {
+    int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL(&lock);
+    bool fresh = have_candidate && now - latest_candidate.capture_us <= max_age_us;
+    if (fresh) *pose = latest_candidate;
     portEXIT_CRITICAL(&lock);
     return fresh;
 }

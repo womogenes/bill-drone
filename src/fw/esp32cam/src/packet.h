@@ -4,7 +4,7 @@
 
 // ESP32 is little-endian. The drone's receiver (fw/drone/main/camera.c) uses the same explicit layout.
 struct __attribute__((packed)) PosePacket {
-    char magic[4] = {'T', 'A', 'G', '2'};
+    char magic[4] = {'T', 'A', 'G', '3'};
     uint32_t sequence = 0;
     uint32_t captureUs = 0; // CAM clock (wraps every ~72 minutes): readout of the tag's centre row, else the frame's.
     uint32_t ageUs = 0;     // Capture-to-ready time; no clock sync required.
@@ -19,10 +19,14 @@ struct __attribute__((packed)) PosePacket {
     float flowResidualPx = 0;     // Median deviation of the matched blocks from the median shift.
     uint16_t flowInliers = 0;     // Blocks that agreed.
     int16_t flowOffsetUs = 0;     // This frame's centre-row readout minus captureUs.
-    uint16_t reserved = 0;        // Keep DMA transactions a multiple of four bytes.
+    float tagPosition[3] = {};    // Tag centre in the camera frame, metres: well determined even when the tilt is not.
+    float altPosition[3] = {};    // The other planar solution, as position and rotation.
+    float altRotation[9] = {};
+    float altReprojectionPx = 0;
+    uint16_t trusted = 0;         // 1: the pose fields hold both solutions, though valid may be 0 (ambiguous tilt).
     uint16_t checksum = 0;
 };
-static_assert(sizeof(PosePacket) == 100, "Wire format changed");
+static_assert(sizeof(PosePacket) == 164, "Wire format changed");
 
 // CRC-16/CCITT-FALSE over all bytes before checksum (including magic).
 inline uint16_t crc16(const uint8_t *data, size_t length) {

@@ -3,7 +3,8 @@ Record the ESP32-CAM's per-frame records: uv run fw/esp32cam/record.py [--host 1
 Subscribes to /record, saves every frame to sw/recordings/camera-<time>.frm and prints a line a second. Ctrl-C stops.
 Summarize a recording: uv run fw/esp32cam/record.py --analyze sw/recordings/camera-<time>.frm
 
-File format: repeated [int64 laptop receive time, ns][144-byte record from fw/esp32cam/src/record.h].
+File format: repeated [int64 laptop receive time, ns][record from fw/esp32cam/src/record.h], 224 bytes (TAG3 packets) or,
+in older recordings, 144 (TAG2).
 """
 
 import argparse
@@ -18,26 +19,43 @@ from pathlib import Path
 
 import numpy as np
 
-PACKET = "<4sIIIHH16fIfHhHH"  # PosePacket, 100 bytes
-RECORD = struct.Struct(PACKET + "8fIHHBBH")
-assert RECORD.size == 144
+PACKET = "<4sIIIHH16fIfHh16fHH"  # PosePacket, 164 bytes
+RECORD = struct.Struct(PACKET + "8fIIHBBHBBBBHHHHH")
+assert RECORD.size == 224
+OLD_RECORD = struct.Struct("<4sIIIHH16fIfHhHH" + "8fIHHBBH")  # TAG2, until 2026-10-22
+assert OLD_RECORD.size == 144
 FRAME_US = 33974  # sensor frame period
+PER_DATAGRAM = 6
 
 
 def decode(record):
+    if len(record) == OLD_RECORD.size:
+        v = OLD_RECORD.unpack(record)
+        return {
+            "sequence": v[1], "capture_us": v[2], "age_us": v[3], "valid": v[5],
+            "position": v[6:9], "rotation": v[9:18], "margin": v[18], "reprojection_px": v[19],
+            "flow": v[20:22], "flow_interval_us": v[22], "flow_residual_px": v[23], "flow_inliers": v[24],
+            "tag_position": (0.0, 0.0, 0.0), "alt_reprojection_px": 0.0, "trusted": int(v[5] > 0),
+            "corners": v[28:36], "frame_start_us": v[36], "process_us": v[37], "flow_wait_us": v[38],
+            "found": v[39], "preview": v[40], "short_frames": v[41],
+            "track_failed": 0, "alignment": 0.0, "measured": 0, "measures": 0, "align_coarse": 0, "align_fine": 0, "window_pixels": 0, "frame_pixels": 0,
+        }
     v = RECORD.unpack(record)
     return {
         "sequence": v[1], "capture_us": v[2], "age_us": v[3], "valid": v[5],
         "position": v[6:9], "rotation": v[9:18], "margin": v[18], "reprojection_px": v[19],
         "flow": v[20:22], "flow_interval_us": v[22], "flow_residual_px": v[23], "flow_inliers": v[24],
-        "corners": v[28:36], "frame_start_us": v[36], "process_us": v[37], "flow_wait_us": v[38],
-        "found": v[39], "preview": v[40], "short_frames": v[41],
+        "tag_position": v[26:29], "alt_reprojection_px": v[41], "trusted": v[42],
+        "corners": v[44:52], "frame_start_us": v[52], "process_us": v[53], "flow_wait_us": v[54],
+        "found": v[55], "preview": v[56], "short_frames": v[57],
+        "track_failed": v[58], "alignment": v[59] / 100, "measured": v[60], "measures": v[61], "align_coarse": v[62], "align_fine": v[63], "window_pixels": v[64], "frame_pixels": v[65],
     }
 
 
 def load(path):
     data = Path(path).read_bytes()
-    step = 8 + RECORD.size
+    size = RECORD.size if data[8:12] == b"TAG3" else OLD_RECORD.size
+    step = 8 + size
     rows = [decode(data[i + 8:i + step]) | {"host_ns": struct.unpack_from("<q", data, i)[0]} for i in range(0, len(data) - step + 1, step)]
     rows.sort(key=lambda r: r["sequence"])
     return {k: np.array([r[k] for r in rows]) for k in rows[0]}
@@ -68,11 +86,11 @@ def record(host, out, seconds=None):
         try:
             while seconds is None or time.monotonic() - started < seconds:
                 try:
-                    datagram = sock.recv(4 + 9 * RECORD.size)
+                    datagram = sock.recv(4 + PER_DATAGRAM * RECORD.size)
                 except TimeoutError:
                     datagram = b""
                 now = time.time_ns()
-                if datagram[:4] == b"FRM1":
+                if datagram[:4] == b"FRM2":
                     for i in range(4, len(datagram) - RECORD.size + 1, RECORD.size):
                         chunk = datagram[i:i + RECORD.size]
                         file.write(struct.pack("<q", now) + chunk)
@@ -95,6 +113,19 @@ def record(host, out, seconds=None):
             pass
     stop.set()
     print(f"saved {count} frames to {out}")
+
+
+def cost_model(d):
+    """Least-squares processing time per unit of work, as in the simulator's cost model (sim/harness.cpp)."""
+    columns = {"fixed": np.ones(len(d["process_us"])), "measure": d["measures"], "align_coarse": d["align_coarse"], "align_fine": d["align_fine"],
+               "window_run": d["window_pixels"] > 0, "window_pixel": d["window_pixels"], "frame_run": d["frame_pixels"] > 0, "frame_pixel": d["frame_pixels"]}
+    columns = {k: np.asarray(v, float) for k, v in columns.items()}
+    used = {k: v for k, v in columns.items() if np.any(v != 0) and (k == "fixed" or np.ptp(v) > 0)}
+    if len(used) < 2:
+        return None
+    a = np.stack(list(used.values()), axis=1)
+    solution, *_ = np.linalg.lstsq(a, d["process_us"].astype(float), rcond=None)
+    return {k: round(float(x), 2) for k, x in zip(used, solution)} | {"whole_frame_searches": int((d["frame_pixels"] > 0).sum()), "whole_frame_us_median": int(np.median(d["process_us"][d["frame_pixels"] > 0])) if (d["frame_pixels"] > 0).any() else None}
 
 
 def analyze(path):
@@ -122,7 +153,9 @@ def analyze(path):
         "skipped_after_preview_frames": int(skipped.clip(0)[d["preview"][:-1] > 0].sum()),
         "short_frames": int((d["short_frames"][-1] - d["short_frames"][0]) & 0xFFFF),
         "found": round(found.mean(), 3), "tracked": round((d["found"] == 1).mean(), 3), "detected": int((d["found"] == 2).sum()),
-        "valid": round(valid.mean(), 3), "ambiguous_resolved": int((d["valid"] == 2).sum()),
+        "valid": round(valid.mean(), 3), "ambiguous_resolved": int((d["valid"] == 2).sum()), "trusted": round(float((d["trusted"] > 0).mean()), 3),
+        "measured": int(d["measured"].sum()), "track_failures_by_reason": [int((d["track_failed"] == k).sum()) for k in range(1, 6)],
+        "alignment_median": round(float(np.median(d["alignment"][d["found"] == 1])), 2) if (d["found"] == 1).any() else None,
         "tag_losses": len(losses), "speed_before_loss_px_per_frame": [round(float(v), 1) for v in pre][:20],
         "corner_speed_px_per_frame": {"median": round(float(np.median(speed)), 2) if len(speed) else None, "p95": round(float(np.percentile(speed, 95)), 2) if len(speed) else None, "max": round(float(speed.max()), 2) if len(speed) else None},
         "position_step_m": {"median": round(float(np.median(step)), 4), "p99": round(float(np.percentile(step, 99)), 4), "max": round(float(step.max()), 4)},
@@ -131,6 +164,7 @@ def analyze(path):
         "age_us": {"median": int(np.median(d["age_us"])), "p95": int(np.percentile(d["age_us"], 95))},
         "process_us": {"median": int(np.median(d["process_us"])), "p95": int(np.percentile(d["process_us"], 95)), "max": int(d["process_us"].max())},
         "flow_wait_us": {"median": int(np.median(d["flow_wait_us"])), "p95": int(np.percentile(d["flow_wait_us"], 95))},
+        "process_us_by_work": cost_model(d),
         # Flow against the tag's own motion: the tag is excluded from the flow, so with a still tag this is camera motion.
         "flow_vs_tag_px": {"frames": len(flow), "rms_difference": round(float(np.sqrt(np.mean(np.sum((flow - motion) ** 2, axis=1)))), 3) if len(flow) else None},
     }, indent=1))

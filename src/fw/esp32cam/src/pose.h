@@ -152,8 +152,10 @@ inline float angleBetween(const float a[9], const float b[9]) {
     return acosf(fminf(1, fmaxf(-1, (trace - 1) / 2)));
 }
 
-// valid is 1 for an unambiguous pose, 2 for an ambiguous one resolved by continuity with the previous valid pose.
-inline void estimatePose(const float corners[4][2], float margin, PosePacket &packet) {
+// valid is 1 for an unambiguous pose, 2 for an ambiguous one resolved by continuity with the previous valid pose, and 0
+// otherwise. trusted (the corners are good enough for a pose) gives the packet both solutions, the chosen one (else
+// the better fitting) first, and the tag's position in the camera frame, also when the tilt stays ambiguous.
+inline void estimatePose(const float corners[4][2], float margin, PosePacket &packet, bool trusted = true) {
     packet.margin = margin;
     float v[4][2];
     for (int i = 0; i < 4; ++i) undistort(corners[i], v[i]);
@@ -168,24 +170,34 @@ inline void estimatePose(const float corners[4][2], float margin, PosePacket &pa
     } else if (anchored && packet.captureUs - anchorUs <= config::anchorUs) {
         const float angles[2] = {angleBetween(anchorR, poses[0].R), angleBetween(anchorR, poses[1].R)};
         best = angles[0] <= angles[1] ? 0 : 1;
-        packet.valid = angles[best] <= config::anchorMaxRad ? 2 : 0;
+        const bool decided = angles[best] <= config::anchorMaxRad && angles[best] * config::anchorDecisive <= angles[1 - best];
+        packet.valid = decided ? 2 : 0;
     }
-    const PlanarPose &pose = poses[best];
-    packet.reprojectionPx = sqrtf(pose.error / 4);
-    if (packet.reprojectionPx > config::maxReprojectionPx)
-        packet.valid = 0;
+    packet.reprojectionPx = sqrtf(poses[best].error / 4);
+    packet.altReprojectionPx = sqrtf(poses[1 - best].error / 4);
+    bool finite = true;
     // Invert tag -> camera: R_tc = R_ct^T, p_tc = -R_ct^T * t_ct.
-    for (int row = 0; row < 3; ++row) {
-        for (int col = 0; col < 3; ++col) {
-            const float r = pose.R[3*col + row];
-            packet.rotation[3*row + col] = r;
-            packet.position[row] -= r * pose.t[col];
-            if (!isfinite(r) || !isfinite(packet.position[row]))
-                packet.valid = 0;
+    for (int k = 0; k < 2; ++k) {
+        const PlanarPose &pose = poses[k ? 1 - best : best];
+        float rotation[9], position[3] = {};
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                const float r = pose.R[3*col + row];
+                rotation[3*row + col] = r;
+                position[row] -= r * pose.t[col];
+                finite = finite && isfinite(r) && isfinite(position[row]);
+            }
         }
+        // The packet is packed, so its fields are written whole.
+        memcpy(k ? packet.altRotation : packet.rotation, rotation, sizeof(rotation));
+        memcpy(k ? packet.altPosition : packet.position, position, sizeof(position));
     }
+    memcpy(packet.tagPosition, poses[best].t, sizeof(packet.tagPosition));
+    packet.trusted = trusted && finite && packet.reprojectionPx <= config::maxReprojectionPx;
+    if (!packet.trusted)
+        packet.valid = 0;
     if (packet.valid) {
-        memcpy(anchorR, pose.R, sizeof(anchorR));
+        memcpy(anchorR, poses[best].R, sizeof(anchorR));
         anchorUs = packet.captureUs;
         anchored = true;
     }

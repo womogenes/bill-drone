@@ -7,6 +7,7 @@
 #include "tag16h5.h"
 #include "pose.h"
 #include "track.h"
+#include "tag.h"
 #include "flow.h"
 #include "ota.h"
 
@@ -14,8 +15,7 @@
 #include "record.h"
 
 PosePacket *wirePacket;
-apriltag_detector_t *detector;
-apriltag_family_t *family;
+TagFinder finder;
 uint32_t sequence = 0;
 spi_slave_transaction_t transfer = {};
 bool transferPending = false;
@@ -23,18 +23,9 @@ bool cameraReady = false;
 // Set by OTA; the detection loop stops the camera between frames, so OTA never has to win a lock against it.
 volatile bool cameraStopRequested = false;
 bool cameraStalled = false;
-// Shortest side of the last accepted tag, in pixels; zero after a miss.
-float tagSidePx = 0;
-struct Window {
-    int x, y, w, h;
-};
-// The tracked tag's corners in this and the previous frame; tracking is false after a miss.
-bool tracking = false;
-float trackedCorners[4][2], previousCorners[4][2];
-// The tracked tag's neighbourhood, copied out of the frame.
-uint8_t window[8 * 1024];
-uint32_t lastTagSequence = 0;
 uint32_t lastCaptureUs = 0;
+// GET /search?frames=N: the next N frames forget the tag and search the whole frame, to measure that path.
+volatile uint32_t searchTests = 0;
 
 camera_config_t cameraConfig = {};
 uint32_t stalls = 0, recoveries = 0;
@@ -144,6 +135,16 @@ void adjustExposure() {
         exposureLines = lines;
 }
 
+// The detector's working set is PSRAM-bound (union-find alone is 8 bytes per pixel). A window is small enough to keep
+// in internal RAM; the limit is global, so it stays at the default while the preview encoder is running too. A
+// whole-frame search's many small allocations (clusters, quads) took internal RAM down to 7.7 KB, so they all go to
+// PSRAM; Wi-Fi and lwip allocate internal RAM explicitly and are unaffected.
+void detectorWorkspace(Workspace where) {
+    heap_caps_malloc_extmem_enable(where == workspaceInternal && !previewStreaming ? config::trackInternalBytes
+                                   : where == workspaceExternal                    ? 0
+                                                                                   : 4096);
+}
+
 void setup() {
     memcpy(lastCrumbs, crumbs, sizeof(crumbs));
     memset(crumbs, 0, sizeof(crumbs));
@@ -206,15 +207,20 @@ void setup() {
         return;
     }
 
-    detector = apriltag_detector_create();
-    family = tag16h5_create();
-    apriltag_detector_add_family_bits(detector, family, 0);
+    apriltag_detector_t *detector = finder.detector = apriltag_detector_create();
+    finder.family = tag16h5_create();
+    apriltag_detector_add_family_bits(detector, finder.family, 0);
     detector->nthreads = 1;
     detector->refine_edges = true;
     // A tag is high-contrast black on white: reject faint and tiny blobs at thresholding, before the expensive
     // union-find, clustering and quad fitting, which otherwise scale with every noise blob in a dim, cluttered scene.
     detector->qtp.min_white_black_diff = 20;
     detector->qtp.max_nmaxima = 6;
+    finder.workspace = detectorWorkspace;
+    web.on("/search", HTTP_GET, []() {
+        searchTests = uint32_t(max(0L, min(1000L, web.arg("frames").toInt())));
+        web.send(200, "application/json", "{\"searching\":true}");
+    });
     startPreview();
     startRecording();
     flowDone = xSemaphoreCreateBinary();
@@ -243,62 +249,6 @@ void publish(const PosePacket &packet) {
     transferPending = true;
 }
 
-// The detector, on a window around the last tag (or the whole frame): finds quads at a resolution that keeps the tag's
-// sides about decimatedSidePx and refines and decodes at full resolution. Corners come back in the calibration's pixel
-// convention, centres at integers; the detector's are half a pixel further right and down.
-bool detectTag(camera_fb_t *frame, const float (*predicted)[2], float corners[4][2], float &margin) {
-    const int stride = frame->width;
-    // The window: the predicted corners' box grown by half its size and 8 px on each side.
-    Window searched = {};
-    if (predicted) {
-        float low[2] = {INFINITY, INFINITY}, high[2] = {-INFINITY, -INFINITY};
-        for (int i = 0; i < 4; ++i)
-            for (int axis = 0; axis < 2; ++axis) {
-                low[axis] = fminf(low[axis], predicted[i][axis]);
-                high[axis] = fmaxf(high[axis], predicted[i][axis]);
-            }
-        const float grow = fmaxf(high[0] - low[0], high[1] - low[1]) / 2 + 8;
-        const int x0 = max(0, int(low[0] - grow)), y0 = max(0, int(low[1] - grow));
-        const int x1 = min(stride, int(high[0] + grow) + 1), y1 = min(int(frame->height), int(high[1] + grow) + 1);
-        if (x1 - x0 >= 16 && y1 - y0 >= 16)
-            searched = {x0, y0, x1 - x0, y1 - y0};
-    }
-    image_u8_t image = {searched.w ? searched.w : stride, searched.w ? searched.h : int(frame->height), stride,
-                        frame->buf + searched.y * stride + searched.x};
-    detector->quad_decimate = searched.w ? fminf(3, fmaxf(1, floorf(tagSidePx / config::decimatedSidePx))) : 2;
-    // In a window, a cluster much shorter than the tag's outline (such as a single data bit) cannot be the tag.
-    detector->qtp.min_cluster_pixels =
-        searched.w ? max(config::minClusterPixels, int(config::clusterPerSide * tagSidePx / detector->quad_decimate))
-                   : config::minClusterPixels;
-    // The detector's working set is PSRAM-bound (union-find alone is 8 bytes per pixel). A window is small enough to
-    // keep in internal RAM; a whole-frame search could exhaust what Wi-Fi needs, so it stays in PSRAM. The limit is
-    // global, so it stays at the default while the preview encoder is running too.
-    heap_caps_malloc_extmem_enable(searched.w && !previewStreaming ? config::trackInternalBytes : 4096);
-    zarray_t *tags = apriltag_detector_detect(detector, &image);
-    heap_caps_malloc_extmem_enable(4096);
-    apriltag_detection_t *target = nullptr;
-    int matches = 0;
-    for (int i = 0; i < zarray_size(tags); ++i) {
-        apriltag_detection_t *tag;
-        zarray_get(tags, i, &tag);
-        if (tag->id == config::tagId) {
-            ++matches;
-            target = tag;
-        }
-    }
-    const bool found = matches == 1 && target->hamming == 0 && target->decision_margin >= config::minMargin;
-    if (found) {
-        for (int i = 0; i < 4; ++i) {
-            corners[i][0] = target->p[i][0] + searched.x - 0.5f;
-            corners[i][1] = target->p[i][1] + searched.y - 0.5f;
-        }
-        margin = target->decision_margin;
-        ++detectedCount;
-    }
-    apriltag_detections_destroy(tags);
-    return found;
-}
-
 void loop() {
     if (cameraStopRequested && cameraReady) {
         esp_camera_deinit();
@@ -323,7 +273,7 @@ void loop() {
         }
         cameraStalled = !cameraReady;
         recoveries += cameraReady;
-        tracking = false;
+        finder.tracking = false;
         flow::primed = false;
         return;
     }
@@ -338,74 +288,36 @@ void loop() {
     packet.captureUs = frameCentreUs;
     // The flow runs on core 0 alongside the tag search; it skips the predicted tag and half its size around it.
     flowJob.frame = frame;
-    flowJob.excluded = tracking;
-    if (tracking) {
+    flowJob.excluded = finder.tracking;
+    if (finder.tracking) {
         flowJob.box[0] = flowJob.box[1] = INFINITY;
         flowJob.box[2] = flowJob.box[3] = -INFINITY;
+        float predicted[4][2];
+        finder.predict(frameStart(frame), predicted);
         for (int i = 0; i < 4; ++i)
             for (int axis = 0; axis < 2; ++axis) {
-                const float predicted = 2 * trackedCorners[i][axis] - previousCorners[i][axis];
-                flowJob.box[axis] = fminf(flowJob.box[axis], predicted);
-                flowJob.box[axis + 2] = fmaxf(flowJob.box[axis + 2], predicted);
+                flowJob.box[axis] = fminf(flowJob.box[axis], predicted[i][axis]);
+                flowJob.box[axis + 2] = fmaxf(flowJob.box[axis + 2], predicted[i][axis]);
             }
         for (int axis = 0; axis < 2; ++axis) {
-            flowJob.box[axis] -= tagSidePx / 2;
-            flowJob.box[axis + 2] += tagSidePx / 2;
+            flowJob.box[axis] -= finder.sidePx / 2;
+            flowJob.box[axis + 2] += finder.sidePx / 2;
         }
     }
     xTaskNotifyGive(flowTask);
     crumbs[0] = 3;
-    bool trackedNow = false;
+    TagKind kind = tagNone;
+    float corners[4][2] = {}, margin = 0;
     if (calibrated()) {
         ++poseCount;
-        float corners[4][2], margin;
-        bool found = false;
-        // Tracking: the last corners, moved by their motion over the last frame, are re-measured in this frame.
-        if (tracking) {
-            const bool consecutive = lastTagSequence + 1 == packet.sequence;
-            for (int i = 0; i < 4; ++i)
-                for (int axis = 0; axis < 2; ++axis)
-                    corners[i][axis] = 2 * trackedCorners[i][axis] - (consecutive ? previousCorners[i][axis] : trackedCorners[i][axis]);
-            // The tracker reads around the tag at random; a copy in internal RAM, when it fits, beats the PSRAM frame.
-            float low[2] = {INFINITY, INFINITY}, high[2] = {-INFINITY, -INFINITY};
-            for (auto &corner : corners)
-                for (int axis = 0; axis < 2; ++axis) {
-                    low[axis] = fminf(low[axis], corner[axis]);
-                    high[axis] = fmaxf(high[axis], corner[axis]);
-                }
-            const float grow = fmaxf(high[0] - low[0], high[1] - low[1]) / 4 + 4;
-            const int left = max(0, int(low[0] - grow)), top = max(0, int(low[1] - grow));
-            const int right = min(int(frame->width), int(high[0] + grow) + 2);
-            const int bottom = min(int(frame->height), int(high[1] + grow) + 2);
-            Image8 image = {frame->buf, 0, 0, int(frame->width), int(frame->height)};
-            if (right > left && bottom > top && (right - left) * (bottom - top) <= int(sizeof(window))) {
-                for (int y = top; y < bottom; ++y)
-                    memcpy(window + (y - top) * (right - left), frame->buf + y * frame->width + left, right - left);
-                image = {window, left, top, right - left, bottom - top};
-            }
-            found = trackCorners(image, corners, family, family->codes[config::tagId], margin);
-            trackedCount += found;
-            trackedNow = found;
+        if (searchTests) {
+            --searchTests;
+            finder.tracking = false;
+            finder.seenUs = 0;
         }
-        crumbs[0] = 4;
-        if (!found)
-            found = detectTag(frame, tracking ? corners : nullptr, corners, margin);
-        crumbs[0] = 5;
-        tracking = found;
-        if (found) {
-            memcpy(previousCorners, trackedCorners, sizeof(corners));
-            memcpy(trackedCorners, corners, sizeof(corners));
-            lastTagSequence = packet.sequence;
-            float top = INFINITY, bottom = -INFINITY;
-            for (auto &corner : corners) {
-                top = fminf(top, corner[1]);
-                bottom = fmaxf(bottom, corner[1]);
-            }
-            tagSidePx = shortestSide(corners);
-            // Rolling shutter: each output row is read config::rowUs after the one above it.
-            packet.captureUs = frameStart(frame) + uint32_t((top + bottom) / 2 * config::rowUs);
-            estimatePose(corners, margin, packet);
-        }
+        kind = finder.find(frame->buf, frame->width, frame->height, frameStart(frame), corners, margin);
+        trackedCount += kind == tagTracked;
+        detectedCount += kind == tagDetected;
     }
     crumbs[0] = 6;
     const uint32_t flowWaitStart = uint32_t(esp_timer_get_time());
@@ -418,14 +330,24 @@ void loop() {
         packet.flowResidualPx = flowJob.result.residualPx;
         packet.flowInliers = flowJob.result.inliers;
     }
+    // The pose waits for the flow, which removes the rolling shutter when the tag's own velocity is not fresh.
+    if (calibrated()) {
+        float unskewed[4][2];
+        tagPose(finder, kind, corners, margin, frameStart(frame), flowJob.result.shift, packet.flowIntervalUs, packet,
+                unskewed);
+    }
     packet.flowOffsetUs = int16_t(frameCentreUs - packet.captureUs);
     const uint32_t now = uint32_t(esp_timer_get_time());
     packet.ageUs = now - packet.captureUs;
     if (packet.ageUs > config::maxAgeUs)
+        packet.valid = packet.trusted = 0;
+    if (!packet.trusted) {
         packet.valid = 0;
-    if (!packet.valid) {
         memset(packet.position, 0, sizeof(packet.position));
         memset(packet.rotation, 0, sizeof(packet.rotation));
+        memset(packet.tagPosition, 0, sizeof(packet.tagPosition));
+        memset(packet.altPosition, 0, sizeof(packet.altPosition));
+        memset(packet.altRotation, 0, sizeof(packet.altRotation));
     }
     packet.checksum =
         crc16(reinterpret_cast<const uint8_t *>(&packet), offsetof(PosePacket, checksum));
@@ -439,19 +361,29 @@ void loop() {
     if (recording()) {
         FrameRecord record;
         record.packet = packet;
-        if (tracking)
-            memcpy(record.corners, trackedCorners, sizeof(record.corners));
+        record.reserved = 0;
+        if (kind)
+            memcpy(record.corners, finder.corners, sizeof(record.corners));
         else
             memset(record.corners, 0, sizeof(record.corners));
         record.frameStartUs = frameStart(frame);
-        record.processUs = uint16_t(min(uint32_t(detectUs), 65535u));
+        record.processUs = detectUs;
         record.flowWaitUs = uint16_t(min(flowWaitUs, 65535u));
-        record.found = tracking ? (trackedNow ? 1 : 2) : 0;
+        record.found = kind;
+        record.trackFailed = uint8_t(finder.trackFailed);
+        record.alignment = uint8_t(fminf(255, fmaxf(0, finder.alignment * 100)));
+        record.measured = finder.measured;
+        const TagFinder::Work &work = finder.work;
+        record.measures = uint8_t(work.measures);
+        record.alignCoarse = uint16_t(min(work.align.coarse + work.alignFrame.coarse, 65535));
+        record.alignFine = uint16_t(min(work.align.fine + work.alignFrame.fine, 65535));
+        record.windowPixels = uint16_t(min(work.windowPixels, 65535));
+        record.framePixels = uint16_t(min(work.framePixels, 65535));
         record.preview = previewWanted;
         record.shortFrames = uint16_t(shortFrames);
         addRecord(record);
     }
-    finishFrame(frame, tracking, trackedCorners, packet, flow::images[flow::current]);
+    finishFrame(frame, kind != tagNone, finder.corners, packet, flow::images[flow::current]);
     crumbs[0] = 9;
     if (packet.sequence % 15 == 0)
         adjustExposure();

@@ -16,9 +16,10 @@ constexpr int readyPin = 2;
 constexpr float minMargin = 30.0f;
 constexpr float maxReprojectionPx = 2.0f;
 constexpr float minAmbiguityRatio = 2.0f, ambiguityFloorPx = 0.3f;
-// An ambiguous pose takes the solution nearest the last valid one if that is this recent and this close.
+// An ambiguous pose takes the solution nearest the last valid one if that is this recent and this close, and the other
+// solution is at least anchorDecisive times further away.
 constexpr uint32_t anchorUs = 500000;
-constexpr float anchorMaxRad = 0.35f;
+constexpr float anchorMaxRad = 0.35f, anchorDecisive = 2;
 // Capture-to-ready limit; a tracked pose is typically 35-45 ms old (up to 33 ms of readout, then tracking).
 constexpr unsigned maxAgeUs = 150000;
 // OV3660 mode: the central window of the 2048x1536 array, binned 2x2 and scaled to 320x240. A line takes hts SYSCLK
