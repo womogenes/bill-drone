@@ -11,11 +11,33 @@
 
 WebServer web(80);
 Preferences settings;
-// The preview asks for a frame by setting previewWanted; the detector then hands over its buffer instead of
-// returning it. The detector never waits for video, and nothing is copied or encoded on its core.
-QueueHandle_t previewQueue;
+// The preview asks for a frame by setting previewWanted; the detector then hands over, with the tag it found, the flow
+// task's 80x60 reduction of the frame (flow.h, in internal RAM), and a core-0 task copies it for the stream to encode.
+// The preview never holds a frame buffer or reads PSRAM. Copying preview pixels out of the PSRAM frame, even 160x120
+// of them, competed with the driver's own PSRAM writes and lost the next frame about half the time (2026-10-22, with
+// fw/esp32cam/record.py). Calibration needs real pixels: /stream?full=1 hands over the frame buffer itself for a
+// full 320x240 copy, at that cost. The detector never waits for video, and nothing is encoded on its core.
+struct PreviewFrame {
+    camera_fb_t *buffer;    // full mode: the frame, returned by the copier
+    const uint8_t *reduced; // otherwise: the flow's reduced frame
+    uint8_t tag; // 0 none, 1 tracked, 2 tracked with a valid pose
+    float corners[4][2];
+    float position[3];
+    uint32_t handoverUs;
+};
+QueueHandle_t handoverQueue;
+SemaphoreHandle_t previewReady;
+PreviewFrame previewFrame; // the copy's tag; previewFrame.buffer is unused
+uint8_t *previewPixels;    // Y8 in PSRAM, owned by the copier until previewReady, then by the stream
+uint8_t previewReduced[flow::width * flow::height]; // the default preview, in internal RAM
+volatile bool previewFull = false;
+int previewWidth = flow::width, previewHeight = flow::height;
+uint8_t *previewJpeg;      // encoder output in PSRAM
+constexpr size_t previewJpegBytes = 40 * 1024;
 volatile bool previewWanted = false;
-// While streaming, the encoder's allocations would also land in internal RAM during tracking; see main.cpp.
+// Longest time since the last /status that the copier held a frame buffer, and frames the detector found too old.
+volatile uint32_t previewHoldUs = 0, staleFrames = 0;
+// While streaming, the encoder's small allocations would also land in internal RAM during a search; see main.cpp.
 volatile bool previewStreaming = false;
 constexpr TickType_t previewPeriod = pdMS_TO_TICKS(66); // At most 15 fps.
 volatile uint32_t captureCount = 0, poseCount = 0, previewCount = 0, detectUs = 0, frameUs = 0, readoutAgeUs = 0,
@@ -41,8 +63,7 @@ int logToRing(const char *format, va_list args) {
     return length;
 }
 extern bool cameraReady, cameraStalled;
-extern bool tracking;
-extern float trackedCorners[4][2];
+extern UBaseType_t driverPriority;
 
 bool calibrated() { return config::fx > 0 && config::fy > 0 && config::tagSizeM > 0; }
 
@@ -89,65 +110,138 @@ void loadCalibration() {
         assert(applyCalibration(saved));
 }
 
-void finishFrame(camera_fb_t *frame) {
+void finishFrame(camera_fb_t *frame, bool found, const float corners[4][2], const PosePacket &packet,
+                 const uint8_t *reduced) {
     if (previewWanted) {
         previewWanted = false;
-        if (xQueueSend(previewQueue, &frame, 0) == pdTRUE)
+        const bool full = previewFull;
+        PreviewFrame handover = {full ? frame : nullptr, reduced, uint8_t(found ? (packet.valid ? 2 : 1) : 0), {}, {},
+                                 uint32_t(esp_timer_get_time())};
+        if (found)
+            memcpy(handover.corners, corners, sizeof(handover.corners));
+        memcpy(handover.position, packet.position, sizeof(handover.position));
+        if (xQueueSend(handoverQueue, &handover, 0) == pdTRUE && full)
             return;
     }
     esp_camera_fb_return(frame);
 }
 
-void dropPreviewFrames() {
-    camera_fb_t *frame;
-    while (xQueueReceive(previewQueue, &frame, 0) == pdTRUE)
-        esp_camera_fb_return(frame);
+// Core 0, above the flow and HTTP tasks and below the driver's: the copy runs while the detector waits for its next
+// frame, so the two cores do not compete for PSRAM while the detector works.
+void copyLoop(void *) {
+    for (;;) {
+        PreviewFrame handover;
+        xQueueReceive(handoverQueue, &handover, portMAX_DELAY);
+        bool fits = true;
+        if (handover.buffer) {
+            fits = handover.buffer->len == 320 * 240;
+            if (fits)
+                memcpy(previewPixels, handover.buffer->buf, handover.buffer->len);
+            esp_camera_fb_return(handover.buffer);
+            const uint32_t held = uint32_t(esp_timer_get_time()) - handover.handoverUs;
+            if (held > previewHoldUs)
+                previewHoldUs = held;
+            previewWidth = 320;
+            previewHeight = 240;
+        } else {
+            memcpy(previewReduced, handover.reduced, sizeof(previewReduced));
+            previewWidth = flow::width;
+            previewHeight = flow::height;
+        }
+        if (!fits) {
+            previewWanted = true;
+            continue;
+        }
+        previewFrame = handover;
+        xSemaphoreGive(previewReady);
+    }
 }
 
-// Runs in the core-0 HTTP task: encodes the handed-over Y8 frame, returns it to the driver, then sends.
+struct JpegOutput {
+    size_t length;
+    bool overflow;
+};
+
+constexpr size_t jpegOffset = 256; // room for the part header in front
+
+size_t appendJpeg(void *arg, size_t index, const void *data, size_t length) {
+    JpegOutput &output = *static_cast<JpegOutput *>(arg);
+    if (jpegOffset + index + length + 2 > previewJpegBytes) {
+        output.overflow = true;
+        return 0;
+    }
+    memcpy(previewJpeg + jpegOffset + index, data, length);
+    output.length = index + length;
+    return length;
+}
+
+// Runs in the core-0 HTTP task. Each part carries its frame's tag in an X-Tag header ("none", or the state, the four
+// corners in full-resolution 320x240 pixels and the camera position in metres), so the overlay matches the picture.
 esp_err_t streamPreview(httpd_req_t *request) {
+    // Every Wi-Fi packet competes on core 0 with the camera driver, which must empty a 12-line DMA block every 0.7 ms
+    // or lose the frame: chunked sends cost about nine packets a frame and lost the next frame 40% of the time. The
+    // response is written raw instead, one send (one packet for the small preview) per frame.
     const int noDelay = 1;
     setsockopt(httpd_req_to_sockfd(request), IPPROTO_TCP, TCP_NODELAY, &noDelay, sizeof(noDelay));
-    httpd_resp_set_type(request, "multipart/x-mixed-replace;boundary=frame");
-    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
-    dropPreviewFrames();
+    static const char head[] = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace;boundary=frame\r\n"
+                               "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+    if (httpd_send(request, head, sizeof(head) - 1) < 0)
+        return ESP_FAIL;
+    char query[32];
+    previewFull = httpd_req_get_url_query_str(request, query, sizeof(query)) == ESP_OK && strstr(query, "full=1");
+    xSemaphoreTake(previewReady, 0);
     previewStreaming = true;
     previewWanted = true;
     TickType_t started = xTaskGetTickCount();
     esp_err_t result = ESP_OK;
     while (result == ESP_OK) {
-        camera_fb_t *frame;
-        if (xQueueReceive(previewQueue, &frame, pdMS_TO_TICKS(1000)) != pdTRUE)
+        if (xSemaphoreTake(previewReady, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            previewWanted = true;
             continue;
-        uint8_t *jpeg;
-        size_t length;
-        const bool encoded = frame2jpg(frame, 80, &jpeg, &length);
-        esp_camera_fb_return(frame);
-        assert(encoded);
-        char header[100];
-        const int size =
-            snprintf(header, sizeof(header),
-                     "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
-                     unsigned(length));
-        result = httpd_resp_send_chunk(request, header, size);
-        if (result == ESP_OK)
-            result = httpd_resp_send_chunk(request, reinterpret_cast<char *>(jpeg), length);
-        if (result == ESP_OK)
-            result = httpd_resp_send_chunk(request, "\r\n", 2);
-        free(jpeg);
+        }
+        const PreviewFrame frame = previewFrame;
+        // The part header goes in front of the JPEG in the same buffer, so the whole part is one send.
+        JpegOutput output = {0, false};
+        uint8_t *pixels = previewWidth == 320 ? previewPixels : previewReduced;
+        const bool encoded = fmt2jpg_cb(pixels, previewWidth * previewHeight, previewWidth, previewHeight, PIXFORMAT_GRAYSCALE, 75, appendJpeg, &output);
+        // The copy is free again: the next one overlaps this frame's sending.
+        previewWanted = true;
+        if (!encoded || output.overflow)
+            continue;
+        char tag[160] = "none";
+        if (frame.tag)
+            snprintf(tag, sizeof(tag), "%s %.1f,%.1f %.1f,%.1f %.1f,%.1f %.1f,%.1f %.3f,%.3f,%.3f",
+                     frame.tag == 2 ? "valid" : "tracked", frame.corners[0][0], frame.corners[0][1], frame.corners[1][0],
+                     frame.corners[1][1], frame.corners[2][0], frame.corners[2][1], frame.corners[3][0], frame.corners[3][1],
+                     frame.position[0], frame.position[1], frame.position[2]);
+        char header[jpegOffset];
+        const int size = snprintf(header, sizeof(header),
+                                  "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\nX-Tag: %s\r\n\r\n",
+                                  unsigned(output.length), tag);
+        char *part = reinterpret_cast<char *>(previewJpeg) + jpegOffset - size;
+        memcpy(part, header, size);
+        memcpy(part + size + output.length, "\r\n", 2);
+        const int total = size + output.length + 2;
+        for (int sent = 0; sent < total && result == ESP_OK;) {
+            const int n = httpd_send(request, part + sent, total - sent);
+            result = n > 0 ? ESP_OK : ESP_FAIL;
+            sent += n;
+        }
         ++previewCount;
         vTaskDelayUntil(&started, previewPeriod);
-        previewWanted = true;
     }
     previewWanted = false;
     previewStreaming = false;
-    dropPreviewFrames();
     return result;
 }
 
 void startPreview() {
-    previewQueue = xQueueCreate(1, sizeof(camera_fb_t *));
-    assert(previewQueue);
+    handoverQueue = xQueueCreate(1, sizeof(PreviewFrame));
+    previewReady = xSemaphoreCreateBinary();
+    previewPixels = static_cast<uint8_t *>(heap_caps_malloc(320 * 240, MALLOC_CAP_SPIRAM));
+    previewJpeg = static_cast<uint8_t *>(heap_caps_malloc(previewJpegBytes, MALLOC_CAP_SPIRAM));
+    assert(handoverQueue && previewReady && previewPixels && previewJpeg);
+    xTaskCreatePinnedToCore(copyLoop, "preview copy", 2048, nullptr, 3, nullptr, 0);
     httpd_config_t serverConfig = HTTPD_DEFAULT_CONFIG();
     serverConfig.server_port = 81;
     serverConfig.core_id = 0;
@@ -187,7 +281,7 @@ void startPreview() {
     });
     web.on("/status", HTTP_GET, []() {
         web.client().setNoDelay(true);
-        char body[1100];
+        char body[900];
         // The sensor's AEC exposure (lines; the effective exposure is capped at the frame) and real gain.
         sensor_t *sensor = cameraReady ? esp_camera_sensor_get() : nullptr;
         const bool valid = lastPose.valid &&
@@ -198,7 +292,7 @@ void startPreview() {
             "count\":%u,\"tracked_count\":%u,\"detected_count\":%u,\"preview_count\":%u,\"detect_us\":%u,\"frame_us\":%u,\"age_us\":%u,\"frame_age_us\":%u,\"valid\":%s,"
             "\"position_m\":[%.4f,%.4f,%.4f],\"margin\":%.1f,\"reprojection_px\":%.3f,\"internal_min\":%u,\"uptime_ms\":%u,\"reset\":%d,"
             "\"flow_px\":[%.3f,%.3f],\"flow_inliers\":%u,\"flow_residual_px\":%.3f,\"short_frames\":%u,\"stalls\":%u,\"recoveries\":%u,"
-            "\"last_crumbs\":[%u,%u,%u],\"gain\":%.2f,\"exposure_lines\":%d,\"frame_lines\":%d}",
+            "\"last_crumbs\":[%u,%u,%u],\"gain\":%.2f,\"exposure_lines\":%d,\"frame_lines\":%d,\"preview_hold_us\":%u,\"stale_frames\":%u,\"driver_priority\":[%u,%u]}",
             cameraStalled ? "stalled" : cameraReady ? "running" : "stopped", calibrated() ? "true" : "false", config::tagId, config::tagSizeM * 1000,
             unsigned(captureCount), unsigned(poseCount), unsigned(trackedCount), unsigned(detectedCount),
             unsigned(previewCount), unsigned(detectUs),
@@ -208,15 +302,9 @@ void startPreview() {
             lastPose.flow[0], lastPose.flow[1], unsigned(lastPose.flowInliers), lastPose.flowResidualPx, unsigned(shortFrames), unsigned(stalls),
             unsigned(recoveries), unsigned(lastCrumbs[0]), unsigned(lastCrumbs[1]), unsigned(lastCrumbs[2]),
             sensor ? sensor->get_reg(sensor, 0x350a, 0x3ff) / 16.0f : 0, sensor ? sensor->get_reg(sensor, 0x3500, 0xffffff) >> 4 : 0,
-            sensor ? sensor->get_reg(sensor, 0x380e, 0xffff) : 0);
-        // Tracked corners in preview pixels for the dashboard overlay; core 1 may be mid-update, which only shifts the drawing.
-        const int length = strlen(body) - 1;
-        if (tracking)
-            snprintf(body + length, sizeof(body) - length, ",\"corners_px\":[[%.1f,%.1f],[%.1f,%.1f],[%.1f,%.1f],[%.1f,%.1f]]}",
-                     trackedCorners[0][0], trackedCorners[0][1], trackedCorners[1][0], trackedCorners[1][1],
-                     trackedCorners[2][0], trackedCorners[2][1], trackedCorners[3][0], trackedCorners[3][1]);
-        else
-            snprintf(body + length, sizeof(body) - length, ",\"corners_px\":null}");
+            sensor ? sensor->get_reg(sensor, 0x380e, 0xffff) : 0, unsigned(previewHoldUs), unsigned(staleFrames),
+            unsigned(driverPriority), unsigned(configMAX_PRIORITIES - 1));
+        previewHoldUs = 0;
         web.send(200, "application/json", body);
     });
     web.begin();

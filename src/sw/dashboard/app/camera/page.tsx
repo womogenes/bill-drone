@@ -14,8 +14,65 @@ type Status = {
   pose_count: number;
   preview_count: number;
   position_m: number[];
-  corners_px: number[][] | null;
 };
+// The tag in one preview frame, from its X-Tag header: corners in 320x240 pixels.
+type Tag = { valid: boolean; corners: number[][]; position: number[] } | null;
+
+function parseTag(text: string): Tag {
+  const [state, ...fields] = text.trim().split(' ');
+  if (state === 'none' || fields.length < 5) return null;
+  return {
+    valid: state === 'valid',
+    corners: fields.slice(0, 4).map((pair) => pair.split(',').map(Number)),
+    position: fields[4].split(',').map(Number),
+  };
+}
+
+function indexOf(bytes: Uint8Array, pattern: number[], from = 0) {
+  outer: for (let i = from; i <= bytes.length - pattern.length; i++) {
+    for (let j = 0; j < pattern.length; j++)
+      if (bytes[i + j] !== pattern[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+// Reads the camera's multipart stream: each part is a JPEG with its tag in an X-Tag header, so the outline drawn
+// over a frame is that frame's.
+async function readPreview(
+  url: string,
+  signal: AbortSignal,
+  onFrame: (jpeg: Uint8Array, tag: string) => void
+) {
+  const response = await fetch(url, { signal });
+  if (!response.ok || !response.body)
+    throw new Error((await response.json()).error ?? 'Preview unavailable.');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = new Uint8Array(0);
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error('Preview ended.');
+    const joined = new Uint8Array(buffer.length + value.length);
+    joined.set(buffer);
+    joined.set(value, buffer.length);
+    buffer = joined;
+    for (;;) {
+      const headerEnd = indexOf(buffer, [13, 10, 13, 10]);
+      if (headerEnd < 0) break;
+      const header = decoder.decode(buffer.subarray(0, headerEnd));
+      const length = Number(/Content-Length: *(\d+)/i.exec(header)?.[1] ?? 0);
+      const start = headerEnd + 4;
+      if (buffer.length < start + length + 2) break;
+      if (length)
+        onFrame(
+          buffer.slice(start, start + length),
+          /X-Tag: *(.*)/i.exec(header)?.[1] ?? 'none'
+        );
+      buffer = buffer.slice(start + length + 2);
+    }
+  }
+}
 
 async function calculate(body: object) {
   const response = await fetch('/api/camera', {
@@ -41,7 +98,9 @@ export default function CameraPage() {
   const [result, setResult] = useState<Result | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [rates, setRates] = useState({ preview: 0, pose: 0 });
-  const frameRef = useRef<HTMLImageElement>(null);
+  const [full, setFull] = useState(false);
+  const [tag, setTag] = useState<Tag>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const captureButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -73,12 +132,6 @@ export default function CameraPage() {
         const value = await response.json();
         if (!response.ok) throw new Error(value.error);
         const time = performance.now();
-        setStatus(value);
-        // The overlay polls fast; rates use samples at least a second apart.
-        if (previous && time - previous.time < 1000) {
-          timer = setTimeout(refresh, 100);
-          return;
-        }
         if (previous) {
           const seconds = (time - previous.time) / 1000;
           setRates({
@@ -93,12 +146,13 @@ export default function CameraPage() {
           });
         }
         previous = { value, time };
+        setStatus(value);
       } catch (error) {
         if (controller.signal.aborted) return;
         setStatus(null);
         setStreamError(String(error));
       }
-      timer = setTimeout(refresh, 100);
+      timer = setTimeout(refresh, 1000);
     }
     void refresh();
     return () => {
@@ -106,6 +160,41 @@ export default function CameraPage() {
       clearTimeout(timer);
     };
   }, [connectedHost, connection]);
+
+  useEffect(() => {
+    if (!connectedHost) return;
+    const controller = new AbortController();
+    let decoding = false;
+    readPreview(
+      `/api/camera?host=${encodeURIComponent(connectedHost)}${full ? '&full=1' : ''}`,
+      controller.signal,
+      (jpeg, header) => {
+        // Decoding behind the stream drops frames rather than queueing them.
+        if (decoding) return;
+        decoding = true;
+        createImageBitmap(new Blob([jpeg as BlobPart], { type: 'image/jpeg' }))
+          .then((bitmap) => {
+            const canvas = canvasRef.current;
+            if (!canvas || controller.signal.aborted) return;
+            canvas.width = bitmap.width;
+            canvas.height = bitmap.height;
+            canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
+            bitmap.close();
+            setTag(parseTag(header));
+            setStreamError('');
+          })
+          .catch(() => {})
+          .finally(() => (decoding = false));
+      }
+    ).catch((error) => {
+      if (!controller.signal.aborted)
+        setStreamError(error instanceof Error ? error.message : String(error));
+    });
+    return () => {
+      controller.abort();
+      setTag(null);
+    };
+  }, [connectedHost, connection, full]);
 
   function reset() {
     setViews([]);
@@ -125,13 +214,9 @@ export default function CameraPage() {
     setError('');
     setResult(null);
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = 320;
-      canvas.height = 240;
-      const image = frameRef.current!;
-      if (image.naturalWidth !== 320 || image.naturalHeight !== 240)
-        throw new Error('Waiting for a 320×240 frame.');
-      canvas.getContext('2d')!.drawImage(image, 0, 0);
+      const canvas = canvasRef.current!;
+      if (canvas.width !== 320 || canvas.height !== 240)
+        throw new Error('Turn on the full-resolution preview to capture.');
       const { corners } = await calculate({
         ...settings(),
         image: canvas.toDataURL('image/png').split(',')[1],
@@ -199,36 +284,30 @@ export default function CameraPage() {
       </div>
       <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded bg-muted">
         {connectedHost ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            ref={frameRef}
-            src={`/api/camera?host=${encodeURIComponent(connectedHost)}&connection=${connection}`}
-            alt="Live camera preview"
-            onLoad={() => setStreamError('')}
-            onError={() =>
-              setStreamError('Preview unavailable. Check the camera address.')
-            }
+          <canvas
+            ref={canvasRef}
+            aria-label="Live camera preview"
             className="h-full w-full object-contain"
           />
         ) : (
           <p className="text-sm text-muted-foreground">Camera disconnected</p>
         )}
-        {status?.corners_px && (
+        {connectedHost && tag && (
           <svg
             viewBox="0 0 320 240"
             className="pointer-events-none absolute inset-0 h-full w-full"
           >
             <polygon
-              points={status.corners_px.map((p) => p.join(',')).join(' ')}
+              points={tag.corners.map((p) => p.join(',')).join(' ')}
               fill="none"
-              stroke={status.valid ? '#22c55e' : '#f59e0b'}
+              stroke={tag.valid ? '#22c55e' : '#f59e0b'}
               strokeWidth="1.5"
             />
             <circle
-              cx={status.corners_px.reduce((sum, p) => sum + p[0], 0) / 4}
-              cy={status.corners_px.reduce((sum, p) => sum + p[1], 0) / 4}
+              cx={tag.corners.reduce((sum, p) => sum + p[0], 0) / 4}
+              cy={tag.corners.reduce((sum, p) => sum + p[1], 0) / 4}
               r="2"
-              fill={status.valid ? '#22c55e' : '#f59e0b'}
+              fill={tag.valid ? '#22c55e' : '#f59e0b'}
             />
           </svg>
         )}
@@ -247,10 +326,18 @@ export default function CameraPage() {
               ? 'Tag tracked'
               : 'Tag not tracked'
             : 'Lens calibration needed'}
-          {status.valid &&
-            ` · ${status.position_m.map((v) => v.toFixed(3)).join(', ')} m`}
+          {tag && ` · ${tag.position.map((v) => v.toFixed(3)).join(', ')} m`}
         </p>
       )}
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={full}
+          onChange={(event) => setFull(event.target.checked)}
+        />
+        Full-resolution preview (needed to capture views; adds latency to some
+        pose frames)
+      </label>
       <div className="flex gap-6">
         <label className="flex flex-col gap-3 text-sm">
           Tag16h5 ID
@@ -292,6 +379,7 @@ export default function CameraPage() {
             busy ||
             !connectedHost ||
             !status ||
+            !full ||
             !(Number(sizeMm) > 0) ||
             views.length >= 60
           }

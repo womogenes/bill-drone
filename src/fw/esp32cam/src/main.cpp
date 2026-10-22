@@ -11,6 +11,7 @@
 #include "ota.h"
 
 #include "web.h"
+#include "record.h"
 
 PosePacket *wirePacket;
 apriltag_detector_t *detector;
@@ -67,11 +68,14 @@ uint32_t frameStart(const camera_fb_t *frame) {
 // The driver's queue is first in, first out, and with two buffers it stops capturing while the detector holds one and
 // the other waits finished. That keeps the camera DMA copy from competing with the detector for PSRAM, but the waiting
 // frame may have finished long ago. Such a frame is returned and the next one, started afterwards, is used instead.
+UBaseType_t driverPriority = 0; // as the driver created its task, for /status
+
 camera_fb_t *freshFrame() {
     camera_fb_t *frame = esp_camera_fb_get();
     if (!frame || uint32_t(esp_timer_get_time()) - frameStart(frame) <= config::maxFrameAgeUs)
         return frame;
     esp_camera_fb_return(frame);
+    ++staleFrames;
     return esp_camera_fb_get();
 }
 
@@ -112,6 +116,13 @@ bool startCamera() {
     if (!configured) {
         esp_camera_deinit();
         return false;
+    }
+    // The driver's task must empty a 12-line DMA block every 0.7 ms or lose the frame. It is created at the same
+    // priority as the Wi-Fi task on core 0, so Wi-Fi traffic (the preview, /status, records) cost frames; above it,
+    // its short copies only delay Wi-Fi.
+    if (TaskHandle_t driver = xTaskGetHandle("cam_task")) {
+        driverPriority = uxTaskPriorityGet(driver);
+        vTaskPrioritySet(driver, configMAX_PRIORITIES - 1);
     }
     // Exposure is ours (adjustExposure), gain stays automatic up to its 64x ceiling.
     exposureLines = config::exposureLines;
@@ -185,7 +196,7 @@ void setup() {
     // Raw Y8: no JPEG decode on the detector and no compression artefacts on tag edges.
     camera.pixel_format = PIXFORMAT_GRAYSCALE;
     camera.frame_size = FRAMESIZE_QVGA;
-    // One for the detector, one for the driver; the preview holds a frame only between captures.
+    // One for the detector, one for the driver; only the full-resolution preview holds a frame, for its copy.
     camera.fb_count = 2;
     camera.fb_location = CAMERA_FB_IN_PSRAM;
     camera.grab_mode = CAMERA_GRAB_LATEST;
@@ -205,6 +216,7 @@ void setup() {
     detector->qtp.min_white_black_diff = 20;
     detector->qtp.max_nmaxima = 6;
     startPreview();
+    startRecording();
     flowDone = xSemaphoreCreateBinary();
     assert(flowDone);
     xTaskCreatePinnedToCore(flowLoop, "flow", 4096, nullptr, 2, &flowTask, 0);
@@ -343,6 +355,7 @@ void loop() {
     }
     xTaskNotifyGive(flowTask);
     crumbs[0] = 3;
+    bool trackedNow = false;
     if (calibrated()) {
         ++poseCount;
         float corners[4][2], margin;
@@ -372,6 +385,7 @@ void loop() {
             }
             found = trackCorners(image, corners, family, family->codes[config::tagId], margin);
             trackedCount += found;
+            trackedNow = found;
         }
         crumbs[0] = 4;
         if (!found)
@@ -394,7 +408,9 @@ void loop() {
         }
     }
     crumbs[0] = 6;
+    const uint32_t flowWaitStart = uint32_t(esp_timer_get_time());
     xSemaphoreTake(flowDone, portMAX_DELAY);
+    const uint32_t flowWaitUs = uint32_t(esp_timer_get_time()) - flowWaitStart;
     crumbs[0] = 7;
     if (flowJob.found && frameStart(frame) - lastCaptureUs <= 2 * config::framePeriodUs) {
         memcpy(packet.flow, flowJob.result.shift, sizeof(packet.flow));
@@ -420,7 +436,22 @@ void loop() {
     frameUs = frameStart(frame) - lastCaptureUs;
     lastCaptureUs = frameStart(frame);
     crumbs[0] = 8;
-    finishFrame(frame);
+    if (recording()) {
+        FrameRecord record;
+        record.packet = packet;
+        if (tracking)
+            memcpy(record.corners, trackedCorners, sizeof(record.corners));
+        else
+            memset(record.corners, 0, sizeof(record.corners));
+        record.frameStartUs = frameStart(frame);
+        record.processUs = uint16_t(min(uint32_t(detectUs), 65535u));
+        record.flowWaitUs = uint16_t(min(flowWaitUs, 65535u));
+        record.found = tracking ? (trackedNow ? 1 : 2) : 0;
+        record.preview = previewWanted;
+        record.shortFrames = uint16_t(shortFrames);
+        addRecord(record);
+    }
+    finishFrame(frame, tracking, trackedCorners, packet, flow::images[flow::current]);
     crumbs[0] = 9;
     if (packet.sequence % 15 == 0)
         adjustExposure();

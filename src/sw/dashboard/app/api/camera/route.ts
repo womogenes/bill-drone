@@ -7,14 +7,19 @@ function cameraUrl(host: string, path: string) {
   if (!/^[a-zA-Z0-9.-]+(:\d+)?$/.test(host))
     throw new Error('Enter a camera hostname or IP address.');
   const url = new URL(`http://${host}${path}`);
-  if (path === '/stream') url.port = String(Number(url.port || 80) + 1);
+  if (path.startsWith('/stream')) url.port = String(Number(url.port || 80) + 1);
   return url;
 }
 
 export async function GET(request: Request) {
   const query = new URL(request.url).searchParams;
   const host = query.get('host') || '192.168.86.28';
-  const path = query.get('mode') === 'status' ? '/status' : '/stream';
+  const path =
+    query.get('mode') === 'status'
+      ? '/status'
+      : query.get('full') === '1'
+        ? '/stream?full=1'
+        : '/stream';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
