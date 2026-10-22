@@ -41,6 +41,8 @@ int logToRing(const char *format, va_list args) {
     return length;
 }
 extern bool cameraReady, cameraStalled;
+extern bool tracking;
+extern float trackedCorners[4][2];
 
 bool calibrated() { return config::fx > 0 && config::fy > 0 && config::tagSizeM > 0; }
 
@@ -185,7 +187,7 @@ void startPreview() {
     });
     web.on("/status", HTTP_GET, []() {
         web.client().setNoDelay(true);
-        char body[900];
+        char body[1100];
         // The sensor's AEC exposure (lines; the effective exposure is capped at the frame) and real gain.
         sensor_t *sensor = cameraReady ? esp_camera_sensor_get() : nullptr;
         const bool valid = lastPose.valid &&
@@ -207,6 +209,14 @@ void startPreview() {
             unsigned(recoveries), unsigned(lastCrumbs[0]), unsigned(lastCrumbs[1]), unsigned(lastCrumbs[2]),
             sensor ? sensor->get_reg(sensor, 0x350a, 0x3ff) / 16.0f : 0, sensor ? sensor->get_reg(sensor, 0x3500, 0xffffff) >> 4 : 0,
             sensor ? sensor->get_reg(sensor, 0x380e, 0xffff) : 0);
+        // Tracked corners in preview pixels for the dashboard overlay; core 1 may be mid-update, which only shifts the drawing.
+        const int length = strlen(body) - 1;
+        if (tracking)
+            snprintf(body + length, sizeof(body) - length, ",\"corners_px\":[[%.1f,%.1f],[%.1f,%.1f],[%.1f,%.1f],[%.1f,%.1f]]}",
+                     trackedCorners[0][0], trackedCorners[0][1], trackedCorners[1][0], trackedCorners[1][1],
+                     trackedCorners[2][0], trackedCorners[2][1], trackedCorners[3][0], trackedCorners[3][1]);
+        else
+            snprintf(body + length, sizeof(body) - length, ",\"corners_px\":null}");
         web.send(200, "application/json", body);
     });
     web.begin();

@@ -14,6 +14,7 @@ type Status = {
   pose_count: number;
   preview_count: number;
   position_m: number[];
+  corners_px: number[][] | null;
 };
 
 async function calculate(body: object) {
@@ -72,6 +73,12 @@ export default function CameraPage() {
         const value = await response.json();
         if (!response.ok) throw new Error(value.error);
         const time = performance.now();
+        setStatus(value);
+        // The overlay polls fast; rates use samples at least a second apart.
+        if (previous && time - previous.time < 1000) {
+          timer = setTimeout(refresh, 100);
+          return;
+        }
         if (previous) {
           const seconds = (time - previous.time) / 1000;
           setRates({
@@ -86,13 +93,12 @@ export default function CameraPage() {
           });
         }
         previous = { value, time };
-        setStatus(value);
       } catch (error) {
         if (controller.signal.aborted) return;
         setStatus(null);
         setStreamError(String(error));
       }
-      timer = setTimeout(refresh, 1000);
+      timer = setTimeout(refresh, 100);
     }
     void refresh();
     return () => {
@@ -191,7 +197,7 @@ export default function CameraPage() {
           Connect
         </Button>
       </div>
-      <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded bg-muted">
+      <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded bg-muted">
         {connectedHost ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -206,6 +212,25 @@ export default function CameraPage() {
           />
         ) : (
           <p className="text-sm text-muted-foreground">Camera disconnected</p>
+        )}
+        {status?.corners_px && (
+          <svg
+            viewBox="0 0 320 240"
+            className="pointer-events-none absolute inset-0 h-full w-full"
+          >
+            <polygon
+              points={status.corners_px.map((p) => p.join(',')).join(' ')}
+              fill="none"
+              stroke={status.valid ? '#22c55e' : '#f59e0b'}
+              strokeWidth="1.5"
+            />
+            <circle
+              cx={status.corners_px.reduce((sum, p) => sum + p[0], 0) / 4}
+              cy={status.corners_px.reduce((sum, p) => sum + p[1], 0) / 4}
+              r="2"
+              fill={status.valid ? '#22c55e' : '#f59e0b'}
+            />
+          </svg>
         )}
       </div>
       {streamError && (
