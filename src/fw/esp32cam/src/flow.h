@@ -162,6 +162,9 @@ inline bool update(const uint8_t *frame, int frameWidth, const float *exclude, R
             ++inliers;
         }
     }
+    // With an even count the median can fall between two disagreeing groups, leaving no block near it.
+    if (inliers < 3)
+        return false;
     result.shift[0] = sumX / inliers * scale;
     result.shift[1] = sumY / inliers * scale;
     result.residualPx = median(deviation, found) * scale;
