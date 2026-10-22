@@ -47,7 +47,10 @@ def cross(a, b):
     return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 
 
-def run(gains, plant, seconds=10.0, seed=0):
+def run(gains, plant, seconds=10.0, seed=0, log=None):
+    """
+    Simulate one flight. A log list receives (time, position, roll/pitch/yaw, estimated roll/pitch, servo tilts, motor thrusts) every control step.
+    """
     rng = random.Random(seed)
     accel_rng = random.Random(seed + 1000)
     settings = dict(MODEL) | {"roll": 0, "pitch": 0, "yaw_rate": 0, "pitch_trim": 0, "left_trim": 0, "right_trim": 0,
@@ -158,6 +161,8 @@ def run(gains, plant, seconds=10.0, seed=0):
                 pitch + (q * math.cos(roll) - r * math.sin(roll)) * h,
                 angles[2] + (q * math.sin(roll) + r * math.cos(roll)) / math.cos(pitch) * h,
             ]
+        if log is not None:
+            log.append((step * DT, list(position), list(angles), list(attitude), list(servo), list(motor)))
         roll, pitch = angles[0], angles[1]
         angle = max(abs(roll), abs(pitch))
         worst = max(worst, angle)
