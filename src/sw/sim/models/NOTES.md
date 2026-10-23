@@ -87,3 +87,14 @@ The older response fits used data collected before the blocking PWM updates were
 ## Sweep plant (2026-10-22)
 
 `sweep.py` runs a 6-DOF rigid body: thrust and servo tilt in the body frame, gravity, quadratic drag (0.03 N/(m/s)², a rough estimate), and four spring-damper feet at the CAD landing-leg contact points (x ±55 mm, y ±78 mm, 104 mm below the CoM; 2000 N/m and 30 N·s/m per foot, friction 0.5). The controller sees the firmware attitude estimator fed with simulated, noisy gyro and accelerometer readings instead of the true attitude. A plant's `ramp` raises collective to T over that many seconds on the ground. On the 2026-10-21 liftoff and free-flight sweeps this matches the earlier attitude-only plant to about 1° of peak pitch and the same stable/unstable cases: the feet cannot tip the drone before liftoff (rocking about a foot takes about 0.5 N·m; a 10 rad/s² pitch push is 0.016 N·m), and the estimator error is small next to the servo lag. Collective has no altitude hold, so after the climb pulse the drone keeps climbing or sinking; free flight starts at 50 m so the floor never ends a run.
+
+## Airborne fit from the Oct 20–21 recordings (2026-10-23)
+
+Per Bill, the Oct 20 08:25–11:17Z runs sat on the floor (legs touching, collective 700–710 at about 14.5 V is below liftoff on that pack); the Oct 21 02:xx and 06:xx runs were free. The 00:32Z files (no `sensor_to_body` in their header; the firmware then used [1, −1, −1]) never reach collective 600. `slop/airborne.py` fits only the airborne windows, from liftoff to 35° or impact:
+
+| Session | Effectiveness vs controller model | Delay | Steady pitch push | R² |
+| --- | ---: | ---: | ---: | ---: |
+| Oct 21 02:xx | 1.42x | 90 ms | −4.0 rad/s² (nose-up) | 0.71 |
+| Oct 21 06:xx (new ESCs) | 1.04x | 130 ms | +2.8 rad/s² (nose-down) | 0.54 |
+
+The sweep plant with the 06:xx values and the flown gains (pitch 10/10/5, `pitch_bias` +2.4, `velocity_damping` 8) pitches past 30° about 0.6 s after liftoff, matching the recorded tip-overs (21–35° within 0.4–0.6 s). With pitch 15/30/7 the peak pitch in the first second is 15–17° at bias −7, 4–5° at −3, and 13–16° at 0; on the 02:xx plant bias −7 gives 34–39°. The push changed sign between sessions, so bias −3 suits the current (06:xx) hardware and 0 is the safe middle.
