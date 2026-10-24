@@ -2,15 +2,11 @@
 
 ## Code and operation
 
-`sw.sim.slop.simulation.run()` calls the controller at 100 Hz and renders a 10 FPS GIF. The notebook runs a timed takeoff sequence. The firmware takes collective throttle from the dashboard.
-
 Firmware and simulation share the C attitude estimator, controller and thrust table in `fw/drone/main/flight_math.c`; `sw/sim/flight.py` wraps it for the simulation and adds thrust conversion and gyro calibration. The controller receives accelerometer and gyro readings. It uses fixed geometry and inertia estimates; position and altitude are recorded for evaluation.
-
-`control.py` manages settings, shutdown conditions, and PWM output. `imu.py` reads the MPU6050. Tuning is saved in `flight-tuning.json`; the older `control-gains.json` has different gain units and is ignored. Flight trim and physical servo-center offsets in `actuators.py` are separate adjustments to check on the assembled drone.
 
 ## Thrust calibration
 
-The thrust table uses three October 4 sweeps in `sw/slop/`, calibrated with the 1.62 kg bottle comparison. `compare.py` excludes the two confirmed glitches at throttle 750. It calculates a median at each throttle for each run; the shared table uses the median across runs and interpolates between those values.
+The thrust table uses three October 4 sweeps (the CSVs and `compare.py` are kept on the `claude/slop-archive` branch under `src/sw/slop/`), calibrated with the 1.62 kg bottle comparison. `compare.py` excludes the two confirmed glitches at throttle 750. It calculates a median at each throttle for each run; the shared table uses the median across runs and interpolates between those values.
 
 Throttle 200 is treated as approximately zero thrust, based on the bench observation. The curve retains the measured decline above 1100. Commands below 200 produce zero modeled thrust; commands above 1200 hold the last table value. Converting thrust back to throttle uses the rising branch, capped at 1100. Both motors use the same curve. Battery voltage and propeller configuration were not recorded in those CSVs.
 
@@ -23,15 +19,13 @@ Gyro bias is `[0.02, 1.10, -1.95]` °/s, from an earlier stationary dashboard ob
 Actuator parameters are estimates:
 
 - Thrust-command delay: 20 ms, followed by a 50 ms response time constant.
-- Servo play: ±0.5°, implemented by holding the target until the command takes up
-  the slack. Load-driven movement inside the gear clearance is omitted.
+- Servo play: ±0.5°, implemented by holding the target until the command takes up the slack. Load-driven movement inside the gear clearance is omitted.
 - Servo PWM is 100 Hz (was 50 Hz until 2026-10-21). Servo command filter: 60 ms; stiffness: 5 N·m/rad; damping: 0.15 N·m·s/rad.
 - Servo torque limit: ±0.8 N·m; travel: ±60°.
 - Maximum thrust: approximately 11.22 N per motor, from the calibrated curve.
-- Propeller reaction torque: ±0.015 N·m per newton of thrust, with opposite spins.
-  The actual left/right spin assignment still needs confirmation.
+- Propeller reaction torque: ±0.015 N·m per newton of thrust, with opposite spins. The actual left/right spin assignment still needs confirmation.
 
-The thrust sweeps contain settled readings after a one-second wait, so they do not identify motor response timing. Battery sag, aerodynamic drag, and propeller gyroscopic effects are omitted. Propeller geometry supplies approximate inertia and a visual outline. Ground contact uses simple component shapes and foot pads. The standalone XML viewer includes actuator lag; `simulation.py` adds command delay, backlash, sensor noise, and gyro calibration.
+The thrust sweeps contain settled readings after a one-second wait, so they do not identify motor response timing. Battery sag, aerodynamic drag, and propeller gyroscopic effects are omitted. Propeller geometry supplies approximate inertia and a visual outline. Ground contact uses simple component shapes and foot pads. The standalone XML viewer includes actuator lag; `sweep.py` adds command delay, backlash and sensor noise.
 
 ## Controller tuning
 
@@ -90,7 +84,7 @@ The older response fits used data collected before the blocking PWM updates were
 
 ## Airborne fit from the Oct 20–21 recordings (2026-10-23)
 
-Per Bill, the Oct 20 08:25–11:17Z runs sat on the floor (legs touching, collective 700–710 at about 14.5 V is below liftoff on that pack); the Oct 21 02:xx and 06:xx runs were free. The 00:32Z files (no `sensor_to_body` in their header; the firmware then used [1, −1, −1]) never reach collective 600. `slop/airborne.py` fits only the airborne windows, from liftoff to 35° or impact:
+Per Bill, the Oct 20 08:25–11:17Z runs sat on the floor (legs touching, collective 700–710 at about 14.5 V is below liftoff on that pack); the Oct 21 02:xx and 06:xx runs were free. The 00:32Z files (no `sensor_to_body` in their header; the firmware then used [1, −1, −1]) never reach collective 600. `sw/fit_airborne.py` fits only the airborne windows, from liftoff to 35° or impact:
 
 | Session | Effectiveness vs controller model | Delay | Steady pitch push | R² |
 | --- | ---: | ---: | ---: | ---: |

@@ -1,5 +1,5 @@
 """
-Pitch effectiveness, actuator delay and steady push from the airborne part of free-flight recordings: uv run -m sw.sim.slop.airborne sw/recordings/<flight>.bin [...]
+Pitch effectiveness, actuator delay and steady push from the airborne part of free-flight recordings: uv run -m sw.fit_airborne sw/recordings/<flight>.bin [...]
 Each window runs from liftoff (first az above 1.25 g once collective reaches 600) to |pitch| or |roll| past 35°, an impact (|a| > 2.5 g) or motor stop, so ground contact never enters the fit.
 """
 
