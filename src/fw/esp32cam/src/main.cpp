@@ -2,7 +2,6 @@
 #include "esp_camera.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
-#include "driver/spi_slave.h"
 #include "driver/gpio.h"
 #include "tag16h5.h"
 #include "pose.h"
@@ -14,11 +13,8 @@
 #include "web.h"
 #include "record.h"
 
-PosePacket *wirePacket;
 TagFinder finder;
 uint32_t sequence = 0;
-spi_slave_transaction_t transfer = {};
-bool transferPending = false;
 bool cameraReady = false;
 // Set by OTA; the detection loop stops the camera between frames, so OTA never has to win a lock against it.
 volatile bool cameraStopRequested = false;
@@ -33,15 +29,6 @@ int exposureLines;
 // What each core was doing, kept across a panic restart: /status shows the values from before the last reset.
 RTC_NOINIT_ATTR uint32_t crumbs[3];
 uint32_t lastCrumbs[3];
-
-// Driver callbacks run only after DMA is armed / the transfer has completed.
-void IRAM_ATTR transferReady(spi_slave_transaction_t *) {
-    gpio_set_level(gpio_num_t(config::readyPin), 1);
-}
-
-void IRAM_ATTR transferDone(spi_slave_transaction_t *) {
-    gpio_set_level(gpio_num_t(config::readyPin), 0);
-}
 
 // Wi-Fi, OTA and the control server share core 0 with the radio and the camera driver's copy task. Core 1 only captures and detects.
 void serviceTask(void *) {
@@ -148,32 +135,18 @@ void detectorWorkspace(Workspace where) {
 void setup() {
     memcpy(lastCrumbs, crumbs, sizeof(crumbs));
     memset(crumbs, 0, sizeof(crumbs));
-    Serial.begin(115200);
+    // UART0 carries pose packets to the drone from here on; the boot ROM's own messages on GPIO1 fail the drone's magic
+    // and CRC checks. A transmit buffer lets publish() return without waiting for the wire.
+    Serial.setTxBufferSize(1024);
+    Serial.begin(config::linkBaud, SERIAL_8N1, config::linkRxPin, config::linkTxPin);
     startWifi();
     assert(psramFound());
     heap_caps_malloc_extmem_enable(4096);
-    pinMode(config::readyPin, OUTPUT);
-    digitalWrite(config::readyPin, LOW);
+    pinMode(config::syncPin, OUTPUT);
+    digitalWrite(config::syncPin, LOW);
     loadCalibration();
-    spi_bus_config_t bus = {};
-    bus.mosi_io_num = config::mosiPin;
-    bus.miso_io_num = config::misoPin;
-    bus.sclk_io_num = config::clockPin;
-    bus.quadwp_io_num = bus.quadhd_io_num = -1;
-    bus.max_transfer_sz = sizeof(PosePacket);
-    spi_slave_interface_config_t slave = {};
-    slave.spics_io_num = config::csPin;
-    slave.mode = 1; // ESP32 slave DMA supports modes 1 and 3.
-    slave.queue_size = 1;
-    slave.post_setup_cb = transferReady;
-    slave.post_trans_cb = transferDone;
-    wirePacket = static_cast<PosePacket *>(
-        heap_caps_malloc(sizeof(PosePacket), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-    assert(wirePacket);
-    ESP_ERROR_CHECK(spi_slave_initialize(HSPI_HOST, &bus, &slave, SPI_DMA_CH_AUTO));
 
-    // AI Thinker ESP32-CAM pinout; the camera driver identifies the sensor. The SPI link uses the
-    // otherwise unused microSD pins.
+    // AI Thinker ESP32-CAM pinout; the camera driver identifies the sensor.
     camera_config_t &camera = cameraConfig;
     camera.pin_pwdn = 32;
     camera.pin_reset = -1;
@@ -202,7 +175,6 @@ void setup() {
     camera.fb_location = CAMERA_FB_IN_PSRAM;
     camera.grab_mode = CAMERA_GRAB_LATEST;
     if (!startCamera()) {
-        Serial.println("Camera start failed; OTA remains available.");
         xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
         return;
     }
@@ -228,25 +200,17 @@ void setup() {
     xTaskCreatePinnedToCore(flowLoop, "flow", 4096, nullptr, 2, &flowTask, 0);
     cameraReady = true;
     xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
-    Serial.println("AprilTag pose SPI ready: 320x240 Y8, tag16h5, mode 1.");
 }
 
-// One outstanding result. READY is raised by the driver, then the host clocks exactly 100 bytes. A result the host
-// has not read yet is kept and this one dropped: the host measures how long READY was high, so it knows that age.
+// Each frame's packet goes out on UART0 as soon as it is ready; at 2 Mbaud its 164 bytes take 0.8 ms, far inside a frame.
+// syncPin's rising edge marks the moment the packet's age was measured, so the drone dates the capture by that edge
+// whatever its UART latency. If the transmit buffer is full (the line is stuck), the packet is dropped.
 void publish(const PosePacket &packet) {
-    if (transferPending) {
-        spi_slave_transaction_t *finished;
-        const esp_err_t result = spi_slave_get_trans_result(HSPI_HOST, &finished, 0);
-        if (result == ESP_ERR_TIMEOUT)
-            return;
-        ESP_ERROR_CHECK(result);
-    }
-    memcpy(wirePacket, &packet, sizeof(packet));
-    transfer = {};
-    transfer.length = sizeof(packet) * 8;
-    transfer.tx_buffer = wirePacket;
-    ESP_ERROR_CHECK(spi_slave_queue_trans(HSPI_HOST, &transfer, 0));
-    transferPending = true;
+    if (Serial.availableForWrite() < int(sizeof(packet)))
+        return;
+    gpio_set_level(gpio_num_t(config::syncPin), 1);
+    Serial.write(reinterpret_cast<const uint8_t *>(&packet), sizeof(packet));
+    gpio_set_level(gpio_num_t(config::syncPin), 0);
 }
 
 void loop() {

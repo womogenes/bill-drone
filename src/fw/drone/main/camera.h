@@ -8,7 +8,7 @@
 typedef struct {
     // The camera's frame number; use each pose once.
     uint32_t sequence;
-    // Readout of the tag's centre row on this drone's esp_timer clock: READY's rising edge minus the camera's age.
+    // Readout of the tag's centre row on this drone's esp_timer clock: the SYNC edge minus the camera's age.
     int64_t capture_us;
     uint16_t tag_id;
     // 1: unambiguous; 2: the tilt was ambiguous and the camera chose the solution nearest its previous pose; 0: the
@@ -40,15 +40,16 @@ typedef struct {
 } CameraFlow;
 
 typedef struct {
-    // packets: transfers clocked; frames: well-formed new frames, with or without a tag; poses: accepted poses.
-    // corrupt: bad magic or CRC; repeats: a sequence seen last time; stale: older than the limit on arrival;
-    // unsynced: READY found high without an edge (at start or after a missed edge), so its wait was unknown.
+    // packets: packets read; frames: well-formed new frames, with or without a tag; poses: accepted poses.
+    // corrupt: bad CRC; repeats: a sequence seen last time; stale: older than the limit on arrival;
+    // unsynced: frames with no SYNC edge just before them, whose send time was estimated from their arrival.
     uint32_t packets, frames, poses, flows, corrupt, repeats, stale, unsynced;
     // Arrival of the last well-formed frame on the esp_timer clock, -1 before the first.
     int64_t frame_us;
 } CameraStats;
 
-// SPI2 master on GPIO27 SCLK, 26 MOSI, 34 MISO, 23 CS; READY on GPIO4 with a pull-down; a receiver task on core 0.
+// UART2 at 2 Mbaud, RX on GPIO34 (camera GPIO1), TX on GPIO26 (camera GPIO3, unused for now); SYNC on GPIO4 with a
+// pull-down (camera GPIO13); a receiver task on core 0.
 // Not started by app_main: nothing uses the camera yet.
 void camera_start(void);
 // Copies the newest frame's pose if that frame saw the tag, the camera decided its tilt (valid 1 or 2), and the pose

@@ -10,9 +10,11 @@ float fx = 492.659676617f, fy = 494.563782912f, cx = 160.561003196f, cy = 107.77
 // OpenCV Brown-Conrady coefficients: k1, k2, p1, p2, k3.
 float distortion[5] = {-0.031215286f, 0.896256747f, 0.000000000f, 0.000000000f, 0.000000000f};
 
-// Native HSPI pins on the camera; microSD must remain unused.
-constexpr int clockPin = 14, mosiPin = 13, misoPin = 12, csPin = 15;
-constexpr int readyPin = 2;
+// Link to the drone: UART0 (the USB-serial pins, GPIO1 TX and GPIO3 RX) at linkBaud, and syncPin pulsed as each
+// packet starts so the drone can timestamp it. GPIO14, 15 and 2 are left for the microSD slot in 1-bit mode; GPIO12
+// (a boot strap that must stay low) and GPIO4 (the flash LED) stay unconnected.
+constexpr int linkTxPin = 1, linkRxPin = 3, syncPin = 13;
+constexpr unsigned long linkBaud = 2000000;
 constexpr float minMargin = 30.0f;
 constexpr float maxReprojectionPx = 2.0f;
 constexpr float minAmbiguityRatio = 2.0f, ambiguityFloorPx = 0.3f;

@@ -11,10 +11,9 @@ extern volatile bool cameraStopRequested;
 #endif
 
 inline void startWifi() {
-    if (!wifiSsid[0]) {
-        Serial.println("OTA disabled: copy wifi.example.h to wifi.h and set the network.");
+    // Nothing is printed: UART0 is the drone link. Without wifi.h there is no Wi-Fi and no OTA.
+    if (!wifiSsid[0])
         return;
-    }
     WiFi.mode(WIFI_STA);
     WiFi.setHostname("bill-esp32cam");
     WiFi.setAutoReconnect(true);
@@ -27,9 +26,8 @@ inline void startWifi() {
         // The detection loop stops the camera after its current frame and keeps it stopped until the restart.
         cameraStopRequested = true;
         while (cameraReady) delay(10);
-        Serial.println("OTA update started; camera stopped.");
     });
-    ArduinoOTA.onError([](ota_error_t error) { Serial.printf("OTA error: %u; restarting camera.\n", error); ESP.restart(); });
+    ArduinoOTA.onError([](ota_error_t) { ESP.restart(); });
 }
 
 inline void serviceOta() {
@@ -46,8 +44,6 @@ inline void serviceOta() {
     if (!started) {
         ArduinoOTA.begin();
         started = true;
-        Serial.print("OTA ready at ");
-        Serial.println(WiFi.localIP());
     }
     ArduinoOTA.handle();
 }
