@@ -44,6 +44,10 @@ volatile uint32_t captureCount = 0, poseCount = 0, previewCount = 0, detectUs = 
                   trackedCount = 0, detectedCount = 0;
 PosePacket lastPose;
 extern uint32_t stalls, recoveries, lastCrumbs[3];
+extern volatile uint32_t linkSent, linkDropped, linkReceived;
+namespace blackbox {
+int status(char *out, size_t size);
+}
 
 // The last 2 KB of ESP-IDF log output (the camera driver's warnings and errors), for /log.
 char logRing[2048];
@@ -265,8 +269,6 @@ void startPreview() {
         settings.putString("calibration", body);
         web.send(200, "application/json", "{\"saved\":true}");
     });
-    esp_log_set_vprintf(logToRing);
-    esp_log_level_set("*", ESP_LOG_WARN);
     web.on("/log", HTTP_GET, []() {
         String text;
         portENTER_CRITICAL(&logLock);
@@ -281,7 +283,7 @@ void startPreview() {
     });
     web.on("/status", HTTP_GET, []() {
         web.client().setNoDelay(true);
-        char body[900];
+        char body[1400];
         // The sensor's AEC exposure (lines; the effective exposure is capped at the frame) and real gain.
         sensor_t *sensor = cameraReady ? esp_camera_sensor_get() : nullptr;
         const bool valid = lastPose.valid &&
@@ -292,7 +294,8 @@ void startPreview() {
             "count\":%u,\"tracked_count\":%u,\"detected_count\":%u,\"preview_count\":%u,\"detect_us\":%u,\"frame_us\":%u,\"age_us\":%u,\"frame_age_us\":%u,\"valid\":%s,"
             "\"position_m\":[%.4f,%.4f,%.4f],\"margin\":%.1f,\"reprojection_px\":%.3f,\"internal_min\":%u,\"uptime_ms\":%u,\"reset\":%d,"
             "\"flow_px\":[%.3f,%.3f],\"flow_inliers\":%u,\"flow_residual_px\":%.3f,\"short_frames\":%u,\"stalls\":%u,\"recoveries\":%u,"
-            "\"last_crumbs\":[%u,%u,%u],\"gain\":%.2f,\"exposure_lines\":%d,\"frame_lines\":%d,\"preview_hold_us\":%u,\"stale_frames\":%u,\"driver_priority\":[%u,%u]}",
+            "\"last_crumbs\":[%u,%u,%u],\"gain\":%.2f,\"exposure_lines\":%d,\"frame_lines\":%d,\"preview_hold_us\":%u,\"stale_frames\":%u,\"driver_priority\":[%u,%u],"
+            "\"link_sent\":%u,\"link_dropped\":%u,\"link_rx_bytes\":%u,",
             cameraStalled ? "stalled" : cameraReady ? "running" : "stopped", calibrated() ? "true" : "false", config::tagId, config::tagSizeM * 1000,
             unsigned(captureCount), unsigned(poseCount), unsigned(trackedCount), unsigned(detectedCount),
             unsigned(previewCount), unsigned(detectUs),
@@ -303,7 +306,14 @@ void startPreview() {
             unsigned(recoveries), unsigned(lastCrumbs[0]), unsigned(lastCrumbs[1]), unsigned(lastCrumbs[2]),
             sensor ? sensor->get_reg(sensor, 0x350a, 0x3ff) / 16.0f : 0, sensor ? sensor->get_reg(sensor, 0x3500, 0xffffff) >> 4 : 0,
             sensor ? sensor->get_reg(sensor, 0x380e, 0xffff) : 0, unsigned(previewHoldUs), unsigned(staleFrames),
-            unsigned(driverPriority), unsigned(configMAX_PRIORITIES - 1));
+            unsigned(driverPriority), unsigned(configMAX_PRIORITIES - 1), unsigned(linkSent), unsigned(linkDropped),
+            unsigned(linkReceived));
+        const size_t used = strlen(body);
+        const int more = blackbox::status(body + used, sizeof(body) - used - 1);
+        if (more > 0 && used + more + 2 <= sizeof(body))
+            strcat(body, "}");
+        else
+            strcpy(body + used - 1, "}");
         previewHoldUs = 0;
         web.send(200, "application/json", body);
     });

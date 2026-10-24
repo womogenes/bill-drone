@@ -10,11 +10,19 @@ float fx = 492.659676617f, fy = 494.563782912f, cx = 160.561003196f, cy = 107.77
 // OpenCV Brown-Conrady coefficients: k1, k2, p1, p2, k3.
 float distortion[5] = {-0.031215286f, 0.896256747f, 0.000000000f, 0.000000000f, 0.000000000f};
 
-// Link to the drone: UART0 (the USB-serial pins, GPIO1 TX and GPIO3 RX) at linkBaud, and syncPin pulsed as each
-// packet starts so the drone can timestamp it. GPIO14, 15 and 2 are left for the microSD slot in 1-bit mode; GPIO12
-// (a boot strap that must stay low) and GPIO4 (the flash LED) stay unconnected.
-constexpr int linkTxPin = 1, linkRxPin = 3, syncPin = 13;
+// Link to the drone: UART0 (the USB-serial pins, GPIO1 TX and GPIO3 RX) at linkBaud, 8N1, and syncPin pulsed high for
+// syncPulseUs as each packet is queued, so the drone can date it. GPIO14, 15 and 2 are the microSD slot in 1-bit mode;
+// GPIO12 (a boot strap that must stay low) is unconnected and GPIO4 (the flash LED) is held low.
+constexpr int linkTxPin = 1, linkRxPin = 3, syncPin = 13, flashLedPin = 4;
 constexpr unsigned long linkBaud = 2000000;
+constexpr unsigned syncPulseUs = 20;
+// Black box on the microSD card (sd.h): a ring in PSRAM fed by the detector and written in staging-sized pieces from
+// DMA-capable internal RAM, the tag crop's side, how often a frame also carries the whole 320x240 image (0 never), and
+// the size at which a file is closed and the next one started (FAT32 files stop at 4 GiB).
+constexpr uint32_t blackBoxRingBytes = 1 << 20, blackBoxStagingBytes = 8192;
+constexpr int blackBoxCropSize = 96;
+constexpr unsigned blackBoxFullEvery = 0;
+constexpr uint64_t blackBoxFileBytes = 3500000000ull;
 constexpr float minMargin = 30.0f;
 constexpr float maxReprojectionPx = 2.0f;
 constexpr float minAmbiguityRatio = 2.0f, ambiguityFloorPx = 0.3f;

@@ -3,6 +3,9 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+#include "driver/uart.h"
+#include "esp_rom_sys.h"
+#include "soc/gpio_struct.h"
 #include "tag16h5.h"
 #include "pose.h"
 #include "track.h"
@@ -12,6 +15,7 @@
 
 #include "web.h"
 #include "record.h"
+#include "sd.h"
 
 TagFinder finder;
 uint32_t sequence = 0;
@@ -30,11 +34,38 @@ int exposureLines;
 RTC_NOINIT_ATTR uint32_t crumbs[3];
 uint32_t lastCrumbs[3];
 
+// The drone link on UART0. The receive side (GPIO3) is for the drone's future messages; for now its bytes are only
+// counted. The transmit buffer holds a few packets; publish() never queues behind an unsent one.
+constexpr uart_port_t linkPort = UART_NUM_0;
+constexpr int linkTxBytes = 1024, linkRxBytes = 256;
+portMUX_TYPE syncLock = portMUX_INITIALIZER_UNLOCKED;
+volatile uint32_t linkSent = 0, linkDropped = 0, linkReceived = 0;
+
+void noPrint(char) {}
+
+void startLink() {
+    esp_rom_install_channel_putc(1, noPrint);
+    uart_config_t link = {};
+    link.baud_rate = int(config::linkBaud);
+    link.data_bits = UART_DATA_8_BITS;
+    link.parity = UART_PARITY_DISABLE;
+    link.stop_bits = UART_STOP_BITS_1;
+    link.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    link.source_clk = UART_SCLK_APB;
+    ESP_ERROR_CHECK(uart_driver_install(linkPort, linkRxBytes, linkTxBytes, 0, nullptr, 0));
+    ESP_ERROR_CHECK(uart_param_config(linkPort, &link));
+    ESP_ERROR_CHECK(uart_set_pin(linkPort, config::linkTxPin, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+}
+
 // Wi-Fi, OTA and the control server share core 0 with the radio and the camera driver's copy task. Core 1 only captures and detects.
 void serviceTask(void *) {
     while (true) {
         serviceOta();
         web.handleClient();
+        uint8_t received[64];
+        const int n = uart_read_bytes(linkPort, received, sizeof(received), 0);
+        if (n > 0)
+            linkReceived = linkReceived + n;
         delay(2);
     }
 }
@@ -135,15 +166,18 @@ void detectorWorkspace(Workspace where) {
 void setup() {
     memcpy(lastCrumbs, crumbs, sizeof(crumbs));
     memset(crumbs, 0, sizeof(crumbs));
-    // UART0 carries pose packets to the drone from here on; the boot ROM's own messages on GPIO1 fail the drone's magic
-    // and CRC checks. A transmit buffer lets publish() return without waiting for the wire.
-    Serial.setTxBufferSize(1024);
-    Serial.begin(config::linkBaud, SERIAL_8N1, config::linkRxPin, config::linkTxPin);
+    // UART0 is the drone link from here on, so nothing else may write to it: log output goes to the /log ring and the
+    // ROM's printf to nowhere. Only the boot ROM and bootloader print, at 115200 before this, and the drone rejects that.
+    esp_log_set_vprintf(logToRing);
+    esp_log_level_set("*", ESP_LOG_WARN);
+    startLink();
+    pinMode(config::flashLedPin, OUTPUT);
+    digitalWrite(config::flashLedPin, LOW);
     startWifi();
     assert(psramFound());
     heap_caps_malloc_extmem_enable(4096);
-    pinMode(config::syncPin, OUTPUT);
-    digitalWrite(config::syncPin, LOW);
+    // Mounting holds the sync line high (the card's DAT3) and leaves it low.
+    blackbox::mount();
     loadCalibration();
 
     // AI Thinker ESP32-CAM pinout; the camera driver identifies the sensor.
@@ -175,6 +209,7 @@ void setup() {
     camera.fb_location = CAMERA_FB_IN_PSRAM;
     camera.grab_mode = CAMERA_GRAB_LATEST;
     if (!startCamera()) {
+        blackbox::start();
         xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
         return;
     }
@@ -195,6 +230,7 @@ void setup() {
     });
     startPreview();
     startRecording();
+    blackbox::start();
     flowDone = xSemaphoreCreateBinary();
     assert(flowDone);
     xTaskCreatePinnedToCore(flowLoop, "flow", 4096, nullptr, 2, &flowTask, 0);
@@ -202,15 +238,40 @@ void setup() {
     xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
 }
 
-// Each frame's packet goes out on UART0 as soon as it is ready; at 2 Mbaud its 164 bytes take 0.8 ms, far inside a frame.
-// syncPin's rising edge marks the moment the packet's age was measured, so the drone dates the capture by that edge
-// whatever its UART latency. If the transmit buffer is full (the line is stuck), the packet is dropped.
-void publish(const PosePacket &packet) {
-    if (Serial.availableForWrite() < int(sizeof(packet)))
+// Each frame's packet goes out on UART0 at 2 Mbaud, 164 bytes in 0.8 ms, from the driver's transmit buffer, so the
+// detector never waits for the wire. The sync line rises at the moment the packet's age is measured, just before it is
+// queued: the drone dates the capture as that edge minus ageUs, whatever its own UART latency. A packet is dropped,
+// with no pulse, if the previous one has not left the buffer (which at this rate means the link is broken).
+void publish(PosePacket &packet) {
+    size_t room = 0;
+    uart_get_tx_buffer_free_size(linkPort, &room);
+    const bool clear = room >= linkTxBytes;
+    portENTER_CRITICAL(&syncLock);
+    const uint32_t now = uint32_t(esp_timer_get_time());
+    if (clear)
+        GPIO.out_w1ts = 1u << config::syncPin;
+    portEXIT_CRITICAL(&syncLock);
+    packet.ageUs = now - packet.captureUs;
+    if (packet.ageUs > config::maxAgeUs)
+        packet.valid = packet.trusted = 0;
+    if (!packet.trusted) {
+        packet.valid = 0;
+        memset(packet.position, 0, sizeof(packet.position));
+        memset(packet.rotation, 0, sizeof(packet.rotation));
+        memset(packet.tagPosition, 0, sizeof(packet.tagPosition));
+        memset(packet.altPosition, 0, sizeof(packet.altPosition));
+        memset(packet.altRotation, 0, sizeof(packet.altRotation));
+    }
+    packet.checksum = crc16(reinterpret_cast<const uint8_t *>(&packet), offsetof(PosePacket, checksum));
+    if (!clear) {
+        ++linkDropped;
         return;
-    gpio_set_level(gpio_num_t(config::syncPin), 1);
-    Serial.write(reinterpret_cast<const uint8_t *>(&packet), sizeof(packet));
-    gpio_set_level(gpio_num_t(config::syncPin), 0);
+    }
+    uart_write_bytes(linkPort, &packet, sizeof(packet));
+    ++linkSent;
+    while (uint32_t(esp_timer_get_time()) - now < config::syncPulseUs) {
+    }
+    GPIO.out_w1tc = 1u << config::syncPin;
 }
 
 void loop() {
@@ -301,28 +362,15 @@ void loop() {
                 unskewed);
     }
     packet.flowOffsetUs = int16_t(frameCentreUs - packet.captureUs);
-    const uint32_t now = uint32_t(esp_timer_get_time());
-    packet.ageUs = now - packet.captureUs;
-    if (packet.ageUs > config::maxAgeUs)
-        packet.valid = packet.trusted = 0;
-    if (!packet.trusted) {
-        packet.valid = 0;
-        memset(packet.position, 0, sizeof(packet.position));
-        memset(packet.rotation, 0, sizeof(packet.rotation));
-        memset(packet.tagPosition, 0, sizeof(packet.tagPosition));
-        memset(packet.altPosition, 0, sizeof(packet.altPosition));
-        memset(packet.altRotation, 0, sizeof(packet.altRotation));
-    }
-    packet.checksum =
-        crc16(reinterpret_cast<const uint8_t *>(&packet), offsetof(PosePacket, checksum));
     publish(packet);
+    const uint32_t now = packet.captureUs + packet.ageUs;
     lastPose = packet;
     detectUs = now - started;
     readoutAgeUs = now - frameStart(frame);
     frameUs = frameStart(frame) - lastCaptureUs;
     lastCaptureUs = frameStart(frame);
     crumbs[0] = 8;
-    if (recording()) {
+    if (recording() || blackbox::active) {
         FrameRecord record;
         record.packet = packet;
         record.reserved = 0;
@@ -345,7 +393,16 @@ void loop() {
         record.framePixels = uint16_t(min(work.framePixels, 65535));
         record.preview = previewWanted;
         record.shortFrames = uint16_t(shortFrames);
-        addRecord(record);
+        if (recording())
+            addRecord(record);
+        // The black box takes the tag crop mostly from the tracker's internal copy, and the reduced frame the flow left
+        // in internal RAM; only a full frame (every fullEvery-th) is a large PSRAM read.
+        const Image8 &copy = finder.measuredImage;
+        const bool inWindow = copy.pixels == finder.window;
+        const blackbox::CropSource crop = {frame->buf, int(frame->width), int(frame->height), inWindow ? finder.window : nullptr,
+                                           copy.left, copy.top, copy.width, copy.height};
+        const bool full = blackbox::fullEvery && packet.sequence % blackbox::fullEvery == 0 && frame->len == config::outW * config::outH;
+        blackbox::addFrame(record, flow::images[flow::current], kind ? &crop : nullptr, finder.corners, full ? frame->buf : nullptr);
     }
     finishFrame(frame, kind != tagNone, finder.corners, packet, flow::images[flow::current]);
     crumbs[0] = 9;

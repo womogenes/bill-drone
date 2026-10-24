@@ -3,7 +3,7 @@
 IDF_PATH ?= $(HOME)/esp/esp-idf
 IDF = bash -c 'source $(IDF_PATH)/export.sh >/dev/null && "$$@"' idf
 
-.PHONY: build deploy usb accel level
+.PHONY: build deploy usb accel level camera-test
 build:
 	$(IDF) idf.py -C drone build
 
@@ -23,3 +23,10 @@ accel:
 # Level reference: two still readings 180° apart on the same spot, which cancels floor tilt.
 level:
 	uv run tools/level.py
+
+# Host tests of the camera link: the drone's packet parser, and the camera's black-box format against blackbox.py.
+camera-test:
+	mkdir -p drone/build/host
+	cc -std=c11 -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -Idrone/main drone/test/camera_link_test.c -o drone/build/host/camera_link_test
+	drone/build/host/camera_link_test
+	uv run esp32cam/test/blackbox_test.py

@@ -55,8 +55,10 @@ struct TagFinder {
     float frameDecimate = 3;
     int maxHamming = 0;
     float minMargin = config::minMargin;
-    // The tracked tag's neighbourhood, copied out of the frame.
+    // The tracked tag's neighbourhood, copied out of the frame, and where the last measure read: this copy, or the
+    // frame itself when the neighbourhood did not fit (the black box crops the tag from it).
     uint8_t window[24 * 1024];
+    Image8 measuredImage = {};
 
     struct Window {
         int x, y, w, h;
@@ -184,6 +186,7 @@ struct TagFinder {
                 memcpy(window + (y - top) * (right - left), frame + y * width + left, right - left);
             image = {window, left, top, right - left, bottom - top};
         }
+        measuredImage = image;
         ++work.measures;
         const uint32_t code = uint32_t(family->codes[config::tagId]);
         float aligned[4][2];
