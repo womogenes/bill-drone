@@ -32,10 +32,12 @@ def optimize(build_env, node):
     # The library was converted to float, but its unsuffixed constants and math calls still promote to double, which
     # the ESP32 only emulates in software. Make constants float and math calls type-generic.
     flags = [flag for flag in build_env["CCFLAGS"] if flag != "-Os"] + ["-O2", "-fsingle-precision-constant"]
-    if node.name.endswith(".c"):
-        flags += ["-include", str(single)]
+    # The flash header goes first: the single-precision header includes apriltag.h, whose IRAM_ATTR declarations would
+    # otherwise put the cold definitions back in IRAM.
     if node.name in COLD:
         flags += ["-include", str(header)]
+    if node.name.endswith(".c"):
+        flags += ["-include", str(single)]
     return build_env.Object(node, CCFLAGS=flags)
 
 
