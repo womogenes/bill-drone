@@ -82,6 +82,8 @@ void flight_runtime_status(Status *status);
 
 // The ESP-NOW link and request service (radio.c).
 void radio_start(void);
+// True while the controller has been heard in the last 2 s.
+bool radio_connected(void);
 // Replaces the metadata JSON sent to the recorder after each start; false while the previous one is being sent.
 bool radio_log_meta(const char *data, size_t length);
 

@@ -153,6 +153,11 @@ static void collect(uint32_t number, uint8_t index, uint8_t count, const uint8_t
     xTaskNotifyGive(update_task);
 }
 
+// When a packet from the paired controller last passed the session and freshness checks, for radio_connected().
+static volatile int64_t heard_us = INT64_MIN / 2;
+
+bool radio_connected(void) { return esp_timer_get_time() - heard_us < 2000000; }
+
 // Runs in the Wi-Fi task: parse, check freshness and order, and queue; never sends.
 static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, int size) {
     if (memcmp(info->src_addr, peer, ESP_NOW_ETH_ALEN) || size < HEADER || size > HEADER + PAYLOAD ||
@@ -167,6 +172,7 @@ static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, 
     size_t length = size - HEADER;
     int32_t age = (int32_t)(now_ms() - token);
     if (packet_session != session || age < 0 || age > 200) return;
+    heard_us = esp_timer_get_time();
     if (channel == 6) {
         // Stop preempts everything, including a request in progress; the laptop repeats it until answered.
         if (count == 1 && length == 5 && data[4] == 'X') {

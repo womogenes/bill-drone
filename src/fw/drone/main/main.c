@@ -16,6 +16,8 @@
 // HX711 channel A, gain 128: DT/DOUT on GPIO32, SCK on GPIO33, VCC to 3V3.
 #define LOAD_DOUT 32
 #define LOAD_SCK 33
+// The dev board's blue LED: blinks at 1 Hz until the controller is heard, then stays on.
+#define LED 2
 // Battery on GPIO35 (ADC1 channel 7) through a 100k/10k divider.
 #define BATTERY ADC_CHANNEL_7
 #define DIVIDER ((100000 + 10000) / 10000)
@@ -99,6 +101,8 @@ void app_main(void) {
     radio_start();
     flight_runtime_start();
 
+    gpio_config_t led = {.pin_bit_mask = 1ULL << LED, .mode = GPIO_MODE_OUTPUT};
+    ESP_ERROR_CHECK(gpio_config(&led));
     gpio_config_t sck = {.pin_bit_mask = 1ULL << LOAD_SCK, .mode = GPIO_MODE_OUTPUT};
     gpio_config_t dout = {.pin_bit_mask = 1ULL << LOAD_DOUT, .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE};
     ESP_ERROR_CHECK(gpio_config(&sck));
@@ -125,6 +129,7 @@ void app_main(void) {
         // Refused while the previous metadata is still being sent; the same text is offered again.
         if (pending && radio_log_meta(meta, pending)) pending = 0;
         read_load_cell();
+        gpio_set_level(LED, radio_connected() || esp_timer_get_time() / 500000 % 2);
         int raw, millivolts;
         ESP_ERROR_CHECK(adc_oneshot_read(adc, BATTERY, &raw));
         ESP_ERROR_CHECK(adc_cali_raw_to_voltage(calibration, raw, &millivolts));
