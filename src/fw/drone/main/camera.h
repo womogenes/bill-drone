@@ -40,17 +40,21 @@ typedef struct {
 } CameraFlow;
 
 typedef struct {
-    // packets: packets read; frames: well-formed new frames, with or without a tag; poses: accepted poses.
-    // corrupt: bad CRC; repeats: a sequence seen last time; stale: older than the limit on arrival;
-    // unsynced: frames with no SYNC edge just before them, whose send time was estimated from their arrival.
+    // packets: packets with the magic and a matching CRC; frames: those that were new and dated, with or without a
+    // tag; poses: accepted poses. corrupt: full-length candidates whose CRC failed; repeats: a sequence seen last time;
+    // stale: older than the limit on arrival; unsynced: no unused SYNC edge in the 10 ms before the packet completed,
+    // so its capture time is unknown and it is discarded.
     uint32_t packets, frames, poses, flows, corrupt, repeats, stale, unsynced;
+    // skipped_bytes: bytes that could not start a packet (the camera's boot messages, noise); overflows: the receive
+    // buffer overflowed and was flushed; line_errors: framing, parity or break errors (115200-baud boot messages).
+    uint32_t skipped_bytes, overflows, line_errors;
     // Arrival of the last well-formed frame on the esp_timer clock, -1 before the first.
     int64_t frame_us;
 } CameraStats;
 
-// UART2 at 2 Mbaud, RX on GPIO34 (camera GPIO1), TX on GPIO26 (camera GPIO3, unused for now); SYNC on GPIO4 with a
-// pull-down (camera GPIO13); a receiver task on core 0.
-// Not started by app_main: nothing uses the camera yet.
+// UART2 at 2 Mbaud, 8N1: RX on GPIO34 from the camera's TX (GPIO1), TX on GPIO27 to its RX (GPIO3, unused so far);
+// SYNC from the camera's GPIO13 on GPIO13 with a pull-down; a receiver task on core 0. GPIO4, GPIO23 and GPIO26, the
+// old SPI link's READY, chip select and MOSI, are free. Not started by app_main: nothing uses the camera yet.
 void camera_start(void);
 // Copies the newest frame's pose if that frame saw the tag, the camera decided its tilt (valid 1 or 2), and the pose
 // is at most max_age_us old now.
