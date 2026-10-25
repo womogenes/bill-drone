@@ -92,3 +92,7 @@ Per Bill, the Oct 20 08:25–11:17Z runs sat on the floor (legs touching, collec
 | Oct 21 06:xx (new ESCs) | 1.04x | 130 ms | +2.8 rad/s² (nose-down) | 0.54 |
 
 The sweep plant with the 06:xx values and the flown gains (pitch 10/10/5, `pitch_bias` +2.4, `velocity_damping` 8) pitches past 30° about 0.6 s after liftoff, matching the recorded tip-overs (21–35° within 0.4–0.6 s). With pitch 15/30/7 the peak pitch in the first second is 15–17° at bias −7, 4–5° at −3, and 13–16° at 0; on the 02:xx plant bias −7 gives 34–39°. The push changed sign between sessions, so bias −3 suits the current (06:xx) hardware and 0 is the safe middle.
+
+## Centre of mass of the final assembly (2026-10-24)
+
+Four single-point hangs (front, back, front-left and front-right foot-tie points from the CAD, at 87 mm below the tube; front tie 58.7 mm forward, back 54.7 mm back, corners 62 mm out), with the IMU's body-frame accelerometer averaged over 3 s of stillness and corrected by the stored level reference (IMU mounted 4.5° pitch, 1.3° roll on the new deck). All four lines pass within 1.6 mm of the solution: the CoM is 2.1 mm behind the tube (1.4–2.4 mm leaving one hang out), 0.7 mm right of centre and 13.8 mm above the tube, so the tilt pivots are 23.4 mm above it. Mass is about 940 g. A CoM 2.1 mm behind the pivots alone pushes about 11 rad/s² nose-up; the deck's perfboard sits mostly behind the tube. `sweep.py` now uses 940 g and the 23.4 mm pivot height; its `com_x` still stands for the net fitted push, not this geometry alone.
