@@ -81,6 +81,9 @@ const char *flight_runtime_calibrate(void);
 // True once per finished calibration: gyro bias (rad/s), pose zero (degrees) and the sensor frame it belongs to.
 bool flight_runtime_take_calibration(float *bias, float *pose_zero, float *sensor_frame);
 const char *flight_runtime_zero_servo(int side, float *offset, char *error, size_t size);
+// Servo bench test, disarmed with zero throttle: start (amp in degrees, cycles), then read progress and per-side results as JSON.
+const char *flight_runtime_servo_test(float amp, int cycles);
+size_t flight_runtime_servo_result(char *text, size_t size);
 void flight_runtime_status(Status *status);
 
 // The ESP-NOW link and request service (radio.c).
