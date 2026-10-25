@@ -1,9 +1,11 @@
 // USB-to-ESP-NOW relay. The laptop supplies every controller heartbeat.
 
 #include <string.h>
+#include "driver/gpio.h"
 #include "driver/uart.h"
 #include "esp_now.h"
 #include "esp_rom_crc.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -16,6 +18,9 @@
 #define PENDING_MAX 260
 #define WINDOW 4
 #define OUTGOING_MAX 8
+// The board's blue LED: blinks at 1 Hz until the drone is heard, then stays on while it was heard in the last 2 s.
+#define LED 2
+#define HEARD_US 2000000
 
 static const uint8_t drone_mac[6] = {0x20, 0x50, 0x0d, 0x8b, 0x7e, 0x68};
 
@@ -28,6 +33,7 @@ static QueueHandle_t outgoing;
 static QueueHandle_t incoming;
 static QueueHandle_t uart_events;
 static SemaphoreHandle_t window;
+static volatile int64_t heard_us;
 
 // Matches wire.unpack: size, magic, channel, fragment index and count.
 static bool valid_header(const uint8_t *packet, size_t length)
@@ -46,9 +52,22 @@ static void received(const esp_now_recv_info_t *info, const uint8_t *data, int l
     if (memcmp(info->src_addr, drone_mac, 6) || length > PACKET_MAX) {
         return;
     }
+    heard_us = esp_timer_get_time();
     packet_t packet = {.length = length};
     memcpy(packet.data, data, length);
     xQueueSend(incoming, &packet, 0);
+}
+
+static void led_task(void *argument)
+{
+    gpio_reset_pin(LED);
+    gpio_set_direction(LED, GPIO_MODE_OUTPUT);
+    for (;;) {
+        const int64_t now = esp_timer_get_time();
+        const bool connected = heard_us && now - heard_us < HEARD_US;
+        gpio_set_level(LED, connected || now / 500000 % 2 == 0);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 }
 
 static void radio_task(void *argument)
@@ -219,4 +238,5 @@ void app_main(void)
     xTaskCreate(usb_read_task, "usb_read", 4096, NULL, 12, NULL);
     xTaskCreate(usb_write_task, "usb_write", 4096, NULL, 11, NULL);
     xTaskCreate(radio_task, "radio", 4096, NULL, 11, NULL);
+    xTaskCreate(led_task, "led", 2048, NULL, 1, NULL);
 }
