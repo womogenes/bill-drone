@@ -88,24 +88,32 @@ static float compensate(Controller *state, int side, float angle, float amount) 
     return angle + *direction * amount;
 }
 
+// Armed without usable thrust: the servos wait at trim, tilted back for a tilted rest as the upright takeoff will want them, so they are already there when thrust comes.
+static void hold_servos(Controller *state, const Command *c) {
+    const Model *model = &c->model;
+    float upright = clamp(UPRIGHT_GAIN * (c->pitch - (c->target_pitch + c->pitch_trim)), -UPRIGHT_MAX, UPRIGHT_MAX);
+    state->left_angle = clamp(c->left_trim - model->left_servo_direction * upright, model->servo_min, model->servo_max);
+    state->right_angle = clamp(c->right_trim - model->right_servo_direction * upright, model->servo_min, model->servo_max);
+}
+
 void flight_control(Controller *state, const Command *c, const float *table, size_t count) {
     if (!c->enabled || c->base == 0) {
         flight_reset(state, c);
         state->left = state->right = state->left_angle = state->right_angle = 0;
+        if (c->enabled) hold_servos(state, c);
         return;
     }
 
-    const Model *model = &c->model;
     float trim = c->pitch_trim;
     float force = 2 * flight_interpolate(c->base, table, count, 0) * cosf(trim);
     // Without thrust, atan2(horizontal, ~0) saturates the servos on gyro noise.
     if (force < 2 * MIN_THRUST) {
         flight_reset(state, c);
         state->left = state->right = c->base;
-        state->left_angle = clamp(c->left_trim, model->servo_min, model->servo_max);
-        state->right_angle = clamp(c->right_trim, model->servo_min, model->servo_max);
+        hold_servos(state, c);
         return;
     }
+    const Model *model = &c->model;
     // On the ground the setpoint follows the measured attitude, so a sloped surface is no error. Once collective first reaches integrate_throttle it ramps to the target at target_rate: liftoff levels off instead of stepping.
     if (c->base >= c->integrate_throttle) state->airborne = 1;
     if (!state->airborne) {
