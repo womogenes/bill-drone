@@ -4,7 +4,7 @@ The controller ESP32 runs the ESP-IDF relay in `native/`. It forwards packets be
 
 ## Build and install
 
-Stop the laptop service before opening the controller's USB port. Identify the controller explicitly; both boards use CP2102 adapters and their `/dev/ttyUSBn` names can change.
+Keep one serial owner: stop the laptop service before opening the controller's USB port, and restart it afterwards. Opening a serial port can reset its ESP. Identify the controller explicitly: both boards use CP2102 adapters that report serial number `0001`, so `/dev/serial/by-id` is ambiguous and `/dev/ttyUSBn` names can change. Check the MAC (`esptool read-mac`) after replacing or reconnecting a board; the current ones are in the pairing table's sources below.
 
 ```sh
 # From the repository root:
