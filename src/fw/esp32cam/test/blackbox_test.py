@@ -1,7 +1,5 @@
 """
-Round trip of the black-box format: builds test/blackbox_test.cpp with the camera's src/blackbox.h, writes a file, and
-checks that blackbox.py decodes every queued frame (record, reduced frame, tag crop, full frame) exactly and counts the
-drops. Run from src/fw: uv run esp32cam/test/blackbox_test.py
+Round trip of the black-box format: builds test/blackbox_test.cpp with the camera's src/blackbox.h, writes a file, and checks that blackbox.py decodes every queued frame (record, reduced frame, tag crop, full frame) exactly and counts the drops. Run from src/fw: uv run esp32cam/test/blackbox_test.py
 """
 
 import subprocess

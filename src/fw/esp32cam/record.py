@@ -3,8 +3,7 @@ Record the ESP32-CAM's per-frame records: uv run fw/esp32cam/record.py [--host 1
 Subscribes to /record, saves every frame to sw/recordings/camera-<time>.frm and prints a line a second. Ctrl-C stops.
 Summarize a recording, or a black-box file's records: uv run fw/esp32cam/record.py --analyze sw/recordings/camera-<time>.frm
 
-File format: repeated [int64 laptop receive time, ns][record from fw/esp32cam/src/record.h], 224 bytes (TAG3 packets) or,
-in older recordings, 144 (TAG2).
+File format: repeated [int64 laptop receive time, ns][record from fw/esp32cam/src/record.h], 224 bytes (TAG3 packets) or, in older recordings, 144 (TAG2).
 """
 
 import argparse

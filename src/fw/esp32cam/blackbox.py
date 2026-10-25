@@ -6,11 +6,7 @@ Export its images as PNGs:        uv run fw/esp32cam/blackbox.py 0003.bin --png 
 Analyze its records:              uv run fw/esp32cam/record.py --analyze 0003.bin
 Download new files after landing: uv run fw/esp32cam/blackbox.py --fetch [--host 192.168.86.28] [--out sw/recordings/blackbox]
 
-File format: a 104-byte header (HEADER below: magic BILLBBX1, header size, file number, record size, reduced frame size,
-crop size, full frame size, how often a frame carried the full frame, CAM clock at the start, calibration, tag, build),
-then one entry per frame: a 16-byte entry header (BBE1, flags, reserved, payload length, frames dropped so far in this
-file), then the 224-byte FrameRecord (record.py), the 80x60 reduced frame, if flags & 1 an 8-byte crop header (left, top,
-width, height) and the crop's pixels, if flags & 2 the full 320x240 frame, and padding to a multiple of four bytes.
+File format: a 104-byte header (HEADER below: magic BILLBBX1, header size, file number, record size, reduced frame size, crop size, full frame size, how often a frame carried the full frame, CAM clock at the start, calibration, tag, build), then one entry per frame: a 16-byte entry header (BBE1, flags, reserved, payload length, frames dropped so far in this file), then the 224-byte FrameRecord (record.py), the 80x60 reduced frame, if flags & 1 an 8-byte crop header (left, top, width, height) and the crop's pixels, if flags & 2 the full 320x240 frame, and padding to a multiple of four bytes.
 """
 
 import argparse
@@ -42,9 +38,7 @@ def read_header(data):
 
 
 def entries(data):
-    """Yields each entry as a dict: the decoded record, dropped (frames dropped so far), reduced (an image), and crop
-    ((left, top), image) and full (an image) or None. Damaged stretches are skipped to the next entry magic; a truncated
-    last entry (power cut before the final write) is ignored."""
+    """Yields each entry as a dict: the decoded record, dropped (frames dropped so far), reduced (an image), and crop ((left, top), image) and full (an image) or None. Damaged stretches are skipped to the next entry magic; a truncated last entry (power cut before the final write) is ignored."""
     header = read_header(data)
     rw, rh = header["reduced"]
     fw, fh = header["full"]

@@ -6,9 +6,7 @@
 #include "config.h"
 #include "track.h"
 
-// Finding the tag in one frame, independent of the camera and the board so the host simulator (fw/esp32cam/sim) runs
-// the same code: re-measure the tracked tag (track.h), else run the detector around where it was, else on the whole
-// frame.
+// Finding the tag in one frame, independent of the camera and the board so the host simulator (fw/esp32cam/sim) runs the same code: re-measure the tracked tag (track.h), else run the detector around where it was, else on the whole frame.
 
 enum TagKind : uint8_t { tagNone = 0, tagTracked = 1, tagDetected = 2 };
 enum Workspace { workspaceDefault, workspaceInternal, workspaceExternal };
@@ -16,16 +14,13 @@ enum Workspace { workspaceDefault, workspaceInternal, workspaceExternal };
 struct TagFinder {
     apriltag_detector_t *detector = nullptr;
     apriltag_family_t *family = nullptr;
-    // Where the detector's allocations go: called before a run in a window (which may use internal RAM) or on the whole
-    // frame (which must not starve Wi-Fi of it), and with workspaceDefault after; null on the host.
+    // Where the detector's allocations go: called before a run in a window (which may use internal RAM) or on the whole frame (which must not starve Wi-Fi of it), and with workspaceDefault after; null on the host.
     void (*workspace)(Workspace where) = nullptr;
     // The tag's corners when last seen, at seenUs (frame start); tracking is false after a miss.
     bool tracking = false;
     float corners[4][2] = {};
     uint32_t seenUs = 0;
-    // The corners' velocity in pixels per frame period, over the interval before seenUs, which ended lag frame periods
-    // after the velocity's moment; known when measured over a recent interval (else zero), and fresh when that interval
-    // was about one frame. Their acceleration is measured between two fresh velocities, else zero.
+    // The corners' velocity in pixels per frame period, over the interval before seenUs, which ended lag frame periods after the velocity's moment; known when measured over a recent interval (else zero), and fresh when that interval was about one frame. Their acceleration is measured between two fresh velocities, else zero.
     bool velocityKnown = false, velocityFresh = false;
     float velocity[4][2] = {}, acceleration[4][2] = {}, lag = 0;
     // A tag seen within this many frame periods (0.5 s) is first looked for where its velocity puts it.
@@ -34,19 +29,15 @@ struct TagFinder {
     static constexpr float unknownSpeedPx = 15;
     // Shortest side of the last accepted tag, in pixels; zero after a miss.
     float sidePx = 0;
-    // What the last find did, for timing: the edge tracker's runs, the alignment's shifts tried in the internal copy and
-    // (when the neighbourhood did not fit) in the PSRAM frame, and the decimated pixels searched by the detector in
-    // windows and on whole frames.
+    // What the last find did, for timing: the edge tracker's runs, the alignment's shifts tried in the internal copy and (when the neighbourhood did not fit) in the PSRAM frame, and the decimated pixels searched by the detector in windows and on whole frames.
     struct Work {
         int measures;
         AlignWork align, alignFrame;
         int windowPixels, framePixels;
     } work = {};
-    // The tracker's alignment search reaches up to maxAlignPx from the prediction and is used when its correlation is
-    // at least minAlignment; alignment is the last one's correlation.
+    // The tracker's alignment search reaches up to maxAlignPx from the prediction and is used when its correlation is at least minAlignment; alignment is the last one's correlation.
     float maxAlignPx = 40, minAlignment = 0.5f, alignment = 0;
-    // Whether the edge tracker measured the last corners found (always when tracked, and when it confirmed a
-    // detection), and why tracking failed in the last find (trackFailure), or 0.
+    // Whether the edge tracker measured the last corners found (always when tracked, and when it confirmed a detection), and why tracking failed in the last find (trackFailure), or 0.
     bool measured = false;
     int trackFailed = 0;
     // Faster than this, in pixels per frame period, blur and changing motion corrupt the tag's shape too much for a pose.
@@ -55,8 +46,7 @@ struct TagFinder {
     float frameDecimate = 3;
     int maxHamming = 0;
     float minMargin = config::minMargin;
-    // The tracked tag's neighbourhood, copied out of the frame, and where the last measure read: this copy, or the
-    // frame itself when the neighbourhood did not fit (the black box crops the tag from it).
+    // The tracked tag's neighbourhood, copied out of the frame, and where the last measure read: this copy, or the frame itself when the neighbourhood did not fit (the black box crops the tag from it).
     uint8_t window[24 * 1024];
     Image8 measuredImage = {};
 
@@ -64,9 +54,7 @@ struct TagFinder {
         int x, y, w, h;
     };
 
-    // The detector, on a window around the predicted corners (or the whole frame): finds quads at a resolution that
-    // keeps the tag's sides about decimatedSidePx and refines and decodes at full resolution. Corners come back in the
-    // calibration's pixel convention, centres at integers; the detector's are half a pixel further right and down.
+    // The detector, on a window around the predicted corners (or the whole frame): finds quads at a resolution that keeps the tag's sides about decimatedSidePx and refines and decodes at full resolution. Corners come back in the calibration's pixel convention, centres at integers; the detector's are half a pixel further right and down.
     bool detect(const uint8_t *frame, int width, int height, const float (*predicted)[2], float out[4][2],
                 float &margin, float uncertainty = 0) {
         Window searched = {};
@@ -122,10 +110,7 @@ struct TagFinder {
         return found;
     }
 
-    // Rolling shutter: each row is read config::rowUs after the one above, so a moving tag is sheared, which looks like
-    // tilt. These are the corners as they were when the tag's middle row (between its top and bottom corners, the
-    // capture time) was read, by the tag's velocity brought forward to this frame, else by flow (the image shift in
-    // pixels per frame period, or null).
+    // Rolling shutter: each row is read config::rowUs after the one above, so a moving tag is sheared, which looks like tilt. These are the corners as they were when the tag's middle row (between its top and bottom corners, the capture time) was read, by the tag's velocity brought forward to this frame, else by flow (the image shift in pixels per frame period, or null).
     void unskew(const float in[4][2], const float *flow, float out[4][2]) const {
         float top = INFINITY, bottom = -INFINITY;
         for (int i = 0; i < 4; ++i) {
@@ -141,10 +126,7 @@ struct TagFinder {
         }
     }
 
-    // Whether the last corners found are good enough for a pose: measured by the edge tracker, with the rolling shutter
-    // removable (velocity from consecutive frames, else flow: the image shift per frame period over at most about one,
-    // or null), and moving slower than maxPoseSpeedPx per frame period, beyond which blur and changing motion corrupt
-    // the shape.
+    // Whether the last corners found are good enough for a pose: measured by the edge tracker, with the rolling shutter removable (velocity from consecutive frames, else flow: the image shift per frame period over at most about one, or null), and moving slower than maxPoseSpeedPx per frame period, beyond which blur and changing motion corrupt the shape.
     bool trustworthy(const float *flow) const {
         if (!measured || !(velocityFresh || flow))
             return false;
@@ -166,8 +148,7 @@ struct TagFinder {
                 out[i][axis] = corners[i][axis] + frames * velocity[i][axis];
     }
 
-    // Re-measures the tag near the corners out in this frame with the edge tracker, after aligning them within radius
-    // pixels. False if the edges or the code do not check out.
+    // Re-measures the tag near the corners out in this frame with the edge tracker, after aligning them within radius pixels. False if the edges or the code do not check out.
     bool measure(const uint8_t *frame, int width, int height, float out[4][2], float radius, float &margin) {
         float low[2] = {INFINITY, INFINITY}, high[2] = {-INFINITY, -INFINITY};
         for (int i = 0; i < 4; ++i)
@@ -197,8 +178,7 @@ struct TagFinder {
         return trackCorners(image, out, family, code, margin);
     }
 
-    // Finds the tag in a width x height Y8 frame that started at timeUs. Returns the kind, with the corners and
-    // margin when found; measured says whether the edge tracker measured these corners (always when tracked).
+    // Finds the tag in a width x height Y8 frame that started at timeUs. Returns the kind, with the corners and margin when found; measured says whether the edge tracker measured these corners (always when tracked).
     TagKind find(const uint8_t *frame, int width, int height, uint32_t timeUs, float out[4][2], float &margin) {
         TagKind kind = tagNone;
         work = {};
@@ -209,8 +189,7 @@ struct TagFinder {
         const float frames = framesSince(timeUs);
         const bool recent = seenUs != 0 && frames <= recentFrames;
         predict(timeUs, guess);
-        // The prediction can be off by about the distance moved since, as the motion changes, or when the velocity is
-        // not known, by as far as a quick hand moves the view.
+        // The prediction can be off by about the distance moved since, as the motion changes, or when the velocity is not known, by as far as a quick hand moves the view.
         float speed = velocityKnown ? 0 : unknownSpeedPx;
         for (int i = 0; i < 4; ++i)
             speed = fmaxf(speed, hypotf(velocity[i][0], velocity[i][1]));
@@ -267,10 +246,7 @@ struct TagFinder {
     }
 };
 
-// The tag fields of this frame's packet from a find: the capture time, the readout of the tag's middle row (of the
-// frame's middle row without a tag), and the pose from the corners with the rolling shutter removed, which can be valid
-// only if the finder trusts them. flow is this frame's image shift since the frame intervalUs earlier (0 for none).
-// unskewed gets the corners the pose used. After a miss, an ambiguous pose cannot be resolved until an unambiguous one.
+// The tag fields of this frame's packet from a find: the capture time, the readout of the tag's middle row (of the frame's middle row without a tag), and the pose from the corners with the rolling shutter removed, which can be valid only if the finder trusts them. flow is this frame's image shift since the frame intervalUs earlier (0 for none). unskewed gets the corners the pose used. After a miss, an ambiguous pose cannot be resolved until an unambiguous one.
 inline void tagPose(const TagFinder &finder, TagKind kind, const float corners[4][2], float margin,
                     uint32_t frameStartUs, const float flow[2], uint32_t intervalUs, PosePacket &packet,
                     float unskewed[4][2]) {

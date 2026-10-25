@@ -98,15 +98,13 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
         state->right_angle = clamp(c->right_trim, model->servo_min, model->servo_max);
         return;
     }
-    // On the ground the setpoint follows the measured attitude, so a sloped surface is no error. Once collective first
-    // reaches integrate_throttle it ramps to the target at target_rate: liftoff levels off instead of stepping.
+    // On the ground the setpoint follows the measured attitude, so a sloped surface is no error. Once collective first reaches integrate_throttle it ramps to the target at target_rate: liftoff levels off instead of stepping.
     if (c->base >= c->integrate_throttle) state->airborne = 1;
     if (!state->airborne) {
         state->setpoint_roll = c->roll;
         state->setpoint_pitch = c->pitch;
     } else {
-        // Dead-reckoned horizontal velocity: tilt accelerates the vehicle at g * tan(tilt); the leak bounds attitude-error drift.
-        // Positive roll (right side down) moves right; positive pitch (nose down) moves forward.
+        // Dead-reckoned horizontal velocity: tilt accelerates the vehicle at g * tan(tilt); the leak bounds attitude-error drift. Positive roll (right side down) moves right; positive pitch (nose down) moves forward.
         float keep = expf(-c->dt / c->velocity_leak);
         state->velocity[0] = keep * state->velocity[0] + 9.81f * tanf(c->roll) * c->dt;
         state->velocity[1] = keep * state->velocity[1] + 9.81f * tanf(c->pitch) * c->dt;

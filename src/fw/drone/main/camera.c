@@ -1,7 +1,4 @@
-// TAG3 pose and flow packets from the ESP32-CAM over UART (fw/esp32cam/README.md). The camera raises SYNC as it queues
-// each packet and sends it at 2 Mbaud; the rising edge's time minus the packet's age is the capture time on this clock,
-// whatever the UART and task latency. The byte stream is searched for the magic and checked by CRC, so the camera's
-// boot messages on the same wire (at 115200) are skipped.
+// TAG3 pose and flow packets from the ESP32-CAM over UART (fw/esp32cam/README.md). The camera raises SYNC as it queues each packet and sends it at 2 Mbaud; the rising edge's time minus the packet's age is the capture time on this clock, whatever the UART and task latency. The byte stream is searched for the magic and checked by CRC, so the camera's boot messages on the same wire (at 115200) are skipped.
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,8 +28,7 @@ static CameraFlow latest_flow;
 static bool have_pose, have_candidate, have_flow;
 static CameraStats stats = {.frame_us = -1};
 
-// The edge time is the low 32 bits of esp_timer, compared by unsigned difference. This ISR runs from flash, so during a
-// flash write (only while disarmed) the edge is stamped late and the age reads low.
+// The edge time is the low 32 bits of esp_timer, compared by unsigned difference. This ISR runs from flash, so during a flash write (only while disarmed) the edge is stamped late and the age reads low.
 static void sync_edge(void *arg) {
     portENTER_CRITICAL_ISR(&lock);
     edge_us = (uint32_t)esp_timer_get_time();

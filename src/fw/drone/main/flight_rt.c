@@ -309,8 +309,7 @@ bool flight_runtime_targets(const float *targets) {
     return active;
 }
 
-// The only way to arm: an explicit request after any stop, with the streamed collective at zero. Arming starts a
-// recording, so it also needs the laptop's recorder and the previous recording fully sent.
+// The only way to arm: an explicit request after any stop, with the streamed collective at zero. Arming starts a recording, so it also needs the laptop's recorder and the previous recording fully sent.
 uint32_t flight_runtime_stop_generation(void) {
     portENTER_CRITICAL(&lock);
     uint32_t generation = stop_generation;
@@ -318,8 +317,7 @@ uint32_t flight_runtime_stop_generation(void) {
     return generation;
 }
 
-// Every check, including the stop count from when the request arrived, runs under the lock that stops take, so a
-// stop at any point after the request arrived refuses it.
+// Every check, including the stop count from when the request arrived, runs under the lock that stops take, so a stop at any point after the request arrived refuses it.
 const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t expected_generation,
                                uint32_t arm_sequence) {
     portENTER_CRITICAL(&lock);
@@ -419,8 +417,7 @@ bool flight_runtime_take_calibration(float *bias, float *pose_zero, float *senso
     return ready;
 }
 
-// Keeps the current pulse and makes the servo's commanded angle its new zero, only if the settings table can hold
-// the new offset; otherwise nothing changes. error is scratch space for the message.
+// Keeps the current pulse and makes the servo's commanded angle its new zero, only if the settings table can hold the new offset; otherwise nothing changes. error is scratch space for the message.
 const char *flight_runtime_zero_servo(int side, float *offset, char *error, size_t size) {
     int index = side ? SETTING_servo_offset_right : SETTING_servo_offset_left;
     portENTER_CRITICAL(&lock);
@@ -546,8 +543,7 @@ void flight_runtime_start(void) {
     config.tip_limit = TIP_LIMIT / DEG;
     float values[SETTINGS];
     settings_copy(values);
-    // A calibration is valid only in the sensor frame it was taken in. Arming and the status both read
-    // state.calibrated, so a rejected calibration blocks arming.
+    // A calibration is valid only in the sensor frame it was taken in. Arming and the status both read state.calibrated, so a rejected calibration blocks arming.
     float pose_zero[2];
     if (settings_calibration(frame(), state.bias, pose_zero)) {
         state.pose_zero = (Attitude){pose_zero[0] / DEG, pose_zero[1] / DEG};

@@ -1,9 +1,7 @@
 // Runs the camera's own tag pipeline (tag.h, track.h, pose.h, flow.h) on rendered frames; built and driven by sim.py.
 // stdin: "FRM0", int32 width, height, count, then per frame int64 frame start (us) and width x height Y8 pixels.
-// stdout: one line per frame: kind valid margin reprojection_px host_us corners(8, rolling shutter removed) position(3) rotation(9) flow(2) flow_found\n// track_failure predicted(8) (the tracker's prediction, zero when it did not run) trusted tag_position(3).
-// argv: fx fy cx cy [timed]. When timed, each frame's work (TagFinder::work) gives how long the camera would be busy,
-// and frames it would miss meanwhile are reported with kind -1: as on the camera, a frame can be processed only once
-// its readout has ended and the previous one is done. host_us is then that camera time.
+// stdout: one line per frame: kind valid margin reprojection_px host_us corners(8, rolling shutter removed) position(3) rotation(9) flow(2) flow_found track_failure predicted(8) (the tracker's prediction, zero when it did not run) trusted tag_position(3).
+// argv: fx fy cx cy [timed]. When timed, each frame's work (TagFinder::work) gives how long the camera would be busy, and frames it would miss meanwhile are reported with kind -1: as on the camera, a frame can be processed only once its readout has ended and the previous one is done. host_us is then that camera time.
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -30,10 +28,7 @@ int main(int argc, char **argv) {
         config::cy = atof(argv[4]);
     }
     const bool timed = argc >= 6 && atoi(argv[5]);
-    // Camera costs, measured on 2026-10-22 except where estimated: a frame's fixed work (flow wait, pose, packet), an edge
-    // tracker run, an alignment shift tried on the nearest pixels or interpolated (64 samples) in the internal copy
-    // (estimated) or in the PSRAM frame (18 us measured), and per decimated pixel the detector in an internal-RAM window
-    // (estimated) or on a PSRAM whole frame (80 ms at decimation 3, including the refinement).
+    // Camera costs, measured on 2026-10-22 except where estimated: a frame's fixed work (flow wait, pose, packet), an edge tracker run, an alignment shift tried on the nearest pixels or interpolated (64 samples) in the internal copy (estimated) or in the PSRAM frame (18 us measured), and per decimated pixel the detector in an internal-RAM window (estimated) or on a PSRAM whole frame (80 ms at decimation 3, including the refinement).
     constexpr double fixedUs = 2500, trackUs = 4000, coarseUs = 4, fineUs = 20, frameCoarseUs = 18, frameFineUs = 40,
                      detectorRunUs = 1500, windowPixelUs = 4, framePixelUs = 8.5;
     double busyUntil = 0;

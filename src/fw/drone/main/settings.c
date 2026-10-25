@@ -1,5 +1,4 @@
-// The settings store: values for every settings.def entry, loaded from NVS at boot, changed by requests and
-// calibration, and committed to NVS as one blob while the drone is disarmed.
+// The settings store: values for every settings.def entry, loaded from NVS at boot, changed by requests and calibration, and committed to NVS as one blob while the drone is disarmed.
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,8 +11,7 @@ static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 #define UNLOCK() portEXIT_CRITICAL(&lock)
 
 #define RAD (3.14159265358979323846f / 180.0f)
-// NVS blob: "FS1", a reserved byte, then (name length, name, float32) pairs. Names rather than positions let
-// entries be added or removed without losing the rest.
+// NVS blob: "FS1", a reserved byte, then (name length, name, float32) pairs. Names rather than positions let entries be added or removed without losing the rest.
 #define BLOB 1024
 
 static const char *const names[SETTINGS] = {
@@ -87,8 +85,7 @@ int settings_index(const char *name, size_t length) {
     return -1;
 }
 
-// Applies a parsed blob; anything missing, unknown, out of range or truncated keeps its default, and a calibration
-// that is not complete and in range is not calibrated.
+// Applies a parsed blob; anything missing, unknown, out of range or truncated keeps its default, and a calibration that is not complete and in range is not calibrated.
 void settings_decode(const uint8_t *data, size_t size) {
     float loaded[SETTINGS];
     bool present[SETTINGS] = {false};
@@ -150,8 +147,7 @@ float settings_get(int index) {
     return value;
 }
 
-// Applies all of the values or, if any is outside the table's range, none of them; calibration marks a save the
-// dashboard waits for.
+// Applies all of the values or, if any is outside the table's range, none of them; calibration marks a save the dashboard waits for.
 bool settings_change(const int *indices, const float *changes, int count, int64_t now) {
     for (int i = 0; i < count; i++) {
         if (!settings_valid(indices[i], changes[i])) return false;
@@ -321,8 +317,7 @@ bool settings_save_due(int64_t now) {
     return due;
 }
 
-// Called by the radio's update task only, between flight_runtime_begin_maintenance and end: the NVS write stalls
-// flash access on both cores, so the outputs are held at zero and it never runs under the control lock.
+// Called by the radio's update task only, between flight_runtime_begin_maintenance and end: the NVS write stalls flash access on both cores, so the outputs are held at zero and it never runs under the control lock.
 void settings_commit(int64_t now) {
     LOCK();
     dirty = false;

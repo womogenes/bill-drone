@@ -13,8 +13,7 @@
 // MG995 analog servos stay at the standard 50 Hz. ESC refresh is independent; 50 and 400 Hz both use 1000–2200 us pulses.
 #define SERVO_HZ 100
 #define ESC_HZ 400
-// Raw sensor axes to body X forward, Y left, Z up: body axis i is sensor_to_body[i] times sensor axis sensor_axis[i].
-// The replacement IMU is turned -90° about body Y, so its X points up and its Z forward.
+// Raw sensor axes to body X forward, Y left, Z up: body axis i is sensor_to_body[i] times sensor axis sensor_axis[i]. The replacement IMU is turned -90° about body Y, so its X points up and its Z forward.
 static const int sensor_axis[3] = {2, 1, 0};
 static const int sensor_to_body[3] = {1, -1, 1};
 
@@ -56,9 +55,7 @@ void flight_runtime_outputs(void);
 void flight_runtime_start(void);
 void flight_runtime_set_voltage(uint16_t millivolts);
 bool flight_runtime_idle(void);
-// Returns why arming was refused (arming.h), or NULL once armed and recording. expected_generation is
-// flight_runtime_stop_generation() from when the request arrived.
-// arm_sequence is the arm packet's laptop sequence.
+// Returns why arming was refused (arming.h), or NULL once armed and recording. expected_generation is flight_runtime_stop_generation() from when the request arrived. arm_sequence is the arm packet's laptop sequence.
 const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t expected_generation,
                                uint32_t arm_sequence);
 uint32_t flight_runtime_stop_generation(void);

@@ -3,8 +3,7 @@
 #include "packet.h"
 #include "web.h"
 
-// Per-frame records for offline analysis (fw/esp32cam/record.py), sent over UDP to one subscriber. Core 1 only copies
-// a record into a ring in internal RAM, and only while someone subscribes; a low-priority core-0 task batches and sends.
+// Per-frame records for offline analysis (fw/esp32cam/record.py), sent over UDP to one subscriber. Core 1 only copies a record into a ring in internal RAM, and only while someone subscribes; a low-priority core-0 task batches and sends.
 struct __attribute__((packed)) FrameRecord {
     PosePacket packet;
     float corners[4][2];   // tag corners in pixels as found (rolling shutter included), zero when not found

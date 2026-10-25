@@ -10,8 +10,7 @@ static inline bool sequence_newer(uint32_t a, uint32_t b) {
     return (int32_t)(a - b) > 0;
 }
 
-// The highest laptop sequence of an accepted STOP since boot: an ARM packet must be newer. A reordered older STOP
-// still stops the outputs but never lowers the barrier.
+// The highest laptop sequence of an accepted STOP since boot: an ARM packet must be newer. A reordered older STOP still stops the outputs but never lowers the barrier.
 typedef struct {
     bool set;
     uint32_t sequence;
@@ -27,8 +26,7 @@ static inline void stop_barrier_update(StopBarrier *barrier, uint32_t sequence) 
 // Everything arming depends on, read under the runtime lock in one go (flight_rt.c flight_runtime_arm).
 typedef struct {
     bool running, online, calibrated, calibrating, enabled, throttle, base, recorder, log_pending;
-    // A finished calibration is not trusted until it is committed to NVS: ready (not yet taken by the update task)
-    // and unsaved (taken, not yet committed) both refuse.
+    // A finished calibration is not trusted until it is committed to NVS: ready (not yet taken by the update task) and unsaved (taken, not yet committed) both refuse.
     bool calibration_ready, calibration_unsaved;
     // An NVS or flash write in progress; outputs are held at zero meanwhile.
     bool maintenance;
@@ -54,8 +52,7 @@ static inline const char *arm_refusal(const ArmCheck *check) {
     return NULL;
 }
 
-// Recently handled arm request ids: a repeated id replays its first result and never arms again, even after the
-// reply cache has moved on to other requests.
+// Recently handled arm request ids: a repeated id replays its first result and never arms again, even after the reply cache has moved on to other requests.
 #define ARM_HISTORY 8
 typedef struct {
     uint8_t id[ARM_HISTORY][4];

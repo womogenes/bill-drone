@@ -1,5 +1,4 @@
-// Direct ESP-NOW link: status messages, streamed targets, stop, and the request service for updates and
-// transactions. Framing: src/fw/controller/wire.py.
+// Direct ESP-NOW link: status messages, streamed targets, stop, and the request service for updates and transactions. Framing: src/fw/controller/wire.py.
 //
 // Channels: 0 status (drone, every 50 ms), 1 targets (laptop, newest wins; each one is the controller heartbeat),
 // 2/3 binary/JSON flight log (one message in flight, resent until acknowledged), 4 recorder subscription,
@@ -41,8 +40,7 @@ static const uint8_t peer[ESP_NOW_ETH_ALEN] = {0x04, 0xb2, 0x47, 0x54, 0x80, 0x4
 #define LOG_MAX 8
 #define LOG_HEADER 12
 
-// Request states, each with one owner of the request and reply buffers: the receive callback fills IDLE,
-// the update task handles READY and sends REPLIED.
+// Request states, each with one owner of the request and reply buffers: the receive callback fills IDLE, the update task handles READY and sends REPLIED.
 enum { IDLE, READY, REPLIED };
 
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
@@ -381,10 +379,7 @@ static void describe(char *text, size_t size, const esp_partition_t *partition) 
              app.app_elf_sha256[6], app.app_elf_sha256[7]);
 }
 
-// Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset,
-// S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, Q set the accelerometer
-// correction (offset x, y, z then gain x, y, z as float32).
-// Fills reply after the id and status bytes; returns an error or NULL.
+// Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -504,8 +499,7 @@ static void send_reply(void) {
     }
 }
 
-// Stores a finished calibration, then commits changed settings while disarmed: flash writes never run under the
-// control lock or in the control task.
+// Stores a finished calibration, then commits changed settings while disarmed: flash writes never run under the control lock or in the control task.
 static void store_settings(void) {
     float bias[3], pose_zero[2], sensor_frame;
     int64_t now = esp_timer_get_time();

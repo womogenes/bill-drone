@@ -5,8 +5,7 @@
 #include "config.h"
 #include "packet.h"
 
-// Tag-frame corners in detection order (the library's flipped-Y convention: x right, y down, z into the tag), in
-// half tag widths.
+// Tag-frame corners in detection order (the library's flipped-Y convention: x right, y down, z into the tag), in half tag widths.
 constexpr float cornerX[4] = {-1, 1, 1, -1}, cornerY[4] = {1, 1, -1, -1};
 
 // Distorted pixel to normalized pinhole coordinates, inverting OpenCV's Brown-Conrady model by fixed-point iteration.
@@ -103,8 +102,7 @@ inline float planarError(const float v[4][2], float half, const PlanarPose &pose
     return error;
 }
 
-// Both planar solutions of a square by IPPE (Collins and Bartoli 2014, as in OpenCV's SOLVEPNP_IPPE_SQUARE): closed
-// form, no allocation. Returns false for a degenerate image.
+// Both planar solutions of a square by IPPE (Collins and Bartoli 2014, as in OpenCV's SOLVEPNP_IPPE_SQUARE): closed form, no allocation. Returns false for a degenerate image.
 inline bool solveSquare(const float v[4][2], float half, PlanarPose poses[2]) {
     float H[9];
     squareHomography(v, H);
@@ -140,8 +138,7 @@ inline bool solveSquare(const float v[4][2], float half, PlanarPose poses[2]) {
     return true;
 }
 
-// The last valid solution (camera = R * tag + t) and its capture time. While recent, it decides between ambiguous
-// solutions: the true tilt changes little between frames, the mirrored one sits tens of degrees away.
+// The last valid solution (camera = R * tag + t) and its capture time. While recent, it decides between ambiguous solutions: the true tilt changes little between frames, the mirrored one sits tens of degrees away.
 float anchorR[9];
 uint32_t anchorUs;
 bool anchored = false;
@@ -152,9 +149,7 @@ inline float angleBetween(const float a[9], const float b[9]) {
     return acosf(fminf(1, fmaxf(-1, (trace - 1) / 2)));
 }
 
-// valid is 1 for an unambiguous pose, 2 for an ambiguous one resolved by continuity with the previous valid pose, and 0
-// otherwise. trusted (the corners are good enough for a pose) gives the packet both solutions, the chosen one (else
-// the better fitting) first, and the tag's position in the camera frame, also when the tilt stays ambiguous.
+// valid is 1 for an unambiguous pose, 2 for an ambiguous one resolved by continuity with the previous valid pose, and 0 otherwise. trusted (the corners are good enough for a pose) gives the packet both solutions, the chosen one (else the better fitting) first, and the tag's position in the camera frame, also when the tilt stays ambiguous.
 inline void estimatePose(const float corners[4][2], float margin, PosePacket &packet, bool trusted = true) {
     packet.margin = margin;
     float v[4][2];

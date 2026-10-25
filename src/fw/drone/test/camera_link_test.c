@@ -1,7 +1,4 @@
-// Host test of the camera link parser and SYNC matching (main/camera_link.h): make camera-test from src/fw.
-// The stream mixes real packets with what the wire carries at camera power-up (the ROM and bootloader's 115200-baud text
-// as a 2 Mbaud receiver decodes it), random noise, false "TAG3" starts, truncated and damaged packets, and is fed in
-// pieces of random size. Every intact packet must come out once, in order, and nothing else.
+// Host test of the camera link parser and SYNC matching (main/camera_link.h): make camera-test from src/fw. The stream mixes real packets with what the wire carries at camera power-up (the ROM and bootloader's 115200-baud text as a 2 Mbaud receiver decodes it), random noise, false "TAG3" starts, truncated and damaged packets, and is fed in pieces of random size. Every intact packet must come out once, in order, and nothing else.
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,9 +38,7 @@ static void put_packet(uint32_t sequence) {
     expected[expected_count++] = sequence;
 }
 
-// What a 2 Mbaud UART receiver makes of text sent at 115200: the line is sampled at the receiver's rate, a low after
-// idle is a start bit, eight data bits are sampled mid-bit, and the byte is kept even when the stop bit is wrong (a
-// framing error), as the ESP32 does.
+// What a 2 Mbaud UART receiver makes of text sent at 115200: the line is sampled at the receiver's rate, a low after idle is a start bit, eight data bits are sampled mid-bit, and the byte is kept even when the stop bit is wrong (a framing error), as the ESP32 does.
 static void put_slow_text(const char *text) {
     static uint8_t line[1 << 20];
     size_t samples = 0;

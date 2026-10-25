@@ -4,10 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Global image motion between consecutive frames, for the drone to turn into velocity after removing rotation with its
-// gyro. Each frame is reduced to a quarter-size image; the most textured blocks of the previous one are found in the
-// current one by sum of absolute differences, refined by two Lucas-Kanade steps, and the shift is the mean of the
-// blocks within one small pixel of the median. The tag's area can be excluded.
+// Global image motion between consecutive frames, for the drone to turn into velocity after removing rotation with its gyro. Each frame is reduced to a quarter-size image; the most textured blocks of the previous one are found in the current one by sum of absolute differences, refined by two Lucas-Kanade steps, and the shift is the mean of the blocks within one small pixel of the median. The tag's area can be excluded.
 
 namespace flow {
 constexpr int scale = 4, width = 80, height = 60;
@@ -23,8 +20,7 @@ uint8_t images[2][width * height];
 int current = 0;
 bool primed = false;
 
-// Reduce a full-resolution frame by scale: the mean of four pixels from one row in four, one 32-bit read each (frames
-// are word-aligned). Reading the whole frame from PSRAM would cost about 6 ms.
+// Reduce a full-resolution frame by scale: the mean of four pixels from one row in four, one 32-bit read each (frames are word-aligned). Reading the whole frame from PSRAM would cost about 6 ms.
 inline void reduce(const uint8_t *frame, int frameWidth, uint8_t *out) {
     for (int y = 0; y < height; ++y) {
         const uint32_t *p = reinterpret_cast<const uint32_t *>(frame + (y * scale + scale / 2) * frameWidth);
@@ -54,8 +50,7 @@ inline float median(float *values, int n) {
     return n % 2 ? values[n / 2] : (values[n / 2 - 1] + values[n / 2]) / 2;
 }
 
-// Adds a frame. Returns false for the first frame. exclude is a full-resolution box (x0, y0, x1, y1) to ignore, or
-// null.
+// Adds a frame. Returns false for the first frame. exclude is a full-resolution box (x0, y0, x1, y1) to ignore, or null.
 inline bool update(const uint8_t *frame, int frameWidth, const float *exclude, Result &result) {
     current ^= 1;
     reduce(frame, frameWidth, images[current]);

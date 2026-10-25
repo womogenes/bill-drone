@@ -1,7 +1,4 @@
-// Writes a black-box file on the host with the camera's own encoder and ring (src/blackbox.h), draining the ring in
-// staging-sized pieces as sd.h does, with a writer that stalls now and then so entries are dropped. blackbox_test.py
-// builds and runs it and decodes the file with blackbox.py. argv: output file. stdout: one line per frame offered,
-// "sequence queued crop_left crop_top full", then the dropped count.
+// Writes a black-box file on the host with the camera's own encoder and ring (src/blackbox.h), draining the ring in staging-sized pieces as sd.h does, with a writer that stalls now and then so entries are dropped. blackbox_test.py builds and runs it and decodes the file with blackbox.py. argv: output file. stdout: one line per frame offered, "sequence queued crop_left crop_top full", then the dropped count.
 #include <cstdio>
 #include <cstdlib>
 #include <vector>

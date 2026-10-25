@@ -11,12 +11,7 @@
 
 WebServer web(80);
 Preferences settings;
-// The preview asks for a frame by setting previewWanted; the detector then hands over, with the tag it found, the flow
-// task's 80x60 reduction of the frame (flow.h, in internal RAM), and a core-0 task copies it for the stream to encode.
-// The preview never holds a frame buffer or reads PSRAM. Copying preview pixels out of the PSRAM frame, even 160x120
-// of them, competed with the driver's own PSRAM writes and lost the next frame about half the time (2026-10-22, with
-// fw/esp32cam/record.py). Calibration needs real pixels: /stream?full=1 hands over the frame buffer itself for a
-// full 320x240 copy, at that cost. The detector never waits for video, and nothing is encoded on its core.
+// The preview asks for a frame by setting previewWanted; the detector then hands over, with the tag it found, the flow task's 80x60 reduction of the frame (flow.h, in internal RAM), and a core-0 task copies it for the stream to encode. The preview never holds a frame buffer or reads PSRAM. Copying preview pixels out of the PSRAM frame, even 160x120 of them, competed with the driver's own PSRAM writes and lost the next frame about half the time (2026-10-22, with fw/esp32cam/record.py). Calibration needs real pixels: /stream?full=1 hands over the frame buffer itself for a full 320x240 copy, at that cost. The detector never waits for video, and nothing is encoded on its core.
 struct PreviewFrame {
     camera_fb_t *buffer;    // full mode: the frame, returned by the copier
     const uint8_t *reduced; // otherwise: the flow's reduced frame
@@ -126,8 +121,7 @@ void finishFrame(camera_fb_t *frame, bool found, const float corners[4][2], cons
     esp_camera_fb_return(frame);
 }
 
-// Core 0, above the flow and HTTP tasks and below the driver's: the copy runs while the detector waits for its next
-// frame, so the two cores do not compete for PSRAM while the detector works.
+// Core 0, above the flow and HTTP tasks and below the driver's: the copy runs while the detector waits for its next frame, so the two cores do not compete for PSRAM while the detector works.
 void copyLoop(void *) {
     for (;;) {
         PreviewFrame handover;
@@ -172,12 +166,9 @@ size_t appendJpeg(void *arg, size_t index, const void *data, size_t length) {
     return length;
 }
 
-// Runs in the core-0 HTTP task. Each part carries its frame's tag in an X-Tag header ("none", or the state, the four
-// corners in full-resolution 320x240 pixels and the camera position in metres), so the overlay matches the picture.
+// Runs in the core-0 HTTP task. Each part carries its frame's tag in an X-Tag header ("none", or the state, the four corners in full-resolution 320x240 pixels and the camera position in metres), so the overlay matches the picture.
 esp_err_t streamPreview(httpd_req_t *request) {
-    // Every Wi-Fi packet competes on core 0 with the camera driver, which must empty a 12-line DMA block every 0.7 ms
-    // or lose the frame: chunked sends cost about nine packets a frame and lost the next frame 40% of the time. The
-    // response is written raw instead, one send (one packet for the small preview) per frame.
+    // Every Wi-Fi packet competes on core 0 with the camera driver, which must empty a 12-line DMA block every 0.7 ms or lose the frame: chunked sends cost about nine packets a frame and lost the next frame 40% of the time. The response is written raw instead, one send (one packet for the small preview) per frame.
     const int noDelay = 1;
     setsockopt(httpd_req_to_sockfd(request), IPPROTO_TCP, TCP_NODELAY, &noDelay, sizeof(noDelay));
     static const char head[] = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace;boundary=frame\r\n"

@@ -3,9 +3,7 @@
 # ///
 """
 Camera tag-pipeline simulator: uv run fw/esp32cam/sim/sim.py [scenario ...]
-Renders 320x240 Y8 frames of the tag16h5 tag on a textured wall as the ESP32-CAM sees them (calibrated pinhole,
-rolling shutter at 138 us a row, motion blur over the exposure, lens blur, noise), runs them through the camera's own
-pipeline (harness.cpp: tag.h, track.h, pose.h, flow.h, the AprilTag library) and scores it against the truth.
+Renders 320x240 Y8 frames of the tag16h5 tag on a textured wall as the ESP32-CAM sees them (calibrated pinhole, rolling shutter at 138 us a row, motion blur over the exposure, lens blur, noise), runs them through the camera's own pipeline (harness.cpp: tag.h, track.h, pose.h, flow.h, the AprilTag library) and scores it against the truth.
 """
 
 import argparse
@@ -102,8 +100,7 @@ def render(motion, frames, exposure_us=10000, noise=2.5, seed=0):
         r0, c0 = motion(start * 1e-6)
         r1, c1 = motion((start + exposure_us) * 1e-6)
         spin = np.degrees(np.arccos(np.clip((np.trace(r0.T @ r1) - 1) / 2, -1, 1)))
-        # At least 16, each offset within the pixel (4x4 stratified), so pixels integrate their area as a sensor's do;
-        # point samples would put every edge at a pixel boundary.
+        # At least 16, each offset within the pixel (4x4 stratified), so pixels integrate their area as a sensor's do; point samples would put every edge at a pixel boundary.
         samples = int(np.clip(np.ceil(spin * FX * np.pi / 180 * 2 + np.linalg.norm(c1 - c0) * 1000), 16, 48))
         accumulated = np.zeros((HEIGHT, WIDTH), np.float32)
         for k in range(samples):

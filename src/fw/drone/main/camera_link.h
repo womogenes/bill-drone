@@ -1,8 +1,7 @@
 #ifndef CAMERA_LINK_H
 #define CAMERA_LINK_H
 
-// The TAG3 packet and the byte-stream parser for the camera link, with no ESP-IDF dependencies so the host test
-// (fw/drone/test/camera_link_test.c) runs the same code as camera.c.
+// The TAG3 packet and the byte-stream parser for the camera link, with no ESP-IDF dependencies so the host test (fw/drone/test/camera_link_test.c) runs the same code as camera.c.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -32,8 +31,7 @@ static inline uint16_t camera_crc16(const uint8_t *data, size_t length) {
     return crc;
 }
 
-// The bytes since the last packet that could still start one. skipped counts bytes thrown away (the camera's boot
-// messages, line noise, the remains of a damaged packet); corrupt counts full-length candidates whose CRC failed.
+// The bytes since the last packet that could still start one. skipped counts bytes thrown away (the camera's boot messages, line noise, the remains of a damaged packet); corrupt counts full-length candidates whose CRC failed.
 typedef struct {
     uint8_t bytes[sizeof(CameraPacket)];
     size_t have;
@@ -52,10 +50,7 @@ static inline void camera_parser_drop(CameraParser *parser, size_t n) {
     }
 }
 
-// Consumes input from *data (advancing *data and *length) until a packet with the magic, full length and a matching
-// CRC is complete: copies it to packet and returns true. Returns false once the input is used up, keeping a partial
-// packet for the next call. After a CRC failure the search resumes one byte past the false start, so a real packet that
-// began inside it is still found.
+// Consumes input from *data (advancing *data and *length) until a packet with the magic, full length and a matching CRC is complete: copies it to packet and returns true. Returns false once the input is used up, keeping a partial packet for the next call. After a CRC failure the search resumes one byte past the false start, so a real packet that began inside it is still found.
 static inline bool camera_parse(CameraParser *parser, const uint8_t **data, size_t *length, CameraPacket *packet) {
     while (*length) {
         // Outside a packet, skip quickly to the next possible start.
@@ -91,11 +86,7 @@ static inline bool camera_parse(CameraParser *parser, const uint8_t **data, size
     return false;
 }
 
-// The camera raises SYNC as it queues each packet, then sends it: a packet completed within CAMERA_SYNC_WINDOW_US of
-// the newest unused rising edge belongs to that edge (the 0.8 ms transfer plus this drone's UART and task latency;
-// packets are about 34 ms apart). edges counts rising edges, edge_us is the newest one's time and used_edges the count
-// already matched; all times are the low 32 bits of esp_timer. Returns whether the packet is dated, and how long before
-// now its edge was.
+// The camera raises SYNC as it queues each packet, then sends it: a packet completed within CAMERA_SYNC_WINDOW_US of the newest unused rising edge belongs to that edge (the 0.8 ms transfer plus this drone's UART and task latency; packets are about 34 ms apart). edges counts rising edges, edge_us is the newest one's time and used_edges the count already matched; all times are the low 32 bits of esp_timer. Returns whether the packet is dated, and how long before now its edge was.
 #define CAMERA_SYNC_WINDOW_US 10000
 static inline bool camera_sync(uint32_t now_us, uint32_t edges, uint32_t edge_us, uint32_t *used_edges, uint32_t *since_edge_us) {
     *since_edge_us = now_us - edge_us;

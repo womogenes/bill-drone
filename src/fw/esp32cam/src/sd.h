@@ -13,11 +13,7 @@
 #include "record.h"
 #include "web.h"
 
-// The black box: every frame's record, the flow's 80x60 reduced frame and a full-resolution crop of the tag (and every
-// fullEvery-th frame the whole frame) go to /blackbox/NNNN.bin on the microSD card, a new file per boot (blackbox.h has
-// the format, fw/esp32cam/blackbox.py reads it). The detector only copies an entry into a ring in PSRAM, and drops it
-// (counting) when the ring is full; a low-priority core-0 task moves the ring to the card in staging-sized writes from
-// DMA-capable internal RAM, the only memory the SDMMC driver writes from without a sector-at-a-time bounce buffer.
+// The black box: every frame's record, the flow's 80x60 reduced frame and a full-resolution crop of the tag (and every fullEvery-th frame the whole frame) go to /blackbox/NNNN.bin on the microSD card, a new file per boot (blackbox.h has the format, fw/esp32cam/blackbox.py reads it). The detector only copies an entry into a ring in PSRAM, and drops it (counting) when the ring is full; a low-priority core-0 task moves the ring to the card in staging-sized writes from DMA-capable internal RAM, the only memory the SDMMC driver writes from without a sector-at-a-time bounce buffer.
 namespace blackbox {
 enum CardState { cardNone, cardFailed, cardIdle, cardRecording, cardError };
 const char *const cardStateNames[] = {"none", "failed", "idle", "recording", "error"};
@@ -34,10 +30,7 @@ volatile uint32_t framesQueued = 0, framesDropped = 0, fileNumber = 0, ringLowes
 volatile uint64_t bytesWritten = 0, cardBytes = 0, freeBytes = 0;
 constexpr char mountPoint[] = "/sdcard", directory[] = "/sdcard/blackbox";
 
-// Mounts the card in 1-bit SD mode on GPIO14 CLK, 15 CMD and 2 D0, if there is one. The card samples DAT3 at its first
-// command and enters SPI mode if it is low; DAT3 is GPIO13, the sync line, so it is driven high until the card is up.
-// Call before the sync line idles low; without a card or with an unreadable one the camera runs without a black box.
-// The steps of esp_vfs_fat_sdmmc_mount, which would also link the SPI-mode card driver into the nearly full IRAM.
+// Mounts the card in 1-bit SD mode on GPIO14 CLK, 15 CMD and 2 D0, if there is one. The card samples DAT3 at its first command and enters SPI mode if it is low; DAT3 is GPIO13, the sync line, so it is driven high until the card is up. Call before the sync line idles low; without a card or with an unreadable one the camera runs without a black box. The steps of esp_vfs_fat_sdmmc_mount, which would also link the SPI-mode card driver into the nearly full IRAM.
 esp_err_t mountCard() {
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.flags = SDMMC_HOST_FLAG_1BIT;
@@ -118,10 +111,7 @@ void updateFree() {
         freeBytes = uint64_t(clusters) * volume->csize * card->csd.sector_size;
 }
 
-// Core 0, priority 1: below the camera driver, Wi-Fi, the flow and the preview copier. Writes only whole staging
-// buffers, so every write is sector-aligned and goes to the card in one multi-block command; the last partial one is
-// written when the file closes. The file's size reaches the directory entry at each sync, once a second, so a power
-// cut loses at most that.
+// Core 0, priority 1: below the camera driver, Wi-Fi, the flow and the preview copier. Writes only whole staging buffers, so every write is sector-aligned and goes to the card in one multi-block command; the last partial one is written when the file closes. The file's size reaches the directory entry at each sync, once a second, so a power cut loses at most that.
 void writerLoop(void *) {
     const uint32_t chunk = config::blackBoxStagingBytes;
     updateFree();
@@ -208,8 +198,7 @@ void writerLoop(void *) {
     }
 }
 
-// Core 1, once per frame while a file is open: queues the entry or counts it dropped, never waits. crop is null when
-// the tag was not found; full is the frame buffer when this frame should carry the whole image.
+// Core 1, once per frame while a file is open: queues the entry or counts it dropped, never waits. crop is null when the tag was not found; full is the frame buffer when this frame should carry the whole image.
 inline void addFrame(const FrameRecord &record, const uint8_t *reduced, const CropSource *crop, const float corners[4][2],
                      const uint8_t *full) {
     if (!active)
@@ -236,9 +225,7 @@ bool validName(const String &name) {
     return true;
 }
 
-// /blackbox lists the files, /blackbox/file?name=NNNN.bin downloads one, and /blackbox/control?record=0|1&full_every=N
-// stops (closing the file) or starts a new file and sets how often a frame carries the whole image. All of it runs in
-// the core-0 web task; reading the card while recording competes with the writer, so download after landing.
+// /blackbox lists the files, /blackbox/file?name=NNNN.bin downloads one, and /blackbox/control?record=0|1&full_every=N stops (closing the file) or starts a new file and sets how often a frame carries the whole image. All of it runs in the core-0 web task; reading the card while recording competes with the writer, so download after landing.
 void startServer() {
     web.on("/blackbox", HTTP_GET, []() {
         String body = "{\"state\":\"";

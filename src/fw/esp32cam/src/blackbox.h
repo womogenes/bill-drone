@@ -3,9 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 
-// The black box's file format and the ring that feeds it, without anything ESP32-specific, so the host test
-// (test/blackbox_test.cpp) runs this same code; sd.h mounts the card and writes. A file is a FileHeader followed by one
-// entry per recorded frame; fw/esp32cam/blackbox.py reads it. All fields are little-endian.
+// The black box's file format and the ring that feeds it, without anything ESP32-specific, so the host test (test/blackbox_test.cpp) runs this same code; sd.h mounts the card and writes. A file is a FileHeader followed by one entry per recorded frame; fw/esp32cam/blackbox.py reads it. All fields are little-endian.
 namespace blackbox {
 
 struct __attribute__((packed)) FileHeader {
@@ -25,8 +23,7 @@ struct __attribute__((packed)) FileHeader {
 };
 static_assert(sizeof(FileHeader) == 104, "Black box header changed");
 
-// Each entry: EntryHeader, then length bytes: the FrameRecord, the reduced frame, a CropHeader and its pixels when
-// flags has hasCrop, the full frame when it has hasFull, and zero padding to a multiple of four.
+// Each entry: EntryHeader, then length bytes: the FrameRecord, the reduced frame, a CropHeader and its pixels when flags has hasCrop, the full frame when it has hasFull, and zero padding to a multiple of four.
 enum EntryFlags : uint16_t { hasCrop = 1, hasFull = 2 };
 
 struct __attribute__((packed)) EntryHeader {
@@ -44,9 +41,7 @@ struct __attribute__((packed)) CropHeader {
 };
 static_assert(sizeof(CropHeader) == 8, "Black box crop changed");
 
-// A byte ring with one producer (the detector, core 1) and one consumer (the card writer, core 0). The counters only
-// grow, so their difference is the fill even when they wrap; size must be a power of two. The producer never waits:
-// an entry that does not fit is refused, and the consumer only ever sees whole committed entries.
+// A byte ring with one producer (the detector, core 1) and one consumer (the card writer, core 0). The counters only grow, so their difference is the fill even when they wrap; size must be a power of two. The producer never waits: an entry that does not fit is refused, and the consumer only ever sees whole committed entries.
 struct Ring {
     uint8_t *bytes = nullptr;
     uint32_t size = 0;
@@ -95,8 +90,7 @@ struct Writer {
 
 inline uint32_t padded(uint32_t length) { return (length + 3) & ~3u; }
 
-// Where the tag crop comes from: the frame, and the tracker's internal-RAM copy of the tag's neighbourhood (window,
-// whose top-left is frame pixel windowLeft, windowTop; null when the tracker read the frame itself).
+// Where the tag crop comes from: the frame, and the tracker's internal-RAM copy of the tag's neighbourhood (window, whose top-left is frame pixel windowLeft, windowTop; null when the tracker read the frame itself).
 struct CropSource {
     const uint8_t *frame;
     int width, height;
@@ -119,8 +113,7 @@ inline CropHeader placeCrop(const float corners[4][2], int size, int width, int 
     return crop;
 }
 
-// The crop's rows, top to bottom, as pieces passed to append(pointer, length): from the window where it covers them, so
-// the PSRAM frame is read only around it.
+// The crop's rows, top to bottom, as pieces passed to append(pointer, length): from the window where it covers them, so the PSRAM frame is read only around it.
 template <typename Append> inline void copyCrop(const CropSource &source, const CropHeader &crop, Append &&append) {
     const int left = crop.left, right = crop.left + crop.width;
     const int coveredLeft = source.window && source.windowLeft > left ? source.windowLeft : left;
@@ -140,8 +133,7 @@ template <typename Append> inline void copyCrop(const CropSource &source, const 
     }
 }
 
-// Queues one frame's entry: the record, the reduced frame, the tag crop when crop is not null, and the full frame when
-// full is not null. False, with nothing queued, when the ring has no room for all of it.
+// Queues one frame's entry: the record, the reduced frame, the tag crop when crop is not null, and the full frame when full is not null. False, with nothing queued, when the ring has no room for all of it.
 inline bool encodeFrame(Ring &ring, uint32_t dropped, const void *record, uint32_t recordBytes, const uint8_t *reduced,
                         uint32_t reducedBytes, const CropSource *source, const CropHeader &crop, const uint8_t *full,
                         uint32_t fullBytes) {

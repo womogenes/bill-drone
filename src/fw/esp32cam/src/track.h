@@ -5,10 +5,7 @@
 #include "pose.h"
 
 
-// Frame-to-frame tag tracking without the detector: each edge of the black square is measured afresh in the new
-// frame from intensity profiles across its predicted position, the corners are the intersections of the fitted lines,
-// and the tag's 16 data bits are read back through the new corners and must match the code the detector accepted.
-// Every pose is measured from the frame's own pixels; the prediction only places the search.
+// Frame-to-frame tag tracking without the detector: each edge of the black square is measured afresh in the new frame from intensity profiles across its predicted position, the corners are the intersections of the fitted lines, and the tag's 16 data bits are read back through the new corners and must match the code the detector accepted. Every pose is measured from the frame's own pixels; the prediction only places the search.
 
 // A window of a frame: pixels holds width x height pixels whose top-left is frame pixel (left, top).
 struct Image8 {
@@ -44,8 +41,7 @@ inline void project(const float H[9], float x, float y, float &u, float &v) {
     v = (H[3] * x + H[4] * y + H[5]) / w;
 }
 
-// The family's data bits in its order, read through H; the threshold is the middle of the black border and the white
-// margin. Returns the bits and the mean distance of the bit samples from the threshold.
+// The family's data bits in its order, read through H; the threshold is the middle of the black border and the white margin. Returns the bits and the mean distance of the bit samples from the threshold.
 inline bool readCode(const Image8 &image, const float H[9], const apriltag_family_t *family, uint32_t &code,
                      float &margin) {
     // Bit cell (x, y) of the black square, width_at_border cells wide, maps to half-width coordinates.
@@ -90,12 +86,7 @@ inline bool readCode(const Image8 &image, const float H[9], const apriltag_famil
     return true;
 }
 
-// Coarse alignment before the edges are measured: the tag as the predicted corners place it (its code, black border and
-// white margin, one sample per cell) is correlated with the frame at shifts up to radius pixels. Shifts a whole number
-// of pixels apart, about half a cell, are tried on the nearest pixels; then the best is refined with interpolated
-// samples, halving the step down to a pixel. A blurred tag still correlates best where it is. The corners are moved by
-// the best shift; returns its normalized correlation (0 when nothing could be compared), and counts the coarse and fine
-// shifts tried.
+// Coarse alignment before the edges are measured: the tag as the predicted corners place it (its code, black border and white margin, one sample per cell) is correlated with the frame at shifts up to radius pixels. Shifts a whole number of pixels apart, about half a cell, are tried on the nearest pixels; then the best is refined with interpolated samples, halving the step down to a pixel. A blurred tag still correlates best where it is. The corners are moved by the best shift; returns its normalized correlation (0 when nothing could be compared), and counts the coarse and fine shifts tried.
 struct AlignWork {
     int coarse, fine;
 };
@@ -121,8 +112,7 @@ inline float alignTag(const Image8 &image, float corners[4][2], const apriltag_f
             py[points] = int(floorf(pv[points] + 0.5f)) - image.top;
             white[points++] = value;
         }
-    // Normalized cross-correlation of the samples with the expected pattern, over the samples in the frame; the pattern
-    // is 0 or 1, so the products are the sum over white cells.
+    // Normalized cross-correlation of the samples with the expected pattern, over the samples in the frame; the pattern is 0 or 1, so the products are the sum over white cells.
     auto correlation = [&](float n, float sum, float squares, float whiteSum, float whites) {
         if (n < points * 3 / 4)
             return -1.0f;
@@ -237,9 +227,7 @@ inline bool fitEdge(const Image8 &image, const float a[2], const float b[2], con
             const float o = (k - half) * step;
             profile[k] = bilinear(image, cx + nx * o, cy + ny * o);
         }
-        // A bright-outside to dark-inside step. Its crossing of the middle level places a window of about two pixels;
-        // the edge is then the window's area above the dark level divided by the step height, which is exact for any
-        // blur of a straight edge, unlike a gradient peak or a crossing between interpolated samples.
+        // A bright-outside to dark-inside step. Its crossing of the middle level places a window of about two pixels; the edge is then the window's area above the dark level divided by the step height, which is exact for any blur of a straight edge, unlike a gradient peak or a crossing between interpolated samples.
         const float outside = (profile[0] + profile[1] + profile[2] + profile[3]) / 4;
         const float inner = (profile[steps - 4] + profile[steps - 3] + profile[steps - 2] + profile[steps - 1]) / 4;
         const float height = outside - inner;
@@ -321,8 +309,7 @@ inline bool trackCorners(const Image8 &image, float corners[4][2], const aprilta
     float side = INFINITY;
     for (int e = 0; e < 4; ++e)
         side = fminf(side, hypotf(corners[(e + 1) % 4][0] - corners[e][0], corners[(e + 1) % 4][1] - corners[e][1]));
-    // Search across the edge for two thirds of the black border (a sixth of the tag), so the profile ends stay in the
-    // border and the white margin.
+    // Search across the edge for two thirds of the black border (a sixth of the tag), so the profile ends stay in the border and the white margin.
     const float reach = fmaxf(1.5f, side / 9);
     for (int e = 0; e < 4; ++e) {
         if (!fitEdge(image, corners[e], corners[(e + 1) % 4], centre, reach, lines[e]))

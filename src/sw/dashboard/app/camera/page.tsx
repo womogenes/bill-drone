@@ -37,8 +37,7 @@ function indexOf(bytes: Uint8Array, pattern: number[], from = 0) {
   return -1;
 }
 
-// Reads the camera's multipart stream: each part is a JPEG with its tag in an X-Tag header, so the outline drawn
-// over a frame is that frame's.
+// Reads the camera's multipart stream: each part is a JPEG with its tag in an X-Tag header, so the outline drawn over a frame is that frame's.
 async function readPreview(
   url: string,
   signal: AbortSignal,

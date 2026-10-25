@@ -32,8 +32,7 @@ int exposureLines;
 RTC_NOINIT_ATTR uint32_t crumbs[3];
 uint32_t lastCrumbs[3];
 
-// The drone link on UART0. The receive side (GPIO3) is for the drone's future messages; for now its bytes are only
-// counted. The transmit buffer holds a few packets; publish() never queues behind an unsent one.
+// The drone link on UART0. The receive side (GPIO3) is for the drone's future messages; for now its bytes are only counted. The transmit buffer holds a few packets; publish() never queues behind an unsent one.
 constexpr uart_port_t linkPort = UART_NUM_0;
 constexpr int linkTxBytes = 1024, linkRxBytes = 256;
 portMUX_TYPE syncLock = portMUX_INITIALIZER_UNLOCKED;
@@ -72,9 +71,7 @@ uint32_t frameStart(const camera_fb_t *frame) {
     return uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec);
 }
 
-// The driver's queue is first in, first out, and with two buffers it stops capturing while the detector holds one and
-// the other waits finished. That keeps the camera DMA copy from competing with the detector for PSRAM, but the waiting
-// frame may have finished long ago. Such a frame is returned and the next one, started afterwards, is used instead.
+// The driver's queue is first in, first out, and with two buffers it stops capturing while the detector holds one and the other waits finished. That keeps the camera DMA copy from competing with the detector for PSRAM, but the waiting frame may have finished long ago. Such a frame is returned and the next one, started afterwards, is used instead.
 UBaseType_t driverPriority = 0; // as the driver created its task, for /status
 
 camera_fb_t *freshFrame() {
@@ -105,9 +102,7 @@ void flowLoop(void *) {
     }
 }
 
-// Starts the camera: the driver, then mirror and flip (a 180-degree rotation from the previous orientation), and on
-// the OV3660 the PLL and window of config.h. The driver's raw-QVGA clock (20 MHz SYSCLK, 11 fps) becomes its
-// small-frame one, 40 MHz SYSCLK with the same 10 MHz PCLK; a faster line rate panicked within minutes.
+// Starts the camera: the driver, then mirror and flip, and on the OV3660 the PLL and window of config.h. The driver's raw-QVGA clock (20 MHz SYSCLK, 11 fps) becomes its small-frame one, 40 MHz SYSCLK with the same 10 MHz PCLK; a faster line rate panicked within minutes.
 bool startCamera() {
     if (esp_camera_init(&cameraConfig) != ESP_OK)
         return false;
@@ -123,9 +118,7 @@ bool startCamera() {
         esp_camera_deinit();
         return false;
     }
-    // The driver's task must empty a 12-line DMA block every 0.7 ms or lose the frame. It is created at the same
-    // priority as the Wi-Fi task on core 0, so Wi-Fi traffic (the preview, /status, records) cost frames; above it,
-    // its short copies only delay Wi-Fi.
+    // The driver's task must empty a 12-line DMA block every 0.7 ms or lose the frame. It is created at the same priority as the Wi-Fi task on core 0, so Wi-Fi traffic (the preview, /status, records) cost frames; above it, its short copies only delay Wi-Fi.
     if (TaskHandle_t driver = xTaskGetHandle("cam_task")) {
         driverPriority = uxTaskPriorityGet(driver);
         vTaskPrioritySet(driver, configMAX_PRIORITIES - 1);
@@ -136,8 +129,7 @@ bool startCamera() {
            sensor->set_reg(sensor, 0x3a18, 0xff, 0x03) == 0 && sensor->set_reg(sensor, 0x3a19, 0xff, 0xff) == 0;
 }
 
-// Short exposures keep motion blur down; the automatic gain makes up the light. Only when the gain nears its ceiling
-// does the exposure grow, up to the whole frame, and it shrinks back as the gain falls.
+// Short exposures keep motion blur down; the automatic gain makes up the light. Only when the gain nears its ceiling does the exposure grow, up to the whole frame, and it shrinks back as the gain falls.
 void adjustExposure() {
     sensor_t *sensor = esp_camera_sensor_get();
     const float gain = sensor->get_reg(sensor, 0x350a, 0x3ff) / 16.0f;
@@ -150,10 +142,7 @@ void adjustExposure() {
         exposureLines = lines;
 }
 
-// The detector's working set is PSRAM-bound (union-find alone is 8 bytes per pixel). A window is small enough to keep
-// in internal RAM; the limit is global, so it stays at the default while the preview encoder is running too. A
-// whole-frame search's many small allocations (clusters, quads) took internal RAM down to 7.7 KB, so they all go to
-// PSRAM; Wi-Fi and lwip allocate internal RAM explicitly and are unaffected.
+// The detector's working set is PSRAM-bound (union-find alone is 8 bytes per pixel). A window is small enough to keep in internal RAM; the limit is global, so it stays at the default while the preview encoder is running too. A whole-frame search's many small allocations (clusters, quads) took internal RAM down to 7.7 KB, so they all go to PSRAM; Wi-Fi and lwip allocate internal RAM explicitly and are unaffected.
 void detectorWorkspace(Workspace where) {
     heap_caps_malloc_extmem_enable(where == workspaceInternal && !previewStreaming ? config::trackInternalBytes
                                    : where == workspaceExternal                    ? 0
@@ -163,8 +152,7 @@ void detectorWorkspace(Workspace where) {
 void setup() {
     memcpy(lastCrumbs, crumbs, sizeof(crumbs));
     memset(crumbs, 0, sizeof(crumbs));
-    // UART0 is the drone link from here on, so nothing else may write to it: log output goes to the /log ring and the
-    // ROM's printf to nowhere. Only the boot ROM and bootloader print, at 115200 before this, and the drone rejects that.
+    // UART0 is the drone link from here on, so nothing else may write to it: log output goes to the /log ring and the ROM's printf to nowhere. Only the boot ROM and bootloader print, at 115200 before this, and the drone rejects that.
     esp_log_set_vprintf(logToRing);
     esp_log_level_set("*", ESP_LOG_WARN);
     startLink();
@@ -216,8 +204,7 @@ void setup() {
     apriltag_detector_add_family_bits(detector, finder.family, 0);
     detector->nthreads = 1;
     detector->refine_edges = true;
-    // A tag is high-contrast black on white: reject faint and tiny blobs at thresholding, before the expensive
-    // union-find, clustering and quad fitting, which otherwise scale with every noise blob in a dim, cluttered scene.
+    // A tag is high-contrast black on white: reject faint and tiny blobs at thresholding, before the expensive union-find, clustering and quad fitting, which otherwise scale with every noise blob in a dim, cluttered scene.
     detector->qtp.min_white_black_diff = 20;
     detector->qtp.max_nmaxima = 6;
     finder.workspace = detectorWorkspace;
@@ -231,10 +218,7 @@ void setup() {
     xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
 }
 
-// Each frame's packet goes out on UART0 at 2 Mbaud, 164 bytes in 0.8 ms, from the driver's transmit buffer, so the
-// detector never waits for the wire. The sync line rises at the moment the packet's age is measured, just before it is
-// queued: the drone dates the capture as that edge minus ageUs, whatever its own UART latency. A packet is dropped,
-// with no pulse, if the previous one has not left the buffer (which at this rate means the link is broken).
+// Each frame's packet goes out on UART0 at 2 Mbaud, 164 bytes in 0.8 ms, from the driver's transmit buffer, so the detector never waits for the wire. The sync line rises at the moment the packet's age is measured, just before it is queued: the drone dates the capture as that edge minus ageUs, whatever its own UART latency. A packet is dropped, with no pulse, if the previous one has not left the buffer (which at this rate means the link is broken).
 void publish(PosePacket &packet) {
     size_t room = 0;
     uart_get_tx_buffer_free_size(linkPort, &room);
@@ -278,8 +262,7 @@ void loop() {
     }
     crumbs[0] = 1;
     camera_fb_t *frame = freshFrame();
-    // A driver that stops delivering frames is restarted, up to three tries; Wi-Fi and OTA stay up regardless, and
-    // /status counts stalls and recoveries.
+    // A driver that stops delivering frames is restarted, up to three tries; Wi-Fi and OTA stay up regardless, and /status counts stalls and recoveries.
     if (!frame) {
         ++stalls;
         crumbs[2] = stalls;
@@ -383,8 +366,7 @@ void loop() {
         record.shortFrames = uint16_t(shortFrames);
         if (recording())
             addRecord(record);
-        // The black box takes the tag crop mostly from the tracker's internal copy, and the reduced frame the flow left
-        // in internal RAM; only a full frame (every fullEvery-th) is a large PSRAM read.
+        // The black box takes the tag crop mostly from the tracker's internal copy, and the reduced frame the flow left in internal RAM; only a full frame (every fullEvery-th) is a large PSRAM read.
         const Image8 &copy = finder.measuredImage;
         const bool inWindow = copy.pixels == finder.window;
         const blackbox::CropSource crop = {frame->buf, int(frame->width), int(frame->height), inWindow ? finder.window : nullptr,
