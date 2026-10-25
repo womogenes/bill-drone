@@ -24,8 +24,6 @@ bool cameraReady = false;
 volatile bool cameraStopRequested = false;
 bool cameraStalled = false;
 uint32_t lastCaptureUs = 0;
-// GET /search?frames=N: the next N frames forget the tag and search the whole frame, to measure that path.
-volatile uint32_t searchTests = 0;
 
 camera_config_t cameraConfig = {};
 uint32_t stalls = 0, recoveries = 0;
@@ -84,7 +82,6 @@ camera_fb_t *freshFrame() {
     if (!frame || uint32_t(esp_timer_get_time()) - frameStart(frame) <= config::maxFrameAgeUs)
         return frame;
     esp_camera_fb_return(frame);
-    ++staleFrames;
     return esp_camera_fb_get();
 }
 
@@ -224,10 +221,6 @@ void setup() {
     detector->qtp.min_white_black_diff = 20;
     detector->qtp.max_nmaxima = 6;
     finder.workspace = detectorWorkspace;
-    web.on("/search", HTTP_GET, []() {
-        searchTests = uint32_t(max(0L, min(1000L, web.arg("frames").toInt())));
-        web.send(200, "application/json", "{\"searching\":true}");
-    });
     startPreview();
     startRecording();
     blackbox::start();
@@ -335,11 +328,6 @@ void loop() {
     float corners[4][2] = {}, margin = 0;
     if (calibrated()) {
         ++poseCount;
-        if (searchTests) {
-            --searchTests;
-            finder.tracking = false;
-            finder.seenUs = 0;
-        }
         kind = finder.find(frame->buf, frame->width, frame->height, frameStart(frame), corners, margin);
         trackedCount += kind == tagTracked;
         detectedCount += kind == tagDetected;

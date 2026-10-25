@@ -1,7 +1,7 @@
 """
 Record the ESP32-CAM's per-frame records: uv run fw/esp32cam/record.py [--host 192.168.86.28]
 Subscribes to /record, saves every frame to sw/recordings/camera-<time>.frm and prints a line a second. Ctrl-C stops.
-Summarize a recording: uv run fw/esp32cam/record.py --analyze sw/recordings/camera-<time>.frm
+Summarize a recording, or a black-box file's records: uv run fw/esp32cam/record.py --analyze sw/recordings/camera-<time>.frm
 
 File format: repeated [int64 laptop receive time, ns][record from fw/esp32cam/src/record.h], 224 bytes (TAG3 packets) or,
 in older recordings, 144 (TAG2).
@@ -54,6 +54,12 @@ def decode(record):
 
 def load(path):
     data = Path(path).read_bytes()
+    if data[:8] == b"BILLBBX1":
+        from blackbox import entries
+
+        rows = [e["record"] | {"host_ns": 0} for e in entries(data) if "record" in e]
+        rows.sort(key=lambda r: r["sequence"])
+        return {k: np.array([r[k] for r in rows]) for k in rows[0]}
     size = RECORD.size if data[8:12] == b"TAG3" else OLD_RECORD.size
     step = 8 + size
     rows = [decode(data[i + 8:i + step]) | {"host_ns": struct.unpack_from("<q", data, i)[0]} for i in range(0, len(data) - step + 1, step)]
@@ -173,7 +179,7 @@ def analyze(path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="192.168.86.28")
-    parser.add_argument("--analyze")
+    parser.add_argument("--analyze", help="summarize a .frm recording or a black-box .bin file")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--seconds", type=float, help="stop after this long instead of on Ctrl-C")
     args = parser.parse_args()

@@ -3,8 +3,7 @@ Read the ESP32-CAM's black-box files (src/blackbox.h, written to the microSD car
 
 Summarize a file:                 uv run fw/esp32cam/blackbox.py sw/recordings/blackbox/0003.bin
 Export its images as PNGs:        uv run fw/esp32cam/blackbox.py 0003.bin --png out/  [--every 10] [--limit 500]
-Convert its records for record.py: uv run fw/esp32cam/blackbox.py 0003.bin --frm 0003.frm
-                                  uv run fw/esp32cam/record.py --analyze 0003.frm
+Analyze its records:              uv run fw/esp32cam/record.py --analyze 0003.bin
 Download new files after landing: uv run fw/esp32cam/blackbox.py --fetch [--host 192.168.86.28] [--out sw/recordings/blackbox]
 
 File format: a 104-byte header (HEADER below: magic BILLBBX1, header size, file number, record size, reduced frame size,
@@ -43,7 +42,7 @@ def read_header(data):
 
 
 def entries(data):
-    """Yields each entry as a dict: the decoded record and its bytes (raw), dropped (frames dropped so far), reduced (an image), and crop
+    """Yields each entry as a dict: the decoded record, dropped (frames dropped so far), reduced (an image), and crop
     ((left, top), image) and full (an image) or None. Damaged stretches are skipped to the next entry magic; a truncated
     last entry (power cut before the final write) is ignored."""
     header = read_header(data)
@@ -63,8 +62,7 @@ def entries(data):
         if body + length > len(data):
             return
         p = body
-        raw = data[p:p + header["record_bytes"]]
-        record = decode(raw)
+        record = decode(data[p:p + header["record_bytes"]])
         p += header["record_bytes"]
         reduced = np.frombuffer(data, np.uint8, rw * rh, p).reshape(rh, rw)
         p += rw * rh
@@ -77,7 +75,7 @@ def entries(data):
         if flags & HAS_FULL:
             full = np.frombuffer(data, np.uint8, fw * fh, p).reshape(fh, fw)
             p += fw * fh
-        yield {"record": record, "raw": raw, "dropped": dropped, "reduced": reduced, "crop": crop, "full": full}
+        yield {"record": record, "dropped": dropped, "reduced": reduced, "crop": crop, "full": full}
         at = body + length
 
 
@@ -131,16 +129,6 @@ def export_png(path, out, every=1, limit=None):
     print(f"wrote {written} frames to {out}")
 
 
-def export_frm(path, out):
-    with Path(out).open("wb") as file:
-        count = 0
-        for e in entries(Path(path).read_bytes()):
-            if "record" in e:
-                file.write(struct.pack("<q", 0) + e["raw"])
-                count += 1
-    print(f"wrote {count} records to {out}")
-
-
 def fetch(host, out):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -161,7 +149,6 @@ if __name__ == "__main__":
     parser.add_argument("--png", help="export the frames' images to this directory")
     parser.add_argument("--every", type=int, default=1, help="with --png, every Nth frame")
     parser.add_argument("--limit", type=int, help="with --png, at most this many frames")
-    parser.add_argument("--frm", help="write the records in record.py's format to this file")
     parser.add_argument("--fetch", action="store_true", help="download the camera's black-box files")
     parser.add_argument("--host", default="192.168.86.28")
     parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[2] / "sw" / "recordings" / "blackbox")
@@ -172,7 +159,5 @@ if __name__ == "__main__":
         summarize(args.file)
         if args.png:
             export_png(args.file, args.png, args.every, args.limit)
-        if args.frm:
-            export_frm(args.file, args.frm)
     else:
         parser.print_help()

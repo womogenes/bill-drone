@@ -23,7 +23,6 @@ struct PreviewFrame {
     uint8_t tag; // 0 none, 1 tracked, 2 tracked with a valid pose
     float corners[4][2];
     float position[3];
-    uint32_t handoverUs;
 };
 QueueHandle_t handoverQueue;
 SemaphoreHandle_t previewReady;
@@ -35,8 +34,6 @@ int previewWidth = flow::width, previewHeight = flow::height;
 uint8_t *previewJpeg;      // encoder output in PSRAM
 constexpr size_t previewJpegBytes = 40 * 1024;
 volatile bool previewWanted = false;
-// Longest time since the last /status that the copier held a frame buffer, and frames the detector found too old.
-volatile uint32_t previewHoldUs = 0, staleFrames = 0;
 // While streaming, the encoder's small allocations would also land in internal RAM during a search; see main.cpp.
 volatile bool previewStreaming = false;
 constexpr TickType_t previewPeriod = pdMS_TO_TICKS(66); // At most 15 fps.
@@ -119,8 +116,7 @@ void finishFrame(camera_fb_t *frame, bool found, const float corners[4][2], cons
     if (previewWanted) {
         previewWanted = false;
         const bool full = previewFull;
-        PreviewFrame handover = {full ? frame : nullptr, reduced, uint8_t(found ? (packet.valid ? 2 : 1) : 0), {}, {},
-                                 uint32_t(esp_timer_get_time())};
+        PreviewFrame handover = {full ? frame : nullptr, reduced, uint8_t(found ? (packet.valid ? 2 : 1) : 0), {}, {}};
         if (found)
             memcpy(handover.corners, corners, sizeof(handover.corners));
         memcpy(handover.position, packet.position, sizeof(handover.position));
@@ -142,9 +138,6 @@ void copyLoop(void *) {
             if (fits)
                 memcpy(previewPixels, handover.buffer->buf, handover.buffer->len);
             esp_camera_fb_return(handover.buffer);
-            const uint32_t held = uint32_t(esp_timer_get_time()) - handover.handoverUs;
-            if (held > previewHoldUs)
-                previewHoldUs = held;
             previewWidth = 320;
             previewHeight = 240;
         } else {
@@ -294,7 +287,7 @@ void startPreview() {
             "count\":%u,\"tracked_count\":%u,\"detected_count\":%u,\"preview_count\":%u,\"detect_us\":%u,\"frame_us\":%u,\"age_us\":%u,\"frame_age_us\":%u,\"valid\":%s,"
             "\"position_m\":[%.4f,%.4f,%.4f],\"margin\":%.1f,\"reprojection_px\":%.3f,\"internal_min\":%u,\"uptime_ms\":%u,\"reset\":%d,"
             "\"flow_px\":[%.3f,%.3f],\"flow_inliers\":%u,\"flow_residual_px\":%.3f,\"short_frames\":%u,\"stalls\":%u,\"recoveries\":%u,"
-            "\"last_crumbs\":[%u,%u,%u],\"gain\":%.2f,\"exposure_lines\":%d,\"frame_lines\":%d,\"preview_hold_us\":%u,\"stale_frames\":%u,\"driver_priority\":[%u,%u],"
+            "\"last_crumbs\":[%u,%u,%u],\"gain\":%.2f,\"exposure_lines\":%d,\"frame_lines\":%d,\"driver_priority\":[%u,%u],"
             "\"link_sent\":%u,\"link_dropped\":%u,\"link_rx_bytes\":%u,",
             cameraStalled ? "stalled" : cameraReady ? "running" : "stopped", calibrated() ? "true" : "false", config::tagId, config::tagSizeM * 1000,
             unsigned(captureCount), unsigned(poseCount), unsigned(trackedCount), unsigned(detectedCount),
@@ -305,7 +298,7 @@ void startPreview() {
             lastPose.flow[0], lastPose.flow[1], unsigned(lastPose.flowInliers), lastPose.flowResidualPx, unsigned(shortFrames), unsigned(stalls),
             unsigned(recoveries), unsigned(lastCrumbs[0]), unsigned(lastCrumbs[1]), unsigned(lastCrumbs[2]),
             sensor ? sensor->get_reg(sensor, 0x350a, 0x3ff) / 16.0f : 0, sensor ? sensor->get_reg(sensor, 0x3500, 0xffffff) >> 4 : 0,
-            sensor ? sensor->get_reg(sensor, 0x380e, 0xffff) : 0, unsigned(previewHoldUs), unsigned(staleFrames),
+            sensor ? sensor->get_reg(sensor, 0x380e, 0xffff) : 0,
             unsigned(driverPriority), unsigned(configMAX_PRIORITIES - 1), unsigned(linkSent), unsigned(linkDropped),
             unsigned(linkReceived));
         const size_t used = strlen(body);
@@ -314,7 +307,6 @@ void startPreview() {
             strcat(body, "}");
         else
             strcpy(body + used - 1, "}");
-        previewHoldUs = 0;
         web.send(200, "application/json", body);
     });
     web.begin();
