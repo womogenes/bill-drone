@@ -37,7 +37,7 @@
 // Battery smoothing for thrust compensation (s), and the furthest the smoothed voltage may sit from thrust_voltage, as a ratio, before it is treated as an ADC fault and clamped.
 #define VOLTAGE_TAU 0.3f
 #define VOLTAGE_RANGE 0.15f
-// Oldest camera pose hover uses (us), and the highest throttle it may ask for (the thrust table's rising end).
+// Oldest camera sighting hover uses (us), and the highest throttle it may ask for (the thrust table's rising end).
 #define HOVER_POSE_US 150000
 #define HOVER_THROTTLE 1100
 
@@ -278,9 +278,11 @@ static void runtime_task(void *arg) {
             if (hover_mode && hover.bias > 0.5f) {
                 CameraPose camera;
                 HoverPose seen, *tag = NULL;
-                if (command.hover_camera && camera_pose(&camera, HOVER_POSE_US)) {
-                    seen = (HoverPose){camera.sequence, camera.capture_us, {camera.position_m[0], camera.position_m[1], camera.position_m[2]},
-                                       {camera.rotation[2], camera.rotation[5], camera.rotation[8]}};
+                // Every frame whose tag corners the camera trusted, whether or not it settled the tilt: hover flies on the tag centre, which the tilt does not affect, and takes the wall's normal (the tag's z axis in the camera frame) only from an unambiguous tilt.
+                if (command.hover_camera && camera_candidates(&camera, HOVER_POSE_US)) {
+                    seen = (HoverPose){.sequence = camera.sequence, .capture_us = camera.capture_us,
+                                       .tag = {camera.tag_position_m[0], camera.tag_position_m[1], camera.tag_position_m[2]}};
+                    if (camera.valid == 1) memcpy(seen.normal, &camera.rotation[6], sizeof(seen.normal));
                     tag = &seen;
                 }
                 float flying = command.base > 0 ? 2 * flight_interpolate(command.base, &flight_thrust[0][0], flight_thrust_count, 0) : 0;
@@ -289,11 +291,19 @@ static void runtime_task(void *arg) {
                 HoverGains gains = command.hover;
                 if (!command.hover_camera) gains.center = 0;
                 HoverOutput out;
-                hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, vertical, flying, &out);
+                // Heading rate about vertical from the body rates (positive left).
+                float heading_rate = (state.gyro[1] * sinf(pose.roll) + state.gyro[2] * cosf(pose.roll)) / cosf(pose.pitch);
+                hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &out);
                 scaled.base = out.force > 0 ? fminf(HOVER_THROTTLE, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
                 scaled.target_roll = out.roll;
                 scaled.target_pitch = out.pitch;
                 scaled.target_yaw = out.yaw_rate;
+                // Once flying on the tag, hover damps the velocity itself, measured by the camera and dead-reckoned through losses: flight_math's damping is off, since its leaky integral of attitude error would cancel any steady tilt hover asks for, and its velocity follows hover's, so it would resume from the real velocity.
+                if (out.tracking) {
+                    state.controller.velocity[0] = out.velocity[0];
+                    state.controller.velocity[1] = out.velocity[1];
+                    scaled.velocity_damping = 0;
+                }
             }
             flown = scaled;
             if (command.thrust_voltage > 0 && battery_v > 0) {

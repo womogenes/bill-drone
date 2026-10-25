@@ -125,6 +125,8 @@ const tuningFields = [
   { key: 'hover_distance', label: 'Hover distance from tag (m)', min: 0.3 },
   { key: 'hover_approach', label: 'Hover approach speed (m/s)', min: 0.02 },
   { key: 'hover_ceiling', label: 'Hover ceiling above takeoff (m)', min: 0.2 },
+  { key: 'hover_kside', label: 'Hover pull to square-on (m/s² per m)', min: 0 },
+  { key: 'hover_cam_pitch', label: 'Camera tilt up from body (°)', min: -30 },
 ] as const;
 const modelFields = [
   { key: 'pivot_height', label: 'Pivot height (m)', min: 0, max: undefined },
