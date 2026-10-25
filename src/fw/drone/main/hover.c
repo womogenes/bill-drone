@@ -148,7 +148,7 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     state->yaw = wrap(state->yaw + yaw_rate * dt);
     float cy = cosf(state->yaw), sy = sinf(state->yaw);
     if (state->height >= AIRBORNE) {
-        float ahead = GRAVITY * tanf(pitch) - state->trim[0], left = -GRAVITY * tanf(roll) - state->trim[1];
+        float ahead = GRAVITY * tanf(pitch - g->pitch_trim) - state->trim[0], left = -GRAVITY * tanf(roll) - state->trim[1];
         state->velocity[0] += (ahead * cy - left * sy) * dt;
         state->velocity[1] += (ahead * sy + left * cy) * dt;
     }

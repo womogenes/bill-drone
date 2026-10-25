@@ -26,6 +26,8 @@ typedef struct {
     float center, distance, approach, ceiling;
     // The camera's tilt up from the body's forward axis.
     float cam_pitch;
+    // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
+    float pitch_trim;
 } HoverGains;
 
 // One camera sighting: the tag centre in the camera frame (m; right, down, forward), the wall's normal into it in the camera frame when the camera settled the tag's tilt (zero otherwise), and its capture time.

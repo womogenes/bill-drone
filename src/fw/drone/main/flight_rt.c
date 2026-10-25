@@ -290,6 +290,7 @@ static void runtime_task(void *arg) {
                 // Centring climbs looking for the tag, which only makes sense with the camera on.
                 HoverGains gains = command.hover;
                 if (!command.hover_camera) gains.center = 0;
+                gains.pitch_trim = command.pitch_trim;
                 HoverOutput out;
                 // Heading rate about vertical from the body rates (positive left).
                 float heading_rate = (state.gyro[1] * sinf(pose.roll) + state.gyro[2] * cosf(pose.roll)) / cosf(pose.pitch);
