@@ -582,6 +582,7 @@ export const ControlPanel = memo(function ControlPanel({
             {label === 'Takeoff' && (
               <form
                 className="flex items-center gap-1"
+                noValidate
                 onSubmit={(event) => {
                   event.preventDefault();
                   confirmTakeoff();
@@ -589,7 +590,7 @@ export const ControlPanel = memo(function ControlPanel({
               >
                 <Input
                   type="number"
-                  min={1}
+                  min={0}
                   max={THROTTLE_MAX}
                   step={10}
                   value={takeoffDraft}
