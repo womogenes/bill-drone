@@ -12,7 +12,8 @@ from sw.sim.flight import MODEL, Attitude, Controller, throttle, thrust
 MASS = 0.940  # kg, the final assembly with the printed deck and IMU bracket (Bill's estimate, 2026-10-24)
 WEIGHT = MASS * 9.81
 DT = 0.01
-SUB = 10
+# Physics substeps per control step: the foot contacts' friction is stiff, and at 10 a gripping contact chatters (the sampled gyro and accelerometer read tens of deg/s and 2-3 g at rest).
+SUB = 40
 TAKEOFF_THROTTLE = 720  # dashboard T
 CLIMB = 0.5  # seconds at T after liftoff before collective drops to hover
 # Landing-leg contact points relative to the CoM, body frame (m): CAD legs touch at x ±55 mm, y ±78 mm, 87 mm below the tube; the CoM is 17.2 mm above it.
@@ -95,7 +96,15 @@ def run(gains, plant, seconds=10.0, seed=0, log=None):
     deadband = math.radians(plant["deadband"])
     # Seconds for collective to rise linearly to T on the ground (0 = step).
     ramp = plant.get("ramp", 0.0)
+    # Like the drone, a liftoff starts armed at zero collective for "armed_s", so the takeoff setpoint starts at the resting attitude.
+    armed = round(plant.get("armed_s", 0.0) / DT) if liftoff else 0
+    if armed:
+        settings["base_throttle"] = 0
+        controller.configure(settings | {"enabled": 1})
     for step in range(int(seconds / DT)):
+        if armed and step == armed:
+            settings["base_throttle"] = TAKEOFF_THROTTLE
+            controller.configure(settings | {"enabled": 1})
         if liftoff and lifted is None and step * DT < ramp:
             settings["base_throttle"] = round(TAKEOFF_THROTTLE * (step + 1) * DT / ramp)
             controller.configure(settings | {"enabled": 1})
