@@ -1,5 +1,5 @@
 """
-Gain sweeps: uv run -m sw.sim.sweep. Runs the drone's C attitude estimator and controller (via sw.sim.flight) against a lean 6-DOF rigid-body plant with actuator delay, lag, servo backlash/slew, IMU noise, drag, landing-leg ground contact and model mismatch. Free flight starts at hover in the air; a plant with "liftoff" starts level on the ground at the dashboard's T collective instead.
+Gain sweeps: uv run -m sw.sim.sweep. Runs the drone's C attitude estimator and controller (via sw.sim.flight) against a lean 6-DOF rigid-body plant with actuator delay, lag, servo backlash/slew, IMU noise, drag, landing-leg ground contact and model mismatch. Free flight starts at hover in the air; a plant with "liftoff" starts on the ground at the dashboard's T collective instead, level or resting at "ground_pitch" degrees on its "feet" (contact points relative to the CoM, default FEET).
 """
 
 import itertools
@@ -69,9 +69,11 @@ def run(gains, plant, seconds=10.0, seed=0, log=None):
     inertia = [MODEL["roll_inertia"] * plant["roll_inertia"], MODEL["pitch_inertia"] * plant["pitch_inertia"], MODEL["yaw_inertia"] * plant["yaw_inertia"]]
     height = MODEL["pivot_height"] * plant["height"]
     arm = MODEL["arm"]
-    angles = [0.0, 0.0, 0.0] if liftoff else [math.radians(plant.get("roll0", 3)), math.radians(plant.get("pitch0", -3)), 0.0]
-    # World position and velocity of the CoM; on the ground the feet start at their static sag. Free flight starts high enough that sinking without altitude hold never reaches the floor.
-    position = [0.0, 0.0, -FEET[0][2] - WEIGHT / 4 / GROUND_K if liftoff else 50.0]
+    feet = plant.get("feet", FEET)
+    angles = [0.0, math.radians(plant.get("ground_pitch", 0.0)), 0.0] if liftoff else [math.radians(plant.get("roll0", 3)), math.radians(plant.get("pitch0", -3)), 0.0]
+    # World position and velocity of the CoM; on the ground the lowest feet start at their static sag. Free flight starts high enough that sinking without altitude hold never reaches the floor.
+    lowest = min(apply(rotation(*angles), foot)[2] for foot in feet)
+    position = [0.0, 0.0, -lowest - WEIGHT / len(feet) / GROUND_K if liftoff else 50.0]
     velocity = [0.0, 0.0, 0.0]
     rate = [0.0, 0.0, 0.0]
     motor = [0.0, 0.0] if liftoff else [WEIGHT / 2, WEIGHT / 2]
@@ -136,7 +138,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None):
             push = [f - DRAG * speed * v for f, v in zip(apply(matrix, [sum(forward), 0.0, sum(vertical)]), velocity)]
             spin = apply(matrix, rate)
             touching = False
-            for foot in FEET:
+            for foot in feet:
                 lever = apply(matrix, foot)
                 depth = position[2] + lever[2]
                 if depth >= 0:
@@ -168,7 +170,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None):
         worst = max(worst, angle)
         if lifted is not None:
             trace.append((step * DT - lifted, math.degrees(pitch)))
-            peak_height = max(peak_height, position[2] + FEET[0][2])
+            peak_height = max(peak_height, position[2] + lowest)
         if angle > math.radians(45):
             return {"stable": False, "fail_s": step * DT, "worst": 45.0, "axis": "roll" if abs(roll) > abs(pitch) else "pitch", "yaw_rate": math.degrees(rate[2])}
         if step * DT >= seconds / 2:

@@ -56,6 +56,8 @@ void flight_attitude(Attitude *state, const Motion *m) {
 #define COMPENSATION_HYSTERESIS (0.3f * 3.14159265f / 180)
 // Most tilt velocity damping may add to the roll/pitch target.
 #define VELOCITY_TILT (8.0f * 3.14159265f / 180)
+// The integrators see at most this much error, so a large transient (a tilted takeoff, a gust) winds them up only slowly while a steady error of any size is still trimmed out.
+#define INTEGRATE_ERROR (8.0f * 3.14159265f / 180)
 
 // Integrators start from the configured bias so liftoff already counters a known disturbance.
 void flight_reset(Controller *state, const Command *c) {
@@ -121,10 +123,10 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
         state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);
         state->pitch_i = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit);
     } else {
-        state->roll_i = clamp(state->roll_i + c->roll_i * roll_error * c->dt,
-                              -c->integral_limit, c->integral_limit);
-        state->pitch_i = clamp(state->pitch_i + c->pitch_i * pitch_error * c->dt,
-                               -c->integral_limit, c->integral_limit);
+        float roll_seen = clamp(roll_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
+        float pitch_seen = clamp(pitch_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
+        state->roll_i = clamp(state->roll_i + c->roll_i * roll_seen * c->dt, -c->integral_limit, c->integral_limit);
+        state->pitch_i = clamp(state->pitch_i + c->pitch_i * pitch_seen * c->dt, -c->integral_limit, c->integral_limit);
     }
 
     float roll_torque = model->roll_inertia * (c->roll_p * roll_error + state->roll_i - c->roll_damping * c->gx);
