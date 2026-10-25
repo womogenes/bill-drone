@@ -4,8 +4,6 @@
 #include "hover.h"
 
 #define GRAVITY 9.81f
-// With the fence on, a tag lost this long after it was seen lands the drone (us).
-#define FENCE_LOST_US 2000000
 // A tag unseen this long is lost: the range, place and heading holds stop, horizontal velocity is dead-reckoned and damped, and height runs on the IMU alone.
 #define LOST_US 250000
 // How fast the camera corrects the velocity (s); sightings further apart than GAP_US restart it.
@@ -133,7 +131,6 @@ static void take(HoverState *state, const HoverGains *g, const HoverPose *pose) 
 void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverPose *pose, int64_t now_us, float dt,
                   float roll, float pitch, float yaw_rate, float vertical_g, float force, HoverOutput *output) {
     float weight = g->mass * GRAVITY;
-    if (mode == HOVER_HOLD && state->fenced) mode = HOVER_LAND;
     if (!state->engaged) {
         state->engaged = true;
         // Continue from the thrust being flown, so taking over a manual flight does not step.
@@ -167,7 +164,6 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     // IMU: integrate vertical acceleration; without the camera, leak the climb rate.
     state->climb_rate += (vertical_g - state->bias) * GRAVITY * dt;
     bool seeing = state->have_pose && now_us - state->seen_us <= LOST_US;
-    if (g->fence > 0 && mode == HOVER_HOLD && state->found && now_us - state->seen_us > FENCE_LOST_US) state->fenced = true;
     if (pose && (!state->have_pose || pose->sequence != state->sequence)) {
         if (!seeing) state->have_pose = state->have_setpoint = false;
         take(state, g, pose);
@@ -223,7 +219,6 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         float lead = clamp((now_us - state->capture_us) / 1e6f, 0, 0.1f);
         float px = state->position[0] - state->velocity[0] * lead, py = state->position[1] - state->velocity[1] * lead;
         float range = fmaxf(hypotf(px, py), 0.1f);
-        if (g->fence > 0 && mode == HOVER_HOLD && fabsf(range - g->distance) > g->fence) state->fenced = true;
         float bearing = atan2f(px * sy - py * cy, px * cy + py * sy);
         // Where on the circle about the tag: the heading of the line from the drone to the tag, in the yaw-turned frame.
         float around = atan2f(py, px);

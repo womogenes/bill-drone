@@ -126,7 +126,6 @@ const tuningFields = [
   { key: 'hover_approach', label: 'Hover approach speed (m/s)', min: 0.02 },
   { key: 'hover_ceiling', label: 'Hover ceiling above takeoff (m)', min: 0.2 },
   { key: 'hover_kside', label: 'Hover pull to square-on (m/s² per m)', min: 0 },
-  { key: 'hover_fence', label: 'Hover fence: land beyond (m, 0 off)', min: 0 },
   { key: 'hover_cam_pitch', label: 'Camera tilt up from body (°)', min: -30 },
 ] as const;
 const modelFields = [

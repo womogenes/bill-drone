@@ -26,8 +26,6 @@ typedef struct {
     float center, distance, approach, ceiling;
     // The camera's tilt up from the body's forward axis.
     float cam_pitch;
-    // Indoor fence: once the tag has been seen, a hold turns into a landing if the range strays this far from distance (m) or the tag stays lost FENCE_LOST_US (0 = off).
-    float fence;
 } HoverGains;
 
 // One camera sighting: the tag centre in the camera frame (m; right, down, forward), the wall's normal into it in the camera frame when the camera settled the tag's tilt (zero otherwise), and its capture time.
@@ -41,8 +39,7 @@ typedef struct {
 
 typedef struct {
     // engaged: running since the mode left HOVER_OFF; landed: a landing touched down and thrust is ramping to zero; found: the tag has been seen since engaging; tracking: the horizontal hold has flown on the tag since, so the velocity estimate is good.
-    // fenced: the fence turned this hold into a landing.
-    bool engaged, landed, have_pose, have_setpoint, have_normal, found, tracking, fenced;
+    bool engaged, landed, have_pose, have_setpoint, have_normal, found, tracking;
     // Vertical specific force at rest, in g, learned while not engaged.
     float bias;
     // Height above the engage point (m) and climb rate (m/s), from the IMU and the camera; the height target; the last climb-rate command (m/s); the climb-rate integral (m/s²); the last thrust (N); how long thrust has been low while landing (s).
