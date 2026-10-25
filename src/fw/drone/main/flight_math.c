@@ -3,7 +3,7 @@
 
 #include "flight_math.h"
 
-// (throttle, thrust in N): the median of three calibrated sweeps in sw/slop/comparison.csv. Throttle 200 is treated as approximately zero thrust, from the bench observation; thrust declines above 1100.
+// (throttle, thrust in N): the median of three calibrated sweeps (sw/sim/models/NOTES.md). Throttle 200 is treated as approximately zero thrust, from the bench observation; thrust declines above 1100.
 const float flight_thrust[][2] = {
     {0, 0.0f}, {200, 0.0f}, {250, 0.758689175f}, {300, 1.140325966f}, {350, 1.544788528f}, {400, 1.955279404f},
     {450, 2.353557228f}, {500, 2.775707658f}, {550, 3.261558474f}, {600, 3.673818136f}, {650, 4.264941843f},
