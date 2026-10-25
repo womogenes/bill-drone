@@ -58,17 +58,19 @@ void flight_attitude(Attitude *state, const Motion *m) {
 #define VELOCITY_TILT (8.0f * 3.14159265f / 180)
 // The integrators see at most this much error, so a large transient (a tilted takeoff, a gust) winds them up only slowly while a steady error of any size is still trimmed out.
 #define INTEGRATE_ERROR (8.0f * 3.14159265f / 180)
+// Seconds over which the pitch bias fades in once collective reaches integrate_throttle.
+#define PITCH_BIAS_RAMP 0.8f
 // A takeoff from a rest more than UPRIGHT_START from level tilts the servos back by UPRIGHT_GAIN times the pitch from level (at most UPRIGHT_MAX), scaled down to nothing as the righting rotation approaches UPRIGHT_RATE, until the drone first comes within UPRIGHT_DONE of level. Tuned in the simulator from 12-30° rests with sliding and gripping nose contacts (sw/sim/sweep.py ground_pitch, feet).
-#define UPRIGHT_START (5.0f * 3.14159265f / 180)
+#define UPRIGHT_START (2.0f * 3.14159265f / 180)
 #define UPRIGHT_DONE (2.0f * 3.14159265f / 180)
 #define UPRIGHT_MAX (35.0f * 3.14159265f / 180)
 #define UPRIGHT_GAIN 0.7f
 #define UPRIGHT_RATE (30.0f * 3.14159265f / 180)
 
-// Integrators start from the configured bias so liftoff already counters a known disturbance.
+// The roll integrator starts from roll_bias so liftoff already counters a known disturbance. The pitch bias is instead faded in over PITCH_BIAS_RAMP after collective reaches integrate_throttle (flight_control): the nose-up push it counters builds up in flight, and applied on the ground it kicks the nose down at liftoff.
 void flight_reset(Controller *state, const Command *c) {
     state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);
-    state->pitch_i = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit);
+    state->pitch_i = 0;
     state->comp_dir[0] = state->comp_dir[1] = state->comp_ref[0] = state->comp_ref[1] = 0;
     state->airborne = 0;
     state->setpoint_roll = c->roll;
@@ -116,7 +118,8 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     }
     const Model *model = &c->model;
     // On the ground the setpoint follows the measured attitude, so a sloped surface is no error. Once collective first reaches integrate_throttle it ramps to the target at target_rate: liftoff levels off instead of stepping.
-    if (c->base >= c->integrate_throttle) state->airborne = 1;
+    // airborne counts seconds since collective first reached integrate_throttle (0 before).
+    if (c->base >= c->integrate_throttle || state->airborne) state->airborne += c->dt;
     if (!state->airborne) {
         state->setpoint_roll = c->roll;
         state->setpoint_pitch = c->pitch;
@@ -145,7 +148,7 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     // Below integrate_throttle the feet are still down: integrating an error the ground holds would only wind up.
     if (c->base < c->integrate_throttle) {
         state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);
-        state->pitch_i = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit);
+        state->pitch_i = 0;
     } else {
         float roll_seen = clamp(roll_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
         float pitch_seen = clamp(pitch_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
@@ -154,7 +157,8 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     }
 
     float roll_torque = model->roll_inertia * (c->roll_p * roll_error + state->roll_i - c->roll_damping * c->gx);
-    float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i - c->pitch_damping * c->gy);
+    float pitch_bias = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit) * clamp(state->airborne / PITCH_BIAS_RAMP, 0, 1);
+    float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * c->gy);
     float yaw_torque = model->yaw_inertia * (c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias);
 
     float left_vertical = fmaxf(0, (force + roll_torque / model->arm) / 2);

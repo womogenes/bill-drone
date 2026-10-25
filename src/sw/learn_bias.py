@@ -1,6 +1,6 @@
 """
 Learn roll_bias and pitch_bias from a flight: uv run -m sw.learn_bias [sw/recordings/<flight>.bin] [--apply] [--gain 0.7]
-Rebuilds the attitude controller's integrators from the log (flight_math.c: they start at the biases and integrate once collective reaches integrate_throttle), finds the airborne stretches where the attitude stopped moving, and takes the controller's total angular-acceleration command there as the steady disturbance the bias should cancel. --apply moves each bias that fraction of the way and stores it through the running bridge.
+Rebuilds the attitude controller's integrators and pitch-bias fade-in from the log (flight_math.c), finds the airborne stretches where the attitude stopped moving, and takes the controller's total angular-acceleration command there as the steady disturbance the bias should cancel. --apply moves each bias that fraction of the way and stores it through the running bridge.
 """
 
 import argparse
@@ -47,8 +47,12 @@ def learn(path):
             if airborne[i]:
                 setpoint[i] = setpoint[i - 1] + np.clip(target[i] - setpoint[i - 1], -step[i], step[i])
         error = setpoint - angle
-        integral = s[f"{axis}_bias"] + np.cumsum(np.where(airborne, s[f"{axis}_i"] * error * dt, 0))
-        integral = np.clip(integral, -s["integral_limit"], s["integral_limit"])
+        # As flight_math.c: the integrators see at most 8° of error; roll's starts at its bias, while pitch's starts at zero and the pitch bias fades in over 0.8 s from the moment collective reaches integrate_throttle.
+        seen = np.clip(error, -math.radians(8), math.radians(8))
+        bias = np.clip(s[f"{axis}_bias"], -s["integral_limit"], s["integral_limit"])
+        integral = np.clip((bias if axis == "roll" else 0) + np.cumsum(np.where(airborne, s[f"{axis}_i"] * seen * dt, 0)), -s["integral_limit"], s["integral_limit"])
+        if axis == "pitch":
+            integral = integral + bias * np.clip((t - lift) / 0.8, 0, 1)
         gyro = np.radians(data[rate].to_numpy())
         command = s[f"{axis}_p"] * error + integral - s[f"{axis}_damping"] * gyro
         steady = airborne & (t - lift >= SETTLE_S) & (np.abs(data[rate].to_numpy()) < STEADY_RATE)

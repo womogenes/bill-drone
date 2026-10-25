@@ -201,14 +201,11 @@ class Controller:
 
     def reset(self):
         """
-        Start the integrators from the clamped biases, like the native flight_reset.
+        Start the roll integrator from the clamped roll bias and the pitch integrator from zero (the pitch bias fades in after liftoff), like the native flight_reset.
         """
         limit = self.command[6 + TUNING_LAYOUT.index("integral_limit")]
-        bias = [
-            max(-limit, min(limit, self.command[6 + TUNING_LAYOUT.index(key)]))
-            for key in ("roll_bias", "pitch_bias")
-        ]
-        struct.pack_into("<2f", self.state, 0, *bias)
+        roll = max(-limit, min(limit, self.command[6 + TUNING_LAYOUT.index("roll_bias")]))
+        struct.pack_into("<2f", self.state, 0, roll, 0.0)
         # No upright takeoff: free flight starts in the air, and a liftoff arms first, where the native flight_reset sets the flag from the resting attitude.
         self.state[15] = 0.0
 
