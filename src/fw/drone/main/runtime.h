@@ -35,8 +35,14 @@ typedef struct __attribute__((packed)) {
     uint32_t force_age_ms, force_sequence;
     uint16_t adc_raw, settings_version;
     float voltage;
+    // The camera link's counters (camera.h CameraStats), then its newest frame: sequence, age since capture in ms (0xffffffff before the first), and its pose's valid and trusted flags.
+    uint32_t camera_packets, camera_frames, camera_poses, camera_flows, camera_corrupt, camera_repeats, camera_stale,
+        camera_unsynced, camera_skipped_bytes, camera_overflows, camera_line_errors, camera_sync_edges,
+        camera_rx_edges;
+    uint32_t camera_sequence, camera_age_ms;
+    uint8_t camera_valid, camera_trusted;
 } Status;
-_Static_assert(sizeof(Status) == 107, "Status layout");
+_Static_assert(sizeof(Status) == 169, "Status layout");
 
 typedef struct {
     uint32_t session, started_us, samples, dropped, elapsed_us, pending;

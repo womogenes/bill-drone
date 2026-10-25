@@ -40,11 +40,17 @@ typedef struct {
     uint32_t packets, frames, poses, flows, corrupt, repeats, stale, unsynced;
     // skipped_bytes: bytes that could not start a packet (the camera's boot messages, noise); overflows: the receive buffer overflowed and was flushed; line_errors: framing, parity or break errors (115200-baud boot messages).
     uint32_t skipped_bytes, overflows, line_errors;
+    // SYNC rising edges, one per packet the camera queues; rx_edges: falling edges on the RX pin, counted in hardware, so a silent wire can be told from a receiver fault.
+    uint32_t sync_edges, rx_edges;
     // Arrival of the last well-formed frame on the esp_timer clock, -1 before the first.
     int64_t frame_us;
+    // That frame's sequence, capture time, and its pose's valid (as CameraPose) and trusted flags, whether or not the pose was accepted.
+    uint32_t sequence;
+    int64_t capture_us;
+    uint8_t valid, trusted;
 } CameraStats;
 
-// UART2 at 2 Mbaud, 8N1: RX on GPIO34 from the camera's TX (GPIO1), TX on GPIO27 to its RX (GPIO3, unused so far); SYNC from the camera's GPIO13 on GPIO13 with a pull-down; a receiver task on core 0. Not started by app_main: nothing uses the camera yet.
+// UART2 at 2 Mbaud, 8N1: RX on GPIO34 from the camera's TX (GPIO1), TX on GPIO27 to its RX (GPIO3, unused so far); SYNC from the camera's GPIO13 on GPIO13 with a pull-down; a receiver task on core 0 at priority 4, below the control task on core 1. Call from a core-0 task (app_main) so the UART and GPIO interrupts are on core 0 too.
 void camera_start(void);
 // Copies the newest frame's pose if that frame saw the tag, the camera decided its tilt (valid 1 or 2), and the pose is at most max_age_us old now.
 bool camera_pose(CameraPose *pose, uint32_t max_age_us);

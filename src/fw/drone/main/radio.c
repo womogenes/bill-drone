@@ -19,6 +19,7 @@
 #include "runtime.h"
 #include "settings.h"
 #include "arming.h"
+#include "camera.h"
 
 // The controller's station MAC; the drone answers nothing else.
 static const uint8_t peer[ESP_NOW_ETH_ALEN] = {0x04, 0xb2, 0x47, 0x54, 0x80, 0x4c};
@@ -314,6 +315,28 @@ static void stream_log(int64_t now) {
     }
 }
 
+static void camera_status(Status *status, int64_t now) {
+    CameraStats camera;
+    camera_stats(&camera);
+    status->camera_packets = camera.packets;
+    status->camera_frames = camera.frames;
+    status->camera_poses = camera.poses;
+    status->camera_flows = camera.flows;
+    status->camera_corrupt = camera.corrupt;
+    status->camera_repeats = camera.repeats;
+    status->camera_stale = camera.stale;
+    status->camera_unsynced = camera.unsynced;
+    status->camera_skipped_bytes = camera.skipped_bytes;
+    status->camera_overflows = camera.overflows;
+    status->camera_line_errors = camera.line_errors;
+    status->camera_sync_edges = camera.sync_edges;
+    status->camera_rx_edges = camera.rx_edges;
+    status->camera_sequence = camera.sequence;
+    status->camera_age_ms = camera.frame_us < 0 ? UINT32_MAX : (now - camera.capture_us) / 1000;
+    status->camera_valid = camera.valid;
+    status->camera_trusted = camera.trusted;
+}
+
 static void tick(void *arg) {
     portENTER_CRITICAL(&lock);
     bool stopping = stop_pending;
@@ -335,6 +358,7 @@ static void tick(void *arg) {
     status.time_ms = now / 1000;
     status.settings_version = settings_version();
     status.flags |= settings_calibration_unsaved() << 1;
+    camera_status(&status, now);
     portENTER_CRITICAL(&lock);
     status.target_sequence = target_sequence;
     status.flags |= subscribed(now) << 5;

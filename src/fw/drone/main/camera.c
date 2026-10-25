@@ -6,6 +6,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "driver/pulse_cnt.h"
 #include "driver/uart.h"
 #include "esp_attr.h"
 #include "esp_timer.h"
@@ -21,6 +22,7 @@
 #define MAX_AGE_US 150000
 
 static QueueHandle_t events;
+static pcnt_unit_handle_t rx_counter;
 static volatile uint32_t edges, edge_us;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static CameraPose latest, latest_candidate;
@@ -61,6 +63,10 @@ static void accept(const CameraPacket *packet, bool synced, uint32_t since_edge_
         // The newest frame decides: one without the tag, or too old, clears the previous pose.
         stats.frames++;
         stats.frame_us = now;
+        stats.sequence = packet->sequence;
+        stats.capture_us = now - age;
+        stats.valid = packet->valid;
+        stats.trusted = packet->trusted;
         have_pose = packet->valid && packet->trusted && age <= MAX_AGE_US;
         stats.stale += packet->valid && !have_pose;
         stats.poses += have_pose;
@@ -132,6 +138,16 @@ void camera_start(void) {
     // A 2 KB receive buffer is a dozen packets; the transmit side (GPIO27, to the camera) is unused for now.
     ESP_ERROR_CHECK(uart_driver_install(PORT, 2048, 0, 16, &events, 0));
     ESP_ERROR_CHECK(uart_param_config(PORT, &link));
+    // A pulse counter shares the RX pin through the GPIO matrix and counts its falling edges, several hundred per packet; it accumulates past its 16-bit limit at each watch point.
+    pcnt_unit_config_t unit = {.low_limit = -1, .high_limit = 30000, .flags.accum_count = 1};
+    ESP_ERROR_CHECK(pcnt_new_unit(&unit, &rx_counter));
+    pcnt_chan_config_t edges_on_rx = {.edge_gpio_num = RX, .level_gpio_num = -1};
+    pcnt_channel_handle_t channel;
+    ESP_ERROR_CHECK(pcnt_new_channel(rx_counter, &edges_on_rx, &channel));
+    ESP_ERROR_CHECK(pcnt_channel_set_edge_action(channel, PCNT_CHANNEL_EDGE_ACTION_HOLD, PCNT_CHANNEL_EDGE_ACTION_INCREASE));
+    ESP_ERROR_CHECK(pcnt_unit_add_watch_point(rx_counter, 30000));
+    ESP_ERROR_CHECK(pcnt_unit_enable(rx_counter));
+    ESP_ERROR_CHECK(pcnt_unit_start(rx_counter));
     // GPIO34 has no internal pull-up; with the camera unpowered the line floats and the parser skips the noise.
     ESP_ERROR_CHECK(uart_set_pin(PORT, TX, RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     // The pull-down holds SYNC low while the camera is off or booting.
@@ -173,5 +189,9 @@ bool camera_flow(CameraFlow *flow, uint32_t max_age_us) {
 void camera_stats(CameraStats *stats_out) {
     portENTER_CRITICAL(&lock);
     *stats_out = stats;
+    stats_out->sync_edges = edges;
     portEXIT_CRITICAL(&lock);
+    int rx_edges = 0;
+    pcnt_unit_get_count(rx_counter, &rx_edges);
+    stats_out->rx_edges = rx_edges;
 }

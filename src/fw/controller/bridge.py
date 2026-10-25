@@ -31,8 +31,15 @@ from wire import PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 RECORDINGS = Path(__file__).resolve().parents[2] / "sw/recordings"
 
-# drone/main/runtime.h Status.
+# drone/main/runtime.h Status, then its camera link fields (absent from firmware before the camera link).
 STATUS_FORMAT = "<4sIIHB3f3f3f2f2H4f2IiIIHHf"
+CAMERA_FORMAT = "<15I2B"
+STATUS_SIZE = struct.calcsize(STATUS_FORMAT)
+CAMERA_KEYS = (
+    "packets", "frames", "poses", "flows", "corrupt", "repeats", "stale",
+    "unsynced", "skipped_bytes", "overflows", "line_errors", "sync_edges", "rx_edges",
+    "sequence", "age_ms", "valid", "trusted",
+)
 REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T"}
 # Schema entries per D reply (drone/main/settings.h SCHEMA_PAGE).
 SCHEMA_PAGE = 12
@@ -42,7 +49,13 @@ def decode_status(payload, settings):
     """
     The dashboard's reading (sw/dashboard/lib/telemetry.ts Reading) from a status message.
     """
-    (magic, time_ms, target_sequence, flags, reason, *values) = struct.unpack(STATUS_FORMAT, payload)
+    (magic, time_ms, target_sequence, flags, reason, *values) = struct.unpack_from(STATUS_FORMAT, payload)
+    camera = None
+    if len(payload) == STATUS_SIZE + struct.calcsize(CAMERA_FORMAT):
+        camera = dict(zip(CAMERA_KEYS, struct.unpack_from(CAMERA_FORMAT, payload, STATUS_SIZE)))
+        # No frame yet: the age is meaningless.
+        if camera["age_ms"] == 0xFFFFFFFF:
+            camera["age_ms"] = None
     accel, gyro = values[0:3], values[3:6]
     roll, pitch, temperature, left_servo, right_servo, left_throttle, right_throttle = values[6:13]
     target_roll, target_pitch, target_yaw, base = values[13:17]
@@ -87,6 +100,7 @@ def decode_status(payload, settings):
             "samples": samples,
             "dropped": dropped,
         },
+        "camera": camera,
     }
 
 
