@@ -69,7 +69,7 @@ void flight_attitude(Attitude *state, const Motion *m) {
 // The upright phase also ends this long after collective reaches integrate_throttle, so a drone that lifts off without rotating is still levelled by the normal loop (s).
 #define UPRIGHT_HOLD 0.4f
 
-// The roll integrator starts from roll_bias so liftoff already counters a known disturbance. The pitch bias is instead faded in over PITCH_BIAS_RAMP after collective reaches integrate_throttle (flight_control): the nose-up push it counters builds up in flight, and applied on the ground it kicks the nose down at liftoff.
+// The roll integrator starts from roll_bias so liftoff already counters a known disturbance. The pitch bias is instead faded in over PITCH_BIAS_RAMP after collective reaches integrate_throttle (flight_control): applied while the feet still hold the drone it only waits to kick the nose at liftoff, so it arrives just as the drone lifts.
 void flight_reset(Controller *state, const Command *c) {
     state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);
     state->pitch_i = 0;
