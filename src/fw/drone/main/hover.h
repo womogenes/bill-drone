@@ -20,6 +20,8 @@ typedef struct {
     float climb, climb_rate, land_rate;
     // Heading loop (camera only): yaw rate per radian of heading error, and the fastest yaw rate it may command.
     float kyaw, yaw_rate;
+    // Tag hold (camera only): center 1 flies square in front of the tag at distance (m) from the wall and at its height, facing it, moving the horizontal setpoint there at approach (m/s); center 0 holds the position and heading where the tag was first seen at the height climb. ceiling is the most height above the engage point centring may ask for, and the height a takeoff climbs toward while looking for the tag (m).
+    float center, distance, approach, ceiling;
 } HoverGains;
 
 // One camera pose: the camera origin in the tag frame (m), the camera's forward axis in the tag frame (rotation * (0, 0, 1)), and its capture time.
@@ -30,13 +32,13 @@ typedef struct {
 } HoverPose;
 
 typedef struct {
-    // engaged: running since the mode left HOVER_OFF; landed: a landing touched down and thrust is ramping to zero.
-    bool engaged, landed, have_pose, have_setpoint;
+    // engaged: running since the mode left HOVER_OFF; landed: a landing touched down and thrust is ramping to zero; found: the tag has been seen since engaging.
+    bool engaged, landed, have_pose, have_setpoint, found;
     // Vertical specific force at rest, in g, learned while not engaged.
     float bias;
-    // Height above the engage point (m) and climb rate (m/s), from the IMU and the camera; the height target; the climb-rate integral (m/s²); the last thrust (N); how long thrust has been low while landing (s).
-    float height, climb_rate, target, integral, force, low_time;
-    // Camera: the newest pose's sequence, capture time and position, its velocity, the camera height that is zero height, the horizontal setpoint, the engage heading and the newest heading.
+    // Height above the engage point (m) and climb rate (m/s), from the IMU and the camera; the height target; the last climb-rate command (m/s); the climb-rate integral (m/s²); the last thrust (N); how long thrust has been low while landing (s).
+    float height, climb_rate, target, command, integral, force, low_time;
+    // Camera: the newest pose's sequence, capture time and position, its velocity, the camera height that is zero height, the horizontal setpoint, the heading where the tag was first seen and the newest heading.
     uint32_t sequence;
     int64_t capture_us, seen_us;
     float position[3], velocity[3], zero_y, setpoint[2], heading, facing;

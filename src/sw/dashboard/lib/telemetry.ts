@@ -47,6 +47,10 @@ export type ControlSettings = {
   velocity_damping: number;
   velocity_leak: number;
   thrust_voltage: number;
+  hover_center: number;
+  hover_distance: number;
+  hover_approach: number;
+  hover_ceiling: number;
 };
 
 // The drone service's recorder (src/fw/controller/bridge.py).

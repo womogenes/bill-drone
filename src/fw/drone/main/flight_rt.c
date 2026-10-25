@@ -285,8 +285,11 @@ static void runtime_task(void *arg) {
                 }
                 float flying = command.base > 0 ? 2 * flight_interpolate(command.base, &flight_thrust[0][0], flight_thrust_count, 0) : 0;
                 if (hover.engaged) flying = hover.force;
+                // Centring climbs looking for the tag, which only makes sense with the camera on.
+                HoverGains gains = command.hover;
+                if (!command.hover_camera) gains.center = 0;
                 HoverOutput out;
-                hover_update(&hover, &command.hover, hover_mode, tag, now, dt, pose.roll, pose.pitch, vertical, flying, &out);
+                hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, vertical, flying, &out);
                 scaled.base = out.force > 0 ? fminf(HOVER_THROTTLE, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
                 scaled.target_roll = out.roll;
                 scaled.target_pitch = out.pitch;

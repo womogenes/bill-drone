@@ -11,7 +11,7 @@
 #define GAP_US 200000
 // How fast the camera pulls the IMU's height and climb rate toward its own (s).
 #define CAMERA_TAU 0.15f
-// Without the camera the integrated climb rate leaks toward zero over this long (s), so an accelerometer bias cannot run away.
+// Without the camera the integrated climb rate leaks over this long (s), so an accelerometer bias cannot run away: airborne in hold toward the last climb-rate command, so a long climb keeps the speed it really has; on the ground (where the drone cannot follow the command) and landing toward zero, so touchdown still shows as a stalled descent.
 #define LEAK_TAU 10.0f
 // Resting specific force smoothing (s).
 #define BIAS_TAU 0.5f
@@ -24,6 +24,9 @@
 #define TOUCHDOWN_RATE 0.1f
 #define TOUCHDOWN_S 0.3f
 #define LANDED_RAMP 0.5f
+// Below this height (m) a hold is still on the ground taking off: the IMU climb rate leaks toward zero, and centring neither tilts nor turns and lets the horizontal setpoint follow the drone. The tag-height target never asks for less than MIN_HEIGHT above the engage point (m).
+#define AIRBORNE 0.15f
+#define MIN_HEIGHT 0.2f
 
 static float clamp(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
@@ -87,7 +90,7 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         if (!seeing) state->have_pose = state->have_setpoint = false;
         take(state, pose);
         state->seen_us = now_us;
-        seeing = true;
+        seeing = state->found = true;
         if (!state->have_setpoint) {
             state->setpoint[0] = pose->position[0];
             state->setpoint[1] = pose->position[2];
@@ -99,19 +102,24 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         state->height += (state->zero_y - pose->position[1] - state->height) * pull;
         state->climb_rate += (-state->velocity[1] - state->climb_rate) * pull;
     } else if (!seeing) {
-        state->climb_rate *= expf(-dt / LEAK_TAU);
+        float leak = mode == HOVER_HOLD && state->height >= AIRBORNE ? state->command : 0;
+        state->climb_rate += (leak - state->climb_rate) * (1 - expf(-dt / LEAK_TAU));
     }
     state->height += state->climb_rate * dt;
 
-    // Climb-rate command: hold climbs to the target height; landing descends at a set rate.
+    // Climb-rate command: hold moves the target height toward its goal at climb_rate; landing descends at a set rate.
     float command;
     if (mode == HOVER_HOLD) {
-        state->target = fminf(g->climb, state->target + g->climb_rate * dt);
+        // The goal is climb; centring goes to the tag's height instead (camera y 0, which is height zero_y), climbs toward the ceiling to bring the tag into view before it is first seen, and holds the height reached when it is lost.
+        float goal = g->climb;
+        if (g->center) goal = seeing ? clamp(state->zero_y, MIN_HEIGHT, g->ceiling) : state->found ? fmaxf(g->climb, state->target) : g->ceiling;
+        state->target += clamp(goal - state->target, -g->climb_rate * dt, g->climb_rate * dt);
         command = clamp(g->kz * (state->target - state->height), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
     } else {
         command = -g->land_rate * (mode == HOVER_LAND_FAST ? 3 : 1);
         state->target = state->height;
     }
+    state->command = command;
     float error = command - state->climb_rate;
     state->integral = clamp(state->integral + g->kiz * error * dt, -MAX_INTEGRAL, MAX_INTEGRAL);
     float up = clamp(g->kdz * error + state->integral, -MAX_VERTICAL, MAX_VERTICAL);
@@ -129,12 +137,33 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     // Horizontal hold in the tag frame (x along the wall, z toward it), turned into body forward/right by the camera's heading; the camera position is extrapolated over its age.
     float lead = clamp((now_us - state->capture_us) / 1e6f, 0, 0.1f);
     float x = state->position[0] + state->velocity[0] * lead, z = state->position[2] + state->velocity[2] * lead;
-    float ax = -g->kp * (x - state->setpoint[0]) - g->kd * state->velocity[0];
-    float az = -g->kp * (z - state->setpoint[1]) - g->kd * state->velocity[2];
+    // Centring: on the ground the setpoint follows the drone and nothing is commanded, since noisy camera velocity would only tilt it on its feet; airborne in hold the setpoint moves straight toward square in front of the tag at the approach speed, so a large offset is flown out rather than lunged at, and the loop follows its rate; landing holds it where it is.
+    float heading = state->heading, rate[2] = {0, 0};
+    if (g->center) {
+        if (mode == HOVER_HOLD && state->height < AIRBORNE) {
+            state->setpoint[0] = x;
+            state->setpoint[1] = z;
+            return;
+        }
+        if (mode == HOVER_HOLD) {
+            float dx = -state->setpoint[0], dz = -g->distance - state->setpoint[1], gap = hypotf(dx, dz);
+            float step = fminf(gap, g->approach * dt);
+            if (gap > 0) {
+                rate[0] = dx / gap * step / dt;
+                rate[1] = dz / gap * step / dt;
+                state->setpoint[0] += rate[0] * dt;
+                state->setpoint[1] += rate[1] * dt;
+            }
+        }
+        // Face the tag: the bearing of its centre (the tag-frame origin) from the camera.
+        heading = hover_heading((float[]){-state->position[0], 0, -state->position[2]});
+    }
+    float ax = -g->kp * (x - state->setpoint[0]) - g->kd * (state->velocity[0] - rate[0]);
+    float az = -g->kp * (z - state->setpoint[1]) - g->kd * (state->velocity[2] - rate[1]);
     float forward = ax * sinf(state->facing) + az * cosf(state->facing);
     float right = ax * cosf(state->facing) - az * sinf(state->facing);
     output->pitch = clamp(atanf(forward / GRAVITY), -g->tilt, g->tilt);
     output->roll = clamp(atanf(right / GRAVITY), -g->tilt, g->tilt);
-    // Turned right of the engage heading: turn left, a positive yaw rate.
-    output->yaw_rate = clamp(g->kyaw * wrap(state->facing - state->heading), -g->yaw_rate, g->yaw_rate);
+    // Turned right of the heading target: turn left, a positive yaw rate.
+    output->yaw_rate = clamp(g->kyaw * wrap(state->facing - heading), -g->yaw_rate, g->yaw_rate);
 }
