@@ -34,7 +34,8 @@ static const uint8_t peer[ESP_NOW_ETH_ALEN] = {0x04, 0xb2, 0x47, 0x54, 0x80, 0x4
 #define REPLY (8 * PAYLOAD)
 #define SECTOR 4096
 #define HASH 8
-#define TARGETS 8
+// Target floats: base, roll, pitch, yaw rate, two servos, two throttles, then the hover mode (hover.h), which older senders leave out.
+#define TARGETS 9
 // An image that is still unconfirmed this long after boot restarts, so the bootloader rolls back to the previous one.
 #define CONFIRM_US 90000000
 // Most records per FLG1 batch (controller/log_format.py MAX_BATCH) and the batch header size.
@@ -193,7 +194,7 @@ static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, 
         return;
     }
     if ((channel != 1 && channel != 4) || !length) return;
-    if (channel == 1 && (length != 1 + TARGETS * 4 || data[0] != 'T')) return;
+    if (channel == 1 && ((length != 1 + TARGETS * 4 && length != 1 + (TARGETS - 1) * 4) || data[0] != 'T')) return;
     int64_t now = esp_timer_get_time();
     portENTER_CRITICAL(&lock);
     bool newer = !seen[channel] || (uint32_t)(number - latest[channel]) - 1 < 0x7fffffffU;
@@ -212,8 +213,8 @@ static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, 
     portEXIT_CRITICAL(&lock);
     if (!newer || channel != 1) return;
     // A late or reordered target packet is dropped: the newer one already superseded it.
-    float targets[TARGETS];
-    memcpy(targets, data + 1, sizeof(targets));
+    float targets[TARGETS] = {0};
+    memcpy(targets, data + 1, length - 1);
     if (flight_runtime_targets(targets)) {
         portENTER_CRITICAL(&lock); target_sequence = number; portEXIT_CRITICAL(&lock);
     }

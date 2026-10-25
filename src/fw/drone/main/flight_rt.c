@@ -13,6 +13,8 @@
 #include "runtime.h"
 #include "settings.h"
 #include "arming.h"
+#include "camera.h"
+#include "hover.h"
 
 #define LOG_CAPACITY 200
 #define DEG (180.0f / 3.14159265358979323846f)
@@ -35,6 +37,9 @@
 // Battery smoothing for thrust compensation (s), and the furthest the smoothed voltage may sit from thrust_voltage, as a ratio, before it is treated as an ADC fault and clamped.
 #define VOLTAGE_TAU 0.3f
 #define VOLTAGE_RANGE 0.15f
+// Oldest camera pose hover uses (us), and the highest throttle it may ask for (the thrust table's rising end).
+#define HOVER_POSE_US 150000
+#define HOVER_THROTTLE 1100
 
 typedef struct __attribute__((packed)) {
     uint32_t elapsed, sequence;
@@ -88,6 +93,10 @@ static StopBarrier stop_barrier;
 static uint16_t voltage_mv;
 // Smoothed battery volts, for thrust compensation; 0 until the first reading.
 static float battery_v;
+// The streamed hover mode (hover.h), the hover loop, and the command actually flown this tick (hover replaces base and targets), which the recording logs.
+static int hover_mode;
+static HoverState hover;
+static Command flown;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
 static float limit(float value, float low, float high) {
@@ -156,12 +165,13 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
         record->throttle[side] = state.throttle[side];
         record->servo[side] = lroundf(state.servo[side] * 100);
     }
-    record->target[0] = lroundf(command.target_roll * DEG * 100);
-    record->target[1] = lroundf(command.target_pitch * DEG * 100);
-    record->target[2] = lroundf(command.target_yaw * DEG * 100);
-    record->base = command.base;
+    record->target[0] = lroundf(flown.target_roll * DEG * 100);
+    record->target[1] = lroundf(flown.target_pitch * DEG * 100);
+    record->target[2] = lroundf(flown.target_yaw * DEG * 100);
+    record->base = lroundf(flown.base);
     record->control_us = duration > 65535 ? 65535 : duration;
-    record->flags = state.enabled;
+    // Bit 0 armed, bits 1-2 the hover mode, bit 3 hover sees the tag, bit 4 a hover landing touched down.
+    record->flags = state.enabled | hover_mode << 1 | (hover.have_pose && (int64_t)now - hover.seen_us <= 250000) << 3 | hover.landed << 4;
     record->voltage = voltage_mv;
 }
 
@@ -255,6 +265,9 @@ static void runtime_task(void *arg) {
         Attitude pose = relative_attitude(&state);
         if (state.enabled && (fabsf(pose.roll) > config.tip_limit ||
                               fabsf(pose.pitch) > config.tip_limit)) stop_locked(4);
+        // Measured specific force along vertical, in g: the accelerometer onto the IMU attitude's up axis.
+        float vertical = -state.accel[0] * sinf(state.attitude.pitch) +
+                         cosf(state.attitude.pitch) * (state.accel[1] * sinf(state.attitude.roll) + state.accel[2] * cosf(state.attitude.roll));
         if (state.enabled) {
             command.roll = pose.roll;
             command.pitch = pose.pitch;
@@ -262,6 +275,24 @@ static void runtime_task(void *arg) {
             command.dt = dt;
             // Propeller thrust at a fixed throttle goes with the square of battery voltage, so the table's newtons are scaled to the measured voltage: a sagging pack gets more throttle for the same force.
             Command scaled = command;
+            if (hover_mode && hover.bias > 0.5f) {
+                CameraPose camera;
+                HoverPose seen, *tag = NULL;
+                if (command.hover_camera && camera_pose(&camera, HOVER_POSE_US)) {
+                    seen = (HoverPose){camera.sequence, camera.capture_us, {camera.position_m[0], camera.position_m[1], camera.position_m[2]},
+                                       {camera.rotation[2], camera.rotation[5], camera.rotation[8]}};
+                    tag = &seen;
+                }
+                float flying = command.base > 0 ? 2 * flight_interpolate(command.base, &flight_thrust[0][0], flight_thrust_count, 0) : 0;
+                if (hover.engaged) flying = hover.force;
+                HoverOutput out;
+                hover_update(&hover, &command.hover, hover_mode, tag, now, dt, pose.roll, pose.pitch, vertical, flying, &out);
+                scaled.base = out.force > 0 ? fminf(HOVER_THROTTLE, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
+                scaled.target_roll = out.roll;
+                scaled.target_pitch = out.pitch;
+                scaled.target_yaw = out.yaw_rate;
+            }
+            flown = scaled;
             if (command.thrust_voltage > 0 && battery_v > 0) {
                 float ratio = limit(battery_v / command.thrust_voltage, 1 - VOLTAGE_RANGE, 1 + VOLTAGE_RANGE);
                 scaled.left_thrust_scale *= ratio * ratio;
@@ -276,6 +307,11 @@ static void runtime_task(void *arg) {
                 write_servo(side);
                 pulse(side * 2 + 1, 1000 + state.throttle[side]);
             }
+        }
+        if (!state.enabled || !hover_mode) {
+            flown = command;
+            // The resting vertical force is learned only with the motors off; spinning keeps the last value.
+            hover_rest(&hover, state.throttle[0] || state.throttle[1] ? hover.bias : vertical, dt);
         }
         uint32_t duration = esp_timer_get_time() - started;
         if (recording) capture(now, raw, duration);
@@ -294,11 +330,12 @@ bool flight_runtime_idle(void) {
 
 // A target packet from the laptop is the controller heartbeat; the 500 ms watchdog stops the motors when they cease.
 bool flight_runtime_targets(const float *targets) {
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
         if (!isfinite(targets[i])) return false;
     }
     if (targets[0] < 0 || fabsf(targets[1]) > TARGET_TILT || fabsf(targets[2]) > TARGET_TILT ||
-        fabsf(targets[3]) > TARGET_RATE || targets[6] < 0 || targets[7] < 0)
+        fabsf(targets[3]) > TARGET_RATE || targets[6] < 0 || targets[7] < 0 ||
+        !(targets[8] == HOVER_OFF || targets[8] == HOVER_HOLD || targets[8] == HOVER_LAND || targets[8] == HOVER_LAND_FAST))
         return false;
     portENTER_CRITICAL(&lock);
     bool active = running && targets[0] <= THROTTLE_MAX && targets[6] <= THROTTLE_MAX && targets[7] <= THROTTLE_MAX &&
@@ -309,6 +346,7 @@ bool flight_runtime_targets(const float *targets) {
         command.target_roll = targets[1] / DEG;
         command.target_pitch = targets[2] / DEG;
         command.target_yaw = targets[3] / DEG;
+        hover_mode = targets[8];
         if (!targets[6] && !targets[7]) state.latched = false;
         // During maintenance the disarmed outputs stay where they are: zero throttle, servos still.
         if (!state.enabled && !maintenance) {
@@ -347,6 +385,8 @@ const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t
         .arm_sequence = arm_sequence, .barrier = stop_barrier,
     };
     const char *error = arm_refusal(&check);
+    // Hover takes off by itself, so it is switched on only after arming.
+    if (!error && hover_mode) error = "Hover mode must be off to arm";
     if (!error) {
         command.enabled = 1;
         state.enabled = true;

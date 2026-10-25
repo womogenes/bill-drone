@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 
+#include "hover.h"
+
 // Angles/rates are radians. Shared by the drone and the host simulation (sw/sim/flight.py).
 typedef struct { float roll, pitch; } Attitude;
 typedef struct { float ax, ay, az, gx, gy, gz, dt, gravity_tau; } Motion;
@@ -33,6 +35,9 @@ typedef struct {
     Model model;
     // Battery volts the thrust table is taken to hold at (0 = off): the runtime scales the thrust scales by (measured / this)² before flight_control, which does not read it. Last, so the host simulation's buffer layout is unchanged.
     float thrust_voltage;
+    // Hover and landing (hover.h), and whether they use the camera (0 = IMU only). Also runtime-only.
+    HoverGains hover;
+    float hover_camera;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.
@@ -41,6 +46,8 @@ extern const size_t flight_thrust_count;
 
 void flight_attitude(Attitude *state, const Motion *motion);
 void flight_reset(Controller *state, const Command *command);
+// Throttle to thrust (reverse 0) or thrust to throttle on the rising curve (reverse 1), on rows of (throttle, N).
+float flight_interpolate(float value, const float *table, size_t count, int reverse);
 void flight_control(Controller *state, const Command *command, const float *table, size_t count);
 
 #endif

@@ -5,7 +5,7 @@
 """
 The laptop's drone service. It owns the controller's USB port and serves, on 127.0.0.1 only:
 
-- /ws: the dashboard. The drone's status as JSON readings; the browser streams targets every 50 ms and sends stop, arm, calibrate, zero and tune requests.
+- /ws: the dashboard. The drone's status as JSON readings; the browser streams targets (including the manual/hover/land mode) every 50 ms and sends stop, arm, calibrate, zero and tune requests.
 - /update: raw id-tagged requests for tools/ota_direct.py.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
 
@@ -208,10 +208,12 @@ class Recorder:
 
 def encode_targets(message):
     """
-    A 'T' target packet (drone/main/flight_rt.c flight_runtime_targets) from the browser's current controls.
+    A 'T' target packet (drone/main/flight_rt.c flight_runtime_targets) from the browser's current controls: base throttle, roll, pitch, yaw rate, two servo angles, two throttles and the flight mode.
+
+    Mode 0 is manual, 1 hover (the drone holds position, height and heading from the camera), 2 land and 3 land fast. In modes 1-3 the drone computes its own base throttle, roll, pitch and yaw rate and ignores the streamed ones. Clients that send no mode get manual.
     """
     values = [message[key] for key in ("base_throttle", "roll", "pitch", "yaw_rate")]
-    return b"T" + struct.pack("<8f", *values, *message["servo"], *message["throttle"])
+    return b"T" + struct.pack("<9f", *values, *message["servo"], *message["throttle"], message.get("mode", 0))
 
 
 class ClientSender:

@@ -12,7 +12,7 @@ static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
 #define RAD (3.14159265358979323846f / 180.0f)
 // NVS blob: "FS1", a reserved byte, then (name length, name, float32) pairs. Names rather than positions let entries be added or removed without losing the rest.
-#define BLOB 1024
+#define BLOB 2048
 
 static const char *const names[SETTINGS] = {
 #define TUNE(name, member, scale, min, max, value) #name,

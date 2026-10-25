@@ -18,7 +18,7 @@ static float clamp(float value, float low, float high) {
 }
 
 // Calibration rows are (throttle, thrust). Reverse lookup uses the rising curve.
-static float interpolate(float value, const float *table, size_t count, int reverse) {
+float flight_interpolate(float value, const float *table, size_t count, int reverse) {
     if (value <= table[reverse]) return table[1 - reverse];
     for (size_t i = 1; i < count; i++) {
         float x = table[2 * i + reverse];
@@ -89,7 +89,7 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
 
     const Model *model = &c->model;
     float trim = c->pitch_trim;
-    float force = 2 * interpolate(c->base, table, count, 0) * cosf(trim);
+    float force = 2 * flight_interpolate(c->base, table, count, 0) * cosf(trim);
     // Without thrust, atan2(horizontal, ~0) saturates the servos on gyro noise.
     if (force < 2 * MIN_THRUST) {
         flight_reset(state, c);
@@ -142,6 +142,6 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     float right_angle = model->right_servo_direction * atan2f(right_horizontal, right_vertical) + c->right_trim;
     state->left_angle = clamp(compensate(state, 0, left_angle, c->servo_compensation), model->servo_min, model->servo_max);
     state->right_angle = clamp(compensate(state, 1, right_angle, c->servo_compensation), model->servo_min, model->servo_max);
-    state->left = roundf(interpolate(hypotf(left_horizontal, left_vertical) / c->left_thrust_scale, table, count, 1));
-    state->right = roundf(interpolate(hypotf(right_horizontal, right_vertical) / c->right_thrust_scale, table, count, 1));
+    state->left = roundf(flight_interpolate(hypotf(left_horizontal, left_vertical) / c->left_thrust_scale, table, count, 1));
+    state->right = roundf(flight_interpolate(hypotf(right_horizontal, right_vertical) / c->right_thrust_scale, table, count, 1));
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { THROTTLE_MAX } from '@/lib/telemetry';
+import { FLIGHT_MODES, THROTTLE_MAX } from '@/lib/telemetry';
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -51,6 +51,27 @@ function savedTakeoff() {
   }
 }
 const KEY_REPEAT_MS = 100;
+// L in manual flight ramps collective down in the dashboard; holding it past LAND_FAST_MS ramps faster, or in hover switches to land fast.
+const LAND_RATE = 150;
+const LAND_FAST_RATE = 450;
+const LAND_FAST_MS = 300;
+const LAND_TICK_MS = 50;
+const MANUAL = 0;
+const LAND = 2;
+const LAND_FAST = 3;
+
+// Keys typed into a field or a dialog aren't flight commands.
+function typing(event: KeyboardEvent) {
+  return (
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    (event.target instanceof HTMLElement &&
+      !!event.target.closest(
+        'input, textarea, select, [contenteditable="true"], [role="dialog"]'
+      ))
+  );
+}
 // Keyboard setpoint sizes are a local preference, not drone settings.
 const MANUAL_KEY = 'manual-inputs';
 const MANUAL_DEFAULT = { tilt: 15, yaw: 20 };
@@ -151,7 +172,10 @@ export const ControlPanel = memo(function ControlPanel({
   imu,
   status,
   connected,
+  mode,
   onChange,
+  onMode,
+  onHover,
   onStop,
 }: {
   settings: ControlSettings;
@@ -160,7 +184,10 @@ export const ControlPanel = memo(function ControlPanel({
   imu: 'offline' | 'calibrating' | 'uncalibrated' | 'calibrated';
   status: Reading['control_status'];
   connected: boolean;
+  mode: number;
   onChange: (settings: Partial<ControlSettings>) => void;
+  onMode: (mode: number) => void;
+  onHover: () => void;
   onStop: () => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
@@ -209,6 +236,11 @@ export const ControlPanel = memo(function ControlPanel({
   };
   useEffect(() => setManual(readManual()), []);
   const throttle = useRef(settings.base_throttle);
+  // Key handlers read the mode through a ref so a mode change doesn't re-register them and forget held keys.
+  const modeRef = useRef(mode);
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   const changeSetpoint = useCallback(
     (key: Setpoint, value: number) => {
@@ -228,6 +260,62 @@ export const ControlPanel = memo(function ControlPanel({
 
     const held = new Set<string>();
     let timer: ReturnType<typeof setInterval> | undefined;
+    let landing: ReturnType<typeof setInterval> | undefined;
+    let landFast: ReturnType<typeof setTimeout> | undefined;
+    let landPressed = 0;
+
+    function setMode(next: number) {
+      modeRef.current = next;
+      onMode(next);
+    }
+
+    function stopRamp() {
+      clearInterval(landing);
+      landing = undefined;
+    }
+
+    // Manual landing: collective ramps to zero with roll, pitch and yaw untouched; W, S, T or leaving manual cancel it.
+    function rampDown() {
+      let last = performance.now();
+      stopRamp();
+      landing = setInterval(() => {
+        if (modeRef.current !== MANUAL) {
+          stopRamp();
+          return;
+        }
+        const now = performance.now();
+        const fast = held.has('KeyL') && now - landPressed > LAND_FAST_MS;
+        const rate = fast ? LAND_FAST_RATE : LAND_RATE;
+        const next = Math.max(
+          0,
+          Math.round(throttle.current - (rate * (now - last)) / 1000)
+        );
+        last = now;
+        throttle.current = next;
+        setDraft((previous) => ({ ...previous, base_throttle: next }));
+        onChange({ base_throttle: next });
+        if (next === 0) stopRamp();
+      }, LAND_TICK_MS);
+    }
+
+    function land() {
+      landPressed = performance.now();
+      if (modeRef.current === MANUAL) {
+        if (throttle.current > 0) rampDown();
+        return;
+      }
+      setMode(LAND);
+      clearTimeout(landFast);
+      landFast = setTimeout(() => {
+        if (held.has('KeyL') && modeRef.current === LAND) setMode(LAND_FAST);
+      }, LAND_FAST_MS);
+    }
+
+    function releaseLand() {
+      clearTimeout(landFast);
+      landFast = undefined;
+      if (modeRef.current === LAND_FAST) setMode(LAND);
+    }
 
     function changeThrottle() {
       const direction = Number(held.has('KeyW')) - Number(held.has('KeyS'));
@@ -266,28 +354,29 @@ export const ControlPanel = memo(function ControlPanel({
       if (event.code === 'Space') {
         held.clear();
         clearInterval(timer);
+        stopRamp();
+        clearTimeout(landFast);
         return;
       }
       if (
-        !['KeyW', 'KeyS', 'KeyA', 'KeyD', 'KeyT'].includes(event.code) &&
+        !['KeyW', 'KeyS', 'KeyA', 'KeyD', 'KeyT', 'KeyL'].includes(
+          event.code
+        ) &&
         !(event.code in tiltKeys)
       )
         return;
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
-      if (
-        event.target instanceof HTMLElement &&
-        event.target.closest(
-          'input, textarea, select, [contenteditable="true"], [role="dialog"]'
-        )
-      )
-        return;
+      if (typing(event)) return;
 
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat || held.has(event.code)) return;
       held.add(event.code);
 
-      if (event.code === 'KeyT') {
+      if (['KeyW', 'KeyS', 'KeyT'].includes(event.code)) stopRamp();
+
+      if (event.code === 'KeyL') {
+        land();
+      } else if (event.code === 'KeyT') {
         held.delete('KeyT');
         const value = takeoffRef.current;
         throttle.current = value;
@@ -307,6 +396,7 @@ export const ControlPanel = memo(function ControlPanel({
     function keyup(event: KeyboardEvent) {
       if (!held.delete(event.code)) return;
       event.preventDefault();
+      if (event.code === 'KeyL') releaseLand();
       if (event.code === 'KeyA' || event.code === 'KeyD') changeYaw();
       if (event.code in tiltKeys)
         changeTilt(event.code as keyof typeof tiltKeys);
@@ -316,7 +406,10 @@ export const ControlPanel = memo(function ControlPanel({
       }
     }
 
+    // A lost keyup can't be trusted, so held keys stop the motors; L alone just drops back from land fast, and landing carries on.
     function blur() {
+      if (held.has('KeyL')) releaseLand();
+      held.delete('KeyL');
       if (held.size) onStop();
       held.clear();
       clearInterval(timer);
@@ -328,11 +421,28 @@ export const ControlPanel = memo(function ControlPanel({
     window.addEventListener('blur', blur);
     return () => {
       clearInterval(timer);
+      stopRamp();
+      clearTimeout(landFast);
       window.removeEventListener('keydown', keydown, true);
       window.removeEventListener('keyup', keyup);
       window.removeEventListener('blur', blur);
     };
-  }, [available, settings.enabled, open, onChange, onStop, manual]);
+  }, [available, settings.enabled, open, onChange, onMode, onStop, manual]);
+
+  // H works disarmed too: it arms like Enable, then hovers.
+  useEffect(() => {
+    if (!available || open) return;
+    function keydown(event: KeyboardEvent) {
+      if (event.code !== 'KeyH' || typing(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
+      if (!settings.enabled && !ready) return;
+      onHover();
+    }
+    window.addEventListener('keydown', keydown, true);
+    return () => window.removeEventListener('keydown', keydown, true);
+  }, [available, ready, settings.enabled, open, onHover]);
 
   return (
     <section
@@ -532,6 +642,12 @@ export const ControlPanel = memo(function ControlPanel({
             </form>
           </DialogContent>
         </Dialog>
+        <span
+          className={`text-sm tabular-nums ${mode === MANUAL ? 'text-muted-foreground' : 'font-medium text-blue-700 dark:text-blue-400'}`}
+          aria-label="Flight mode"
+        >
+          {FLIGHT_MODES[mode] ?? `Mode ${mode}`}
+        </span>
         <Button
           variant="outline"
           disabled={!connected || (!settings.enabled && !ready)}
@@ -563,6 +679,8 @@ export const ControlPanel = memo(function ControlPanel({
         {[
           { keys: ['W', 'S'], label: 'Throttle' },
           { keys: ['T'], label: 'Takeoff' },
+          { keys: ['H'], label: 'Hover (arms if needed)' },
+          { keys: ['L'], label: 'Land (hold for fast)' },
           { keys: ['A', 'D'], label: 'Yaw' },
           { keys: ['ArrowUp', 'ArrowDown'], label: 'Pitch' },
           { keys: ['ArrowLeft', 'ArrowRight'], label: 'Roll' },

@@ -38,6 +38,7 @@ const ZERO_TARGETS: Targets = {
   yaw_rate: 0,
   servo: [0, 0],
   throttle: [0, 0],
+  mode: 0,
 };
 // Battery voltage EMA time constant; time-based so irregular packet timing doesn't change the smoothing.
 const VOLTAGE_TAU = 1500;
@@ -105,10 +106,14 @@ export default function Page() {
   const packetCount = useRef(0);
   const socket = useRef<EspConnection | null>(null);
   const targets = useRef<Targets>(ZERO_TARGETS);
+  const [mode, setModeState] = useState(0);
+  // H while disarmed arms first and enters hover only once the arm request succeeds.
+  const hoverPending = useRef(false);
 
   const setTargets = useCallback((update: Partial<Targets>) => {
     targets.current = { ...targets.current, ...update };
     socket.current?.targets(targets.current);
+    if (update.mode !== undefined) setModeState(update.mode);
   }, []);
 
   const request = useCallback((message: DroneRequest) => {
@@ -123,6 +128,8 @@ export default function Page() {
     socket.current = null;
     // A new connection starts from zero targets; arming needs an explicit request.
     targets.current = ZERO_TARGETS;
+    setModeState(0);
+    hoverPending.current = false;
     setStatus('connecting');
     setReading(null);
     setRequestError('');
@@ -149,6 +156,10 @@ export default function Page() {
         if (socket.current !== ws) return;
         if (message.type === 'result') {
           if (message.request === 'calibrate') setCalibrationPending(false);
+          if (message.request === 'arm' && hoverPending.current) {
+            hoverPending.current = false;
+            if (!message.error) setTargets({ mode: 1 });
+          }
           if (message.request === 'zero' && !message.error) {
             // The drone has captured the old angle and holds it until this zero target arrives.
             const servo = [...targets.current.servo] as [number, number];
@@ -241,6 +252,7 @@ export default function Page() {
   }, [request]);
 
   const stopMotors = useCallback(() => {
+    hoverPending.current = false;
     setTargets(ZERO_TARGETS);
     setStopEpoch((previous) => previous + 1);
     request({ type: 'stop' });
@@ -265,6 +277,33 @@ export default function Page() {
     },
     [request, setTargets, stopMotors]
   );
+
+  const setMode = useCallback(
+    (mode: number) => setTargets({ mode }),
+    [setTargets]
+  );
+
+  // Arming needs zero base throttle, as with Enable, so hover starts from the ground with base throttle 0.
+  const hover = useCallback(() => {
+    if (latestReading.current?.control?.enabled) {
+      setTargets({ mode: 1 });
+      return;
+    }
+    hoverPending.current = true;
+    sendControl({
+      enabled: true,
+      base_throttle: 0,
+      roll: 0,
+      pitch: 0,
+      yaw_rate: 0,
+    });
+  }, [sendControl, setTargets]);
+
+  // A drone that disarms itself drops back to manual, so a later Enable never arms straight into hover.
+  const armed = reading?.control?.enabled;
+  useEffect(() => {
+    if (armed === false && targets.current.mode !== 0) setTargets({ mode: 0 });
+  }, [armed, setTargets]);
 
   const sendActuator = useCallback(
     (command: 'servo' | 'throttle', side: Side, value: number) => {
@@ -429,7 +468,10 @@ export default function Page() {
                       ? 'calibrated'
                       : 'uncalibrated'
               }
+              mode={mode}
               onChange={sendControl}
+              onMode={setMode}
+              onHover={hover}
               onStop={stopMotors}
             />
           )}

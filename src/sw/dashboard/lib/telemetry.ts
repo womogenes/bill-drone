@@ -65,7 +65,11 @@ export type Targets = {
   yaw_rate: number;
   servo: [number, number];
   throttle: [number, number];
+  // FLIGHT_MODES index. In hover and landing the drone flies itself from the camera and ignores the setpoints above.
+  mode: number;
 };
+
+export const FLIGHT_MODES = ['Manual', 'Hover', 'Landing', 'Landing fast'];
 
 export type Reading = {
   logging?: {
