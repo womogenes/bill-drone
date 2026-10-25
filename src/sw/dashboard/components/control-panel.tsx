@@ -51,11 +51,8 @@ function savedTakeoff() {
   }
 }
 const KEY_REPEAT_MS = 100;
-// L in manual flight ramps collective down in the dashboard; holding it past LAND_FAST_MS ramps faster, or in hover switches to land fast.
-const LAND_RATE = 150;
-const LAND_FAST_RATE = 450;
+// L hands the drone its controlled landing (a steady descent, then motors off at touchdown), from hover or manual flight; holding it past LAND_FAST_MS descends faster.
 const LAND_FAST_MS = 300;
-const LAND_TICK_MS = 50;
 const MANUAL = 0;
 const LAND = 2;
 const LAND_FAST = 3;
@@ -260,50 +257,16 @@ export const ControlPanel = memo(function ControlPanel({
 
     const held = new Set<string>();
     let timer: ReturnType<typeof setInterval> | undefined;
-    let landing: ReturnType<typeof setInterval> | undefined;
     let landFast: ReturnType<typeof setTimeout> | undefined;
-    let landPressed = 0;
 
     function setMode(next: number) {
       modeRef.current = next;
       onMode(next);
     }
 
-    function stopRamp() {
-      clearInterval(landing);
-      landing = undefined;
-    }
-
-    // Manual landing: collective ramps to zero with roll, pitch and yaw untouched; W, S, T or leaving manual cancel it.
-    function rampDown() {
-      let last = performance.now();
-      stopRamp();
-      landing = setInterval(() => {
-        if (modeRef.current !== MANUAL) {
-          stopRamp();
-          return;
-        }
-        const now = performance.now();
-        const fast = held.has('KeyL') && now - landPressed > LAND_FAST_MS;
-        const rate = fast ? LAND_FAST_RATE : LAND_RATE;
-        const next = Math.max(
-          0,
-          Math.round(throttle.current - (rate * (now - last)) / 1000)
-        );
-        last = now;
-        throttle.current = next;
-        setDraft((previous) => ({ ...previous, base_throttle: next }));
-        onChange({ base_throttle: next });
-        if (next === 0) stopRamp();
-      }, LAND_TICK_MS);
-    }
-
     function land() {
-      landPressed = performance.now();
-      if (modeRef.current === MANUAL) {
-        if (throttle.current > 0) rampDown();
-        return;
-      }
+      // Manual with no collective is already on the ground.
+      if (modeRef.current === MANUAL && throttle.current <= 0) return;
       setMode(LAND);
       clearTimeout(landFast);
       landFast = setTimeout(() => {
@@ -354,7 +317,6 @@ export const ControlPanel = memo(function ControlPanel({
       if (event.code === 'Space') {
         held.clear();
         clearInterval(timer);
-        stopRamp();
         clearTimeout(landFast);
         return;
       }
@@ -371,8 +333,6 @@ export const ControlPanel = memo(function ControlPanel({
       event.stopPropagation();
       if (event.repeat || held.has(event.code)) return;
       held.add(event.code);
-
-      if (['KeyW', 'KeyS', 'KeyT'].includes(event.code)) stopRamp();
 
       if (event.code === 'KeyL') {
         land();
@@ -421,7 +381,6 @@ export const ControlPanel = memo(function ControlPanel({
     window.addEventListener('blur', blur);
     return () => {
       clearInterval(timer);
-      stopRamp();
       clearTimeout(landFast);
       window.removeEventListener('keydown', keydown, true);
       window.removeEventListener('keyup', keyup);
