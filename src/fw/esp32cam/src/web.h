@@ -6,6 +6,10 @@
 #include "cJSON.h"
 #include "lwip/sockets.h"
 #include "lwip/tcp.h"
+#include "lwip/api.h"
+extern "C" {
+#include "lwip/priv/sockets_priv.h"
+}
 #include "config.h"
 #include "packet.h"
 
@@ -166,6 +170,22 @@ size_t appendJpeg(void *arg, size_t index, const void *data, size_t length) {
     return length;
 }
 
+// True once everything sent on the socket has been acknowledged, false if that takes 5 s (a stalled or vanished viewer). lwIP's pcb is read without its lock: two pointers compared with null, re-read every poll, since the pcb goes away if the peer resets.
+bool previousAcknowledged(int socket) {
+    lwip_sock *sock = lwip_socket_dbg_get_socket(socket);
+    const TickType_t start = xTaskGetTickCount();
+    for (;;) {
+        tcp_pcb *pcb = sock && sock->conn ? sock->conn->pcb.tcp : nullptr;
+        if (!pcb)
+            return false;
+        if (!pcb->unsent && !pcb->unacked)
+            return true;
+        if (xTaskGetTickCount() - start > pdMS_TO_TICKS(5000))
+            return false;
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
 // Runs in the core-0 HTTP task. Each part carries its frame's tag in an X-Tag header ("none", or the state, the four corners in full-resolution 320x240 pixels and the camera position in metres), so the overlay matches the picture.
 esp_err_t streamPreview(httpd_req_t *request) {
     // Every Wi-Fi packet competes on core 0 with the camera driver, which must empty a 12-line DMA block every 0.7 ms or lose the frame: chunked sends cost about nine packets a frame and lost the next frame 40% of the time. The response is written raw instead, one send (one packet for the small preview) per frame.
@@ -177,23 +197,29 @@ esp_err_t streamPreview(httpd_req_t *request) {
         return ESP_FAIL;
     char query[32];
     previewFull = httpd_req_get_url_query_str(request, query, sizeof(query)) == ESP_OK && strstr(query, "full=1");
-    xSemaphoreTake(previewReady, 0);
     previewStreaming = true;
-    previewWanted = true;
-    TickType_t started = xTaskGetTickCount();
+    const int socket = httpd_req_to_sockfd(request);
+    TickType_t takenAt = xTaskGetTickCount() - previewPeriod;
     esp_err_t result = ESP_OK;
     while (result == ESP_OK) {
-        if (xSemaphoreTake(previewReady, pdMS_TO_TICKS(1000)) != pdTRUE) {
-            previewWanted = true;
-            continue;
+        // A frame is asked for only once the previous part is acknowledged, so a slow link drops frames instead of queueing seconds of them in front of /status, OTA and the records, and each frame shown is fresh.
+        if (!previousAcknowledged(socket)) {
+            result = ESP_FAIL;
+            break;
         }
+        const TickType_t since = xTaskGetTickCount() - takenAt;
+        if (since < previewPeriod)
+            vTaskDelay(previewPeriod - since);
+        xSemaphoreTake(previewReady, 0);
+        previewWanted = true;
+        if (xSemaphoreTake(previewReady, pdMS_TO_TICKS(1000)) != pdTRUE)
+            continue;
+        takenAt = xTaskGetTickCount();
         const PreviewFrame frame = previewFrame;
         // The part header goes in front of the JPEG in the same buffer, so the whole part is one send.
         JpegOutput output = {0, false};
         uint8_t *pixels = previewWidth == 320 ? previewPixels : previewReduced;
         const bool encoded = fmt2jpg_cb(pixels, previewWidth * previewHeight, previewWidth, previewHeight, PIXFORMAT_GRAYSCALE, 75, appendJpeg, &output);
-        // The copy is free again: the next one overlaps this frame's sending.
-        previewWanted = true;
         if (!encoded || output.overflow)
             continue;
         char tag[160] = "none";
@@ -216,7 +242,6 @@ esp_err_t streamPreview(httpd_req_t *request) {
             sent += n;
         }
         ++previewCount;
-        vTaskDelayUntil(&started, previewPeriod);
     }
     previewWanted = false;
     previewStreaming = false;
@@ -235,7 +260,7 @@ void startPreview() {
     serverConfig.core_id = 0;
     serverConfig.task_priority = 1; // Video networking stays off the detector's core.
     serverConfig.stack_size = 8192;
-    serverConfig.send_wait_timeout = 1;
+    serverConfig.send_wait_timeout = 5; // as long as previousAcknowledged waits
     httpd_handle_t server;
     ESP_ERROR_CHECK(httpd_start(&server, &serverConfig));
     httpd_uri_t stream = {};
@@ -279,7 +304,7 @@ void startPreview() {
             "\"position_m\":[%.4f,%.4f,%.4f],\"margin\":%.1f,\"reprojection_px\":%.3f,\"internal_min\":%u,\"uptime_ms\":%u,\"reset\":%d,"
             "\"flow_px\":[%.3f,%.3f],\"flow_inliers\":%u,\"flow_residual_px\":%.3f,\"short_frames\":%u,\"stalls\":%u,\"recoveries\":%u,"
             "\"last_crumbs\":[%u,%u,%u],\"gain\":%.2f,\"exposure_lines\":%d,\"frame_lines\":%d,\"driver_priority\":[%u,%u],"
-            "\"link_sent\":%u,\"link_dropped\":%u,\"link_rx_bytes\":%u,",
+            "\"link_sent\":%u,\"link_dropped\":%u,\"link_rx_bytes\":%u,\"rssi\":%d,",
             cameraStalled ? "stalled" : cameraReady ? "running" : "stopped", calibrated() ? "true" : "false", config::tagId, config::tagSizeM * 1000,
             unsigned(captureCount), unsigned(poseCount), unsigned(trackedCount), unsigned(detectedCount),
             unsigned(previewCount), unsigned(detectUs),
@@ -291,7 +316,7 @@ void startPreview() {
             sensor ? sensor->get_reg(sensor, 0x350a, 0x3ff) / 16.0f : 0, sensor ? sensor->get_reg(sensor, 0x3500, 0xffffff) >> 4 : 0,
             sensor ? sensor->get_reg(sensor, 0x380e, 0xffff) : 0,
             unsigned(driverPriority), unsigned(configMAX_PRIORITIES - 1), unsigned(linkSent), unsigned(linkDropped),
-            unsigned(linkReceived));
+            unsigned(linkReceived), int(WiFi.RSSI()));
         const size_t used = strlen(body);
         const int more = blackbox::status(body + used, sizeof(body) - used - 1);
         if (more > 0 && used + more + 2 <= sizeof(body))
