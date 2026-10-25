@@ -64,8 +64,8 @@ typedef struct {
     float velocity[2];
 } HoverOutput;
 
-// While not hovering: forget the flight and learn the resting vertical specific force (g).
-void hover_rest(HoverState *state, float vertical_g, float dt);
+// While not hovering: forget the hover. With the motors off, learn the resting vertical specific force (g); spinning (manual flight), keep integrating the climb rate and height so a later hover or landing starts from them.
+void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt);
 // One control tick. mode is HOVER_HOLD, HOVER_LAND or HOVER_LAND_FAST; pose is the newest camera sighting or NULL (camera disabled or no tag); roll and pitch are the measured attitude from level and yaw_rate the measured heading rate (rad/s, positive left); vertical_g is the measured specific force along vertical, in g; force is the collective thrust in N being flown now, so taking over mid-flight is smooth.
 void hover_update(HoverState *state, const HoverGains *gains, int mode, const HoverPose *pose, int64_t now_us, float dt,
                   float roll, float pitch, float yaw_rate, float vertical_g, float force, HoverOutput *output);

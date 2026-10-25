@@ -45,10 +45,19 @@ static float wrap(float angle) {
     return atan2f(sinf(angle), cosf(angle));
 }
 
-void hover_rest(HoverState *state, float vertical_g, float dt) {
-    float bias = state->bias ? state->bias + (vertical_g - state->bias) * (1 - expf(-dt / BIAS_TAU)) : vertical_g;
+void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt) {
+    float bias = state->bias, climb_rate = 0, height = 0;
+    if (!spinning) {
+        bias = bias ? bias + (vertical_g - bias) * (1 - expf(-dt / BIAS_TAU)) : vertical_g;
+    } else if (bias) {
+        // Manual flight: keep the climb rate and height current (leaking like the no-camera hover), so a hover or landing taken over mid-flight starts from the real climb, not from rest.
+        climb_rate = (state->climb_rate + (vertical_g - bias) * GRAVITY * dt) * expf(-dt / LEAK_TAU);
+        height = state->height + climb_rate * dt;
+    }
     memset(state, 0, sizeof(*state));
     state->bias = bias;
+    state->climb_rate = climb_rate;
+    state->height = height;
 }
 
 // The newest recorded tick no later than time (the oldest kept if none is).

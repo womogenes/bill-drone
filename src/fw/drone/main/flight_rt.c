@@ -323,8 +323,7 @@ static void runtime_task(void *arg) {
         }
         if (!state.enabled || !hover_mode) {
             flown = command;
-            // The resting vertical force is learned only with the motors off; spinning keeps the last value.
-            hover_rest(&hover, state.throttle[0] || state.throttle[1] ? hover.bias : vertical, dt);
+            hover_rest(&hover, vertical, state.throttle[0] || state.throttle[1], dt);
         }
         uint32_t duration = esp_timer_get_time() - started;
         if (recording) capture(now, raw, duration);
