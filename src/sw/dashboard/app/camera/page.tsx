@@ -94,6 +94,7 @@ export default function CameraPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [streamError, setStreamError] = useState('');
+  const [stalled, setStalled] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [rates, setRates] = useState({ preview: 0, pose: 0 });
@@ -149,7 +150,7 @@ export default function CameraPage() {
       } catch (error) {
         if (controller.signal.aborted) return;
         setStatus(null);
-        setStreamError(String(error));
+        setStreamError(error instanceof Error ? error.message : String(error));
       }
       timer = setTimeout(refresh, 1000);
     }
@@ -160,37 +161,70 @@ export default function CameraPage() {
     };
   }, [connectedHost, connection]);
 
+  // The preview reconnects, backing off, whenever its stream ends, fails or brings no frame for 6 s.
   useEffect(() => {
     if (!connectedHost) return;
-    const controller = new AbortController();
+    const closed = new AbortController();
+    const url = `/api/camera?host=${encodeURIComponent(connectedHost)}${full ? '&full=1' : ''}`;
     let decoding = false;
-    readPreview(
-      `/api/camera?host=${encodeURIComponent(connectedHost)}${full ? '&full=1' : ''}`,
-      controller.signal,
-      (jpeg, header) => {
-        // Decoding behind the stream drops frames rather than queueing them.
-        if (decoding) return;
-        decoding = true;
-        createImageBitmap(new Blob([jpeg as BlobPart], { type: 'image/jpeg' }))
-          .then((bitmap) => {
-            const canvas = canvasRef.current;
-            if (!canvas || controller.signal.aborted) return;
-            canvas.width = bitmap.width;
-            canvas.height = bitmap.height;
-            canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
-            bitmap.close();
-            setTag(parseTag(header));
-            setStreamError('');
-          })
-          .catch(() => {})
-          .finally(() => (decoding = false));
+    let lastFrame = performance.now();
+    const stallCheck = setInterval(
+      () => setStalled(performance.now() - lastFrame > 2000),
+      500
+    );
+    function draw(jpeg: Uint8Array, header: string) {
+      lastFrame = performance.now();
+      // Decoding behind the stream drops frames rather than queueing them.
+      if (decoding) return;
+      decoding = true;
+      createImageBitmap(new Blob([jpeg as BlobPart], { type: 'image/jpeg' }))
+        .then((bitmap) => {
+          const canvas = canvasRef.current;
+          if (!canvas || closed.signal.aborted) return;
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
+          bitmap.close();
+          setTag(parseTag(header));
+          setStreamError('');
+        })
+        .catch(() => {})
+        .finally(() => (decoding = false));
+    }
+    async function run() {
+      let backoff = 250;
+      while (!closed.signal.aborted) {
+        const connection = new AbortController();
+        const started = performance.now();
+        const watchdog = setInterval(() => {
+          if (performance.now() - Math.max(lastFrame, started) > 6000)
+            connection.abort();
+        }, 1000);
+        try {
+          await readPreview(
+            url,
+            AbortSignal.any([closed.signal, connection.signal]),
+            (jpeg, header) => {
+              backoff = 250;
+              draw(jpeg, header);
+            }
+          );
+        } catch (error) {
+          if (!closed.signal.aborted && !connection.signal.aborted)
+            setStreamError(
+              error instanceof Error ? error.message : String(error)
+            );
+        }
+        clearInterval(watchdog);
+        await new Promise((done) => setTimeout(done, backoff));
+        backoff = Math.min(backoff * 2, 4000);
       }
-    ).catch((error) => {
-      if (!controller.signal.aborted)
-        setStreamError(error instanceof Error ? error.message : String(error));
-    });
+    }
+    void run();
     return () => {
-      controller.abort();
+      closed.abort();
+      clearInterval(stallCheck);
+      setStalled(false);
       setTag(null);
     };
   }, [connectedHost, connection, full]);
@@ -311,9 +345,9 @@ export default function CameraPage() {
           </svg>
         )}
       </div>
-      {streamError && (
+      {stalled && (
         <p role="alert" className="text-sm text-red-700">
-          {streamError}
+          {streamError || 'Reconnecting to camera…'}
         </p>
       )}
       {status && (
