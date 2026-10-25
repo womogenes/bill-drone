@@ -36,6 +36,12 @@
 // Below this height (m) a hold is still on the ground taking off: the IMU climb rate leaks toward zero, and centring neither tilts nor turns and lets the range target follow the drone. The tag-height target never asks for less than MIN_HEIGHT above the engage point (m).
 #define AIRBORNE 0.05f
 #define MIN_HEIGHT 0.2f
+// Rotor drag: the servos' dead time beyond the tick the runtime's tilt is already late by (us; sw/sim/sweep.py FITTED has 70 ms), how slowly the camera teaches the drag model its offset (s), and that offset's limit (m/s).
+#define SERVO_DELAY_US 60000
+#define OFFSET_TAU 5.0f
+#define MAX_OFFSET 1.0f
+// The integrated acceleration's bias the drag model may find (m/s², about 6 degrees of attitude error).
+#define MAX_BIAS 1.0f
 
 static float clamp(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
@@ -113,8 +119,8 @@ static void take(HoverState *state, const HoverGains *g, const HoverPose *pose) 
         }
         state->velocity[2] = keep * state->velocity[2] + (1 - keep) * (state->position[2] - position[2]) / interval;
     } else {
-        // Without a recent sighting to compare, the dead-reckoned velocity stands if there is one.
-        if (!state->tracking) {
+        // Without a recent sighting to compare, the dead-reckoned velocity stands if there is one (always, with the drag model bounding it).
+        if (!state->tracking && !g->drag) {
             state->velocity[0] = state->velocity[1] = 0;
             for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3] = state->history[k][4] = 0;
         }
@@ -129,8 +135,9 @@ static void take(HoverState *state, const HoverGains *g, const HoverPose *pose) 
 }
 
 void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverPose *pose, int64_t now_us, float dt,
-                  float roll, float pitch, float yaw_rate, float vertical_g, float force, HoverOutput *output) {
+                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, HoverOutput *output) {
     float weight = g->mass * GRAVITY;
+    bool dragging = g->drag > 0 && drag;
     if (!state->engaged) {
         state->engaged = true;
         // Continue from the thrust being flown, so taking over a manual flight does not step.
@@ -147,8 +154,18 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     // Heading from the gyro; horizontal velocity from tilt (g tan(tilt) less the push the trim cancels, once airborne, as on the ground a resting tilt pushes nothing); both recorded with the attitude.
     state->yaw = wrap(state->yaw + yaw_rate * dt);
     float cy = cosf(state->yaw), sy = sinf(state->yaw);
+    // With the drag model, the measured specific force turned level instead, less the acceleration bias the drag model has found in it: it carries the real thrust tilt and the drag, and its level-reference error cancels against the attitude's (both are relative to pose_zero); what remains is mostly the attitude estimate's own drift.
     if (state->height >= AIRBORNE) {
-        float ahead = GRAVITY * tanf(pitch - g->pitch_trim) - state->trim[0], left = -GRAVITY * tanf(roll) - state->trim[1];
+        float ahead, left;
+        if (dragging) {
+            const float *f = drag->specific;
+            float cr = cosf(roll), sr = sinf(roll), cp = cosf(pitch), sp = sinf(pitch);
+            ahead = GRAVITY * (cp * f[0] + sp * (sr * f[1] + cr * f[2])) - state->drag_bias[0];
+            left = GRAVITY * (cr * f[1] - sr * f[2]) - state->drag_bias[1];
+        } else {
+            ahead = GRAVITY * tanf(pitch - g->pitch_trim) - state->trim[0];
+            left = -GRAVITY * tanf(roll) - state->trim[1];
+        }
         state->velocity[0] += (ahead * cy - left * sy) * dt;
         state->velocity[1] += (ahead * sy + left * cy) * dt;
     }
@@ -159,11 +176,35 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     now[2] = state->yaw;
     now[3] = state->velocity[0];
     now[4] = state->velocity[1];
+    now[5] = dragging ? drag->tilt : 0;
     state->next = (state->next + 1) % HOVER_HISTORY;
+
+    // Rotor drag: the body's horizontal specific force less the thrust vector's forward part (at the tilt the servos have reached) is -drag times the airspeed. It is noisy (vibration, the pitch loop's servo motion), so it pulls the estimate slowly, and the past with it, as the camera's correction does; a steady disagreement is the integrated acceleration's bias, which it learns (a critically damped second-order filter, settling over a few drag_tau). The camera, when it sees the tag, measures the velocity itself: then the disagreement is the drag model's own offset (servo zero, accelerometer bias, mounting) instead, which it teaches below.
+    bool seeing = state->have_pose && now_us - state->seen_us <= LOST_US;
+    float measured[2] = {0, 0};
+    if (dragging && state->height >= AIRBORNE) {
+        const float *f = drag->specific;
+        float tilt = state->history[recorded(state, now_us - SERVO_DELAY_US)][5] + g->drag_tilt;
+        measured[0] = -GRAVITY * (f[0] - f[2] * tanf(tilt)) / g->drag - state->drag_offset[0];
+        measured[1] = -GRAVITY * f[1] / g->drag - state->drag_offset[1];
+        float tau = fmaxf(g->drag_tau, dt), pull = 1 - expf(-dt / tau);
+        float x = measured[0] * cy - measured[1] * sy, y = measured[0] * sy + measured[1] * cy;
+        float error[2] = {x - state->velocity[0], y - state->velocity[1]};
+        for (int i = 0; i < 2; i++) {
+            float correction = error[i] * pull;
+            state->velocity[i] += correction;
+            for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3 + i] += correction;
+            state->place[i] += state->velocity[i] * dt;
+        }
+        if (!seeing) {
+            float learn = dt / (4 * tau * tau);
+            state->drag_bias[0] = clamp(state->drag_bias[0] - (error[0] * cy + error[1] * sy) * learn, -MAX_BIAS, MAX_BIAS);
+            state->drag_bias[1] = clamp(state->drag_bias[1] - (-error[0] * sy + error[1] * cy) * learn, -MAX_BIAS, MAX_BIAS);
+        }
+    }
 
     // IMU: integrate vertical acceleration; without the camera, leak the climb rate.
     state->climb_rate += (vertical_g - state->bias) * GRAVITY * dt;
-    bool seeing = state->have_pose && now_us - state->seen_us <= LOST_US;
     if (pose && (!state->have_pose || pose->sequence != state->sequence)) {
         if (!seeing) state->have_pose = state->have_setpoint = false;
         take(state, g, pose);
@@ -176,9 +217,18 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     } else if (!seeing) {
         float leak = mode == HOVER_HOLD && state->height >= AIRBORNE ? state->command : 0;
         state->climb_rate += (leak - state->climb_rate) * (1 - expf(-dt / LEAK_TAU));
-        float keep = expf(-dt / DRIFT_TAU);
-        state->velocity[0] *= keep;
-        state->velocity[1] *= keep;
+        if (!dragging) {
+            float keep = expf(-dt / DRIFT_TAU);
+            state->velocity[0] *= keep;
+            state->velocity[1] *= keep;
+        }
+    }
+    if (seeing && dragging && state->height >= AIRBORNE) {
+        // The camera measures the velocity: whatever the drag model reads beyond it, in body axes, is its offset (servo zero, accelerometer bias, mounting).
+        float forward = state->velocity[0] * cy + state->velocity[1] * sy, left = -state->velocity[0] * sy + state->velocity[1] * cy;
+        state->drag_offset[0] = clamp(state->drag_offset[0] + (measured[0] - forward) * dt / OFFSET_TAU, -MAX_OFFSET, MAX_OFFSET);
+        state->drag_offset[1] = clamp(state->drag_offset[1] + (measured[1] - left) * dt / OFFSET_TAU, -MAX_OFFSET, MAX_OFFSET);
+        state->place[0] = state->place[1] = 0;
     }
     state->height += state->climb_rate * dt;
 
@@ -210,10 +260,15 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     *output = (HoverOutput){.force = state->force};
     float forward, left;
     if (!seeing) {
-        // Tag lost after flying on it: keep damping the dead-reckoned velocity, with the trim learned on the tag. Before the tag is first flown on, the attitude controller's own damping holds the drone.
-        if (!state->tracking || state->height < AIRBORNE) return;
-        forward = state->trim[0] - g->kd * (state->velocity[0] * cy + state->velocity[1] * sy);
-        left = state->trim[1] - g->kd * (-state->velocity[0] * sy + state->velocity[1] * cy);
+        // Tag lost after flying on it: keep damping the dead-reckoned velocity, with the trim learned on the tag. Before the tag is first flown on, the attitude controller's own damping holds the drone, unless the drag model keeps the velocity: then the hold flies on it from takeoff, and also returns to the place where the tag was last seen (or where it took off), as far as the dead reckoning knows it.
+        if ((!state->tracking && !dragging) || state->height < AIRBORNE) return;
+        float ax = -g->kd * state->velocity[0], ay = -g->kd * state->velocity[1];
+        if (dragging) {
+            ax -= g->kp * state->place[0];
+            ay -= g->kp * state->place[1];
+        }
+        forward = state->trim[0] + ax * cy + ay * sy;
+        left = state->trim[1] - ax * sy + ay * cy;
     } else {
         // The tag relative to the drone now: the sighting moved on by the drone's velocity over its age, then turned into the body's heading.
         float lead = clamp((now_us - state->capture_us) / 1e6f, 0, 0.1f);

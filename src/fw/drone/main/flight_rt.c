@@ -158,6 +158,21 @@ static Attitude relative_attitude(const State *value) {
     return (Attitude){atan2f(sinf(roll), cosf(roll)), atan2f(sinf(pitch), cosf(pitch))};
 }
 
+// Hover's rotor-drag inputs: the specific force turned from the IMU into the level reference's body axes (by pose_zero, the IMU's mounting on the frame), and the thrust vector's forward tilt the controller last commanded (each servo's physical tilt from its trim, weighted by its motor's thrust).
+static HoverDrag drag_inputs(const State *value, const Command *c) {
+    const float *a = value->accel;
+    float zr = value->pose_zero.roll, zp = value->pose_zero.pitch;
+    float y = a[1] * cosf(zr) - a[2] * sinf(zr), z = a[1] * sinf(zr) + a[2] * cosf(zr);
+    HoverDrag drag = {.specific = {a[0] * cosf(zp) + z * sinf(zp), y, -a[0] * sinf(zp) + z * cosf(zp)}};
+    float left = flight_interpolate(value->controller.left, &flight_thrust[0][0], flight_thrust_count, 0);
+    float right = flight_interpolate(value->controller.right, &flight_thrust[0][0], flight_thrust_count, 0);
+    float left_tilt = c->model.left_servo_direction * (value->controller.left_angle - c->left_trim);
+    float right_tilt = c->model.right_servo_direction * (value->controller.right_angle - c->right_trim);
+    float forward = left * sinf(left_tilt) + right * sinf(right_tilt), up = left * cosf(left_tilt) + right * cosf(right_tilt);
+    drag.tilt = up > 0 ? atan2f(forward, up) : 0;
+    return drag;
+}
+
 static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     log_elapsed = now - log_started;
     uint32_t sequence = log_samples++;
@@ -305,7 +320,8 @@ static void runtime_task(void *arg) {
                 HoverOutput out;
                 // Heading rate about vertical from the body rates (positive left).
                 float heading_rate = (state.gyro[1] * sinf(pose.roll) + state.gyro[2] * cosf(pose.roll)) / cosf(pose.pitch);
-                hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &out);
+                HoverDrag drag = drag_inputs(&state, &command);
+                hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag, &out);
                 scaled.base = out.force > 0 ? fminf(HOVER_THROTTLE, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
                 scaled.target_roll = out.roll;
                 scaled.target_pitch = out.pitch;

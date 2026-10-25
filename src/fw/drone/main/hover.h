@@ -26,6 +26,8 @@ typedef struct {
     float center, distance, approach, ceiling;
     // The camera's tilt up from the body's forward axis.
     float cam_pitch;
+    // Rotor drag: the horizontal specific force the rotors' flapping and drag give per m/s of airspeed (1/s; 0 = off, leaving the tilt dead reckoning of before), the forward thrust tilt the servo commands miss (servo zero and mounting), and how slowly the drag-model velocity corrects the estimate (s). On, the velocity estimate runs on the measured specific force turned level and is pulled toward the drag model's, so without the camera it stays bounded instead of drifting, and the hold flies on it from takeoff.
+    float drag, drag_tilt, drag_tau;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
     float pitch_trim;
 } HoverGains;
@@ -37,6 +39,11 @@ typedef struct {
     float tag[3], normal[3];
 } HoverPose;
 
+// The accelerometer's specific force in the level reference's body axes (g; forward, left, up: the IMU turned by pose_zero) and the thrust vector's tilt forward of the body's up axis that the servos were last commanded to (radians, thrust-weighted over both sides); hover delays the tilt by the servos' dead time.
+typedef struct {
+    float specific[3], tilt;
+} HoverDrag;
+
 #define HOVER_HISTORY 24
 
 typedef struct {
@@ -46,10 +53,10 @@ typedef struct {
     float bias;
     // Height above the engage point (m) and climb rate (m/s), from the IMU and the camera; the height target; the last climb-rate command (m/s); the climb-rate integral (m/s²); the last thrust (N); how long thrust has been low while landing (s).
     float height, climb_rate, target, command, integral, force, low_time;
-    // Heading integrated from the gyro (positive left, drifting), and the attitude, heading and horizontal velocity of recent ticks, so a sighting is levelled with the attitude it was captured at and compared with the velocity of its time.
+    // Heading integrated from the gyro (positive left, drifting), and the attitude, heading, horizontal velocity and commanded thrust tilt of recent ticks, so a sighting is levelled with the attitude it was captured at and compared with the velocity of its time, and the drag model sees the tilt the servos have reached.
     float yaw;
     int64_t history_us[HOVER_HISTORY];
-    float history[HOVER_HISTORY][5];
+    float history[HOVER_HISTORY][6];
     int next;
     // Camera: the newest sighting's sequence and capture time; the tag relative to the drone in the level frame turned by yaw (forward, left, up at yaw 0) and the drone's velocity in it; the tag's height above the engage point; the range target (m) and the bearing target (radians, positive right); the heading of the line to the tag that holds the drone's place on the circle about it, and the smoothed heading of the wall's normal, both in the yaw-turned frame.
     uint32_t sequence;
@@ -57,6 +64,8 @@ typedef struct {
     float position[3], velocity[3], tag_height, setpoint, bearing, arc, normal;
     // Horizontal acceleration trim in body axes (m/s²; forward, left).
     float trim[2];
+    // Rotor drag: the drag-model velocity's offset learned while the camera measures the velocity (m/s; body forward, left), the integrated acceleration's bias learned from the drag model without it (m/s²; body forward, left), and the place dead-reckoned since the tag was last seen (m; yaw-turned frame), which the hold returns to without it.
+    float drag_offset[2], drag_bias[2], place[2];
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).
@@ -68,8 +77,8 @@ typedef struct {
 
 // While not hovering: forget the hover. With the motors off, learn the resting vertical specific force (g); spinning (manual flight), keep integrating the climb rate and height so a later hover or landing starts from them.
 void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt);
-// One control tick. mode is HOVER_HOLD, HOVER_LAND or HOVER_LAND_FAST; pose is the newest camera sighting or NULL (camera disabled or no tag); roll and pitch are the measured attitude from level and yaw_rate the measured heading rate (rad/s, positive left); vertical_g is the measured specific force along vertical, in g; force is the collective thrust in N being flown now, so taking over mid-flight is smooth.
+// One control tick. mode is HOVER_HOLD, HOVER_LAND or HOVER_LAND_FAST; pose is the newest camera sighting or NULL (camera disabled or no tag); roll and pitch are the measured attitude from level and yaw_rate the measured heading rate (rad/s, positive left); vertical_g is the measured specific force along vertical, in g; force is the collective thrust in N being flown now, so taking over mid-flight is smooth; drag is what the rotor-drag model needs (used when gains->drag is set).
 void hover_update(HoverState *state, const HoverGains *gains, int mode, const HoverPose *pose, int64_t now_us, float dt,
-                  float roll, float pitch, float yaw_rate, float vertical_g, float force, HoverOutput *output);
+                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, HoverOutput *output);
 
 #endif

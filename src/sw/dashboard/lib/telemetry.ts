@@ -54,6 +54,9 @@ export type ControlSettings = {
   hover_ceiling: number;
   hover_kside: number;
   hover_cam_pitch: number;
+  hover_drag: number;
+  hover_drag_tilt: number;
+  hover_drag_tau: number;
 };
 
 // The drone service's recorder (src/fw/controller/bridge.py).

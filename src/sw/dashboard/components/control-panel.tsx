@@ -128,6 +128,9 @@ const tuningFields = [
   { key: 'hover_ceiling', label: 'Hover ceiling above takeoff (m)', min: 0.2 },
   { key: 'hover_kside', label: 'Hover pull to square-on (m/s² per m)', min: 0 },
   { key: 'hover_cam_pitch', label: 'Camera tilt up from body (°)', min: -30 },
+  { key: 'hover_drag', label: 'Hover rotor drag (1/s, 0 off)', min: 0 },
+  { key: 'hover_drag_tilt', label: 'Hover drag thrust tilt offset (°)', min: -10 },
+  { key: 'hover_drag_tau', label: 'Hover drag correction time (s)', min: 0.1 },
 ] as const;
 const modelFields = [
   { key: 'pivot_height', label: 'Pivot height (m)', min: 0, max: undefined },

@@ -21,9 +21,9 @@ library = ctypes.CDLL(str(LIBRARY))
 
 HISTORY = 24
 HOLD, LAND, LAND_FAST = 1, 2, 3
-GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "cam_pitch", "pitch_trim")
-# Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch) and the attitude controller's pitch_trim.
-ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "pitch_trim")
+GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "cam_pitch", "drag", "drag_tilt", "drag_tau", "pitch_trim")
+# Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_drag_tilt) and the attitude controller's pitch_trim.
+ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "drag_tilt", "pitch_trim")
 
 
 class Gains(ctypes.Structure):
@@ -34,14 +34,19 @@ class Pose(ctypes.Structure):
     _fields_ = [("sequence", ctypes.c_uint32), ("capture_us", ctypes.c_int64), ("tag", ctypes.c_float * 3), ("normal", ctypes.c_float * 3)]
 
 
+class Drag(ctypes.Structure):
+    _fields_ = [("specific", ctypes.c_float * 3), ("tilt", ctypes.c_float)]
+
+
 class State(ctypes.Structure):
     _fields_ = [(name, ctypes.c_bool) for name in ("engaged", "landed", "have_pose", "have_setpoint", "have_normal", "found", "tracking")] + [
         (name, ctypes.c_float) for name in ("bias", "height", "climb_rate", "target", "command", "integral", "force", "low_time", "yaw")
     ] + [
-        ("history_us", ctypes.c_int64 * HISTORY), ("history", (ctypes.c_float * 5) * HISTORY), ("next", ctypes.c_int),
+        ("history_us", ctypes.c_int64 * HISTORY), ("history", (ctypes.c_float * 6) * HISTORY), ("next", ctypes.c_int),
         ("sequence", ctypes.c_uint32), ("capture_us", ctypes.c_int64), ("seen_us", ctypes.c_int64),
         ("position", ctypes.c_float * 3), ("velocity", ctypes.c_float * 3),
-    ] + [(name, ctypes.c_float) for name in ("tag_height", "setpoint", "bearing", "arc", "normal")] + [("trim", ctypes.c_float * 2)]
+    ] + [(name, ctypes.c_float) for name in ("tag_height", "setpoint", "bearing", "arc", "normal")] + [
+        ("trim", ctypes.c_float * 2), ("drag_offset", ctypes.c_float * 2), ("drag_bias", ctypes.c_float * 2), ("place", ctypes.c_float * 2)]
 
 
 class Output(ctypes.Structure):
@@ -51,7 +56,7 @@ class Output(ctypes.Structure):
 library.hover_rest.argtypes = [ctypes.POINTER(State), ctypes.c_float, ctypes.c_bool, ctypes.c_float]
 library.hover_rest.restype = None
 library.hover_update.argtypes = [ctypes.POINTER(State), ctypes.POINTER(Gains), ctypes.c_int, ctypes.POINTER(Pose), ctypes.c_int64, ctypes.c_float,
-                                 ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.POINTER(Output)]
+                                 ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.POINTER(Drag), ctypes.POINTER(Output)]
 library.hover_update.restype = None
 
 
@@ -75,6 +80,11 @@ class Hover:
     def rest(self, vertical_g, spinning, dt):
         library.hover_rest(ctypes.byref(self.state), vertical_g, spinning, dt)
 
-    def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force):
-        library.hover_update(ctypes.byref(self.state), ctypes.byref(self.gains), mode, ctypes.byref(pose) if pose else None, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, ctypes.byref(self.output))
+    def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None):
+        """
+        drag is (specific force in the level reference's body axes in g, commanded thrust tilt in radians) or None.
+        """
+        inputs = Drag(specific=tuple(drag[0]), tilt=drag[1]) if drag else None
+        library.hover_update(ctypes.byref(self.state), ctypes.byref(self.gains), mode, ctypes.byref(pose) if pose else None, now_us, dt, roll, pitch, yaw_rate, vertical_g, force,
+                             ctypes.byref(inputs) if inputs else None, ctypes.byref(self.output))
         return self.output
