@@ -8,6 +8,7 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
+  Check,
   Space,
   Settings2,
   Square,
@@ -37,7 +38,18 @@ const keyIcons: Record<string, LucideIcon> = {
 
 const THROTTLE_STEP = 10;
 // T jumps collective straight to about hover, so liftoff doesn't linger half-supported on the feet.
-const TAKEOFF_THROTTLE = 720;
+const TAKEOFF_DEFAULT = 720;
+const TAKEOFF_KEY = 'takeoffThrottle';
+
+// The takeoff throttle the T key sets, remembered per browser.
+function savedTakeoff() {
+  try {
+    const value = Number(localStorage.getItem(TAKEOFF_KEY));
+    return value > 0 && value <= THROTTLE_MAX ? value : TAKEOFF_DEFAULT;
+  } catch {
+    return TAKEOFF_DEFAULT;
+  }
+}
 const KEY_REPEAT_MS = 100;
 // Keyboard setpoint sizes are a local preference, not drone settings.
 const MANUAL_KEY = 'manual-inputs';
@@ -171,6 +183,29 @@ export const ControlPanel = memo(function ControlPanel({
   const [open, setOpen] = useState(false);
   const [manual, setManual] = useState(MANUAL_DEFAULT);
   const [manualDraft, setManualDraft] = useState(MANUAL_DEFAULT);
+  const [takeoff, setTakeoff] = useState(TAKEOFF_DEFAULT);
+  const [takeoffDraft, setTakeoffDraft] = useState(String(TAKEOFF_DEFAULT));
+  const takeoffRef = useRef(TAKEOFF_DEFAULT);
+  useEffect(() => {
+    const value = savedTakeoff();
+    takeoffRef.current = value;
+    setTakeoff(value);
+    setTakeoffDraft(String(value));
+  }, []);
+  const draftTakeoff = Math.round(Number(takeoffDraft));
+  const takeoffValid =
+    takeoffDraft.trim() !== '' &&
+    draftTakeoff > 0 &&
+    draftTakeoff <= THROTTLE_MAX;
+  const confirmTakeoff = () => {
+    if (!takeoffValid) return;
+    takeoffRef.current = draftTakeoff;
+    setTakeoff(draftTakeoff);
+    setTakeoffDraft(String(draftTakeoff));
+    try {
+      localStorage.setItem(TAKEOFF_KEY, String(draftTakeoff));
+    } catch {}
+  };
   useEffect(() => setManual(readManual()), []);
   const throttle = useRef(settings.base_throttle);
 
@@ -253,9 +288,10 @@ export const ControlPanel = memo(function ControlPanel({
 
       if (event.code === 'KeyT') {
         held.delete('KeyT');
-        throttle.current = TAKEOFF_THROTTLE;
-        setDraft((previous) => ({ ...previous, base_throttle: TAKEOFF_THROTTLE }));
-        onChange({ base_throttle: TAKEOFF_THROTTLE });
+        const value = takeoffRef.current;
+        throttle.current = value;
+        setDraft((previous) => ({ ...previous, base_throttle: value }));
+        onChange({ base_throttle: value });
       } else if (event.code === 'KeyW' || event.code === 'KeyS') {
         changeThrottle();
         if (timer === undefined)
@@ -525,7 +561,7 @@ export const ControlPanel = memo(function ControlPanel({
       <div className="flex flex-col gap-2 text-muted-foreground">
         {[
           { keys: ['W', 'S'], label: 'Throttle' },
-          { keys: ['T'], label: `Takeoff (${TAKEOFF_THROTTLE})` },
+          { keys: ['T'], label: 'Takeoff' },
           { keys: ['A', 'D'], label: 'Yaw' },
           { keys: ['ArrowUp', 'ArrowDown'], label: 'Pitch' },
           { keys: ['ArrowLeft', 'ArrowRight'], label: 'Roll' },
@@ -543,6 +579,36 @@ export const ControlPanel = memo(function ControlPanel({
               })}
             </KbdGroup>
             <span>{label}</span>
+            {label === 'Takeoff' && (
+              <form
+                className="flex items-center gap-1"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  confirmTakeoff();
+                }}
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  max={THROTTLE_MAX}
+                  step={10}
+                  value={takeoffDraft}
+                  onChange={(event) => setTakeoffDraft(event.target.value)}
+                  aria-label="Takeoff throttle"
+                  className="h-7 w-20 tabular-nums"
+                />
+                <Button
+                  type="submit"
+                  variant="outline"
+                  size="icon"
+                  className="size-7"
+                  aria-label="Set takeoff throttle"
+                  disabled={!takeoffValid || draftTakeoff === takeoff}
+                >
+                  <Check />
+                </Button>
+              </form>
+            )}
           </div>
         ))}
       </div>
