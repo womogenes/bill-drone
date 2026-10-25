@@ -59,7 +59,7 @@ void flight_attitude(Attitude *state, const Motion *m) {
 // The integrators see at most this much error, so a large transient (a tilted takeoff, a gust) winds them up only slowly while a steady error of any size is still trimmed out.
 #define INTEGRATE_ERROR (8.0f * 3.14159265f / 180)
 // Seconds over which the pitch bias fades in once collective reaches integrate_throttle.
-#define PITCH_BIAS_RAMP 0.8f
+#define PITCH_BIAS_RAMP 0.3f
 // A takeoff from a rest more than UPRIGHT_START from level tilts the servos back by UPRIGHT_GAIN times the pitch from level (at most UPRIGHT_MAX), scaled down to nothing as the righting rotation approaches UPRIGHT_RATE, until the drone first comes within UPRIGHT_DONE of level. Tuned in the simulator from 12-30° rests with sliding and gripping nose contacts (sw/sim/sweep.py ground_pitch, feet).
 #define UPRIGHT_START (2.0f * 3.14159265f / 180)
 #define UPRIGHT_DONE (2.0f * 3.14159265f / 180)

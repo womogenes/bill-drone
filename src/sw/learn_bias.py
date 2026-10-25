@@ -48,12 +48,12 @@ def learn(path):
             if airborne[i]:
                 setpoint[i] = setpoint[i - 1] + np.clip(target[i] - setpoint[i - 1], -step[i], step[i])
         error = setpoint - angle
-        # As flight_math.c: the integrators see at most 8° of error; roll's starts at its bias, while pitch's starts at zero and the pitch bias fades in over 0.8 s from the moment collective reaches integrate_throttle.
+        # As flight_math.c: the integrators see at most 8° of error; roll's starts at its bias, while pitch's starts at zero and the pitch bias fades in over 0.3 s from the moment collective reaches integrate_throttle.
         seen = np.clip(error, -math.radians(8), math.radians(8))
         bias = np.clip(s[f"{axis}_bias"], -s["integral_limit"], s["integral_limit"])
         integral = np.clip((bias if axis == "roll" else 0) + np.cumsum(np.where(airborne, s[f"{axis}_i"] * seen * dt, 0)), -s["integral_limit"], s["integral_limit"])
         if axis == "pitch":
-            integral = integral + bias * np.clip((t - lift) / 0.8, 0, 1)
+            integral = integral + bias * np.clip((t - lift) / 0.3, 0, 1)
         gyro = np.radians(data[rate].to_numpy())
         command = s[f"{axis}_p"] * error + integral - s[f"{axis}_damping"] * gyro
         steady = airborne & (t - lift >= SETTLE_S) & (np.abs(data[rate].to_numpy()) < STEADY_RATE)
