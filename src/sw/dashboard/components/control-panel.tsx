@@ -102,6 +102,7 @@ const tuningFields = [
   { key: 'target_rate', label: 'Target ramp (°/s)', min: 1 },
   { key: 'velocity_damping', label: 'Velocity damping (°/(m/s))', min: 0 },
   { key: 'velocity_leak', label: 'Velocity leak (s)', min: 0.1 },
+  { key: 'thrust_voltage', label: 'Thrust reference (V, 0 off)', min: 0 },
 ] as const;
 const modelFields = [
   { key: 'pivot_height', label: 'Pivot height (m)', min: 0, max: undefined },

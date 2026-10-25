@@ -31,6 +31,8 @@ typedef struct {
     // Velocity damping: target tilt per m/s of dead-reckoned velocity (rad per m/s, 0 = off), and that estimate's leak time (s).
     float velocity_damping, velocity_leak;
     Model model;
+    // Battery volts the thrust table is taken to hold at (0 = off): the runtime scales the thrust scales by (measured / this)² before flight_control, which does not read it. Last, so the host simulation's buffer layout is unchanged.
+    float thrust_voltage;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.

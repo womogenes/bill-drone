@@ -31,6 +31,7 @@ TUNE(integrate_throttle, integrate_throttle, 1, 0, 1200, 580)
 TUNE(target_rate, target_rate, RAD, 1, 360, 360)
 TUNE(velocity_damping, velocity_damping, RAD, 0, 30, 8)
 TUNE(velocity_leak, velocity_leak, 1, 0.1, 30, 3)
+TUNE(thrust_voltage, thrust_voltage, 1, 0, 20, 0)
 STATE(servo_offset_left, -60, 60, -3)
 STATE(servo_offset_right, -60, 60, 0)
 // Gyro bias in rad/s and the stationary pose in degrees, valid only for the sensor frame they were taken in:

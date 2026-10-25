@@ -46,6 +46,7 @@ export type ControlSettings = {
   target_rate: number;
   velocity_damping: number;
   velocity_leak: number;
+  thrust_voltage: number;
 };
 
 // The drone service's recorder (src/fw/controller/bridge.py).

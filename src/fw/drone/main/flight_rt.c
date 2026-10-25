@@ -32,6 +32,9 @@
 // Streamed target limits: degrees and degrees per second.
 #define TARGET_TILT 15
 #define TARGET_RATE 45
+// Battery smoothing for thrust compensation (s), and the furthest the smoothed voltage may sit from thrust_voltage, as a ratio, before it is treated as an ADC fault and clamped.
+#define VOLTAGE_TAU 0.3f
+#define VOLTAGE_RANGE 0.15f
 
 typedef struct __attribute__((packed)) {
     uint32_t elapsed, sequence;
@@ -83,6 +86,8 @@ static uint32_t stop_generation;
 // The newest laptop STOP since boot (each boot is a new radio session).
 static StopBarrier stop_barrier;
 static uint16_t voltage_mv;
+// Smoothed battery volts, for thrust compensation; 0 until the first reading.
+static float battery_v;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
 static float limit(float value, float low, float high) {
@@ -206,6 +211,10 @@ static void runtime_task(void *arg) {
             raw[4 + i] = sensor[4 + sensor_axis[i]];
         }
         float dt = previous ? (now - previous) / 1000000.0f : 1.0f / SAMPLE_HZ;
+        if (voltage_mv) {
+            float volts = voltage_mv / 1000.0f;
+            battery_v = battery_v ? battery_v + (volts - battery_v) * (1 - expf(-dt / VOLTAGE_TAU)) : volts;
+        }
         if (state.enabled && previous && now - previous > MAX_SAMPLE_MS * 1000ULL) stop_locked(5);
         for (int i = 0; i < 3; i++) {
             state.accel[i] = (raw[i] * config.accel_scale[i] - state.accel_offset[i]) * state.accel_gain[i];
@@ -251,7 +260,14 @@ static void runtime_task(void *arg) {
             command.pitch = pose.pitch;
             command.gx = state.gyro[0]; command.gy = state.gyro[1]; command.gz = state.gyro[2];
             command.dt = dt;
-            flight_control(&state.controller, &command, &flight_thrust[0][0], flight_thrust_count);
+            // Propeller thrust at a fixed throttle goes with the square of battery voltage, so the table's newtons are scaled to the measured voltage: a sagging pack gets more throttle for the same force.
+            Command scaled = command;
+            if (command.thrust_voltage > 0 && battery_v > 0) {
+                float ratio = limit(battery_v / command.thrust_voltage, 1 - VOLTAGE_RANGE, 1 + VOLTAGE_RANGE);
+                scaled.left_thrust_scale *= ratio * ratio;
+                scaled.right_thrust_scale *= ratio * ratio;
+            }
+            flight_control(&state.controller, &scaled, &flight_thrust[0][0], flight_thrust_count);
             state.servo[0] = limit(state.controller.left_angle * DEG, -SERVO_LIMIT, SERVO_LIMIT);
             state.servo[1] = limit(state.controller.right_angle * DEG, -SERVO_LIMIT, SERVO_LIMIT);
             state.throttle[0] = lroundf(limit(state.controller.left, 0, THROTTLE_MAX));
