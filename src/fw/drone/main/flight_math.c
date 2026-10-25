@@ -78,7 +78,8 @@ void flight_reset(Controller *state, const Command *c) {
     state->setpoint_roll = c->roll;
     state->setpoint_pitch = c->pitch;
     state->velocity[0] = state->velocity[1] = 0;
-    state->upright = fabsf(c->pitch - (c->target_pitch + c->pitch_trim)) > UPRIGHT_START;
+    // Tilt from true level, not from pitch_trim: the upright takeoff points the thrust straight up on the ground, while the trim is the attitude to fly at.
+    state->upright = fabsf(c->pitch - c->target_pitch) > UPRIGHT_START;
 }
 
 static float compensate(Controller *state, int side, float angle, float amount) {
@@ -96,7 +97,7 @@ static float compensate(Controller *state, int side, float angle, float amount) 
 // Armed without usable thrust: the servos wait at trim, tilted back for a tilted rest as the upright takeoff will want them, so they are already there when thrust comes.
 static void hold_servos(Controller *state, const Command *c) {
     const Model *model = &c->model;
-    float upright = state->upright ? clamp(UPRIGHT_GAIN * (c->pitch - (c->target_pitch + c->pitch_trim)), -UPRIGHT_MAX, UPRIGHT_MAX) : 0;
+    float upright = state->upright ? clamp(UPRIGHT_GAIN * (c->pitch - c->target_pitch), -UPRIGHT_MAX, UPRIGHT_MAX) : 0;
     state->left_angle = clamp(c->left_trim - model->left_servo_direction * upright, model->servo_min, model->servo_max);
     state->right_angle = clamp(c->right_trim - model->right_servo_direction * upright, model->servo_min, model->servo_max);
 }
@@ -137,7 +138,7 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
         state->setpoint_pitch += clamp(c->target_pitch + trim + brake_pitch - state->setpoint_pitch, -step, step);
     }
     // Resting tilted (no front legs), forward-pointing thrust would shove the drone along the floor and lever it over its nose. Until it first comes level the servos also tilt back by most of the pitch from level: the thrust points nearly up, and acting ahead of the back feet it lifts the nose. That back tilt is far more torque than the drone needs once it is pivoting or airborne, and the servos lag ~0.1 s, so it is withdrawn as the nose comes up (gone at UPRIGHT_RATE): the righting rotation stays slow enough for the pitch damping to stop at level. Meanwhile the setpoint follows the attitude, so the pitch P term and integrator stay out of it and the hand-over is smooth. Only pitch can be vectored this way.
-    float tilt = c->pitch - (c->target_pitch + trim);
+    float tilt = c->pitch - c->target_pitch;
     if (state->upright && (fabsf(tilt) <= UPRIGHT_DONE || state->airborne > UPRIGHT_HOLD)) state->upright = 0;
     float upright = 0;
     if (state->upright) {
