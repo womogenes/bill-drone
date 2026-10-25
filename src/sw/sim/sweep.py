@@ -96,8 +96,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None):
     deadband = math.radians(plant["deadband"])
     # Seconds for collective to rise linearly to T on the ground (0 = step).
     ramp = plant.get("ramp", 0.0)
-    # Like the drone, a liftoff starts armed at zero collective for "armed_s", so the takeoff setpoint starts at the resting attitude.
-    armed = round(plant.get("armed_s", 0.0) / DT) if liftoff else 0
+    # Like the drone, a liftoff starts armed at zero collective for "armed_s" (at least one step), so the takeoff setpoint and the upright-takeoff flag start from the resting attitude.
+    armed = max(1, round(plant.get("armed_s", 0.0) / DT)) if liftoff else 0
     if armed:
         settings["base_throttle"] = 0
         controller.configure(settings | {"enabled": 1})

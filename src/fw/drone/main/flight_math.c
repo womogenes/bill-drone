@@ -58,11 +58,12 @@ void flight_attitude(Attitude *state, const Motion *m) {
 #define VELOCITY_TILT (8.0f * 3.14159265f / 180)
 // The integrators see at most this much error, so a large transient (a tilted takeoff, a gust) winds them up only slowly while a steady error of any size is still trimmed out.
 #define INTEGRATE_ERROR (8.0f * 3.14159265f / 180)
-// A takeoff from a tilted rest tilts the servos back by UPRIGHT_GAIN times the pitch from level predicted UPRIGHT_LEAD seconds ahead (the righting rotation is fast and the servos lag), at most UPRIGHT_MAX, until that prediction first comes within UPRIGHT_DONE of level or crosses it. Tuned in the simulator from a 22° rest with a gripping nose contact (sw/sim/sweep.py ground_pitch, feet).
-#define UPRIGHT_DONE (3.0f * 3.14159265f / 180)
+// A takeoff from a rest more than UPRIGHT_START from level tilts the servos back by UPRIGHT_GAIN times the pitch from level (at most UPRIGHT_MAX), scaled down to nothing as the righting rotation approaches UPRIGHT_RATE, until the drone first comes within UPRIGHT_DONE of level. Tuned in the simulator from 12-30° rests with sliding and gripping nose contacts (sw/sim/sweep.py ground_pitch, feet).
+#define UPRIGHT_START (5.0f * 3.14159265f / 180)
+#define UPRIGHT_DONE (2.0f * 3.14159265f / 180)
 #define UPRIGHT_MAX (35.0f * 3.14159265f / 180)
-#define UPRIGHT_LEAD 0.2f
 #define UPRIGHT_GAIN 0.7f
+#define UPRIGHT_RATE (30.0f * 3.14159265f / 180)
 
 // Integrators start from the configured bias so liftoff already counters a known disturbance.
 void flight_reset(Controller *state, const Command *c) {
@@ -73,7 +74,7 @@ void flight_reset(Controller *state, const Command *c) {
     state->setpoint_roll = c->roll;
     state->setpoint_pitch = c->pitch;
     state->velocity[0] = state->velocity[1] = 0;
-    state->upright = 1;
+    state->upright = fabsf(c->pitch - (c->target_pitch + c->pitch_trim)) > UPRIGHT_START;
 }
 
 static float compensate(Controller *state, int side, float angle, float amount) {
@@ -91,7 +92,7 @@ static float compensate(Controller *state, int side, float angle, float amount) 
 // Armed without usable thrust: the servos wait at trim, tilted back for a tilted rest as the upright takeoff will want them, so they are already there when thrust comes.
 static void hold_servos(Controller *state, const Command *c) {
     const Model *model = &c->model;
-    float upright = clamp(UPRIGHT_GAIN * (c->pitch - (c->target_pitch + c->pitch_trim)), -UPRIGHT_MAX, UPRIGHT_MAX);
+    float upright = state->upright ? clamp(UPRIGHT_GAIN * (c->pitch - (c->target_pitch + c->pitch_trim)), -UPRIGHT_MAX, UPRIGHT_MAX) : 0;
     state->left_angle = clamp(c->left_trim - model->left_servo_direction * upright, model->servo_min, model->servo_max);
     state->right_angle = clamp(c->right_trim - model->right_servo_direction * upright, model->servo_min, model->servo_max);
 }
@@ -130,6 +131,15 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
         state->setpoint_roll += clamp(c->target_roll + brake_roll - state->setpoint_roll, -step, step);
         state->setpoint_pitch += clamp(c->target_pitch + trim + brake_pitch - state->setpoint_pitch, -step, step);
     }
+    // Resting tilted (no front legs), forward-pointing thrust would shove the drone along the floor and lever it over its nose. Until it first comes level the servos also tilt back by most of the pitch from level: the thrust points nearly up, and acting ahead of the back feet it lifts the nose. That back tilt is far more torque than the drone needs once it is pivoting or airborne, and the servos lag ~0.1 s, so it is withdrawn as the nose comes up (gone at UPRIGHT_RATE): the righting rotation stays slow enough for the pitch damping to stop at level. Meanwhile the setpoint follows the attitude, so the pitch P term and integrator stay out of it and the hand-over is smooth. Only pitch can be vectored this way.
+    float tilt = c->pitch - (c->target_pitch + trim);
+    if (state->upright && fabsf(tilt) <= UPRIGHT_DONE) state->upright = 0;
+    float upright = 0;
+    if (state->upright) {
+        float rising = tilt > 0 ? -c->gy : c->gy;
+        upright = clamp(UPRIGHT_GAIN * tilt, -UPRIGHT_MAX, UPRIGHT_MAX) * clamp(1 - rising / UPRIGHT_RATE, 0, 1);
+        state->setpoint_pitch = c->pitch;
+    }
     float roll_error = state->setpoint_roll - c->roll;
     float pitch_error = state->setpoint_pitch - c->pitch;
     // Below integrate_throttle the feet are still down: integrating an error the ground holds would only wind up.
@@ -154,11 +164,6 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     float left_horizontal = (forward - yaw_torque / model->arm) / 2;
     float right_horizontal = (forward + yaw_torque / model->arm) / 2;
 
-    // Resting tilted (no front legs), forward-pointing thrust would shove the drone along the floor and lever it over its nose. Until it comes level the servos also tilt back by most of the pitch from level: the thrust points nearly up, and acting ahead of the CoM it lifts the nose as the drone rises. Only pitch can be vectored this way.
-    float tilt = c->pitch - (c->target_pitch + trim);
-    float ahead = tilt + c->gy * UPRIGHT_LEAD;
-    if (state->upright && (fabsf(ahead) <= UPRIGHT_DONE || ahead * tilt < 0)) state->upright = 0;
-    float upright = state->upright ? clamp(UPRIGHT_GAIN * ahead, -UPRIGHT_MAX, UPRIGHT_MAX) : 0;
     float left_angle = model->left_servo_direction * (atan2f(left_horizontal, left_vertical) - upright) + c->left_trim;
     float right_angle = model->right_servo_direction * (atan2f(right_horizontal, right_vertical) - upright) + c->right_trim;
     state->left_angle = clamp(compensate(state, 0, left_angle, c->servo_compensation), model->servo_min, model->servo_max);

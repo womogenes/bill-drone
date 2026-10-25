@@ -209,7 +209,8 @@ class Controller:
             for key in ("roll_bias", "pitch_bias")
         ]
         struct.pack_into("<2f", self.state, 0, *bias)
-        self.state[15] = 1.0
+        # No upright takeoff: free flight starts in the air, and a liftoff arms first, where the native flight_reset sets the flag from the resting attitude.
+        self.state[15] = 0.0
 
     def configure(self, settings):
         # Setpoints and the enable flag are native-owned on the drone; missing ones are zero.
