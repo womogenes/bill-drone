@@ -34,7 +34,7 @@
 #define TOUCHDOWN_S 0.3f
 #define LANDED_RAMP 0.5f
 // Below this height (m) a hold is still on the ground taking off: the IMU climb rate leaks toward zero, and centring neither tilts nor turns and lets the range target follow the drone. The tag-height target never asks for less than MIN_HEIGHT above the engage point (m).
-#define AIRBORNE 0.15f
+#define AIRBORNE 0.05f
 #define MIN_HEIGHT 0.2f
 
 static float clamp(float value, float low, float high) {
