@@ -10,7 +10,8 @@ typedef struct { float roll, pitch; } Attitude;
 typedef struct { float ax, ay, az, gx, gy, gz, dt, gravity_tau; } Motion;
 // comp_dir/comp_ref: each servo's last commanded direction (+1, -1, or 0 before it moved) and its extreme since. airborne counts seconds since collective first reached integrate_throttle (0 before); setpoint_* is the ramped roll/pitch target (with trim); velocity is the dead-reckoned (rightward, forward) velocity in m/s from g * tan(tilt).
 // upright: 1 from arming at a tilted rest until the drone first comes level; meanwhile the servos also tilt back by most of the pitch from level, so the thrust points up, easing off as the nose comes up (flight_math.c).
-typedef struct { float roll_i, pitch_i, left, right, left_angle, right_angle, comp_dir[2], comp_ref[2], airborne, setpoint_roll, setpoint_pitch, velocity[2], upright; } Controller;
+// yaw_i: the yaw-rate integrator (rad/s²), trimming out steady twist such as the motors' reaction torque at unequal throttles.
+typedef struct { float roll_i, pitch_i, left, right, left_angle, right_angle, comp_dir[2], comp_ref[2], airborne, setpoint_roll, setpoint_pitch, velocity[2], upright, yaw_i; } Controller;
 typedef struct {
     float arm, pivot_height, com_x;
     float roll_inertia, pitch_inertia, yaw_inertia, reaction_torque_ratio;
@@ -36,6 +37,8 @@ typedef struct {
     Model model;
     // Battery volts the thrust table is taken to hold at (0 = off): the runtime scales the thrust scales by (measured / this)² before flight_control, which does not read it. Last, so the host simulation's buffer layout is unchanged.
     float thrust_voltage;
+    // Yaw-rate integral gain (1/s), runtime-only like the fields below it; the integrator shares integral_limit.
+    float yaw_i;
     // Hover and landing (hover.h), and whether they use the camera (0 = IMU only). Also runtime-only.
     HoverGains hover;
     float hover_camera;

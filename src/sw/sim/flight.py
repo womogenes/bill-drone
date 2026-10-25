@@ -193,9 +193,10 @@ class Attitude:
 class Controller:
     def __init__(self, model=MODEL):
         # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, the takeoff setpoint state, then the upright-takeoff flag.
-        self.state = array("f", [0.0] * 16)
+        self.state = array("f", [0.0] * 17)
         # Motion (6 floats), tuning (TUNING_LAYOUT), then model parameters.
-        self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS])
+        # Runtime-only Command fields after the model (thrust_voltage, yaw_i, hover) stay zero: off in the simulation.
+        self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS] + [0.0] * 64)
         for key in THRUST_SCALE_KEYS:
             self.command[6 + TUNING_LAYOUT.index(key)] = 1.0
 

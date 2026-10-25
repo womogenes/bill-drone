@@ -78,6 +78,7 @@ void flight_reset(Controller *state, const Command *c) {
     state->setpoint_roll = c->roll;
     state->setpoint_pitch = c->pitch;
     state->velocity[0] = state->velocity[1] = 0;
+    state->yaw_i = 0;
     // Tilt from true level, not from pitch_trim: the upright takeoff points the thrust straight up on the ground, while the trim is the attitude to fly at.
     state->upright = fabsf(c->pitch - c->target_pitch) > UPRIGHT_START;
 }
@@ -152,7 +153,9 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     if (c->base < c->integrate_throttle) {
         state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);
         state->pitch_i = 0;
+        state->yaw_i = 0;
     } else {
+        state->yaw_i = clamp(state->yaw_i + c->yaw_i * (c->target_yaw - c->gz) * c->dt, -c->integral_limit, c->integral_limit);
         float roll_seen = clamp(roll_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
         float pitch_seen = clamp(pitch_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
         state->roll_i = clamp(state->roll_i + c->roll_i * roll_seen * c->dt, -c->integral_limit, c->integral_limit);
@@ -162,7 +165,7 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     float roll_torque = model->roll_inertia * (c->roll_p * roll_error + state->roll_i - c->roll_damping * c->gx);
     float pitch_bias = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit) * clamp(state->airborne / PITCH_BIAS_RAMP, 0, 1);
     float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * c->gy);
-    float yaw_torque = model->yaw_inertia * (c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias);
+    float yaw_torque = model->yaw_inertia * (c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias + state->yaw_i);
 
     float left_vertical = fmaxf(0, (force + roll_torque / model->arm) / 2);
     float right_vertical = fmaxf(0, (force - roll_torque / model->arm) / 2);

@@ -121,6 +121,7 @@ const tuningFields = [
   { key: 'velocity_damping', label: 'Velocity damping (°/(m/s))', min: 0 },
   { key: 'velocity_leak', label: 'Velocity leak (s)', min: 0.1 },
   { key: 'thrust_voltage', label: 'Thrust reference (V, 0 off)', min: 0 },
+  { key: 'yaw_i', label: 'Yaw I', min: 0 },
   { key: 'hover_center', label: 'Hover centres on tag (1 on, 0 off)', min: 0 },
   { key: 'hover_distance', label: 'Hover distance from tag (m)', min: 0.3 },
   { key: 'hover_approach', label: 'Hover approach speed (m/s)', min: 0.02 },

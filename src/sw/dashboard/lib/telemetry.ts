@@ -47,6 +47,7 @@ export type ControlSettings = {
   velocity_damping: number;
   velocity_leak: number;
   thrust_voltage: number;
+  yaw_i: number;
   hover_center: number;
   hover_distance: number;
   hover_approach: number;
