@@ -85,6 +85,10 @@ export default function Page() {
   const latestReading = useRef<Reading | null>(null);
   const [history] = useState(() => createHistory<ImuSample>());
   const [voltageHistory] = useState(() => createHistory<VoltageSample>());
+  // One sample a second for the hour view, so discharge over a session fits in a small buffer.
+  const [voltageHourHistory] = useState(() =>
+    createHistory<VoltageSample>(3_600_000, 3700)
+  );
   const displayFrame = useRef<number | undefined>(undefined);
   const publishReading = useCallback(() => {
     if (displayFrame.current !== undefined) return;
@@ -126,6 +130,7 @@ export default function Page() {
     latestReading.current = null;
     const session = Date.now();
     let lastVoltage: VoltageSample | undefined;
+    let lastHourVoltage: VoltageSample | undefined;
     function offline() {
       if (socket.current !== ws) return;
       socket.current = null;
@@ -176,6 +181,10 @@ export default function Page() {
                   (data.adc_voltage - lastVoltage!.ema);
           lastVoltage = { time, session, voltage: data.adc_voltage, ema };
           voltageHistory.append(lastVoltage);
+          if (!lastHourVoltage || time - lastHourVoltage.time >= 1000) {
+            lastHourVoltage = lastVoltage;
+            voltageHourHistory.append(lastVoltage);
+          }
         }
         latestReading.current = {
           ...data,
@@ -189,7 +198,7 @@ export default function Page() {
       offline
     );
     socket.current = ws;
-  }, [history, voltageHistory, publishReading, setTargets]);
+  }, [history, voltageHistory, voltageHourHistory, publishReading, setTargets]);
 
   useEffect(() => {
     const start = setTimeout(connect, 0);
@@ -358,6 +367,7 @@ export default function Page() {
             voltage={reading?.adc_voltage}
             ema={reading?.voltage_ema}
             history={voltageHistory.read}
+            hourHistory={voltageHourHistory.read}
             time={reading?.time ?? 0}
             connected={status === 'connected'}
           />
