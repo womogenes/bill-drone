@@ -39,7 +39,8 @@ def learn(path):
     result = {"file": path.name, "airborne_s": round(float(t[airborne].max() - lift), 2)}
     for axis, rate in (("roll", "gx_deg_s"), ("pitch", "gy_deg_s")):
         angle = np.radians(data[f"{axis}_deg"].to_numpy())
-        target = np.radians(data[f"target_{axis}_deg"].to_numpy())
+        # The controller flies level at pitch_trim (degrees in the settings), added to the logged target.
+        target = np.radians(data[f"target_{axis}_deg"].to_numpy() + (s.get("pitch_trim", 0) if axis == "pitch" else 0))
         # The setpoint holds the ground attitude until liftoff, then ramps to the target at target_rate (rad/s in the log's settings is degrees).
         setpoint = np.where(airborne, target, angle)
         step = math.radians(s["target_rate"]) * dt
