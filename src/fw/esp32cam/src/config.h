@@ -6,7 +6,8 @@ int tagId = 0; // This library includes tag16h5 IDs 0..29.
 float tagSizeM = 0.151350000f;
 
 // Calibrate at 320x240 with hmirror=0 and vflip=1, in the sensor mode below. Zero means unset.
-float fx = 492.659676617f, fy = 494.563782912f, cx = 160.561003196f, cy = 107.774728284f;
+// The whole-sensor mode's: the central-window calibration (fx 492.660, fy 494.564, cx 160.561, cy 107.775) scaled by 1536/2048 about the image centre, which reproduces the original whole-sensor calibration to every digit. The distortion coefficients act on normalised coordinates, so they carry over.
+float fx = 369.494757463f, fy = 370.922837184f, cx = 160.420727397f, cy = 110.831046213f;
 // OpenCV Brown-Conrady coefficients: k1, k2, p1, p2, k3.
 float distortion[5] = {-0.031215286f, 0.896256747f, 0.000000000f, 0.000000000f, 0.000000000f};
 
@@ -27,8 +28,8 @@ constexpr uint32_t anchorUs = 500000;
 constexpr float anchorMaxRad = 0.35f, anchorDecisive = 2;
 // Capture-to-ready limit; a tracked pose is typically 35-45 ms old (up to 33 ms of readout, then tracking).
 constexpr unsigned maxAgeUs = 150000;
-// OV3660 mode: the central window of the 2048x1536 array, binned 2x2 and scaled to 320x240. A line takes hts SYSCLK cycles; a frame is the window's binned lines plus 15. The ESP32's 10 MHz pixel clock needs 32 us to move a 320-pixel line, and a faster line rate than this panicked, so 320x240 stops at 29.4 fps. For 100 fps (measured 101.5 Hz, detection off) the output must be 160x120: outW 160, outH 120, hts 1300, sysclkMhz 80 (PLL multiplier and PCLK divider 16), frame buffers in DRAM, intrinsics halved. Its 9.6 ms exposure needs several times this room's light, and whole-frame searches with DRAM frame buffers ran internal RAM down to 5 KB and panicked.
-constexpr int windowW = 1536, windowH = 1152, outW = 320, outH = 240;
+// OV3660 mode: the whole 2048x1536 array (about 47 x 36 degrees through this lens), binned 2x2 and scaled to 320x240; the central 1536x1152 window (36 x 27 degrees) ran at 29.4 fps but lost the tag on modest attitude swings in hover. A line takes hts SYSCLK cycles; a frame is the window's binned lines plus 15. The ESP32's 10 MHz pixel clock needs 32 us to move a 320-pixel line, and a faster line rate than this panicked, so 320x240 stops at 29.4 fps from the central window and 22.2 fps from the whole array. For 100 fps (measured 101.5 Hz, detection off) the output must be 160x120: outW 160, outH 120, hts 1300, sysclkMhz 80 (PLL multiplier and PCLK divider 16), frame buffers in DRAM, intrinsics halved. Its 9.6 ms exposure needs several times this room's light, and whole-frame searches with DRAM frame buffers ran internal RAM down to 5 KB and panicked.
+constexpr int windowW = 2048, windowH = 1536, outW = 320, outH = 240;
 constexpr int hts = 2300, sysclkMhz = 40, vts = windowH / 2 + 15;
 constexpr unsigned framePeriodUs = unsigned(vts) * hts / sysclkMhz;
 // Readout time per output row.
