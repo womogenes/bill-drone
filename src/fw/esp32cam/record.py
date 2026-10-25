@@ -1,6 +1,7 @@
 """
 Record the ESP32-CAM's per-frame records: uv run fw/esp32cam/record.py [--host 192.168.86.28]
 Subscribes to /record, saves every frame to sw/recordings/camera-<time>.frm and prints a line a second. Ctrl-C stops.
+With --imu, the drone's IMU readings from the running bridge (fw/controller/bridge.py /status, 20 Hz, armed or not) go to <name>.imu.jsonl beside it, one {host_ns, drone_ms, gyro_deg_s, accel_g, roll_deg, pitch_deg} per reading, on the same laptop clock as the frames' receive times; load_imu() reads it back.
 Summarize a recording, or a black-box file's records: uv run fw/esp32cam/record.py --analyze sw/recordings/camera-<time>.frm
 
 File format: repeated [int64 laptop receive time, ns][record from fw/esp32cam/src/record.h], 224 bytes (TAG3 packets) or, in older recordings, 144 (TAG2).
@@ -66,6 +67,27 @@ def load(path):
     return {k: np.array([r[k] for r in rows]) for k in rows[0]}
 
 
+def log_imu(path, stop, bridge="http://127.0.0.1:8765/status"):
+    last = None
+    with path.open("w") as file:
+        while not stop.is_set():
+            try:
+                reading = json.load(urllib.request.urlopen(bridge, timeout=1))["reading"]
+            except (OSError, ValueError, KeyError, TypeError):
+                stop.wait(0.5)
+                continue
+            imu = reading and reading.get("imu")
+            if imu and reading["time"] != last:
+                last = reading["time"]
+                file.write(json.dumps({"host_ns": time.time_ns(), "drone_ms": reading["time"], "gyro_deg_s": imu["gyro"], "accel_g": imu["accel"], "roll_deg": imu["roll"], "pitch_deg": imu["pitch"]}) + "\n")
+            stop.wait(0.02)
+
+
+def load_imu(path):
+    rows = [json.loads(line) for line in Path(path).read_text().splitlines()]
+    return {k: np.array([r[k] for r in rows]) for k in rows[0]} if rows else {}
+
+
 def subscribe(host, port, stop):
     while not stop.is_set():
         try:
@@ -75,7 +97,7 @@ def subscribe(host, port, stop):
         stop.wait(2)
 
 
-def record(host, out, seconds=None):
+def record(host, out, seconds=None, imu=False):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
     sock.bind(("", 0))
@@ -84,6 +106,9 @@ def record(host, out, seconds=None):
     threading.Thread(target=subscribe, args=(host, sock.getsockname()[1], stop), daemon=True).start()
     out.parent.mkdir(parents=True, exist_ok=True)
     print(f"recording to {out}")
+    if imu:
+        threading.Thread(target=log_imu, args=(out.with_suffix(".imu.jsonl"), stop), daemon=True).start()
+        print(f"and the drone's IMU to {out.with_suffix('.imu.jsonl')}")
     count, last_sequence, lost = 0, None, 0
     window = []
     shown = started = time.monotonic()
@@ -181,9 +206,10 @@ if __name__ == "__main__":
     parser.add_argument("--analyze", help="summarize a .frm recording or a black-box .bin file")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--seconds", type=float, help="stop after this long instead of on Ctrl-C")
+    parser.add_argument("--imu", action="store_true", help="also log the drone's IMU from the running bridge")
     args = parser.parse_args()
     if args.analyze:
         analyze(args.analyze)
     else:
         default = Path(__file__).resolve().parents[2] / "sw" / "recordings" / f"camera-{datetime.now():%Y%m%d-%H%M%S}.frm"
-        record(args.host, args.out or default, args.seconds)
+        record(args.host, args.out or default, args.seconds, args.imu)
