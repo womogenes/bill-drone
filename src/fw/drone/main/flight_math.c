@@ -66,6 +66,8 @@ void flight_attitude(Attitude *state, const Motion *m) {
 #define UPRIGHT_MAX (35.0f * 3.14159265f / 180)
 #define UPRIGHT_GAIN 0.7f
 #define UPRIGHT_RATE (30.0f * 3.14159265f / 180)
+// The upright phase also ends this long after collective reaches integrate_throttle, so a drone that lifts off without rotating is still levelled by the normal loop (s).
+#define UPRIGHT_HOLD 0.4f
 
 // The roll integrator starts from roll_bias so liftoff already counters a known disturbance. The pitch bias is instead faded in over PITCH_BIAS_RAMP after collective reaches integrate_throttle (flight_control): the nose-up push it counters builds up in flight, and applied on the ground it kicks the nose down at liftoff.
 void flight_reset(Controller *state, const Command *c) {
@@ -136,7 +138,7 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     }
     // Resting tilted (no front legs), forward-pointing thrust would shove the drone along the floor and lever it over its nose. Until it first comes level the servos also tilt back by most of the pitch from level: the thrust points nearly up, and acting ahead of the back feet it lifts the nose. That back tilt is far more torque than the drone needs once it is pivoting or airborne, and the servos lag ~0.1 s, so it is withdrawn as the nose comes up (gone at UPRIGHT_RATE): the righting rotation stays slow enough for the pitch damping to stop at level. Meanwhile the setpoint follows the attitude, so the pitch P term and integrator stay out of it and the hand-over is smooth. Only pitch can be vectored this way.
     float tilt = c->pitch - (c->target_pitch + trim);
-    if (state->upright && fabsf(tilt) <= UPRIGHT_DONE) state->upright = 0;
+    if (state->upright && (fabsf(tilt) <= UPRIGHT_DONE || state->airborne > UPRIGHT_HOLD)) state->upright = 0;
     float upright = 0;
     if (state->upright) {
         float rising = tilt > 0 ? -c->gy : c->gy;
