@@ -153,8 +153,8 @@ const modelFields = [
   { key: 'arm', label: 'Arm (m)', min: 0, max: undefined },
 ] as const;
 const biasFields = [
-  { key: 'roll_bias', label: 'Roll bias (rad/s²)', min: -10, max: 10 },
-  { key: 'pitch_bias', label: 'Pitch bias (rad/s²)', min: -10, max: 10 },
+  { key: 'roll_bias', label: 'Roll bias (rad/s²)', min: -20, max: 20 },
+  { key: 'pitch_bias', label: 'Pitch bias (rad/s²)', min: -20, max: 20 },
   { key: 'yaw_bias', label: 'Yaw bias (rad/s²)', min: -10, max: 10 },
   { key: 'left_thrust_scale', label: 'Left thrust scale', min: 0.5, max: 1.5 },
   {
