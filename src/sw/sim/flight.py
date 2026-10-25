@@ -192,8 +192,8 @@ class Attitude:
 
 class Controller:
     def __init__(self, model=MODEL):
-        # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, then the takeoff setpoint state.
-        self.state = array("f", [0.0] * 15)
+        # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, the takeoff setpoint state, then the upright-takeoff flag.
+        self.state = array("f", [0.0] * 16)
         # Motion (6 floats), tuning (TUNING_LAYOUT), then model parameters.
         self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS])
         for key in THRUST_SCALE_KEYS:
@@ -209,6 +209,7 @@ class Controller:
             for key in ("roll_bias", "pitch_bias")
         ]
         struct.pack_into("<2f", self.state, 0, *bias)
+        self.state[15] = 1.0
 
     def configure(self, settings):
         # Setpoints and the enable flag are native-owned on the drone; missing ones are zero.

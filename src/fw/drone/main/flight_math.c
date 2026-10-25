@@ -58,6 +58,11 @@ void flight_attitude(Attitude *state, const Motion *m) {
 #define VELOCITY_TILT (8.0f * 3.14159265f / 180)
 // The integrators see at most this much error, so a large transient (a tilted takeoff, a gust) winds them up only slowly while a steady error of any size is still trimmed out.
 #define INTEGRATE_ERROR (8.0f * 3.14159265f / 180)
+// A takeoff from a tilted rest tilts the servos back by UPRIGHT_GAIN times the pitch from level predicted UPRIGHT_LEAD seconds ahead (the righting rotation is fast and the servos lag), at most UPRIGHT_MAX, until that prediction first comes within UPRIGHT_DONE of level or crosses it. Tuned in the simulator from a 22° rest with a gripping nose contact (sw/sim/sweep.py ground_pitch, feet).
+#define UPRIGHT_DONE (3.0f * 3.14159265f / 180)
+#define UPRIGHT_MAX (35.0f * 3.14159265f / 180)
+#define UPRIGHT_LEAD 0.2f
+#define UPRIGHT_GAIN 0.7f
 
 // Integrators start from the configured bias so liftoff already counters a known disturbance.
 void flight_reset(Controller *state, const Command *c) {
@@ -68,6 +73,7 @@ void flight_reset(Controller *state, const Command *c) {
     state->setpoint_roll = c->roll;
     state->setpoint_pitch = c->pitch;
     state->velocity[0] = state->velocity[1] = 0;
+    state->upright = 1;
 }
 
 static float compensate(Controller *state, int side, float angle, float amount) {
@@ -140,8 +146,13 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     float left_horizontal = (forward - yaw_torque / model->arm) / 2;
     float right_horizontal = (forward + yaw_torque / model->arm) / 2;
 
-    float left_angle = model->left_servo_direction * atan2f(left_horizontal, left_vertical) + c->left_trim;
-    float right_angle = model->right_servo_direction * atan2f(right_horizontal, right_vertical) + c->right_trim;
+    // Resting tilted (no front legs), forward-pointing thrust would shove the drone along the floor and lever it over its nose. Until it comes level the servos also tilt back by most of the pitch from level: the thrust points nearly up, and acting ahead of the CoM it lifts the nose as the drone rises. Only pitch can be vectored this way.
+    float tilt = c->pitch - (c->target_pitch + trim);
+    float ahead = tilt + c->gy * UPRIGHT_LEAD;
+    if (state->upright && (fabsf(ahead) <= UPRIGHT_DONE || ahead * tilt < 0)) state->upright = 0;
+    float upright = state->upright ? clamp(UPRIGHT_GAIN * ahead, -UPRIGHT_MAX, UPRIGHT_MAX) : 0;
+    float left_angle = model->left_servo_direction * (atan2f(left_horizontal, left_vertical) - upright) + c->left_trim;
+    float right_angle = model->right_servo_direction * (atan2f(right_horizontal, right_vertical) - upright) + c->right_trim;
     state->left_angle = clamp(compensate(state, 0, left_angle, c->servo_compensation), model->servo_min, model->servo_max);
     state->right_angle = clamp(compensate(state, 1, right_angle, c->servo_compensation), model->servo_min, model->servo_max);
     state->left = roundf(flight_interpolate(hypotf(left_horizontal, left_vertical) / c->left_thrust_scale, table, count, 1));
