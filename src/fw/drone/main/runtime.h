@@ -52,7 +52,7 @@ typedef struct {
 } LogState;
 
 // One binary flight-log record (controller/log_format.py SAMPLE_FORMAT), and the longest metadata JSON.
-#define RECORD_SIZE 48
+#define RECORD_SIZE 80
 #define META 3072
 
 // Outputs at zero throttle and servos at their offsets; before the radio, so a stop always has outputs to stop.

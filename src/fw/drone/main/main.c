@@ -79,7 +79,7 @@ static size_t metadata(void) {
     char settings[1536];
     if (!settings_json(settings, sizeof(settings))) abort();
     size_t at = snprintf(meta, META,
-                         "{\"type\":\"metadata\",\"version\":1,\"sample_format\":\"<II7h2h2H2h3hHHHH\",\"record_size\":%d,"
+                         "{\"type\":\"metadata\",\"version\":1,\"sample_format\":\"<II7h2h2H2h3hHHHH3hH12h\",\"record_size\":%d,"
                          "\"target_hz\":%d,\"batch_ms\":%d,\"imu_dlpf\":%d,\"pwm_hz\":{\"servo\":%d,\"esc\":%d},"
                          "\"control_core\":1,\"network_core\":0,\"sensor_axis\":[%d,%d,%d],\"sensor_to_body\":[%d,%d,%d],"
                          "\"servo_offsets\":{\"left\":%.9g,\"right\":%.9g},\"settings\":%s,\"thrust_table\":[",

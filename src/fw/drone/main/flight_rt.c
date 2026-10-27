@@ -47,8 +47,12 @@ typedef struct __attribute__((packed)) {
     uint16_t throttle[2];
     int16_t servo[2], target[3];
     uint16_t base, control_us, flags, voltage;
+    // The hover loop (hover.h HoverState), in the yaw-turned level frame (forward, left, up at yaw 0) unless body axes are named: the tag position it last took (mm) and that sighting's age (ms; 65535 none or older); horizontal velocity (mm/s); height above the engage point (mm) and climb rate (mm/s); height target and range target (mm) and place on the circle (arc, centidegrees); gyro heading (centidegrees); trim (mm/s²; body forward, left); the drag model's velocity (mm/s; body forward, left).
+    int16_t tag[3];
+    uint16_t tag_age;
+    int16_t velocity[2], height, climb, height_target, range_target, arc, yaw, trim[2], drag_velocity[2];
 } Record;
-_Static_assert(sizeof(Record) == 48, "Flight record layout");
+_Static_assert(sizeof(Record) == RECORD_SIZE, "Flight record layout");
 
 // Output channels, in this order: left servo, left ESC, right servo, right ESC (index side * 2 + ESC).
 static const int pins[4] = {14, 25, 16, 18};
@@ -173,6 +177,12 @@ static HoverDrag drag_inputs(const State *value, const Command *c) {
     return drag;
 }
 
+// A value in thousandths (mm, mm/s, mm/s²) or hundredths (centidegrees) of its unit, saturated to int16.
+static int16_t scaled(float value, float scale) {
+    float x = value * scale;
+    return x >= INT16_MAX ? INT16_MAX : x <= INT16_MIN ? INT16_MIN : (int16_t)lroundf(x);
+}
+
 static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     log_elapsed = now - log_started;
     uint32_t sequence = log_samples++;
@@ -196,9 +206,24 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->target[2] = lroundf(flown.target_yaw * DEG * 100);
     record->base = lroundf(flown.base);
     record->control_us = duration > 65535 ? 65535 : duration;
-    // Bit 0 armed, bits 1-2 the hover mode, bit 3 hover sees the tag, bit 4 a hover landing touched down.
-    record->flags = state.enabled | hover_mode << 1 | (hover.have_pose && (int64_t)now - hover.seen_us <= 250000) << 3 | hover.landed << 4;
+    // Bit 0 armed, bits 1-2 the hover mode, bit 3 hover sees the tag, bit 4 a hover landing touched down, bit 5 the drag model ran, bit 6 hover flies on the tag (tracking), bit 7 the range and arc targets are set.
+    record->flags = state.enabled | hover_mode << 1 | (hover.have_pose && (int64_t)now - hover.seen_us <= 250000) << 3 | hover.landed << 4 |
+                    hover.dragging << 5 | hover.tracking << 6 | hover.have_setpoint << 7;
     record->voltage = voltage_mv;
+    for (int i = 0; i < 3; i++) record->tag[i] = scaled(hover.position[i], 1000);
+    int64_t age = ((int64_t)now - hover.capture_us) / 1000;
+    record->tag_age = !hover.have_pose ? UINT16_MAX : age < 0 ? 0 : age >= UINT16_MAX ? UINT16_MAX : age;
+    for (int i = 0; i < 2; i++) {
+        record->velocity[i] = scaled(hover.velocity[i], 1000);
+        record->trim[i] = scaled(hover.trim[i], 1000);
+        record->drag_velocity[i] = scaled(hover.drag_velocity[i], 1000);
+    }
+    record->height = scaled(hover.height, 1000);
+    record->climb = scaled(hover.climb_rate, 1000);
+    record->height_target = scaled(hover.target, 1000);
+    record->range_target = scaled(hover.setpoint, 1000);
+    record->arc = scaled(hover.arc * DEG, 100);
+    record->yaw = scaled(hover.yaw * DEG, 100);
 }
 
 static void runtime_task(void *arg) {

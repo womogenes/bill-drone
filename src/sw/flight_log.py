@@ -10,7 +10,40 @@ import struct
 from pathlib import Path
 
 import pandas as pd
-from fw.controller.log_format import HEADER_FORMAT, HEADER_SIZE, SAMPLE_FORMAT, RECORD_SIZE, MAX_BATCH
+from fw.controller.log_format import HEADER_FORMAT, HEADER_SIZE, FORMATS, MAX_BATCH
+
+# The hover loop's state (fw/drone/main/flight_rt.c Record), NaN in recordings from before it was logged. In the yaw-turned level frame (x forward, y left, z up at hover_yaw_deg 0): the tag position the loop last took and that sighting's age, its velocity estimate; then height above the engage point and climb rate, the height, range and arc targets, the gyro heading, the trim and the drag model's velocity in body axes (x forward, y left). Tag and age are NaN without a sighting, range and arc targets before they are set (flags bit 7), and the drag velocity while the drag model is off (flags bit 5).
+HOVER_COLUMNS = [
+    "hover_x_m", "hover_y_m", "hover_z_m", "hover_tag_age_ms", "hover_vx_m_s", "hover_vy_m_s",
+    "hover_height_m", "hover_climb_m_s", "hover_height_target_m", "hover_range_target_m", "hover_arc_deg",
+    "hover_yaw_deg", "hover_trim_x_m_s2", "hover_trim_y_m_s2", "hover_drag_vx_m_s", "hover_drag_vy_m_s",
+]
+NAN = float("nan")
+
+
+def hover_values(flags, values):
+    """
+    The hover columns from a record's raw hover fields, or all NaN for an older record without them.
+    """
+    if not values:
+        return [NAN] * len(HOVER_COLUMNS)
+    x, y, z, age, vx, vy, height, climb, height_target, range_target, arc, yaw, trim_x, trim_y, drag_x, drag_y = values
+    seen, targeted, dragging = age != 65535, flags >> 7 & 1, flags >> 5 & 1
+    return [
+        *(value / 1000 if seen else NAN for value in (x, y, z)),
+        age if seen else NAN,
+        vx / 1000,
+        vy / 1000,
+        height / 1000,
+        climb / 1000,
+        height_target / 1000,
+        range_target / 1000 if targeted else NAN,
+        arc / 100 if targeted else NAN,
+        yaw / 100,
+        trim_x / 1000,
+        trim_y / 1000,
+        *(value / 1000 if dragging else NAN for value in (drag_x, drag_y)),
+    ]
 
 
 def read_flight(path):
@@ -33,12 +66,13 @@ def read_flight(path):
             if (
                 magic != b"FLG1"
                 or session != metadata["session"]
-                or size != RECORD_SIZE
+                or size not in FORMATS
                 or not 1 <= count <= MAX_BATCH
             ):
                 raise ValueError("Invalid flight-log packet")
             payload = file.read(count * size)
             for offset in range(0, len(payload) - size + 1, size):
+                fields = struct.unpack_from(FORMATS[size], payload, offset)
                 (
                     stamp,
                     seq,
@@ -62,7 +96,7 @@ def read_flight(path):
                     control_us,
                     flags,
                     voltage_mv,
-                ) = struct.unpack_from(SAMPLE_FORMAT, payload, offset)
+                ) = fields[:22]
                 accel = [
                     value * sign / 16384 for value, sign in zip((ax, ay, az), signs)
                 ]
@@ -91,6 +125,7 @@ def read_flight(path):
                         control_us,
                         flags,
                         voltage_mv / 1000,
+                        *hover_values(flags, fields[22:]),
                     ]
                 )
             if len(payload) != count * size:
@@ -121,6 +156,7 @@ def read_flight(path):
         "control_us",
         "flags",
         "battery_v",
+        *HOVER_COLUMNS,
     ]
     data = pd.DataFrame(rows, columns=columns).drop_duplicates(["session", "sequence"])
     return data, truncated

@@ -38,8 +38,8 @@ static const uint8_t peer[ESP_NOW_ETH_ALEN] = {0x04, 0xb2, 0x47, 0x54, 0x80, 0x4
 #define TARGETS 9
 // An image that is still unconfirmed this long after boot restarts, so the bootloader rolls back to the previous one.
 #define CONFIRM_US 90000000
-// Most records per FLG1 batch (controller/log_format.py MAX_BATCH) and the batch header size.
-#define LOG_MAX 8
+// Most records per FLG1 batch (controller/log_format.py MAX_BATCH) and the batch header size: a full batch fits two fragments, so one goes out per tick.
+#define LOG_MAX 5
 #define LOG_HEADER 12
 
 // Request states, each with one owner of the request and reply buffers: the receive callback fills IDLE, the update task handles READY and sends REPLIED.

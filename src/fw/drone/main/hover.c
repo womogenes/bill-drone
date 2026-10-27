@@ -148,6 +148,7 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         if (mode != HOVER_HOLD && force < 0.5f * weight) state->landed = true;
     }
     if (state->landed) {
+        state->dragging = false;
         state->force = fmaxf(0, state->force - weight / LANDED_RAMP * dt);
         *output = (HoverOutput){.force = state->force};
         return;
@@ -183,11 +184,13 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     // Rotor drag: the body's horizontal specific force less the thrust vector's forward part (at the tilt the servos have reached) is -drag times the airspeed. It is noisy (vibration, the pitch loop's servo motion), so it pulls the estimate slowly, and the past with it, as the camera's correction does; a steady disagreement is the integrated acceleration's bias, which it learns (a critically damped second-order filter, settling over a few drag_tau). The camera, when it sees the tag, measures the velocity itself: then the disagreement is the drag model's own offset (servo zero, accelerometer bias, mounting) instead, which it teaches below.
     bool seeing = state->have_pose && now_us - state->seen_us <= LOST_US;
     float measured[2] = {0, 0};
-    if (dragging && state->height >= AIRBORNE) {
+    state->dragging = dragging && state->height >= AIRBORNE;
+    if (state->dragging) {
         const float *f = drag->specific;
         float tilt = state->history[recorded(state, now_us - SERVO_DELAY_US)][5] + g->drag_tilt;
         measured[0] = -GRAVITY * (f[0] - f[2] * tanf(tilt)) / g->drag - state->drag_offset[0];
         measured[1] = -GRAVITY * f[1] / g->drag - state->drag_offset[1];
+        memcpy(state->drag_velocity, measured, sizeof(measured));
         float tau = fmaxf(g->drag_tau, dt), pull = 1 - expf(-dt / tau);
         float x = measured[0] * cy - measured[1] * sy, y = measured[0] * sy + measured[1] * cy;
         float error[2] = {x - state->velocity[0], y - state->velocity[1]};

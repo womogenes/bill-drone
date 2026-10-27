@@ -66,6 +66,9 @@ typedef struct {
     float trim[2];
     // Rotor drag: the drag-model velocity's offset learned while the camera measures the velocity (m/s; body forward, left), the integrated acceleration's bias learned from the drag model without it (m/s²; body forward, left), and the place dead-reckoned since the tag was last seen (m; yaw-turned frame), which the hold returns to without it.
     float drag_offset[2], drag_bias[2], place[2];
+    // The drag model's velocity this tick (m/s; body forward, left, after its offset), for the flight log; dragging: it ran this tick (drag on and airborne).
+    float drag_velocity[2];
+    bool dragging;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

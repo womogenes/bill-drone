@@ -46,7 +46,8 @@ class State(ctypes.Structure):
         ("sequence", ctypes.c_uint32), ("capture_us", ctypes.c_int64), ("seen_us", ctypes.c_int64),
         ("position", ctypes.c_float * 3), ("velocity", ctypes.c_float * 3),
     ] + [(name, ctypes.c_float) for name in ("tag_height", "setpoint", "bearing", "arc", "normal")] + [
-        ("trim", ctypes.c_float * 2), ("drag_offset", ctypes.c_float * 2), ("drag_bias", ctypes.c_float * 2), ("place", ctypes.c_float * 2)]
+        ("trim", ctypes.c_float * 2), ("drag_offset", ctypes.c_float * 2), ("drag_bias", ctypes.c_float * 2), ("place", ctypes.c_float * 2),
+        ("drag_velocity", ctypes.c_float * 2), ("dragging", ctypes.c_bool)]
 
 
 class Output(ctypes.Structure):
