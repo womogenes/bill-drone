@@ -91,13 +91,10 @@ static void receive_task(void *arg) {
         uart_event_t event;
         if (xQueueReceive(events, &event, portMAX_DELAY) != pdTRUE) continue;
         if (event.type == UART_FIFO_OVF || event.type == UART_BUFFER_FULL) {
-            // Bytes were lost; whatever packet was in progress fails its CRC and the search resumes.
-            uart_flush_input(PORT);
-            xQueueReset(events);
+            // Bytes were lost; the packet they belonged to fails its CRC and the parser resumes at the next "TAG3". What is already buffered is intact and still read: flushing it here used to throw away the good packets around each loss.
             portENTER_CRITICAL(&lock);
             stats.overflows++;
             portEXIT_CRITICAL(&lock);
-            continue;
         }
         if (event.type == UART_FRAME_ERR || event.type == UART_PARITY_ERR || event.type == UART_BREAK) {
             portENTER_CRITICAL(&lock);
@@ -138,6 +135,8 @@ void camera_start(void) {
     // A 2 KB receive buffer is a dozen packets; the transmit side (GPIO27, to the camera) is unused for now.
     ESP_ERROR_CHECK(uart_driver_install(PORT, 2048, 0, 16, &events, 0));
     ESP_ERROR_CHECK(uart_param_config(PORT, &link));
+    // The driver empties the 128-byte hardware FIFO when it holds 120 bytes, which at 2 Mbaud leaves 8 bytes (40 us) for the interrupt to run before bytes are lost; the camera's packets overflowed it on 10-40% of frames (2026-10-26). At 32 bytes the interrupt has 96 bytes (480 us) of slack, for a few more interrupts per packet.
+    ESP_ERROR_CHECK(uart_set_rx_full_threshold(PORT, 32));
     // A pulse counter shares the RX pin through the GPIO matrix and counts its falling edges, several hundred per packet; it accumulates past its 16-bit limit at each watch point.
     pcnt_unit_config_t unit = {.low_limit = -1, .high_limit = 30000, .flags.accum_count = 1};
     ESP_ERROR_CHECK(pcnt_new_unit(&unit, &rx_counter));

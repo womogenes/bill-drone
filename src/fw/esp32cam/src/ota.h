@@ -37,7 +37,8 @@ inline void serviceOta() {
     static uint32_t lastRetry = 0;
     if (!wifiSsid[0]) return;
     if (WiFi.status() != WL_CONNECTED) {
-        if (millis() - lastRetry >= 10000) {
+        // The core's auto-reconnect retries most losses at once; this catches the rest (a failed association, a missing access point) every 5 s, which leaves an association in progress time to finish.
+        if (millis() - lastRetry >= 5000) {
             lastRetry = millis();
             WiFi.reconnect();
         }

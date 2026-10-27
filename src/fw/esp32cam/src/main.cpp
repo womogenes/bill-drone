@@ -181,6 +181,8 @@ void setup() {
 #endif
     pinMode(config::flashLedPin, OUTPUT);
     digitalWrite(config::flashLedPin, LOW);
+    health::countBoot();
+    health::watchWifi();
     startWifi();
     assert(psramFound());
     heap_caps_malloc_extmem_enable(4096);

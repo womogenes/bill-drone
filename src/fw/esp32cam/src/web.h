@@ -8,6 +8,7 @@
 #include "lwip/tcp.h"
 #include "config.h"
 #include "packet.h"
+#include "health.h"
 
 WebServer web(80);
 Preferences settings;
@@ -267,7 +268,7 @@ void startPreview() {
     });
     web.on("/status", HTTP_GET, []() {
         web.client().setNoDelay(true);
-        char body[1400];
+        char body[2048];
         // The sensor's AEC exposure (lines; the effective exposure is capped at the frame) and real gain.
         sensor_t *sensor = cameraReady ? esp_camera_sensor_get() : nullptr;
         const bool valid = lastPose.valid &&
@@ -292,7 +293,8 @@ void startPreview() {
             sensor ? sensor->get_reg(sensor, 0x380e, 0xffff) : 0,
             unsigned(driverPriority), unsigned(configMAX_PRIORITIES - 1), unsigned(linkSent), unsigned(linkDropped),
             unsigned(linkReceived));
-        const size_t used = strlen(body);
+        size_t used = strlen(body);
+        used += max(0, min(health::status(body + used, sizeof(body) - used - 1), int(sizeof(body) - used - 2)));
         const int more = blackbox::status(body + used, sizeof(body) - used - 1);
         if (more > 0 && used + more + 2 <= sizeof(body))
             strcat(body, "}");
