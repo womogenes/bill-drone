@@ -52,6 +52,7 @@ export type ControlSettings = {
   hover_distance: number;
   hover_approach: number;
   hover_ceiling: number;
+  hover_square: number;
   hover_kside: number;
   hover_cam_pitch: number;
   hover_cam_roll: number;

@@ -297,7 +297,7 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
             }
             rate = clamp(g->distance - state->setpoint, -g->approach * dt, g->approach * dt) / dt;
             state->setpoint += rate * dt;
-            if (state->have_normal) {
+            if (state->have_normal && g->square) {
                 // Smoothly rather than at full speed, as the estimate moves a little with each sighting.
                 float fastest = g->approach / range;
                 arc_rate = clamp(wrap(state->normal - state->arc) / ARC_TAU, -fastest, fastest);

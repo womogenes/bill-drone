@@ -24,6 +24,8 @@ typedef struct {
     float kyaw, yaw_rate;
     // Tag hold (camera only): center 1 faces the tag, holds distance (m) from it and flies at its height, moving the range target there at approach (m/s); center 0 holds the range and bearing where the tag was first seen at the height climb. ceiling is the most height above the engage point centring may ask for, and the height a takeoff climbs toward while looking for the tag (m).
     float center, distance, approach, ceiling;
+    // Centring only: 1 moves the place on the circle toward square in front of the tag as the wall's normal is learned, 0 keeps the place where the tag was first seen (the normal from a small tag at range can be several degrees off).
+    float square;
     // The camera's tilt up from the body's forward axis, and its roll about its own axis (pi when mounted upside down).
     float cam_pitch, cam_roll;
     // Rotor drag: the horizontal specific force the rotors' flapping and drag give per m/s of airspeed (1/s; 0 = off, leaving the tilt dead reckoning of before), the forward thrust tilt the servo commands miss (servo zero and mounting), and how slowly the drag-model velocity corrects the estimate (s). On, the velocity estimate runs on the measured specific force turned level and is pulled toward the drag model's, so without the camera it stays bounded instead of drifting, and the hold flies on it from takeoff.

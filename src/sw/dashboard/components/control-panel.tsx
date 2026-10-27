@@ -126,6 +126,7 @@ const tuningFields = [
   { key: 'hover_distance', label: 'Hover distance from tag (m)', min: 0.3 },
   { key: 'hover_approach', label: 'Hover approach speed (m/s)', min: 0.02 },
   { key: 'hover_ceiling', label: 'Hover ceiling above takeoff (m)', min: 0.2 },
+  { key: 'hover_square', label: 'Hover moves square to tag (1 on, 0 off)', min: 0 },
   { key: 'hover_kside', label: 'Hover pull to square-on (m/s² per m)', min: 0 },
   { key: 'hover_cam_pitch', label: 'Camera tilt up from body (°)', min: -30 },
   { key: 'hover_cam_roll', label: 'Camera roll about its axis (°, 180 upside down)', min: -180 },
