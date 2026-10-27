@@ -239,8 +239,9 @@ static void runtime_task(void *arg) {
         uint64_t now = esp_timer_get_time();
         portENTER_CRITICAL(&lock);
         bool recording = log_active;
+        // now was read before the lock, so a target accepted on the network core in between leaves heartbeat_us just after it; signed, that is a fresh heartbeat rather than an unsigned wrap to a huge age.
         if ((state.enabled || state.throttle[0] || state.throttle[1]) &&
-            now - state.heartbeat_us > HEARTBEAT_MS * 1000ULL) stop_locked(2);
+            (int64_t)(now - state.heartbeat_us) > HEARTBEAT_MS * 1000LL) stop_locked(2);
 
         if (result != ESP_OK) {
             state.online = false;
