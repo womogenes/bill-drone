@@ -30,8 +30,9 @@ static const uint8_t peer[ESP_NOW_ETH_ALEN] = {0x04, 0xb2, 0x47, 0x54, 0x80, 0x4
 #define CHANNELS 7
 #define WINDOW 4
 #define REQUEST (18 * PAYLOAD)
-// Big enough for the settings JSON (about 1 KB) and one schema page.
-#define REPLY (8 * PAYLOAD)
+// Big enough for the longest settings JSON after the 5-byte reply header, and at least 8 fragments for a schema page and the other replies.
+#define REPLY_FRAGMENTS ((5 + SETTINGS_JSON_SIZE + PAYLOAD - 1) / PAYLOAD)
+#define REPLY ((REPLY_FRAGMENTS > 8 ? REPLY_FRAGMENTS : 8) * PAYLOAD)
 #define SECTOR 4096
 #define HASH 8
 // Target floats: base, roll, pitch, yaw rate, two servos, two throttles, then the hover mode (hover.h), which older senders leave out.

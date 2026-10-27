@@ -76,7 +76,7 @@ static void read_load_cell(void) {
 
 // The recording's description (sw/flight_log.py reads it); the radio resends it after each start and whenever it changes.
 static size_t metadata(void) {
-    char settings[1536];
+    char settings[SETTINGS_JSON_SIZE];
     if (!settings_json(settings, sizeof(settings))) abort();
     size_t at = snprintf(meta, META,
                          "{\"type\":\"metadata\",\"version\":1,\"sample_format\":\"<II7h2h2H2h3hHHHH3hH12h\",\"record_size\":%d,"

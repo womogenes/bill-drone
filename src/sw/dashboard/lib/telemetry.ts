@@ -59,6 +59,8 @@ export type ControlSettings = {
   hover_drag: number;
   hover_drag_tilt: number;
   hover_drag_tau: number;
+  hover_trim_tau: number;
+  hover_trim_max: number;
 };
 
 // The drone service's recorder (src/fw/controller/bridge.py).

@@ -1,6 +1,7 @@
 #ifndef RUNTIME_H
 #define RUNTIME_H
 
+#include "settings.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -51,9 +52,9 @@ typedef struct {
     float bias[3], pose_zero[2];
 } LogState;
 
-// One binary flight-log record (controller/log_format.py SAMPLE_FORMAT), and the longest metadata JSON.
+// One binary flight-log record (controller/log_format.py SAMPLE_FORMAT), and the longest metadata JSON: the settings plus 1 KB for the header and thrust table.
 #define RECORD_SIZE 80
-#define META 3072
+#define META (SETTINGS_JSON_SIZE + 1024)
 
 // Outputs at zero throttle and servos at their offsets; before the radio, so a stop always has outputs to stop.
 void flight_runtime_outputs(void);

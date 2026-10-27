@@ -30,6 +30,8 @@ typedef struct {
     float cam_pitch, cam_roll;
     // Rotor drag: the horizontal specific force the rotors' flapping and drag give per m/s of airspeed (1/s; 0 = off, leaving the tilt dead reckoning of before), the forward thrust tilt the servo commands miss (servo zero and mounting), and how slowly the drag-model velocity corrects the estimate (s). On, the velocity estimate runs on the measured specific force turned level and is pulled toward the drag model's, so without the camera it stays bounded instead of drifting, and the hold flies on it from takeoff.
     float drag, drag_tilt, drag_tau;
+    // The body-fixed trim that takes over a steady range or place error: its integration time (s) and its limit (m/s²; 1 is about 6 degrees of tilt).
+    float trim_tau, trim_max;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
     float pitch_trim;
 } HoverGains;

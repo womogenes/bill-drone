@@ -15,6 +15,18 @@ enum {
     SETTINGS
 };
 
+// The longest settings_json text, so its buffers grow with the list: per entry a separator, two quotes and a colon (4), the name, and a %.9g number (at most 15, as -1.17549435e-38), then the closing brace and the terminator.
+enum {
+    SETTINGS_NAMES = sizeof(""
+#define TUNE(name, ...) #name
+#define STATE(name, ...) #name
+#include "settings.def"
+#undef TUNE
+#undef STATE
+                     ) - 1
+};
+#define SETTINGS_JSON_SIZE (SETTINGS_NAMES + 19 * SETTINGS + 2)
+
 // Schema entries per D reply page: about 60 bytes each, well inside the request reply.
 #define SCHEMA_PAGE 12
 

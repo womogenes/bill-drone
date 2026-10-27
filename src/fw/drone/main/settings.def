@@ -57,6 +57,8 @@ TUNE(hover_cam_roll, hover.cam_roll, RAD, -180, 180, 0)
 TUNE(hover_drag, hover.drag, 1, 0, 2, 0)
 TUNE(hover_drag_tilt, hover.drag_tilt, RAD, -10, 10, 1.4)
 TUNE(hover_drag_tau, hover.drag_tau, 1, 0.1, 10, 0.7)
+TUNE(hover_trim_tau, hover.trim_tau, 1, 0.1, 20, 1.5)
+TUNE(hover_trim_max, hover.trim_max, 1, 0, 3, 1)
 STATE(servo_offset_left, -60, 60, -3)
 STATE(servo_offset_right, -60, 60, 0)
 // Gyro bias in rad/s and the stationary pose in degrees, valid only for the sensor frame they were taken in:

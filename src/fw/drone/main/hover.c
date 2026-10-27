@@ -11,9 +11,6 @@
 #define GAP_US 200000
 // Without the tag the dead-reckoned velocity leaks toward zero over this long (s), as the trim never quite matches the push it cancels.
 #define DRIFT_TAU 3.0f
-// The body-fixed trim's integration time (s) and its limit (m/s², about 3 degrees of tilt).
-#define TRIM_TAU 4.0f
-#define MAX_TRIM 0.5f
 // Each sighting with a settled tilt moves the wall-normal estimate this fraction of the way to its own.
 #define NORMAL_WEIGHT 0.1f
 // The place on the circle follows that estimate over this long (s), at most at the approach speed.
@@ -320,9 +317,14 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         forward = ax * cy + ay * sy;
         left = -ax * sy + ay * cy;
         // A steady push fixed to the body (level-reference error, thrust-vector trim) would leave steady range and place errors: their position terms, in body axes, slowly build a trim that takes it over.
+        // It does not grow while the tilt it would add is already at the limit (anti-windup): a trim wound up while the attitude lagged would otherwise carry the drone past its place once it got there.
         float hx = hold * ux - place * uy, hy = hold * uy + place * ux;
-        state->trim[0] = clamp(state->trim[0] + (hx * cy + hy * sy) * dt / TRIM_TAU, -MAX_TRIM, MAX_TRIM);
-        state->trim[1] = clamp(state->trim[1] + (-hx * sy + hy * cy) * dt / TRIM_TAU, -MAX_TRIM, MAX_TRIM);
+        float step[2] = {(hx * cy + hy * sy) * dt / fmaxf(g->trim_tau, dt), (-hx * sy + hy * cy) * dt / fmaxf(g->trim_tau, dt)};
+        float limit = GRAVITY * tanf(g->tilt);
+        float total[2] = {forward + state->trim[0], left + state->trim[1]};
+        for (int i = 0; i < 2; i++) {
+            if (fabsf(total[i]) < limit || step[i] * total[i] < 0) state->trim[i] = clamp(state->trim[i] + step[i], -g->trim_max, g->trim_max);
+        }
         forward += state->trim[0];
         left += state->trim[1];
         // Tag right of the bearing target: turn right, a negative yaw rate.
