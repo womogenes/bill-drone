@@ -3,17 +3,22 @@ Gain sweeps: uv run -m sw.sim.sweep. Runs the drone's C attitude estimator and c
 """
 
 import itertools
+import json
 import math
 import random
 from collections import deque
+from pathlib import Path
 
 from sw.sim.flight import MODEL, MODEL_KEYS, MODEL_OFFSET, Attitude, Controller, throttle, thrust
 
 MASS = 0.940  # kg, the final assembly with the printed deck and IMU bracket (Bill's estimate, 2026-10-24)
 WEIGHT = MASS * 9.81
 DT = 0.01
-# Physics substeps per control step: the foot contacts' friction is stiff, and at 10 a gripping contact chatters (the sampled gyro and accelerometer read tens of deg/s and 2-3 g at rest).
+# Physics substeps per control step: the foot contacts' friction is stiff, and at 10 a gripping contact chatters (the sampled gyro and accelerometer read tens of deg/s and 2-3 g at rest). Clear of the floor the rigid body and actuators need far fewer.
 SUB = 40
+AIR_SUB = 4
+# Height of the lowest foot above the floor (m) above which a control step uses AIR_SUB.
+CLEAR = 0.02
 TAKEOFF_THROTTLE = 720  # dashboard T
 CLIMB = 0.5  # seconds at T after liftoff before collective drops to hover
 # Landing-leg contact points relative to the CoM, body frame (m): CAD legs touch at x ±55 mm, y ±78 mm, 87 mm below the tube; the CoM is 17.2 mm above it.
@@ -63,9 +68,9 @@ def level_turn(vector, roll, pitch):
     return [x * math.cos(pitch) + z * math.sin(pitch), y, -x * math.sin(pitch) + z * math.cos(pitch)]
 
 
-def sighting(camera, position, angles, cam_pitch, rng):
+def sighting(camera, position, angles, cam_pitch, rng, cam_roll=0.0):
     """
-    The tag centre in the camera frame (m; right, down, forward), or None when it is outside the field of view.
+    The tag centre in the camera frame (m; right, down, forward) as a camera rolled by cam_roll about its axis reports it (hover.c level turns it back), or None when it is outside the field of view.
     """
     offset = [t - p for t, p in zip(camera["tag"], position)]
     x, y, z = apply(rotation(*angles), offset, transpose=True)
@@ -75,14 +80,17 @@ def sighting(camera, position, angles, cam_pitch, rng):
     if ahead <= 0 or abs(math.atan2(right, ahead)) > math.radians(across) or not -math.radians(above) <= math.atan2(down, ahead) <= math.radians(below):
         return None
     spread = camera["noise"] * math.sqrt(x * x + y * y + z * z)
-    return [right + rng.gauss(0, spread), down + rng.gauss(0, spread), ahead + rng.gauss(0, spread)]
+    right, down, ahead = right + rng.gauss(0, spread), down + rng.gauss(0, spread), ahead + rng.gauss(0, spread)
+    cc, sc = math.cos(cam_roll), math.sin(cam_roll)
+    return [cc * right + sc * down, -sc * right + cc * down, ahead]
 
 
 def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     """
     Simulate one flight. A log list receives (time, position, roll/pitch/yaw, estimated roll/pitch, servo tilts, motor thrusts, pitch target, tag seen) every control step.
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
-    IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "vibration" (g RMS, white; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands.
+    With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py), sw/sim/airframe.py supplies the motors, servos and angular accelerations instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
+    IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "vibration" (g RMS, white; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands.
     """
     rng = random.Random(seed)
     accel_rng = random.Random(seed + 1000)
@@ -108,6 +116,9 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     # Pitch angular acceleration per rad/s of pitch rate, per radian of pitch beyond pitch_trim and per m/s of forward airspeed (rad/s² each; positive nose-down, so a negative velocity_moment is the rotors' flapping back in forward flight), and a random one (rad/s² RMS, Ornstein-Uhlenbeck with time constant gust_tau).
     rate_moment, angle_moment, velocity_moment = plant.get("rate_moment", 0.0), plant.get("angle_moment", 0.0), plant.get("velocity_moment", 0.0)
     gust_size, gust_tau, gust = plant.get("gust", 0.0), plant.get("gust_tau", 0.5), 0.0
+    # Roll angular acceleration not in the model (rad/s², positive raising the left side): a constant one (thrust imbalance the roll bias cancels) and a random one like the pitch gust.
+    roll_disturbance, roll_gust_size, roll_gust = plant.get("roll_disturbance", 0.0), plant.get("roll_gust", 0.0), 0.0
+    roll_rng = random.Random(seed + 5000)
     trim = math.radians(settings["pitch_trim"])
     rotor_drag, wind_size, wind_tau, wind = plant.get("rotor_drag", 0.0), plant.get("wind", 0.0), plant.get("wind_tau", 2.0), [0.0, 0.0, 0.0]
     accel_bias = list(plant.get("accel_bias", (0.0, 0.0))) + [0.0]
@@ -135,7 +146,6 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     servo_queue = deque([(0.0, 0.0)] * max(1, round(plant["servo_delay"] / DT)))
     # Half of each servo's play (rad): the horn moves this far either way before the motor mount follows.
     slack = [math.radians(plant.get("left_backlash", plant["backlash"])), math.radians(plant.get("right_backlash", plant["backlash"]))]
-    slew = math.radians(plant["servo_slew"]) * DT / SUB
     scales = [k * (1 - plant["imbalance"] / 2), k * (1 + plant["imbalance"] / 2)]
     worst, peak_height, late, trace = 0.0, 0.0, [], []
     # The estimator starts from the true gravity direction, like the drone after its stationary calibration.
@@ -154,6 +164,12 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         settings["base_throttle"] = 0
         controller.configure(settings | {"enabled": 1})
     commanded = (0.0, 0.0, 0.0, 0.0)
+    airframe = None
+    if plant.get("airframe"):
+        from sw.sim.airframe import Airframe
+        airframe = Airframe(plant["airframe"])
+        airframe.reset(0 if liftoff else hover_throttle)
+        motor = list(airframe.motor)
     places, touched = [], None
     if hover:
         from sw.sim.hover import HOLD, Hover, Pose
@@ -163,7 +179,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         outer = Hover(settings)
         camera = CAMERA | plant.get("camera", {})
         # Frames waiting out their latency (ready time, capture time, sighting or None), the newest delivered one, and the next capture time.
-        frames, newest, capture, sequence = deque(), None, 0.0, 0
+        frames, newest, capture, sequence, missing_frames = deque(), None, 0.0, 0, 0
         seen, ranges = [], []
     for step in range(int(seconds / DT)):
         now = step * DT
@@ -190,7 +206,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 # A study of the horizontal loop alone: the true vertical specific force, so the IMU-only height hold cannot wander off (the measured one, projected with the estimated attitude, drifts by centimetres per second).
                 vertical = apply(rotation(*angles), specific)[2]
             while capture <= now:
-                frames.append((capture + camera["latency"], capture, sighting(camera, position, angles, math.radians(settings.get("hover_cam_pitch", 0.0)), camera_rng)))
+                # Detector misses come in bursts (blur, glare): a frame starts one with probability camera["miss"], and each burst lasts camera["burst"] frames on average.
+                missing = missing_frames > 0 or camera_rng.random() < camera.get("miss", 0.0)
+                missing_frames = missing_frames - 1 if missing_frames > 0 else (round(camera_rng.expovariate(1 / camera.get("burst", 1))) if missing else 0)
+                frames.append((capture + camera["latency"], capture, None if missing else sighting(camera, position, angles, math.radians(settings.get("hover_cam_pitch", 0.0)), camera_rng, math.radians(settings.get("hover_cam_roll", 0.0)))))
                 capture += 1 / camera["fps"]
             while frames and frames[0][0] <= now:
                 newest = frames.popleft()
@@ -231,12 +250,25 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         if gust_size:
             keep = math.exp(-DT / gust_tau)
             gust = keep * gust + gust_size * math.sqrt(1 - keep * keep) * gust_rng.gauss(0, 1)
+        if roll_gust_size:
+            keep = math.exp(-DT / gust_tau)
+            roll_gust = keep * roll_gust + roll_gust_size * math.sqrt(1 - keep * keep) * roll_rng.gauss(0, 1)
         if wind_size:
             keep = math.exp(-DT / wind_tau)
             wind = [keep * w + wind_size * math.sqrt(1 - keep * keep) * wind_rng.gauss(0, 1) for w in wind[:2]] + [0.0]
-        for _ in range(SUB):
-            h = DT / SUB
+        if airframe:
+            body_velocity = apply(rotation(*angles), velocity, transpose=True)
+            tilt_commands = [math.degrees(left_angle - servo_zero[0]) * MODEL["left_servo_direction"], math.degrees(right_angle - servo_zero[1]) * MODEL["right_servo_direction"]]
+            accel, motor, servo = airframe.step((left, right), tilt_commands, 1.0, rate, angles[:2], body_velocity[:2], airborne=lifted is not None or not liftoff)
+            motor, servo = list(motor), list(servo)
+        clearance = position[2] + min(apply(rotation(*angles), foot)[2] for foot in feet)
+        substeps = AIR_SUB if clearance > CLEAR + math.hypot(*velocity) * DT else SUB
+        h = DT / substeps
+        slew = math.radians(plant["servo_slew"]) * h
+        for _ in range(substeps):
             for side in range(2):
+                if airframe:
+                    break
                 force = thrust(target_throttle[side]) * scales[side]
                 motor[side] += (force - motor[side]) * (1 - math.exp(-h / plant["motor_tau"]))
                 horn = output[side] + max(-slew, min(slew, (target_servo[side] - output[side]) * (1 - math.exp(-h / plant["servo_tau"]))))
@@ -250,10 +282,14 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
             # The extra pitch terms act only in flight: on the ground the feet carry them.
             extra = disturbance + gust + (rate_moment * rate[1] + angle_moment * (angles[1] - trim) + velocity_moment * apply(rotation(*angles), velocity, transpose=True)[0] if lifted is not None or not liftoff else 0.0)
             torque = [
-                arm * (vertical[0] - vertical[1]),
+                arm * (vertical[0] - vertical[1]) + ((roll_disturbance + roll_gust) * inertia[0] if lifted is not None or not liftoff else 0.0),
                 height * (forward[0] + forward[1]) + plant["com_x"] * (vertical[0] + vertical[1]) + extra * inertia[1],
                 arm * (forward[1] - forward[0]) + 0.015 * (vertical[1] - vertical[0]),
             ]
+            if airframe:
+                # The airframe's accelerations already hold the thrust torques; the random and constant extras still add.
+                airborne = lifted is not None or not liftoff
+                torque = [accel[0] * inertia[0] + ((roll_disturbance + roll_gust) * inertia[0] if airborne else 0.0), accel[1] * inertia[1] + (gust + disturbance if airborne else 0.0) * inertia[1], accel[2] * inertia[2]]
             matrix = rotation(*angles)
             speed = math.sqrt(sum(v * v for v in velocity))
             # Every force except gravity, in the world frame: thrust, drag, then each foot below the floor.
@@ -261,7 +297,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
             if rotor_drag:
                 # Blade flapping and induced drag: a force against the airspeed in the rotor plane, proportional to it.
                 air = apply(matrix, [v - w for v, w in zip(velocity, wind)], transpose=True)
-                push = [p + d for p, d in zip(push, apply(matrix, [-mass * rotor_drag * air[0], -mass * rotor_drag * air[1], 0.0]))]
+                drag_x, drag_y = rotor_drag if isinstance(rotor_drag, (list, tuple)) else (rotor_drag, rotor_drag)
+                push = [p + d for p, d in zip(push, apply(matrix, [-mass * drag_x * air[0], -mass * drag_y * air[1], 0.0]))]
             spin = apply(matrix, rate)
             touching = False
             for foot in feet:
@@ -340,6 +377,10 @@ FITTED = {"thrust_k": 1.03, "mass": 0.86, "height": 1.42 * 0.03 / MODEL["pivot_h
           "motor_delay": 0.02, "motor_tau": 0.05, "servo_delay": 0.07, "servo_tau": 0.01, "backlash": 0.3, "left_backlash": 0.5, "right_backlash": 0.3,
           "deadband": 0.1, "servo_slew": 340, "imbalance": 0.03, "com_x": 0.0, "disturbance": -10.6, "angle_moment": -3.9, "velocity_moment": -4.0,
           "gust": 5.0, "gust_tau": 0.7, "gyro_noise": 2.0, "camera": {"tag": (2.3, 0.0, 0.3)}, "rotor_drag": 0.5, "vibration": (0.1, 0.1, 0.05)}
+# Identified from the 34 hover flights of 2026-10-27 (both rubber bands on) by closed-loop multi-step prediction with the firmware controller in the loop (sw/sim/identify_airframe.py, parameters in models/airframe_2026-10-27.json). Held out by flight it predicts roll to 1.3° and pitch to 3.7° a second ahead (yaw rate R² 0.55) from the logged references alone. Rotor drag is from the camera velocity over 0.25-1 s against thrust through the logged attitude and modelled tilts (gain within 10 % of 1). The random disturbance is what of the one-step residual lies below 2 Hz (the rest, mostly 10-50 Hz in pitch, does not move the attitude): 0.89 rad/s² RMS in roll and 0.49 in pitch at 0.5 s.
+AIRFRAME = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-27.json").read_text())
+IDENTIFIED = FITTED | {"airframe": AIRFRAME, "mass": 0.94, "thrust_k": 1.0, "height": 1.0, "disturbance": 0.0, "angle_moment": 0.0, "velocity_moment": 0.0, "gust": 0.49, "gust_tau": 0.5, "roll_gust": 0.89,
+                       "camera": {"tag": (2.0, 0.1, 0.45), "miss": 0.006, "burst": 6}, "rotor_drag": (0.6, 0.27)}
 # Plausible mismatch: pivot height ±40 %, inertia ×0.7–1.5, servo delay 40–70 ms (2026-10-21 bench: motion starts 50–60 ms after the command), motor delay 20–40 ms.
 PLANTS = [NOMINAL | {"height": h, "roll_inertia": i, "pitch_inertia": i, "yaw_inertia": i, "servo_delay": sd, "motor_delay": md}
           for h, i, sd, md in itertools.product((0.6, 1.0, 1.4), (0.7, 1.5), (0.04, 0.07), (0.02, 0.04))]

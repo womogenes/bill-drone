@@ -96,3 +96,28 @@ The sweep plant with the 06:xx values and the flown gains (pitch 10/10/5, `pitch
 ## Centre of mass of the final assembly (2026-10-24)
 
 Four single-point hangs (front, back, front-left and front-right foot-tie points from the CAD, at 87 mm below the tube; front tie 58.7 mm forward, back 54.7 mm back, corners 62 mm out), with the IMU's body-frame accelerometer averaged over 3 s of stillness and corrected by the stored level reference (IMU mounted 4.5° pitch, 1.3° roll on the new deck). All four lines pass within 1.6 mm of the solution: the CoM is 2.1 mm behind the tube (1.4–2.4 mm leaving one hang out), 0.7 mm right of centre and 13.8 mm above the tube, so the tilt pivots are 23.4 mm above it. Mass is about 940 g. A CoM 2.1 mm behind the pivots alone pushes about 11 rad/s² nose-up; the deck's perfboard sits mostly behind the tube. `sweep.py` now uses 940 g and the 23.4 mm pivot height; its `com_x` still stands for the net fitted push, not this geometry alone.
+
+## Airframe identified from the 2026-10-27 hover flights (both rubber bands on)
+
+`identify_airframe.py` fits `airframe.py` to the 34 flights (215 s airborne) by closed-loop multi-step prediction: the firmware controller, replayed from arming on each log (it reproduces the logged throttles to rounding and servo commands to 0.04°), flies the model from every start on the logged references alone, and the fit is least squares on rates and attitude 50 ms to 2 s ahead. Fitting to the logged commands instead (open loop), or one step ahead, credits the controller's reactions to the airframe and gave unphysical stiffness and damping and a near-zero yaw effectiveness that the impulse response contradicts.
+
+What it found, in parts that should outlast a geometry change:
+
+- Motors: the left motor responds after about 60 ms with almost no lag; the right one after about 115 ms with a 135 ms lag, and needs 6 % more table thrust in hover. Two different parameterisations both demanded the asymmetry, and the throttle split agrees, so it is probably the right motor, ESC or prop, but closed-loop data cannot fully separate it from the throttles' anti-correlation; a bench step of each motor would settle it. Thrust barely depends on battery voltage beyond what the runtime's compensation already does (voltage power ~0).
+- Servos: about 28 ms dead time, then a second-order loop at about 37 rad/s with damping 0.8 and a slew limit near 340°/s; play 0.5° left and 0.15° right.
+- Rubber bands: a forward preload on each motor assembly of about 2000°/s² (no measurable spring rate). Together with the play and the servo compensation they reproduce the drone's 3.5 Hz pitch wobble.
+- Motor assemblies: their inertia about the servo axis is about 0.2 of the body's pitch inertia, so swinging the motors pitches the body the other way first. This is why the pitch response to a setpoint step starts the wrong way.
+- Effectiveness against the controller's model (pivot_height 0.02-0.03, CAD inertias): roll 1.34, pitch thrust tilt 0.65, yaw 0.56. Roll also sees rate damping of about -18/s and an attitude stiffness of about -13/s² that no single physical term explains.
+- Translation: thrust through the logged attitude and modelled tilts explains 70-80 % of the camera's velocity change over 0.25-1 s with a gain within 10 % of 1; rotor drag about 0.6/s forward and 0.27/s sideways.
+- Disturbance: below 2 Hz the one-step residual is equivalent to 0.89 rad/s² RMS in roll and 0.49 in pitch (0.5 s correlation). Most of pitch's one-step residual (11 rad/s² RMS) is at 10-50 Hz and does not move the attitude; earlier sims' 2-5 rad/s² gusts stood in for a wrong plant.
+
+Held out by flight (5 groups, each predicted by a fit to the others), with the controller in the loop on the logged references:
+
+| Ahead | Roll rate R² | Pitch rate R² | Yaw rate R² | Roll attitude error | Pitch attitude error | Pitch change R² |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 ms | 0.51 | 0.66 | 0.68 | 0.70° | 1.01° | 0.83 |
+| 250 ms | 0.45 | 0.52 | 0.54 | 1.22° | 2.58° | 0.63 |
+| 500 ms | 0.34 | 0.46 | 0.57 | 1.41° | 3.94° | 0.71 |
+| 1 s | 0.32 | 0.19 | 0.55 | 1.34° | 3.71° | 0.80 |
+
+A collective-thrust roll term (roll_lift) improves roll to 0.9° a second ahead, but it needs a -129 rad/s² push to cancel it at hover, has no physical reading, and in the hover simulation rolls the drone off the tag at liftoff; it is left out. With the controller replaced by the logged commands (open loop) the same model's pitch error grows to 15° in a second: pitch is only predictable with the controller in the loop.

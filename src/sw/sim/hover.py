@@ -21,7 +21,7 @@ library = ctypes.CDLL(str(LIBRARY))
 
 HISTORY = 24
 HOLD, LAND, LAND_FAST = 1, 2, 3
-GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "pitch_trim")
+GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "pitch_trim")
 # Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_cam_roll, hover_drag_tilt) and the attitude controller's pitch_trim.
 ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "cam_roll", "drag_tilt", "pitch_trim")
 
@@ -67,8 +67,8 @@ def gains(settings):
     """
     values = {}
     for key in GAIN_KEYS:
-        # hover_square defaults on, as in settings.def, for settings saved before it existed.
-        value = settings.get("pitch_trim" if key == "pitch_trim" else "hover_" + key, 1.0 if key == "square" else 0.0)
+        # Settings saved before an entry existed take its settings.def default (hover_square on, the trim's former constants), the rest zero.
+        value = settings.get("pitch_trim" if key == "pitch_trim" else "hover_" + key, {"square": 1.0, "trim_tau": 4.0, "trim_max": 0.5}.get(key, 0.0))
         values[key] = math.radians(value) if key in ANGULAR_KEYS else value
     return Gains(**values)
 
