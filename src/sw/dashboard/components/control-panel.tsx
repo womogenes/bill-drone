@@ -123,7 +123,7 @@ const tuningFields = [
   { key: 'thrust_voltage', label: 'Thrust reference (V, 0 off)', min: 0 },
   { key: 'yaw_i', label: 'Yaw I', min: 0 },
   { key: 'hover_center', label: 'Hover centres on tag (1 on, 0 off)', min: 0 },
-  { key: 'hover_distance', label: 'Hover distance from tag (m)', min: 0.3 },
+  { key: 'hover_distance', label: 'Hover distance from tag (m, 0 = takeoff range)', min: 0 },
   { key: 'hover_approach', label: 'Hover approach speed (m/s)', min: 0.02 },
   { key: 'hover_ceiling', label: 'Hover ceiling above takeoff (m)', min: 0.2 },
   { key: 'hover_square', label: 'Hover moves square to tag (1 on, 0 off)', min: 0 },

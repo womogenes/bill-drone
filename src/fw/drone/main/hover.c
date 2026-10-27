@@ -210,7 +210,11 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     // IMU: integrate vertical acceleration; without the camera, leak the climb rate.
     state->climb_rate += (vertical_g - state->bias) * GRAVITY * dt;
     if (pose && (!state->have_pose || pose->sequence != state->sequence)) {
-        if (!seeing) state->have_pose = state->have_setpoint = false;
+        // Reacquiring the tag in the air keeps the targets: they are relative to the tag, so a drift while it was lost is flown back rather than adopted. On the ground they restart from the new sighting.
+        if (!seeing) {
+            state->have_pose = false;
+            if (state->height < AIRBORNE) state->have_setpoint = false;
+        }
         take(state, g, pose);
         state->seen_us = now_us;
         seeing = state->found = true;
@@ -295,7 +299,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
                 state->arc = around;
                 return;
             }
-            rate = clamp(g->distance - state->setpoint, -g->approach * dt, g->approach * dt) / dt;
+            // distance 0 keeps the range from takeoff.
+            rate = g->distance > 0 ? clamp(g->distance - state->setpoint, -g->approach * dt, g->approach * dt) / dt : 0;
             state->setpoint += rate * dt;
             if (state->have_normal && g->square) {
                 // Smoothly rather than at full speed, as the estimate moves a little with each sighting.

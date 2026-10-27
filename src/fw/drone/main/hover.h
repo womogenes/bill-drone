@@ -22,7 +22,7 @@ typedef struct {
     float climb, climb_rate, land_rate;
     // Heading loop (camera only): yaw rate per radian of bearing error, and the fastest yaw rate it may command.
     float kyaw, yaw_rate;
-    // Tag hold (camera only): center 1 faces the tag, holds distance (m) from it and flies at its height, moving the range target there at approach (m/s); center 0 holds the range and bearing where the tag was first seen at the height climb. ceiling is the most height above the engage point centring may ask for, and the height a takeoff climbs toward while looking for the tag (m).
+    // Tag hold (camera only): center 1 faces the tag, holds distance (m) from it (0: the range at takeoff) and flies at its height, moving the range target there at approach (m/s); center 0 holds the range and bearing where the tag was first seen at the height climb. ceiling is the most height above the engage point centring may ask for, and the height a takeoff climbs toward while looking for the tag (m).
     float center, distance, approach, ceiling;
     // Centring only: 1 moves the place on the circle toward square in front of the tag as the wall's normal is learned, 0 keeps the place where the tag was first seen (the normal from a small tag at range can be several degrees off).
     float square;
