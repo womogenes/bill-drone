@@ -40,10 +40,17 @@ volatile uint32_t linkSent = 0, linkDropped = 0, linkReceived = 0;
 
 void noPrint(char) {}
 
+// DEBUG_CONSOLE (the debug build environment): UART0 is a 115200 console with ESP logs and a status line instead of the drone link; no packets are sent.
 void startLink() {
+#ifndef DEBUG_CONSOLE
     esp_rom_install_channel_putc(1, noPrint);
+#endif
     uart_config_t link = {};
+#ifdef DEBUG_CONSOLE
+    link.baud_rate = 115200;
+#else
     link.baud_rate = int(config::linkBaud);
+#endif
     link.data_bits = UART_DATA_8_BITS;
     link.parity = UART_PARITY_DISABLE;
     link.stop_bits = UART_STOP_BITS_1;
@@ -56,7 +63,17 @@ void startLink() {
 
 // Wi-Fi, OTA and the control server share core 0 with the radio and the camera driver's copy task. Core 1 only captures and detects.
 void serviceTask(void *) {
+#ifdef DEBUG_CONSOLE
+    uint32_t printed = 0;
+#endif
     while (true) {
+#ifdef DEBUG_CONSOLE
+        if (millis() - printed >= 2000) {
+            printed = millis();
+            printf("status: wifi %d ip %s rssi %d camera %d linkSent %u stalls %u heap %u psram %u\n", int(WiFi.status()), WiFi.localIP().toString().c_str(),
+                   int(WiFi.RSSI()), int(cameraReady), unsigned(linkSent), unsigned(stalls), unsigned(ESP.getFreeHeap()), unsigned(ESP.getFreePsram()));
+        }
+#endif
         serviceOta();
         web.handleClient();
         uint8_t received[64];
@@ -153,9 +170,15 @@ void setup() {
     memcpy(lastCrumbs, crumbs, sizeof(crumbs));
     memset(crumbs, 0, sizeof(crumbs));
     // UART0 is the drone link from here on, so nothing else may write to it: log output goes to the /log ring and the ROM's printf to nowhere. Only the boot ROM and bootloader print, at 115200 before this, and the drone rejects that.
+#ifdef DEBUG_CONSOLE
+    esp_log_level_set("*", ESP_LOG_INFO);
+    startLink();
+    printf("debug console: booted, reset reason %d\n", int(esp_reset_reason()));
+#else
     esp_log_set_vprintf(logToRing);
     esp_log_level_set("*", ESP_LOG_WARN);
     startLink();
+#endif
     pinMode(config::flashLedPin, OUTPUT);
     digitalWrite(config::flashLedPin, LOW);
     startWifi();
@@ -244,7 +267,9 @@ void publish(PosePacket &packet) {
         ++linkDropped;
         return;
     }
+#ifndef DEBUG_CONSOLE
     uart_write_bytes(linkPort, &packet, sizeof(packet));
+#endif
     ++linkSent;
     while (uint32_t(esp_timer_get_time()) - now < config::syncPulseUs) {
     }

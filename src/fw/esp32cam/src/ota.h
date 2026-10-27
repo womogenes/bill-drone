@@ -19,6 +19,8 @@ inline void startWifi() {
     WiFi.setAutoReconnect(true);
     WiFi.setSleep(false);
     WiFi.begin(wifiSsid, wifiPassword);
+    // Full transmit power (about 20 dBm) draws current bursts that browned this board out on its 3.3 V regulator (2026-10-26, "Brownout detector was triggered" at Wi-Fi start); 8.5 dBm keeps the bursts smaller and still links at about -46 dBm received indoors.
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
     ArduinoOTA.setHostname("bill-esp32cam");
     // No OTA password, as requested. Wi-Fi credentials are separate.
     ArduinoOTA.setTimeout(10000);
