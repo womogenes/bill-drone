@@ -24,8 +24,8 @@ typedef struct {
     float kyaw, yaw_rate;
     // Tag hold (camera only): center 1 faces the tag, holds distance (m) from it and flies at its height, moving the range target there at approach (m/s); center 0 holds the range and bearing where the tag was first seen at the height climb. ceiling is the most height above the engage point centring may ask for, and the height a takeoff climbs toward while looking for the tag (m).
     float center, distance, approach, ceiling;
-    // The camera's tilt up from the body's forward axis.
-    float cam_pitch;
+    // The camera's tilt up from the body's forward axis, and its roll about its own axis (pi when mounted upside down).
+    float cam_pitch, cam_roll;
     // Rotor drag: the horizontal specific force the rotors' flapping and drag give per m/s of airspeed (1/s; 0 = off, leaving the tilt dead reckoning of before), the forward thrust tilt the servo commands miss (servo zero and mounting), and how slowly the drag-model velocity corrects the estimate (s). On, the velocity estimate runs on the measured specific force turned level and is pulled toward the drag model's, so without the camera it stays bounded instead of drifting, and the hold flies on it from takeoff.
     float drag, drag_tilt, drag_tau;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.

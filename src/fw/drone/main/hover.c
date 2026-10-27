@@ -81,9 +81,10 @@ static int recorded(const HoverState *state, int64_t time_us) {
 static void level(const HoverState *state, const HoverGains *g, int64_t capture_us, const float *in, float *out) {
     const float *then = state->history[recorded(state, capture_us)];
     float roll = then[0], pitch = then[1], yaw = then[2];
-    // Camera (right, down, forward), tilted up by cam_pitch, to body (forward, left, up).
+    // Camera (right, down, forward), rolled by cam_roll and tilted up by cam_pitch, to body (forward, left, up).
+    float cc = cosf(g->cam_roll), sc = sinf(g->cam_roll);
+    float right = cc * in[0] - sc * in[1], down = sc * in[0] + cc * in[1], ahead = in[2];
     float ca = cosf(g->cam_pitch), sa = sinf(g->cam_pitch);
-    float right = in[0], down = in[1], ahead = in[2];
     float x = down * sa + ahead * ca, y = -right, z = ahead * sa - down * ca;
     // Level the body: roll about forward (right side down), then pitch about left (nose down).
     float cr = cosf(roll), sr = sinf(roll), cp = cosf(pitch), sp = sinf(pitch);

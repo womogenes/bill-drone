@@ -21,9 +21,9 @@ library = ctypes.CDLL(str(LIBRARY))
 
 HISTORY = 24
 HOLD, LAND, LAND_FAST = 1, 2, 3
-GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "cam_pitch", "drag", "drag_tilt", "drag_tau", "pitch_trim")
-# Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_drag_tilt) and the attitude controller's pitch_trim.
-ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "drag_tilt", "pitch_trim")
+GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "pitch_trim")
+# Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_cam_roll, hover_drag_tilt) and the attitude controller's pitch_trim.
+ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "cam_roll", "drag_tilt", "pitch_trim")
 
 
 class Gains(ctypes.Structure):
