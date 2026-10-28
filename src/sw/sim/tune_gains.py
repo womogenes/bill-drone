@@ -2,7 +2,7 @@
 Robust gain tuning on the identified airframe: uv run --with cma -m sw.sim.tune_gains <recording> [--airframe sw/sim/models/airframe_<day>.json] [--range 8] [--generations 50] [--workers N] [--seed 1] [--out result.json]
 
 CMA-ES over the attitude and camera-hover gains, starting from the recording's settings (which also supply everything not tuned), each gain searched on a log scale from its flown value divided by --range to times it. A candidate flies the camera hover (sweep.run with hover=True) for 10 s on every variant below with three noise seeds, and scores as its worst run: the camera position's spread over the last 7 s plus a share of the pitch error, with a run that loses the tag counting as up to 1 m and a crash as more than any flight.
-The variants are what the identification cannot pin down plus a 6 dB gain margin: the identified sim needs its pitch effectiveness ×1.5–2 before the 2026-10-27 pitch_p 30 / pitch_damping 12 hop (06-42-15) diverges as it did, while the p20/d8 and p30/d8 hops stay up, so tuning against the nominal model alone would go past what flies.
+The variants are what the identification cannot pin down, CoM shifts (COM_PUSH) the integrators must absorb, plus a 6 dB gain margin: the identified sim needs its pitch effectiveness ×1.5–2 before the 2026-10-27 pitch_p 30 / pitch_damping 12 hop (06-42-15) diverges as it did, while the p20/d8 and p30/d8 hops stay up, so tuning against the nominal model alone would go past what flies.
 """
 
 import argparse
@@ -19,6 +19,8 @@ from sw.sim.sweep import IDENTIFIED, run
 KEYS = ("pitch_p", "pitch_damping", "pitch_i", "roll_p", "roll_damping", "roll_i", "hover_kp", "hover_kd", "hover_kside", "hover_kyaw")
 SEEDS = (0, 1, 2)
 MODELS = Path(__file__).with_name("models")
+# The steady torque of a CoM shift the gains must absorb without retrimming (rad/s²): on 2026-10-28 moving the battery changed the trim biases learn_bias found by up to ~5 in pitch and roll.
+COM_PUSH = 5.0
 
 
 def variants(a):
@@ -33,6 +35,8 @@ def variants(a):
         "motors alike": {"right_motor_delay": a["motor_delay"], "right_motor_tau": a["motor_tau"]},
         "no bands": {"left_band": 0.0, "right_band": 0.0},
         "push +1 sd": {"roll_push": a["roll_push"] + a.get("roll_push_sd", 2.6), "pitch_push": a["pitch_push"] + a.get("pitch_push_sd", 1.4)},
+        # A moved battery: a steady torque the trim biases do not know about.
+        **{f"CoM {name} {sign:+}": {f"{name}_push": a[f"{name}_push"] + sign * COM_PUSH} for name in ("pitch", "roll") for sign in (-1, 1)},
     }
 
 

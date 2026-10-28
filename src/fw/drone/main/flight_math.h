@@ -42,6 +42,8 @@ typedef struct {
     // Hover and landing (hover.h), and whether they use the camera (0 = IMU only). Also runtime-only.
     HoverGains hover;
     float hover_camera;
+    // Self-trim (flight_rt.c trim): the fraction of the way roll_bias and pitch_bias move toward a hop's steady command at each stop (0 = off). Runtime-only.
+    float auto_trim;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.

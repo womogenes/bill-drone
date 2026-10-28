@@ -112,6 +112,12 @@ static float battery_v;
 static int hover_mode;
 static HoverState hover;
 static Command flown;
+// Self-trim: through a hop, the attitude controller's total roll and pitch command (rad/s²) summed over steady samples (from TRIM_SETTLE s after collective reached integrate_throttle, body rates under TRIM_RATE, no test pattern), as sw/learn_bias.py does from the log. At the stop, with at least TRIM_SAMPLES of them, each bias moves auto_trim of the way to the mean, by at most TRIM_STEP; radio.c stores it once disarmed. So a moved battery costs one hop instead of a retune.
+#define TRIM_SETTLE 1.0f
+#define TRIM_RATE (15 / DEG)
+#define TRIM_SAMPLES 100
+#define TRIM_STEP 3.0f
+static struct { float sum[2], bias[2]; int count; bool ready; } trim;
 // The identification test pattern (P request, flight_runtime_pattern; kept in RAM only, so a restart clears it): piecewise-constant steps added to up to EXCITE_CHANNELS channels, played while collective is up from `after` seconds past collective first reaching integrate_throttle, `repeat` times (0 = until disarmed).
 // Channels: roll and pitch targets (degrees), yaw-rate target (degrees/s), collective (throttle), left and right servo tilt (degrees, positive forward), left and right motor (throttle). The targets and collective add before the controller, so the log's targets hold them; the servos and motors add after it, and the fit adds them back from the pattern (the recording's events) and the segment logged in Record flags.
 #define EXCITE_CHANNELS 8
@@ -148,6 +154,14 @@ static void write_servo(int side) {
 }
 
 static void stop_locked(int reason) {
+    if (state.enabled && trim.count >= TRIM_SAMPLES) {
+        float old[2] = {command.roll_bias, command.pitch_bias};
+        for (int axis = 0; axis < 2; axis++)
+            trim.bias[axis] = limit(old[axis] + limit(command.auto_trim * (trim.sum[axis] / trim.count - old[axis]), -TRIM_STEP, TRIM_STEP), -command.integral_limit, command.integral_limit);
+        trim.ready = true;
+    }
+    trim.sum[0] = trim.sum[1] = 0;
+    trim.count = 0;
     stop_generation++;
     command.enabled = command.base = 0;
     state.enabled = false;
@@ -405,6 +419,15 @@ static void runtime_task(void *arg) {
             state.servo[1] = limit(state.controller.right_angle * DEG, -SERVO_LIMIT, SERVO_LIMIT);
             state.throttle[0] = lroundf(limit(state.controller.left, 0, THROTTLE_MAX));
             state.throttle[1] = lroundf(limit(state.controller.right, 0, THROTTLE_MAX));
+            const Controller *c = &state.controller;
+            if (command.auto_trim > 0 && !excite.active && scaled.base >= command.integrate_throttle && c->airborne > TRIM_SETTLE &&
+                fabsf(state.gyro[0]) < TRIM_RATE && fabsf(state.gyro[1]) < TRIM_RATE) {
+                // As flight_math.c: the roll integrator holds its bias, while the pitch bias adds on top of the pitch integrator (fully faded in by now).
+                trim.sum[0] += command.roll_p * (c->setpoint_roll - pose.roll) + c->roll_i - command.roll_damping * state.gyro[0];
+                trim.sum[1] += command.pitch_p * (c->setpoint_pitch - pose.pitch) + c->pitch_i +
+                               limit(command.pitch_bias, -command.integral_limit, command.integral_limit) - command.pitch_damping * state.gyro[1];
+                trim.count++;
+            }
             if (excite.active) {
                 state.servo[0] = limit(state.servo[0] + command.model.left_servo_direction * add[4], -SERVO_LIMIT, SERVO_LIMIT);
                 state.servo[1] = limit(state.servo[1] + command.model.right_servo_direction * add[5], -SERVO_LIMIT, SERVO_LIMIT);
@@ -608,6 +631,18 @@ const char *flight_runtime_calibrate(void) {
     }
     portEXIT_CRITICAL(&lock);
     return active ? NULL : "IMU offline";
+}
+
+bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias) {
+    portENTER_CRITICAL(&lock);
+    bool ready = trim.ready && !state.enabled;
+    if (ready) {
+        trim.ready = false;
+        *roll_bias = trim.bias[0];
+        *pitch_bias = trim.bias[1];
+    }
+    portEXIT_CRITICAL(&lock);
+    return ready;
 }
 
 bool flight_runtime_take_calibration(float *bias, float *pose_zero, float *sensor_frame) {

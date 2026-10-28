@@ -135,6 +135,7 @@ const tuningFields = [
   { key: 'hover_drag_tau', label: 'Hover drag correction time (s)', min: 0.1 },
   { key: 'hover_trim_tau', label: 'Hover trim build-up time (s)', min: 0.1 },
   { key: 'hover_trim_max', label: 'Hover trim limit (m/s²)', min: 0 },
+  { key: 'auto_trim', label: 'Self-trim per hop (0 off - 1)', min: 0, max: 1 },
 ] as const;
 const modelFields = [
   { key: 'pivot_height', label: 'Pivot height (m)', min: 0, max: undefined },
