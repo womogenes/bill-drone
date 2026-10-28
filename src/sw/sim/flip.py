@@ -59,23 +59,25 @@ def run(params, recovery, n=256, seed=0, seconds=6.0, randomize=True, record=Fal
     control.asked[:] = hover
     flip = Flip(control, params)
     lowest = np.full(n, START)
+    highest = np.full(n, START)
     trace = []
     for k in range(int(seconds / R.DT)):
         flip.advance(sim.time, obs["gyro"])
         throttle, tilt = control(obs, sim.time)
         obs = sim.step(throttle, tilt)
         lowest = np.minimum(lowest, sim.pos[:, 2])
+        highest = np.maximum(highest, sim.pos[:, 2])
         if record:
             trace.append((sim.time, sim.pos.copy(), sim.quat.copy(), sim.motor.copy(), sim.tilt.copy(), np.where(flip.stage == SPIN, 0, 1)))
     up = sim.up()[:, 2]
     still = np.linalg.norm(sim.omega, axis=1) < 1.0
     clean = ~sim.touched & (up > math.cos(math.radians(10))) & still & (flip.turned >= 2 * math.pi - flip.p["handoff"] - 0.01)
-    result = {"clean": clean, "lost": START - lowest, "touched": sim.touched, "up": up, "turned": flip.turned}
+    result = {"clean": clean, "lost": START - lowest, "climbed": highest - START, "touched": sim.touched, "up": up, "turned": flip.turned}
     return (result, trace) if record else result
 
 
 def summary(r):
-    return f"clean {r['clean'].mean() * 100:.1f}% of {len(r['clean'])} | height lost median {np.median(r['lost']):.2f} m (90th {np.percentile(r['lost'], 90):.2f}), hit the ground {r['touched'].mean() * 100:.0f}%, upright at the end {(r['up'] > math.cos(math.radians(10))).mean() * 100:.0f}%"
+    return f"clean {r['clean'].mean() * 100:.1f}% of {len(r['clean'])} | height lost median {np.median(r['lost']):.2f} m (90th {np.percentile(r['lost'], 90):.2f}), climbed median {np.median(r['climbed']):.2f} m, hit the ground {r['touched'].mean() * 100:.0f}%, upright at the end {(r['up'] > math.cos(math.radians(10))).mean() * 100:.0f}%"
 
 
 def main():

@@ -25,6 +25,8 @@ SPACE = [
 HEIGHTS = (3.0, 8.0)
 # The flip's parameters, searched with the recovery controller's (from models/recover_params.json unless --recovery) for the hold after it.
 FLIP_SPACE = [("climb_thrust", 1.0, 2.2), ("climb_time", 0.1, 1.0), ("spin_rate", 4.0, 30.0), ("k_spin", 5.0, 80.0), ("spin_thrust", 0.1, 1.5), ("handoff", 0.3, 2.5)]
+# Height a flip may climb before the cost counts it (m).
+FLIP_ROOM = 1.0
 TASK = {"space": SPACE, "flip": False, "recovery": {}}
 
 
@@ -37,8 +39,8 @@ def encode(params):
 
 
 def flip_cost(result):
-    """How far each flip missed a clean one: hitting the ground, the height lost (per 2 m), not ending upright and still."""
-    c = 3.0 * result["touched"] + np.minimum(result["lost"], 3) / 2 + 2 * np.clip(1 - result["up"], 0, 2) + (~result["clean"]) * 0.5
+    """How far each flip missed a clean one: hitting the ground, the height lost (per 2 m), the height climbed beyond FLIP_ROOM (indoors there is little), not ending upright and still."""
+    c = 3.0 * result["touched"] + np.minimum(result["lost"], 3) / 2 + np.maximum(result["climbed"] - FLIP_ROOM, 0) + 2 * np.clip(1 - result["up"], 0, 2) + (~result["clean"]) * 0.5
     return float(c.mean()), float(result["clean"].mean())
 
 
