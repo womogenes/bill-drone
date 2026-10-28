@@ -12,6 +12,7 @@ node_modules/
 src/sw/recordings/
 
 src/sw/sim/flight_math.so
+src/sw/sim/rigid_step.so
 src/sw/sim/libhover*.so
 
 .env

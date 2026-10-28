@@ -6,7 +6,7 @@ The controller sees only what the drone senses: it integrates the gyro into a qu
   arrest   aim the thrust to stop the vertical and horizontal velocity, then descend at descent m/s
   landed   a touchdown (specific force touch_g beyond what the commanded thrust explains, or the descent stalled with thrust low) stops the motors
 Each tick turns the attitude error into a wanted rotation rate toward the target, no faster than the drone can brake from (sqrt(2 brake angle), at most max_rate, and kp per rad near the target), then into wanted angular accelerations (k_rate per axis) and allocates them to the two thrusts and two tilts with the identified effectiveness (sw/sim/airframe.py), keeping roll authority when a thrust would saturate. The motors take about 0.2 s to follow (dead time and lag), so the tilts that turn thrust into pitch and yaw are worked out from the thrust a motor model says the motors have now, not from what was just asked.
-A fall counts as a safe landing when the drone first touches with its thrust axis within 30° of up, below 1.5 m/s down and under 60 N of contact force, and ends upright.
+A fall counts as a safe landing when the drone first touches with its thrust axis within 30° of up, below 1.5 m/s down and under 300 N of contact force (what a 0.7 m/s touchdown gives on this contact model), and ends upright.
 """
 
 import argparse
@@ -44,6 +44,9 @@ class Controller:
         self.thrust = np.zeros((self.sim.n, 2))
         self.phase[:] = RIGHT
         self.low_time[:] = 0
+        # Wanted descent speed per env (negative climbs), and an optional manoeuvre that takes over the wanted angular accelerations and collective (sw/sim/flip.py).
+        self.descent = np.full(self.sim.n, self.p["descent"])
+        self.override = None
 
     def __call__(self, obs, time):
         sim, p, n = self.sim, self.p, self.sim.n
@@ -62,7 +65,7 @@ class Controller:
         upright = up_body[:, 2]
         # Wanted thrust direction (world): straight up while righting; afterwards to stop the fall and drift.
         a_xy = np.clip(-p["kh"] * self.v[:, :2], -R.G * math.tan(math.radians(p["tilt_max"])), R.G * math.tan(math.radians(p["tilt_max"])))
-        a_z = -p["kv"] * (self.v[:, 2] + p["descent"])
+        a_z = -p["kv"] * (self.v[:, 2] + self.descent)
         arresting = self.phase == ARREST
         wanted = np.where(arresting[:, None], np.column_stack([a_xy, R.G + a_z]), np.array([0, 0, 1.0]))
         wanted /= np.linalg.norm(wanted, axis=1, keepdims=True)
@@ -79,6 +82,8 @@ class Controller:
         weight = sim.mass * R.G
         collective = np.where(arresting, sim.mass * (R.G + a_z) / np.maximum(upright, 0.5), p["flip_thrust"] * weight)
         collective = np.clip(collective, 0.15 * weight, 2.2 * weight)
+        if self.override is not None:
+            alpha, collective = self.override(alpha, collective, omega)
         self.phase = np.where((self.phase == RIGHT) & (upright > math.cos(math.radians(p["right_angle"]))), ARREST, self.phase)
         # Allocation: roll by differential thrust, pitch by common tilt, yaw by differential tilt.
         diff = alpha[:, 0] / sim.k_roll
@@ -146,7 +151,7 @@ def run(params, n=256, seed=0, seconds=8.0, randomize=True, record=False):
         if (control.phase == LANDED).all() and sim.touched.all():
             break
     final_up = sim.up()[:, 2]
-    safe = (first_tilt < 30) & (first_speed < 1.5) & (sim.contact < 60) & (final_up > 0.8)
+    safe = (first_tilt < 30) & (first_speed < 1.5) & (sim.contact < 300) & (final_up > 0.8)
     result = {"safe": safe, "first_tilt": first_tilt, "first_speed": first_speed, "contact": sim.contact, "final_up": final_up, "landed": control.phase == LANDED}
     return (result, trace) if record else result
 

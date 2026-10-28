@@ -28,7 +28,7 @@ def big_floor(xml):
     return xml.replace("<asset>", '<asset>\n    <texture name="grid" type="2d" builtin="checker" rgb1="0.93 0.93 0.91" rgb2="0.80 0.82 0.84" width="512" height="512"/>\n    <material name="grid" texture="grid" texrepeat="40 40"/>\n    <texture type="skybox" builtin="gradient" rgb1="0.75 0.85 0.95" rgb2="0.95 0.97 1.0" width="256" height="256"/>', 1)
 
 
-def render(trace, env, path, width=960, height=720, fps=50, label="", slow=1.0):
+def render(trace, env, path, width=960, height=720, fps=50, label="", slow=1.0, phases=PHASES):
     """One env of a recover.run(..., record=True) trace to an mp4 at path; slow > 1 plays it in slow motion."""
     xml = big_floor(MODEL.read_text())
     cwd = os.getcwd()
@@ -61,7 +61,7 @@ def render(trace, env, path, width=960, height=720, fps=50, label="", slow=1.0):
             frame = Image.fromarray(renderer.render())
             draw = ImageDraw.Draw(frame)
             up = 2 * (quat[env, 0] ** 2 + quat[env, 3] ** 2) - 1
-            text = f"{label}  t {t:4.2f} s   height {pos[env, 2]:4.2f} m   tilt from upright {math.degrees(math.acos(max(-1, min(1, up)))):5.1f}°\nthrust L {motor[env, 0]:4.1f} N  R {motor[env, 1]:4.1f} N   motor tilt L {math.degrees(tilt[env, 0]):+5.1f}° R {math.degrees(tilt[env, 1]):+5.1f}°   {PHASES[int(phase[env])]}"
+            text = f"{label}  t {t:4.2f} s   height {pos[env, 2]:4.2f} m   tilt from upright {math.degrees(math.acos(max(-1, min(1, up)))):5.1f}°\nthrust L {motor[env, 0]:4.1f} N  R {motor[env, 1]:4.1f} N   motor tilt L {math.degrees(tilt[env, 0]):+5.1f}° R {math.degrees(tilt[env, 1]):+5.1f}°   {phases[int(phase[env])]}"
             draw.rectangle([0, 0, width, 52], fill=(255, 255, 255))
             draw.multiline_text((12, 6), text, fill=(20, 20, 20))
             ffmpeg.stdin.write(np.asarray(frame).tobytes())
@@ -76,7 +76,20 @@ def main():
     parser.add_argument("--seed", type=int, default=3)
     parser.add_argument("--heights", type=float, nargs=2, default=(5.0, 9.0))
     parser.add_argument("--slow", type=float, default=1.0)
+    parser.add_argument("--flip", action="store_true", help="render roll flips (sw/sim/flip.py) instead of falls")
     args = parser.parse_args()
+    if args.flip:
+        from sw.sim import flip as F
+        recovery = json.loads((Path(__file__).with_name("models") / "recover_params.json").read_text())
+        result, trace = F.run(json.loads(args.params.read_text()) if args.params else {}, recovery, n=args.episodes, seed=args.seed, record=True)
+        parts = []
+        for env in range(args.episodes):
+            part = args.out.with_name(f"{args.out.stem}_{env}.mp4")
+            render(trace, env, part, label=f"flip {env + 1}: {'CLEAN' if result['clean'][env] else 'FAILED'}", slow=args.slow, phases=("spinning", "flying"))
+            parts.append(part)
+            print(f"flip {env + 1}: {'clean' if result['clean'][env] else 'failed'}, height lost {result['lost'][env]:.2f} m", flush=True)
+        concat(parts, args.out)
+        return
     from sw.sim import recover as C
     C.scenarios.__defaults__ = (tuple(args.heights),)
     params = json.loads(args.params.read_text()) if args.params else {}
@@ -88,12 +101,16 @@ def main():
         render(trace, env, part, label=f"fall {env + 1}: {verdict}", slow=args.slow)
         parts.append(part)
         print(f"fall {env + 1}: {verdict}, tilt at touch {result['first_tilt'][env]:.0f}°, speed {result['first_speed'][env]:.2f} m/s, contact {result['contact'][env]:.0f} N", flush=True)
-    listing = args.out.with_suffix(".txt")
+    concat(parts, args.out)
+
+
+def concat(parts, out):
+    listing = out.with_suffix(".txt")
     listing.write_text("".join(f"file '{p.resolve()}'\n" for p in parts))
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(args.out)], check=True)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(out)], check=True)
     for p in parts + [listing]:
         p.unlink()
-    print(f"saved {args.out}")
+    print(f"saved {out}")
 
 
 if __name__ == "__main__":

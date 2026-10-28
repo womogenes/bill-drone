@@ -5,6 +5,7 @@ Each recording's controller is replayed from arming on its logged attitude, gyro
 With --ground, the tilt's pitch effectiveness grows near the floor (sw/sim/airframe.py pitch_ground, ground_scale), by the logged hover height (flights without one are left out) or by the time since liftoff.
 Flights with the identification test pattern (sw/excite.py) need nothing special: its target and collective steps are in the logged references, and its servo and motor steps are added back to the replayed controller's outputs from the pattern (the recording's "pattern" event) and the segment logged in each sample's flags.
 The per-flight push absorbs any steady torque, so the right motor's static thrust gain is not identifiable from the motion: it is pinned to the airborne thrust split (median left over right table thrust, taking the CoM as centred between the motors, as measured), and only the motors' dead times and lags may differ.
+With --prior, the parameters the motors do not set (servos, links, play, bands, effectiveness, damping and attitude terms) are pulled toward an earlier model's values, each by the residual (value - prior) / max(0.2 |prior|, 2% of its range) times --prior-weight times the square root of the data residuals' count over the prior terms' count: a few flights then refine rather than refit what earlier flights pinned down (after the 2026-10-28 ESC recalibration, the 2026-10-27 model's servos and body).
 It starts from the newest saved model (sw/sim/models/airframe_*.json), so after a hardware change a few flights refit what changed. Then each of --folds groups of flights is predicted by a fit to the others, and the held-out frame-by-frame scores (R² of the rates, attitude error and R² of the attitude change at 10 ms to 1 s) are printed, closed loop and on the logged commands.
 """
 
@@ -258,6 +259,11 @@ def predict(p, data, flights, horizons, stride, closed=True):
 DATA = None
 FREE = None
 BASE = None
+# Prior means and scales for the parameters --prior pulls, and its weight (0 = off).
+PRIOR, PRIOR_WEIGHT = {}, 0.0
+# The parameters a motor or ESC change leaves alone, which --prior may pull.
+SHARED = ("servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_wn", "link_zeta", "inertia_ratio", "left_play", "right_play", "left_band", "right_band", "band_stiffness", "right_gain",
+          "pitch_tilt", "pitch_lift", "pitch_damping", "pitch_stiffness", "pitch_velocity", "yaw_tilt", "yaw_damping", "yaw_from_roll", "roll_damping", "roll_stiffness", "roll_velocity", "roll_from_yaw", "roll_gyro", "roll_prop_drag")
 
 
 def unpack(x):
@@ -274,12 +280,18 @@ def residuals(x, flights, stride=10, closed=True):
         mask = valid[j][:, None]
         out.append((np.clip((rates[h - 1] - DATA.rate[F, k]) / DATA.spread, -30, 30) * mask).ravel())
         out.append((np.clip((attitudes[h - 1] - DATA.att[F, k]) / DATA.spread_of_angle(h), -30, 30) * mask).ravel())
-    return np.concatenate(out) / math.sqrt(len(HORIZONS))
+    data = np.concatenate(out) / math.sqrt(len(HORIZONS))
+    pulled = [key for key in FREE if key in PRIOR]
+    if not PRIOR_WEIGHT or not pulled:
+        return data
+    values = unpack(x)
+    weight = PRIOR_WEIGHT * math.sqrt(np.count_nonzero(data) / len(pulled))
+    return np.concatenate([data, [weight * (values[key] - PRIOR[key][0]) / PRIOR[key][1] for key in pulled]])
 
 
-def initialise(data, free, base):
-    global DATA, FREE, BASE
-    DATA, FREE, BASE = data, free, base
+def initialise(data, free, base, prior=None, weight=0.0):
+    global DATA, FREE, BASE, PRIOR, PRIOR_WEIGHT
+    DATA, FREE, BASE, PRIOR, PRIOR_WEIGHT = data, free, base, prior or {}, weight
 
 
 def column(job):
@@ -332,6 +344,8 @@ def main():
     parser.add_argument("--start", help="parameters to start from (default: the newest sw/sim/models/airframe_*.json; 'defaults' for the plant's starting values)")
     parser.add_argument("--freeze", default="roll_lift,band_stiffness", help="parameters held at their start (default: the terms the 2026-10-27 fit did without); right_thrust_gain is always held at the thrust split")
     parser.add_argument("--ground", choices=("height", "time"), help="fit the near-ground pitch term by logged height or time since liftoff (default: off, unless the start model has one)")
+    parser.add_argument("--prior", type=Path, help="an earlier model whose shared parameters (SHARED) the fit is pulled toward")
+    parser.add_argument("--prior-weight", type=float, default=0.3)
     parser.add_argument("--evaluations", type=int, default=60)
     parser.add_argument("--folds", type=int, default=5, help="held-out groups of flights to score (0 to skip)")
     parser.add_argument("--shortest", type=float, default=0.5, help="seconds airborne a flight needs")
@@ -356,10 +370,16 @@ def main():
     frozen = [key for key in args.freeze.split(",") if key] + ["right_thrust_gain"] + ([] if ground else ["pitch_ground", "ground_scale"])
     free = [key for key in A.KEYS if key not in frozen]
     base = {key: start[key] for key in A.KEYS}
-    initialise(data, free, base)
+    prior = {}
+    if args.prior:
+        earlier = A.complete(json.loads(args.prior.read_text()))
+        prior = {key: (earlier[key], max(0.2 * abs(earlier[key]), 0.02 * (A.PARAMS[key][1] - A.PARAMS[key][0]))) for key in SHARED}
+        print(f"pulled toward {args.prior} with weight {args.prior_weight}", flush=True)
+    weight = args.prior_weight if args.prior else 0.0
+    initialise(data, free, base, prior, weight)
     everything = list(range(len(records)))
     out = Path(args.out) if args.out else MODELS / f"airframe_{max(r['name'] for r in records)[:10]}.json"
-    with Pool(args.workers, initializer=initialise, initargs=(data, free, base)) as pool:
+    with Pool(args.workers, initializer=initialise, initargs=(data, free, base, prior, weight)) as pool:
         x, cost = fit(pool, np.array([start[key] for key in free]), everything, args.evaluations)
         params = unpack(x)
         _, push = teacher(params, data, everything)
