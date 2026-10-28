@@ -68,6 +68,7 @@ def main():
     parser.add_argument("--n", type=int, default=256)
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--popsize", type=int, default=16)
+    parser.add_argument("--chunk", type=int, default=128)
     parser.add_argument("--start", type=Path)
     parser.add_argument("--flip", action="store_true")
     parser.add_argument("--recovery", type=Path, default=Path(__file__).with_name("models") / "recover_params.json")
@@ -89,8 +90,8 @@ def main():
         while not es.stop():
             xs = es.ask()
             seed = es.countiter * 1000
-            # Each candidate's falls split over workers in chunks of 32.
-            chunks = max(1, args.n // 32)
+            # Each candidate's falls split over workers in chunks of --chunk (the numpy controller's per-tick overhead dominates below about 128 envs).
+            chunks = max(1, args.n // args.chunk)
             jobs = [(x, seed + c, args.n // chunks, task) for x in xs for c in range(chunks)]
             out = pool.map(evaluate, jobs)
             costs, safes = [], []
