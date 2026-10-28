@@ -77,6 +77,8 @@ typedef struct {
     bool dragging;
     // The servos' steady thrust tilt beyond the one pitch_trim expects (radians, positive forward), as thrust_tilt counts it.
     float thrust_tilt;
+    // How long a landing's descent has stalled (s).
+    float stall_time;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

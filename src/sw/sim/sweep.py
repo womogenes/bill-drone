@@ -88,6 +88,7 @@ def sighting(camera, position, angles, cam_pitch, rng, cam_roll=0.0):
 def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     """
     Simulate one flight. A log list receives (time, position, roll/pitch/yaw, estimated roll/pitch, servo tilts, motor thrusts, pitch target, tag seen) every control step.
+    With hover and plant["land_at"], the hover loop is switched to its landing (HOVER_LAND, or HOVER_LAND_FAST with plant["land_fast"]) that many seconds after liftoff, as the dashboard's L does; the result then also holds when it came down and how.
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py), sw/sim/airframe.py supplies the motors, servos and angular accelerations instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
     IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "vibration" (g RMS, white; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands.
@@ -171,8 +172,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         airframe.reset(0 if liftoff else hover_throttle)
         motor = list(airframe.motor)
     places, touched = [], None
+    # Landing (plant["land_at"]): when the hover's touchdown flag set and collective reached zero (s after liftoff), the descent speed and largest tilt from level in the 1 s before and after the feet came back.
+    landing = {"landed_s": None, "off_s": None, "contact_speed": None, "contact_tilt": 0.0}
     if hover:
-        from sw.sim.hover import HOLD, Hover, Pose
+        from sw.sim.hover import HOLD, LAND, LAND_FAST, Hover, Pose
         use_camera = settings.get("hover_camera", 1)
         if not use_camera:
             settings["hover_center"] = 0
@@ -232,7 +235,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 up = left_force * math.cos(left_tilt) + right_force * math.cos(right_tilt)
                 tilt = math.atan2(left_force * math.sin(left_tilt) + right_force * math.sin(right_tilt), up) if up > 0 else 0.0
                 drag = (level_turn(accel_filter, *level_error), tilt)
-                out = outer.update(HOLD, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag)
+                mode = HOLD if plant.get("land_at") is None or lifted is None or now - lifted < plant["land_at"] else LAND_FAST if plant.get("land_fast") else LAND
+                out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag)
                 settings["base_throttle"] = min(1100.0, throttle(out.force / 2 / math.cos(trim))) if out.force > 0 else 0
                 settings["roll"], settings["pitch"], settings["yaw_rate"] = math.degrees(out.roll), math.degrees(out.pitch), math.degrees(out.yaw_rate)
                 controller.configure(settings | {"enabled": 1})
@@ -341,6 +345,14 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 places.append((round(now - lifted), position[0], position[1]))
             if hover and touched is None and now - lifted >= 2.0 and position[2] + lowest < 0.01:
                 touched = now - lifted
+                landing["contact_speed"] = -velocity[2]
+            if hover and plant.get("land_at") is not None and now - lifted >= plant["land_at"]:
+                if landing["landed_s"] is None and outer.state.landed:
+                    landing["landed_s"] = now - lifted
+                if landing["off_s"] is None and settings["base_throttle"] == 0:
+                    landing["off_s"] = now - lifted
+                if touched is not None and abs(now - lifted - touched) <= 1.0:
+                    landing["contact_tilt"] = max(landing["contact_tilt"], math.degrees(max(abs(roll), abs(pitch - trim))))
             if hover and now - lifted >= 1.0:
                 seen.append(visible)
                 ranges.append(math.hypot(camera["tag"][0] - position[0], camera["tag"][1] - position[1]))
@@ -368,6 +380,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         result["places"] = places
         # Seconds after liftoff the feet first came back within 1 cm of the floor (from 2 s on), or None: the height hold let it down.
         result["touched"] = touched
+        if plant.get("land_at") is not None:
+            result |= landing
     return result
 
 

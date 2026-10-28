@@ -30,6 +30,9 @@
 #define TOUCHDOWN_RATE 0.1f
 #define TOUCHDOWN_S 0.3f
 #define LANDED_RAMP 0.5f
+// A landing whose descent has stalled (climb rate under half land_rate for STALL_S) winds thrust down at STALL_RAMP (m/s² per s) whatever the climb-rate loop would do: on the floor it cannot follow a descent, so its integral alone takes seconds to drop thrust to TOUCHDOWN_FRACTION. Still in the air, the drone sinks and the stall clears.
+#define STALL_S 0.3f
+#define STALL_RAMP 3.0f
 // Below this height (m) a hold is still on the ground taking off: the IMU climb rate leaks toward zero, and centring neither tilts nor turns and lets the range target follow the drone. The tag-height target never asks for less than MIN_HEIGHT above the engage point (m).
 #define AIRBORNE 0.05f
 #define MIN_HEIGHT 0.2f
@@ -257,6 +260,10 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     state->command = command;
     float error = command - state->climb_rate;
     state->integral = clamp(state->integral + g->kiz * error * dt, -MAX_INTEGRAL, MAX_INTEGRAL);
+    if (mode != HOVER_HOLD) {
+        state->stall_time = fabsf(state->climb_rate) < 0.5f * g->land_rate ? state->stall_time + dt : 0;
+        if (state->stall_time >= STALL_S) state->integral = fmaxf(state->integral - STALL_RAMP * dt, -MAX_INTEGRAL);
+    }
     float up = clamp(g->kdz * error + state->integral, -MAX_VERTICAL, MAX_VERTICAL);
     state->force = g->mass * (GRAVITY + up) / fmaxf(0.5f, cosf(roll) * cosf(pitch));
 
