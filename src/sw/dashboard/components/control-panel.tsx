@@ -89,13 +89,14 @@ const tiltKeys = {
   ArrowLeft: { axis: 'roll', direction: -1 },
   ArrowRight: { axis: 'roll', direction: 1 },
 } as const;
-// In hover and landing the arrows step the hold point instead (m): up toward the tag, left to the drone's left.
-const NUDGE_STEP = 0.05;
+// In hover and landing the arrows move the hold point instead, at NUDGE_SPEED (m/s) while held: up toward the tag, left to the drone's left.
+const NUDGE_SPEED = 0.2;
+const NUDGE_TICK_MS = 50;
 const nudgeKeys = {
-  ArrowUp: [NUDGE_STEP, 0],
-  ArrowDown: [-NUDGE_STEP, 0],
-  ArrowLeft: [0, NUDGE_STEP],
-  ArrowRight: [0, -NUDGE_STEP],
+  ArrowUp: [1, 0],
+  ArrowDown: [-1, 0],
+  ArrowLeft: [0, 1],
+  ArrowRight: [0, -1],
 } as const;
 
 function nudgeText([forward, left]: [number, number]) {
@@ -295,6 +296,9 @@ export const ControlPanel = memo(function ControlPanel({
 
     const held = new Set<string>();
     let timer: ReturnType<typeof setInterval> | undefined;
+    // Arrows held for a hover nudge, and the timer moving the hold point while any is.
+    const nudging = new Set<keyof typeof nudgeKeys>();
+    let nudgeTimer: ReturnType<typeof setInterval> | undefined;
     let landFast: ReturnType<typeof setTimeout> | undefined;
 
     function setMode(next: number) {
@@ -351,8 +355,26 @@ export const ControlPanel = memo(function ControlPanel({
       onChange({ [axis]: value });
     }
 
+    function nudge() {
+      const step = (NUDGE_SPEED * NUDGE_TICK_MS) / 1000;
+      let forward = 0;
+      let left = 0;
+      for (const code of nudging) {
+        forward += nudgeKeys[code][0] * step;
+        left += nudgeKeys[code][1] * step;
+      }
+      if (forward || left) onNudge(forward, left);
+    }
+
+    function stopNudging() {
+      nudging.clear();
+      clearInterval(nudgeTimer);
+      nudgeTimer = undefined;
+    }
+
     function keydown(event: KeyboardEvent) {
       if (event.code === 'Space') {
+        stopNudging();
         held.clear();
         clearInterval(timer);
         clearTimeout(landFast);
@@ -370,10 +392,12 @@ export const ControlPanel = memo(function ControlPanel({
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat || held.has(event.code)) return;
-      // A nudge is a single step, not a held key, so its keyup and a blur leave hover alone.
+      // A nudge key moves the hold point while held; it is not a held flight key, so its keyup and a blur leave hover alone.
       if (event.code in nudgeKeys && modeRef.current !== MANUAL) {
-        const [forward, left] = nudgeKeys[event.code as keyof typeof nudgeKeys];
-        onNudge(forward, left);
+        nudging.add(event.code as keyof typeof nudgeKeys);
+        nudge();
+        if (nudgeTimer === undefined)
+          nudgeTimer = setInterval(nudge, NUDGE_TICK_MS);
         return;
       }
       held.add(event.code);
@@ -398,6 +422,10 @@ export const ControlPanel = memo(function ControlPanel({
     }
 
     function keyup(event: KeyboardEvent) {
+      if (nudging.delete(event.code as keyof typeof nudgeKeys)) {
+        if (!nudging.size) stopNudging();
+        return;
+      }
       if (!held.delete(event.code)) return;
       event.preventDefault();
       if (event.code === 'KeyL') releaseLand();
@@ -412,6 +440,7 @@ export const ControlPanel = memo(function ControlPanel({
 
     // A lost keyup can't be trusted, so held keys stop the motors; L alone just drops back from land fast, and landing carries on.
     function blur() {
+      stopNudging();
       if (held.has('KeyL')) releaseLand();
       held.delete('KeyL');
       if (held.size) onStop();
@@ -425,6 +454,7 @@ export const ControlPanel = memo(function ControlPanel({
     window.addEventListener('blur', blur);
     return () => {
       clearInterval(timer);
+      clearInterval(nudgeTimer);
       clearTimeout(landFast);
       window.removeEventListener('keydown', keydown, true);
       window.removeEventListener('keyup', keyup);
@@ -696,11 +726,11 @@ export const ControlPanel = memo(function ControlPanel({
           { keys: ['A', 'D'], label: 'Yaw' },
           {
             keys: ['ArrowUp', 'ArrowDown'],
-            label: 'Pitch; in hover, hold closer or farther',
+            label: 'Pitch; in hover, move the hold closer or farther',
           },
           {
             keys: ['ArrowLeft', 'ArrowRight'],
-            label: 'Roll; in hover, hold left or right',
+            label: 'Roll; in hover, move the hold left or right',
           },
           { keys: ['Space'], label: 'Stop' },
         ].map(({ keys, label }) => (
