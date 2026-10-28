@@ -33,6 +33,9 @@
 // A landing whose descent has stalled (climb rate under half land_rate for STALL_S) winds thrust down at STALL_RAMP (m/s² per s) whatever the climb-rate loop would do: on the floor it cannot follow a descent, so its integral alone takes seconds to drop thrust to TOUCHDOWN_FRACTION. Still in the air, the drone sinks and the stall clears.
 #define STALL_S 0.3f
 #define STALL_RAMP 3.0f
+// Contact: a landing that tilts past LAND_TILT from level or hits harder than LAND_SHOCK (specific force along vertical, g) stops the motors at once. With no legs the drone touches down on its body, and thrust above the first contact point levers it over (2026-10-28 05:01: nose-down at contact, then over its nose). A slow descent in the air stays well inside both (under 10 degrees, 1.3 g).
+#define LAND_TILT (15.0f * 3.14159265f / 180)
+#define LAND_SHOCK 1.5f
 // Below this height (m) a hold is still on the ground taking off: the IMU climb rate leaks toward zero, and centring neither tilts nor turns and lets the range target follow the drone. The tag-height target never asks for less than MIN_HEIGHT above the engage point (m).
 #define AIRBORNE 0.05f
 #define MIN_HEIGHT 0.2f
@@ -267,6 +270,12 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     float up = clamp(g->kdz * error + state->integral, -MAX_VERTICAL, MAX_VERTICAL);
     state->force = g->mass * (GRAVITY + up) / fmaxf(0.5f, cosf(roll) * cosf(pitch));
 
+    if (mode != HOVER_HOLD && (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT || vertical_g > LAND_SHOCK)) {
+        state->landed = true;
+        state->force = 0;
+        *output = (HoverOutput){.force = 0};
+        return;
+    }
     // On the ground a descent command winds thrust down, since the climb rate cannot follow.
     if (mode != HOVER_HOLD) {
         bool held = state->force < TOUCHDOWN_FRACTION * weight && fabsf(state->climb_rate) < TOUCHDOWN_RATE;
