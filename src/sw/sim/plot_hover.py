@@ -1,7 +1,7 @@
 """
 The camera hover, sim against real: uv run --with scipy --with matplotlib -m sw.sim.plot_hover <recordings> [--seeds 4] [--out plot.png]
 
-Each recording's camera hover (its own settings, tracking the tag) next to the sim (sweep.run with hover=True on IDENTIFIED_ESC, the identified airframe with its calibrated disturbances) flying the same settings for --seconds. A random disturbance cannot be replayed sample for sample, so the plot compares what the disturbances should reproduce: the traces' size and pace (top: range error and sideways wander, real and one sim run), their spectra and the rates' spectra (bottom: real per flight, sim averaged over --seeds runs), with each panel's RMS (the sim's the median over its runs). The real position is the camera's estimate, so its spectrum has the camera's noise floor above about 2 Hz; the sim's is the true position.
+Each recording's camera hover (its own settings, tracking the tag) next to the sim (sweep.run with hover=True on IDENTIFIED_ESC, the identified airframe with its calibrated disturbances) flying the same settings for --seconds. A random disturbance cannot be replayed sample for sample, so the plot compares what the disturbances should reproduce: the traces' size and pace (top: range error and sideways wander, real and one sim run), their spectra and the rates' spectra (bottom: real per flight, sim averaged over --seeds runs), with each panel's RMS (the sim's the median over its runs). Both positions are the hover's own camera-based estimate, so both carry the camera's noise and lag.
 """
 
 import argparse
@@ -50,11 +50,15 @@ def sim(job):
         return None
     t = np.array([e[0] for e in log]) - result["liftoff_s"]
     keep = t > SETTLE
-    p = np.array([e[1] for e in log])[keep]
     angles = np.array([e[2] for e in log])[keep]
-    tag = np.array(IDENTIFIED_ESC["camera"]["tag"])
+    # The hover's own estimate, as the drone logs hover_x_m/hover_y_m against hover_range_target_m and hover_arc_deg: like the real traces, with the camera's noise and lag.
+    estimate = [e[8] for e, k in zip(log, keep) if k]
+    x = np.array([e[0][0] for e in estimate])
+    y = np.array([e[0][1] for e in estimate])
+    reach = np.hypot(x, y)
+    side = (np.angle(np.exp(1j * (np.arctan2(y, x) - np.array([e[1] for e in estimate]))))) * reach
     rate = np.degrees(np.diff(angles, axis=0) * FS)
-    return dict(range=np.hypot(tag[0] - p[:, 0], tag[1] - p[:, 1]) - 2.0, side=p[:, 1] - tag[1], pitch_rate=np.append(rate[:, 1], rate[-1, 1]), roll_rate=np.append(rate[:, 0], rate[-1, 0]))
+    return dict(range=reach - np.array([e[2] for e in estimate]), side=side, pitch_rate=np.append(rate[:, 1], rate[-1, 1]), roll_rate=np.append(rate[:, 0], rate[-1, 0]))
 
 
 def spectrum(series):

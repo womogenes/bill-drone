@@ -32,7 +32,8 @@ DRAG = 0.03  # N/(m/s)², rough bluff-body estimate
 ACCEL_NOISE = 0.0004 * math.sqrt(44)  # g RMS: MPU6050 noise density × DLPF bandwidth
 # The ESP32-CAM tag sighting (fw/esp32cam/README.md): the tag centre's world position (m; forward, left, up from the takeoff point), the field of view from the camera axis (degrees; half across, above, below: the central 1536x1152 window, fx 493 px and cy 108 at 320x240), frame rate, capture-to-use latency (s), and position noise as a fraction of range.
 # Rate, delay and noise as flown on 2026-10-28 (06:55-07:01 hovers): 21-22 sightings a second, 50 ms median age at use (90th percentile 70), range noise 0.5% of range about a 9-frame mean.
-CAMERA = {"tag": (2.0, 0.0, 0.5), "fov": (18.0, 12.4, 15.0), "fps": 22.0, "latency": 0.045, "noise": 0.005}
+# noise is the measured 0.5% range noise; lateral_noise from the camera hovers' sideways spectrum above 2 Hz, about 100x below the range noise in power.
+CAMERA = {"tag": (2.0, 0.0, 0.5), "fov": (18.0, 12.4, 15.0), "fps": 22.0, "latency": 0.045, "noise": 0.005, "lateral_noise": 0.0005}
 # The drone has no landing legs: it rests on the bottom of its body (contact points relative to the CoM, m).
 BODY_FEET = [(x, y, -0.035) for x in (0.07, -0.07) for y in (0.1, -0.1)]
 
@@ -83,15 +84,17 @@ def sighting(camera, position, angles, cam_pitch, rng, cam_roll=0.0):
     across, above, below = camera["fov"]
     if ahead <= 0 or abs(math.atan2(right, ahead)) > math.radians(across) or not -math.radians(above) <= math.atan2(down, ahead) <= math.radians(below):
         return None
-    spread = camera["noise"] * math.sqrt(x * x + y * y + z * z)
-    right, down, ahead = right + rng.gauss(0, spread), down + rng.gauss(0, spread), ahead + rng.gauss(0, spread)
+    # Range noise (along the line of sight) is the tag size's pixel error; across the image the tag centre is far more precise ("lateral_noise", default the same).
+    distance = math.sqrt(x * x + y * y + z * z)
+    spread, lateral = camera["noise"] * distance, camera.get("lateral_noise", camera["noise"]) * distance
+    right, down, ahead = right + rng.gauss(0, lateral), down + rng.gauss(0, lateral), ahead + rng.gauss(0, spread)
     cc, sc = math.cos(cam_roll), math.sin(cam_roll)
     return [cc * right + sc * down, -sc * right + cc * down, ahead]
 
 
 def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     """
-    Simulate one flight. A log list receives (time, position, roll/pitch/yaw, estimated roll/pitch, servo tilts, motor thrusts, pitch target, tag seen) every control step.
+    Simulate one flight. A log list receives (time, position, roll/pitch/yaw, estimated roll/pitch, servo tilts, motor thrusts, pitch target, tag seen, and with hover the hover's own tag-relative position estimate, arc and range setpoint as the drone logs them) every control step.
     With hover and plant["land_at"], the hover loop is switched to its landing (HOVER_LAND, or HOVER_LAND_FAST with plant["land_fast"]) that many seconds after liftoff, as the dashboard's L does; the result then also holds when it came down and how.
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py, at the geometry they name), sw/sim/airframe.py supplies the motors, servos and angular accelerations and the body's inertia instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
@@ -367,7 +370,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 angles[2] + (q * math.sin(roll) + r * math.cos(roll)) / math.cos(pitch) * h,
             ]
         if log is not None:
-            log.append((now, list(position), list(angles), list(attitude), list(servo), list(motor), math.radians(settings["pitch"]), visible))
+            log.append((now, list(position), list(angles), list(attitude), list(servo), list(motor), math.radians(settings["pitch"]), visible, (list(outer.state.position), outer.state.arc, outer.state.setpoint) if hover else None))
         roll, pitch = angles[0], angles[1]
         angle = max(abs(roll), abs(pitch - trim))
         worst = max(worst, angle)
