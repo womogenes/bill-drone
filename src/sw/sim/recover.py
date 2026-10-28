@@ -1,7 +1,7 @@
 """
 Recovery from a fall in any orientation, in the full-attitude simulation (sw/sim/rigid.py): uv run -m sw.sim.recover [--params params.json] [--n 512] [--seed 0]
 
-The controller sees only what the drone senses: it integrates the gyro into a quaternion and the accelerometer, turned to the world, into a velocity, both from the estimate it had when control was lost (the truth plus a little error); no camera and no height. Once upright, while the specific force is close to 1 g, the accelerometer's direction pulls the estimated up back over level_tau s (as the firmware's attitude filter does), so gyro bias cannot tilt the velocity estimate away. (The firmware hover's rotor-drag velocity, the body-plane specific force over the drag, is no use here: the steady pushes the sim was calibrated with are real forces the accelerometer feels, and the drag model reads the -1.1 m/s² one as nearly 2 m/s; integrating the accelerometer counts them right.) The attitude estimate starts within about 1° of the truth in tilt and 6° in yaw (the firmware's filter is held to gravity while it hovers), so the velocity integral drifts a few tenths of a m/s per second at worst. It also knows roughly how high it was (the hover's height, or the height it was dropped from: within HEIGHT_ERROR) and integrates the estimated vertical velocity from there, which tilt errors hardly touch.
+The controller sees only what the drone senses: it integrates the gyro into a quaternion and the accelerometer, turned to the world, into a velocity, both from the estimate it had when control was lost (the truth plus a little error); no camera and no height. Once upright, while the specific force is close to 1 g, the accelerometer's direction pulls the estimated up back over level_tau s (as the firmware's attitude filter does), so gyro bias cannot tilt the velocity estimate away. (The firmware hover's rotor-drag velocity, the body-plane specific force over the drag, is no use here: the steady pushes the sim was calibrated with are real forces the accelerometer feels, and the drag model reads the -1.1 m/s² one as nearly 2 m/s; integrating the accelerometer counts them right.) The attitude estimate starts within about 1° of the truth in tilt and 6° in yaw (the firmware's filter is held to gravity while it hovers), so the velocity integral drifts a few tenths of a m/s per second at worst. Once arresting, the horizontal velocity also leaks toward zero over leak_tau s, as the firmware hover's dead reckoning does without the tag (DRIFT_TAU): the integral's error only grows, while a drone that is holding is seldom moving fast. It also knows roughly how high it was (the hover's height, or the height it was dropped from: within HEIGHT_ERROR) and integrates the estimated vertical velocity from there, which tilt errors hardly touch.
   right    while the thrust axis points more than right_angle from up: aim it up with little collective (inverted, thrust would only push down), rolling with differential thrust and pitching with the motors' common tilt; past roll_over degrees with the error mostly in pitch it rolls the long way round instead (on the strong actuator: a drone pitched θ is one rolled 180° and pitched 180° − θ), leaving the rest of the pitch for once it is the right way up
   arrest   aim the thrust to stop the vertical and horizontal velocity, then descend: k_alt per m of estimated height above flare m faster than descent m/s, at most FAST
   landed   a touchdown (specific force touch_g beyond what the commanded thrust explains, or the descent stalled with thrust low) winds the collective down to nothing over cut_time s while still holding the attitude level, as the firmware's landing does (cutting the motors outright leaves their spinning-down thrusts unbalanced with nothing correcting them, and the legless drone rolls over)
@@ -21,7 +21,7 @@ from sw.sim import rigid as R
 DEFAULTS = {
     "kp": 6.0, "brake": 15.0, "max_rate": 5.0, "k_roll": 8.0, "k_pitch": 12.0, "kd_yaw": 4.0,
     "kv": 3.0, "kh": 1.0, "descent": 0.5, "flip_thrust": 0.35, "right_angle": 45.0, "tilt_max": 15.0,
-    "touch_g": 1.0, "engage": 0.05, "servo_max": 45.0, "level_tau": 1.0, "cut_time": 0.5, "flare": 1.0, "k_alt": 1.0, "roll_over": 165.0,
+    "touch_g": 1.0, "engage": 0.05, "servo_max": 45.0, "level_tau": 1.0, "cut_time": 0.5, "flare": 1.0, "k_alt": 1.0, "roll_over": 165.0, "leak_tau": 3.0,
 }
 RIGHT, ARREST, LANDED = 0, 1, 2
 # The attitude estimate's error when control is lost (rad, standard deviation of the rotation about each world axis: roll, pitch, yaw).
@@ -70,6 +70,7 @@ class Controller:
         Rq = R.rotation(self.q)
         self.v += (np.einsum("nij,nj->ni", Rq, obs["accel"]) - np.array([0, 0, R.G])) * R.DT
         self.h += self.v[:, 2] * R.DT
+        self.v[:, :2] *= np.where((self.phase == ARREST)[:, None], math.exp(-R.DT / p["leak_tau"]), 1.0)
         up_body = Rq[:, 2, :]  # world up in the body frame
         upright = up_body[:, 2]
         # Wanted thrust direction (world): straight up while righting; afterwards to stop the fall and drift.

@@ -47,7 +47,7 @@ class Flip:
         self.stage = np.where(done, RECOVER, self.stage)
 
 
-def run(params, recovery, n=256, seed=0, seconds=6.0, randomize=True, record=False):
+def run(params, recovery, n=256, seed=0, seconds=10.0, randomize=True, record=False):
     recovery = (recovery or {}) | {key: value for key, value in (params or {}).items() if key in C.DEFAULTS}
     sim = R.Sim(n, seed=seed, scale=C.randomization(n, seed) if randomize else None)
     hover = sim.mass * R.G / 2

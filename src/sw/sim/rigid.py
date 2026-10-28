@@ -96,6 +96,17 @@ def rotation(q):
     ], -2)
 
 
+def quat_conjugate(q):
+    return q * np.array([1.0, -1.0, -1.0, -1.0])
+
+
+def rotation_vector(q):
+    """The rotation q as axis times angle (rad), the short way round."""
+    q = q * np.where(q[..., :1] < 0, -1.0, 1.0)
+    sine = np.linalg.norm(q[..., 1:], axis=-1, keepdims=True)
+    return q[..., 1:] * (2 * np.arctan2(sine, q[..., :1]) / np.maximum(sine, 1e-12))
+
+
 def integrate_quat(q, omega, dt):
     """q advanced by body rates omega over dt (exact for constant omega)."""
     angle = np.linalg.norm(omega, axis=-1, keepdims=True) * dt
@@ -168,7 +179,8 @@ class Sim:
         self.rotor_drag = np.array(plant.get("rotor_drag", (0.58, 0.34))) * s("drag")[:, None]
         self.disturbances = Disturbances(plant.get("disturbances"), n, self.rng, s("disturbance"))
         self.history = 40  # control ticks of command history (0.4 s) for the dead times
-        self.gyro_bias = self.rng.normal(0, 0.01, (n, 3))
+        # The gyro's bias left after the firmware's at-rest calibration (rad/s): about 0.03°/s measured at rest after a 2026-10-28 flight; four times that, for drift in flight.
+        self.gyro_bias = self.rng.normal(0, 0.002, (n, 3))
 
     def reset(self, position, velocity, quat, omega, motor=None, tilt=None):
         """motor (N) and tilt (radians, physical) start the actuators steady there (default off and level)."""
@@ -186,6 +198,7 @@ class Sim:
         self.touched = np.zeros(n, bool)
         self.accel = np.tile([0.0, 0.0, G], (n, 1))  # specific force, body frame (m/s²)
         self.contact_now = np.zeros(n)
+        self.turned = self.omega.copy()
         if self.backend == "c":
             self.bind()
         return self.observe()
@@ -225,8 +238,15 @@ class Sim:
 
     def step(self, throttle, tilt_command):
         """Advance one control tick (DT) with these commands; returns the observation."""
+        before = self.quat.copy()
         if self.backend == "c":
-            return self.step_c(throttle, tilt_command)
+            self.step_c(throttle, tilt_command)
+        else:
+            self.step_numpy(throttle, tilt_command)
+        self.turned = rotation_vector(quat_multiply(quat_conjugate(before), self.quat)) / DT
+        return self.observe()
+
+    def step_numpy(self, throttle, tilt_command):
         self.throttles = np.roll(self.throttles, -1, 1)
         self.commands = np.roll(self.commands, -1, 1)
         self.throttles[:, -1] = np.clip(throttle, 0, THROTTLE_MAX)
@@ -284,7 +304,6 @@ class Sim:
         self.contact = np.maximum(self.contact, peak)
         self.contact_now = peak
         self.time += DT
-        return self.observe()
 
     def step_c(self, throttle, tilt_command):
         """step through rigid_step.c, the disturbances still sampled here (the same random stream as the numpy backend)."""
@@ -294,7 +313,6 @@ class Sim:
         self.c_disturbance[:] = self.disturbances.step(DT)
         library().rigid_step(*self.c_args)
         self.time += DT
-        return self.observe()
 
     @property
     def motor(self):
@@ -307,8 +325,8 @@ class Sim:
         return self.state.tilt * np.array([1.0, self.p["right_gain"]]) * math.pi / 180
 
     def observe(self):
-        """What the drone senses: gyro (rad/s, with bias and noise) and accelerometer (m/s², specific force in the body frame, with noise)."""
-        return {"gyro": self.omega + self.gyro_bias + self.rng.normal(0, 0.02, (self.n, 3)), "accel": self.accel + self.rng.normal(0, 0.3, (self.n, 3))}
+        """What the drone senses: gyro (rad/s, with bias and noise; the tick's whole rotation over DT, as the firmware's estimator integrating the gyro at 1 kHz sees it, rather than the rate at the tick's end, which over a fast spin-up would cost degrees a tick) and accelerometer (m/s², specific force in the body frame, with noise)."""
+        return {"gyro": self.turned + self.gyro_bias + self.rng.normal(0, 0.02, (self.n, 3)), "accel": self.accel + self.rng.normal(0, 0.3, (self.n, 3))}
 
     def up(self):
         """The body's z axis in the world frame [env, 3]: (0, 0, 1) is upright."""
