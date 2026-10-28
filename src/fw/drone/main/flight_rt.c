@@ -112,7 +112,7 @@ static float battery_v;
 static int hover_mode;
 static HoverState hover;
 static Command flown;
-// Self-trim: through a hop, the attitude controller's total roll and pitch command (rad/s²) summed over steady samples (from TRIM_SETTLE s after collective reached integrate_throttle, body rates under TRIM_RATE, no test pattern), as sw/learn_bias.py does from the log. At the stop, with at least TRIM_SAMPLES of them, each bias moves auto_trim of the way to the mean, by at most TRIM_STEP; radio.c stores it once disarmed. So a moved battery costs one hop instead of a retune.
+// Self-trim: through a hop, the attitude controller's total roll and pitch command (rad/s²) summed over steady samples (from TRIM_SETTLE s after collective reached integrate_throttle, body rates under TRIM_RATE, no test pattern, not landing: the floor's wash and the touchdown are not the airframe's trim), as sw/learn_bias.py does from the log. At the stop, with at least TRIM_SAMPLES of them, each bias moves auto_trim of the way to the mean, by at most TRIM_STEP; radio.c stores it once disarmed. So a moved battery costs one hop instead of a retune.
 #define TRIM_SETTLE 1.0f
 #define TRIM_RATE (15 / DEG)
 #define TRIM_SAMPLES 100
@@ -422,7 +422,7 @@ static void runtime_task(void *arg) {
             state.throttle[0] = lroundf(limit(state.controller.left, 0, THROTTLE_MAX));
             state.throttle[1] = lroundf(limit(state.controller.right, 0, THROTTLE_MAX));
             const Controller *c = &state.controller;
-            if (command.auto_trim > 0 && !excite.active && scaled.base >= command.integrate_throttle && c->airborne > TRIM_SETTLE &&
+            if (command.auto_trim > 0 && !excite.active && hover_mode <= HOVER_HOLD && scaled.base >= command.integrate_throttle && c->airborne > TRIM_SETTLE &&
                 fabsf(state.gyro[0]) < TRIM_RATE && fabsf(state.gyro[1]) < TRIM_RATE) {
                 // As flight_math.c: the roll integrator holds its bias, while the pitch bias adds on top of the pitch integrator (fully faded in by now).
                 trim.sum[0] += command.roll_p * (c->setpoint_roll - pose.roll) + c->roll_i - command.roll_damping * state.gyro[0];
