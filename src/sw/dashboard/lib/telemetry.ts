@@ -82,6 +82,8 @@ export type Targets = {
   throttle: [number, number];
   // FLIGHT_MODES index. In hover and landing the drone flies itself from the camera and ignores the setpoints above.
   mode: number;
+  // Moves the hover hold point (m): [0] toward the tag, [1] to the drone's left. Hover and landing only.
+  nudge: [number, number];
 };
 
 export const FLIGHT_MODES = ['Manual', 'Hover', 'Landing', 'Landing fast'];
@@ -110,6 +112,24 @@ export type Reading = {
   force_age_ms?: number | null;
   force_sequence?: number;
 };
+
+// The drone service's hover push (src/fw/controller/bridge.py push_hover), in the hover loop's yaw-turned level frame (m; forward, left, up).
+export type HoverState = {
+  elapsed_us: number;
+  mode: number;
+  tracking: boolean;
+  // The tag relative to the drone; null without a sighting.
+  tag: [number, number, number] | null;
+  tag_age_ms: number | null;
+  velocity: [number, number];
+  height: number;
+  height_target: number;
+  // The hold as nudged: range_target from the tag, on the line whose heading from drone to tag is arc_deg.
+  range_target: number | null;
+  arc_deg: number | null;
+};
+
+export type HoverSample = HoverState & { time: number; session: number };
 
 export type ImuSample = ImuReading & { time: number; session: number };
 

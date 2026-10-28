@@ -1,4 +1,4 @@
-import type { Side, Targets } from './telemetry';
+import type { HoverState, Side, Targets } from './telemetry';
 
 // Requests the drone service (src/fw/controller/bridge.py) forwards; stop repeats until the drone confirms it.
 export type DroneRequest =
@@ -8,6 +8,7 @@ export type DroneRequest =
 
 export type ServiceMessage =
   | ({ type: 'reading' } & Record<string, unknown>)
+  | ({ type: 'hover' } & HoverState)
   | {
       type: 'result';
       request: Exclude<DroneRequest['type'], 'zero'>;

@@ -89,6 +89,25 @@ const tiltKeys = {
   ArrowLeft: { axis: 'roll', direction: -1 },
   ArrowRight: { axis: 'roll', direction: 1 },
 } as const;
+// In hover and landing the arrows step the hold point instead (m): up toward the tag, left to the drone's left.
+const NUDGE_STEP = 0.05;
+const nudgeKeys = {
+  ArrowUp: [NUDGE_STEP, 0],
+  ArrowDown: [-NUDGE_STEP, 0],
+  ArrowLeft: [0, NUDGE_STEP],
+  ArrowRight: [0, -NUDGE_STEP],
+} as const;
+
+function nudgeText([forward, left]: [number, number]) {
+  const parts = [];
+  if (forward)
+    parts.push(
+      `${Math.abs(forward).toFixed(2)} m ${forward > 0 ? 'closer' : 'farther'}`
+    );
+  if (left)
+    parts.push(`${Math.abs(left).toFixed(2)} m ${left > 0 ? 'left' : 'right'}`);
+  return `Hold nudge: ${parts.join(', ') || 'none'}`;
+}
 
 const controls = [
   { key: 'roll', label: 'Roll', min: -15, max: 15, suffix: '°' },
@@ -185,9 +204,11 @@ export const ControlPanel = memo(function ControlPanel({
   status,
   connected,
   mode,
+  nudge,
   onChange,
   onMode,
   onHover,
+  onNudge,
   onStop,
 }: {
   settings: ControlSettings;
@@ -197,9 +218,11 @@ export const ControlPanel = memo(function ControlPanel({
   status: Reading['control_status'];
   connected: boolean;
   mode: number;
+  nudge: [number, number];
   onChange: (settings: Partial<ControlSettings>) => void;
   onMode: (mode: number) => void;
   onHover: () => void;
+  onNudge: (forward: number, left: number) => void;
   onStop: () => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
@@ -347,6 +370,12 @@ export const ControlPanel = memo(function ControlPanel({
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat || held.has(event.code)) return;
+      // A nudge is a single step, not a held key, so its keyup and a blur leave hover alone.
+      if (event.code in nudgeKeys && modeRef.current !== MANUAL) {
+        const [forward, left] = nudgeKeys[event.code as keyof typeof nudgeKeys];
+        onNudge(forward, left);
+        return;
+      }
       held.add(event.code);
 
       if (event.code === 'KeyL') {
@@ -401,7 +430,16 @@ export const ControlPanel = memo(function ControlPanel({
       window.removeEventListener('keyup', keyup);
       window.removeEventListener('blur', blur);
     };
-  }, [available, settings.enabled, open, onChange, onMode, onStop, manual]);
+  }, [
+    available,
+    settings.enabled,
+    open,
+    onChange,
+    onMode,
+    onNudge,
+    onStop,
+    manual,
+  ]);
 
   // H works disarmed too: it arms like Enable, then hovers.
   useEffect(() => {
@@ -656,8 +694,14 @@ export const ControlPanel = memo(function ControlPanel({
           { keys: ['H'], label: 'Hover (arms if needed)' },
           { keys: ['L'], label: 'Land (hold for fast)' },
           { keys: ['A', 'D'], label: 'Yaw' },
-          { keys: ['ArrowUp', 'ArrowDown'], label: 'Pitch' },
-          { keys: ['ArrowLeft', 'ArrowRight'], label: 'Roll' },
+          {
+            keys: ['ArrowUp', 'ArrowDown'],
+            label: 'Pitch; in hover, hold closer or farther',
+          },
+          {
+            keys: ['ArrowLeft', 'ArrowRight'],
+            label: 'Roll; in hover, hold left or right',
+          },
           { keys: ['Space'], label: 'Stop' },
         ].map(({ keys, label }) => (
           <div key={label} className="flex items-center gap-2">
@@ -705,6 +749,9 @@ export const ControlPanel = memo(function ControlPanel({
             )}
           </div>
         ))}
+        {(mode !== MANUAL || nudge.some(Boolean)) && (
+          <span className="tabular-nums">{nudgeText(nudge)}</span>
+        )}
       </div>
       <p
         role="status"

@@ -13,6 +13,7 @@ import { LoaderCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import Link from 'next/link';
 
 import { ControlPanel } from '@/components/control-panel';
+import { HoverPanel } from '@/components/hover-panel';
 import { Button } from '@/components/ui/button';
 import { ActuatorPanel } from '@/components/actuator-panel';
 import { ADCPanel } from '@/components/adc-panel';
@@ -20,6 +21,7 @@ import { ImuPanel } from '@/components/imu-panel';
 import { EspConnection, type DroneRequest } from '@/lib/esp-connection';
 import { createHistory } from '@/lib/history';
 import type {
+  HoverSample,
   ImuSample,
   Reading,
   Side,
@@ -39,7 +41,13 @@ const ZERO_TARGETS: Targets = {
   servo: [0, 0],
   throttle: [0, 0],
   mode: 0,
+  nudge: [0, 0],
 };
+const NO_NUDGE: [number, number] = [0, 0];
+// The drone accepts 1.5 m each way; the keys stop short of that.
+const NUDGE_MAX = 1;
+// A hover message this recent means a hold is being flown and recorded.
+const HOVER_FRESH_MS = 3000;
 // Battery voltage EMA time constant; time-based so irregular packet timing doesn't change the smoothing.
 const VOLTAGE_TAU = 1500;
 
@@ -84,6 +92,11 @@ export default function Page() {
   const [requestError, setRequestError] = useState('');
   const [calibrationPending, setCalibrationPending] = useState(false);
   const latestReading = useRef<Reading | null>(null);
+  const [hoverState, setHoverState] = useState<HoverSample | null>(null);
+  const latestHover = useRef<HoverSample | null>(null);
+  const [hoverHistory] = useState(() =>
+    createHistory<HoverSample>(20_000, 1000)
+  );
   const [history] = useState(() => createHistory<ImuSample>());
   const [voltageHistory] = useState(() => createHistory<VoltageSample>());
   // One sample a second for the hour view, so discharge over a session fits in a small buffer.
@@ -96,8 +109,10 @@ export default function Page() {
     displayFrame.current = requestAnimationFrame(() => {
       displayFrame.current = undefined;
       const current = latestReading.current;
+      const hover = latestHover.current;
       startTransition(() => {
         setReading(current);
+        setHoverState(hover);
       });
     });
   }, []);
@@ -107,13 +122,18 @@ export default function Page() {
   const socket = useRef<EspConnection | null>(null);
   const targets = useRef<Targets>(ZERO_TARGETS);
   const [mode, setModeState] = useState(0);
+  const [nudge, setNudgeState] = useState(NO_NUDGE);
   // H while disarmed arms first and enters hover only once the arm request succeeds.
   const hoverPending = useRef(false);
 
   const setTargets = useCallback((update: Partial<Targets>) => {
+    // Hover entered from manual holds where the drone is, so a nudge never carries over between hops.
+    if (update.mode === 1 && targets.current.mode === 0)
+      update = { ...update, nudge: NO_NUDGE };
     targets.current = { ...targets.current, ...update };
     socket.current?.targets(targets.current);
     if (update.mode !== undefined) setModeState(update.mode);
+    if (update.nudge !== undefined) setNudgeState(update.nudge);
   }, []);
 
   const request = useCallback((message: DroneRequest) => {
@@ -129,12 +149,15 @@ export default function Page() {
     // A new connection starts from zero targets; arming needs an explicit request.
     targets.current = ZERO_TARGETS;
     setModeState(0);
+    setNudgeState(NO_NUDGE);
     hoverPending.current = false;
     setStatus('connecting');
     setReading(null);
     setRequestError('');
     setCalibrationPending(false);
     latestReading.current = null;
+    latestHover.current = null;
+    setHoverState(null);
     const session = Date.now();
     let lastVoltage: VoltageSample | undefined;
     let lastHourVoltage: VoltageSample | undefined;
@@ -169,6 +192,12 @@ export default function Page() {
           setRequestError(
             message.error ? `${message.request}: ${message.error}` : ''
           );
+          return;
+        }
+        if (message.type === 'hover') {
+          latestHover.current = { ...message, time: Date.now(), session };
+          hoverHistory.append(latestHover.current);
+          publishReading();
           return;
         }
         const data = message as unknown as Reading;
@@ -209,7 +238,14 @@ export default function Page() {
       offline
     );
     socket.current = ws;
-  }, [history, voltageHistory, voltageHourHistory, publishReading, setTargets]);
+  }, [
+    history,
+    voltageHistory,
+    voltageHourHistory,
+    hoverHistory,
+    publishReading,
+    setTargets,
+  ]);
 
   useEffect(() => {
     const start = setTimeout(connect, 0);
@@ -304,6 +340,22 @@ export default function Page() {
   useEffect(() => {
     if (armed === false && targets.current.mode !== 0) setTargets({ mode: 0 });
   }, [armed, setTargets]);
+  // Arming or disarming starts a new hop from the unnudged hold.
+  useEffect(() => {
+    if (targets.current.nudge.some(Boolean)) setTargets({ nudge: NO_NUDGE });
+  }, [armed, setTargets]);
+
+  const nudgeHold = useCallback(
+    (forward: number, left: number) => {
+      const step = (value: number, change: number) =>
+        Math.round(
+          Math.max(-NUDGE_MAX, Math.min(NUDGE_MAX, value + change)) * 100
+        ) / 100;
+      const [x, y] = targets.current.nudge;
+      setTargets({ nudge: [step(x, forward), step(y, left)] });
+    },
+    [setTargets]
+  );
 
   const sendActuator = useCallback(
     (command: 'servo' | 'throttle', side: Side, value: number) => {
@@ -469,12 +521,18 @@ export default function Page() {
                       : 'uncalibrated'
               }
               mode={mode}
+              nudge={nudge}
               onChange={sendControl}
               onMode={setMode}
               onHover={hover}
+              onNudge={nudgeHold}
               onStop={stopMotors}
             />
           )}
+          {hoverState &&
+            (reading?.time ?? 0) - hoverState.time < HOVER_FRESH_MS && (
+              <HoverPanel state={hoverState} history={hoverHistory.read} />
+            )}
         </div>
       </main>
     </>
