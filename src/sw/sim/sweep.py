@@ -19,7 +19,7 @@ SUB = 40
 AIR_SUB = 4
 # Height of the lowest foot above the floor (m) above which a control step uses AIR_SUB.
 CLEAR = 0.02
-TAKEOFF_THROTTLE = 720  # dashboard T
+TAKEOFF_THROTTLE = 690  # dashboard T
 CLIMB = 0.5  # seconds at T after liftoff before collective drops to hover
 # Landing-leg contact points relative to the CoM, body frame (m): CAD legs touch at x ±55 mm, y ±78 mm, 87 mm below the tube; the CoM is 17.2 mm above it.
 FEET = [(x, y, -0.087 - 0.0172) for x in (0.055, -0.055) for y in (0.078, -0.078)]

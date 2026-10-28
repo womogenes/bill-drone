@@ -38,7 +38,7 @@ const keyIcons: Record<string, LucideIcon> = {
 
 const THROTTLE_STEP = 10;
 // T jumps collective straight to about hover, so liftoff doesn't linger half-supported on the feet.
-const TAKEOFF_DEFAULT = 720;
+const TAKEOFF_DEFAULT = 690;
 const TAKEOFF_KEY = 'takeoffThrottle';
 
 // The takeoff throttle the T key sets, remembered per browser.

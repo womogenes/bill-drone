@@ -3,13 +3,13 @@
 
 #include "flight_math.h"
 
-// (throttle, thrust in N): the median of three calibrated sweeps (sw/sim/models/NOTES.md). Throttle 200 is treated as approximately zero thrust, from the bench observation; thrust declines above 1100.
+// (throttle, thrust in N). Rescaled 2026-10-28 for both ESCs recalibrated to 1000-2200 us (throttle 0-1200), from the median of three load-cell sweeps taken when the ESCs ran from about 200 to 1100 (sw/sim/models/NOTES.md): each throttle c now gives what 200 + 0.75 c gave then. Not yet re-measured; recordings before 2026-10-28 06:40 UTC used the old range.
 const float flight_thrust[][2] = {
-    {0, 0.0f}, {200, 0.0f}, {250, 0.758689175f}, {300, 1.140325966f}, {350, 1.544788528f}, {400, 1.955279404f},
-    {450, 2.353557228f}, {500, 2.775707658f}, {550, 3.261558474f}, {600, 3.673818136f}, {650, 4.264941843f},
-    {700, 4.898708952f}, {750, 5.566624474f}, {800, 6.313341249f}, {850, 7.172694844f}, {900, 8.00416899f},
-    {950, 8.815765343f}, {1000, 9.61023936f}, {1050, 10.438741463f}, {1100, 11.216827129f}, {1150, 11.052149476f},
-    {1200, 10.992227314f},
+    {0, 0.000000f}, {50, 0.569017f}, {100, 0.949508f}, {150, 1.241442f}, {200, 1.544789f}, {250, 1.852657f},
+    {300, 2.154418f}, {350, 2.459095f}, {400, 2.775708f}, {450, 3.140096f}, {500, 3.467688f}, {550, 3.821599f},
+    {600, 4.264942f}, {650, 4.740267f}, {700, 5.232667f}, {750, 5.753304f}, {800, 6.313341f}, {850, 6.957856f},
+    {900, 7.588432f}, {950, 8.207068f}, {1000, 8.815765f}, {1050, 9.411621f}, {1100, 10.024490f}, {1150, 10.633263f},
+    {1200, 11.216827f},
 };
 const size_t flight_thrust_count = sizeof(flight_thrust) / sizeof(flight_thrust[0]);
 

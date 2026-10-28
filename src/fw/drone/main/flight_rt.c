@@ -41,7 +41,7 @@
 #define VOLTAGE_RANGE 0.15f
 // Oldest camera sighting hover uses (us), and the highest throttle it may ask for (the thrust table's rising end).
 #define HOVER_POSE_US 150000
-#define HOVER_THROTTLE 1100
+#define HOVER_THROTTLE 1200
 
 typedef struct __attribute__((packed)) {
     uint32_t elapsed, sequence;
