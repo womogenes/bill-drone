@@ -131,7 +131,12 @@ export type HoverState = {
 
 export type HoverSample = HoverState & { time: number; session: number };
 
-export type ImuSample = ImuReading & { time: number; session: number };
+export type ImuSample = ImuReading & {
+  time: number;
+  session: number;
+  // The drone's roll and pitch targets (degrees) while armed.
+  target?: [number, number];
+};
 
 export type VoltageSample = {
   time: number;

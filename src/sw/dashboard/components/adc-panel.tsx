@@ -64,46 +64,52 @@ export const ADCPanel = memo(function ADCPanel({
   return (
     <section
       aria-labelledby="adc-heading"
-      className="w-full max-w-md space-y-4 px-4 py-4"
+      className="w-full max-w-md space-y-2 px-4 py-3"
     >
-      <h2 id="adc-heading" className="font-semibold">
-        ADC
-      </h2>
-      <div>
-        <p className="text-sm text-muted-foreground">Voltage</p>
-        <p className="mt-1 text-3xl font-medium tabular-nums">
-          {connected && ema !== undefined ? `${ema.toFixed(2)} V` : '—'}
-        </p>
+      <div className="flex items-center gap-2">
+        <h2 id="adc-heading" className="font-semibold">
+          ADC
+        </h2>
+        <div
+          className="ml-auto flex gap-2"
+          role="group"
+          aria-label="Chart span"
+        >
+          {(Object.keys(SPANS) as Span[]).map((key) => (
+            <Button
+              key={key}
+              size="sm"
+              variant={span === key ? 'default' : 'outline'}
+              aria-pressed={span === key}
+              onClick={() => setSpan(key)}
+            >
+              {SPANS[key].label}
+            </Button>
+          ))}
+        </div>
       </div>
-      <div className="grid grid-cols-2 gap-4 tabular-nums">
+      <dl className="grid grid-cols-3 gap-4 tabular-nums">
         <div>
-          <p className="text-sm text-muted-foreground">Raw voltage</p>
-          <p className="mt-1 text-xl font-medium">
+          <dt className="text-sm text-muted-foreground">Voltage</dt>
+          <dd className="text-xl font-medium">
+            {connected && ema !== undefined ? `${ema.toFixed(2)} V` : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-sm text-muted-foreground">Raw voltage</dt>
+          <dd className="text-lg">
             {connected && voltage !== undefined
               ? `${voltage.toFixed(2)} V`
               : '—'}
-          </p>
+          </dd>
         </div>
         <div>
-          <p className="text-sm text-muted-foreground">Raw ADC</p>
-          <p className="mt-1 text-xl font-medium">
+          <dt className="text-sm text-muted-foreground">Raw ADC</dt>
+          <dd className="text-lg">
             {connected && raw !== undefined ? raw.toLocaleString() : '—'}
-          </p>
+          </dd>
         </div>
-      </div>
-      <div className="flex gap-2" role="group" aria-label="Chart span">
-        {(Object.keys(SPANS) as Span[]).map((key) => (
-          <Button
-            key={key}
-            size="sm"
-            variant={span === key ? 'default' : 'outline'}
-            aria-pressed={span === key}
-            onClick={() => setSpan(key)}
-          >
-            {SPANS[key].label}
-          </Button>
-        ))}
-      </div>
+      </dl>
       <FastChart
         history={span === 'minute' ? history : hourHistory}
         series={series}
@@ -115,6 +121,7 @@ export const ADCPanel = memo(function ADCPanel({
         formatTime={relativeTime}
         formatValue={formatValue}
         label={`Battery voltage over the last ${span}, raw and smoothed, in volts`}
+        className="h-24"
       />
     </section>
   );

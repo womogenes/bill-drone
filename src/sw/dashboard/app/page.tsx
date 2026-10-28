@@ -233,7 +233,16 @@ export default function Page() {
         };
         publishReading();
         if (data.imu == null) return;
-        history.append({ ...data.imu, time, session });
+        history.append({
+          ...data.imu,
+          time,
+          session,
+          // The status carries the laptop's setpoints, which hover and landing ignore, so they are plotted in manual only.
+          target:
+            data.control?.enabled && targets.current.mode === 0
+              ? [data.control.roll, data.control.pitch]
+              : undefined,
+        });
       },
       offline
     );

@@ -5,6 +5,7 @@ import { memo, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { signed } from '@/lib/format';
 import { Button } from '@/components/ui/button';
+import { AttitudeChart } from '@/components/attitude-chart';
 import { ImuAxisChart } from '@/components/imu-axis-chart';
 import {
   Select,
@@ -156,6 +157,7 @@ export function ImuPanel({
           </p>
         </div>
       </div>
+      <AttitudeChart history={history} end={end} />
       <ImuRange seconds={seconds} />
       {(
         [

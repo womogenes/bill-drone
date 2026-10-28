@@ -6,6 +6,7 @@ export type ChartSeries<T> = {
   label: string;
   color: string;
   width?: number;
+  dash?: number[];
   value: (point: T) => number | null;
 };
 
@@ -20,6 +21,7 @@ export function FastChart<T>({
   gap,
   range,
   label,
+  className = 'h-40',
 }: {
   history: (start: number, end: number) => readonly T[];
   series: readonly ChartSeries<T>[];
@@ -31,6 +33,8 @@ export function FastChart<T>({
   gap?: (previous: T, next: T) => boolean;
   range?: readonly [number, number];
   label: string;
+  // Sets the chart's height.
+  className?: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -159,6 +163,7 @@ export function FastChart<T>({
       series.forEach((line, index) => {
         context.strokeStyle = colors[index + 2];
         context.lineWidth = line.width ?? 1.5;
+        context.setLineDash(line.dash ?? []);
         context.beginPath();
         let previous: T | undefined;
         for (const point of visible) {
@@ -174,6 +179,7 @@ export function FastChart<T>({
         }
         context.stroke();
       });
+      context.setLineDash([]);
       tip.hidden = true;
       const position = pointer.current;
       if (
@@ -277,7 +283,7 @@ export function FastChart<T>({
   }, [history, series, time, start, end, formatTime, formatValue, gap, range]);
 
   return (
-    <div ref={container} className="relative h-40 w-full">
+    <div ref={container} className={`relative w-full ${className}`}>
       <canvas
         ref={canvas}
         className="block h-full w-full"
