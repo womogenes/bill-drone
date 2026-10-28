@@ -30,7 +30,8 @@ SLIP = 0.05  # m/s; friction is viscous below this so the integration stays stab
 DRAG = 0.03  # N/(m/s)², rough bluff-body estimate
 ACCEL_NOISE = 0.0004 * math.sqrt(44)  # g RMS: MPU6050 noise density × DLPF bandwidth
 # The ESP32-CAM tag sighting (fw/esp32cam/README.md): the tag centre's world position (m; forward, left, up from the takeoff point), the field of view from the camera axis (degrees; half across, above, below: the central 1536x1152 window, fx 493 px and cy 108 at 320x240), frame rate, capture-to-use latency (s), and position noise as a fraction of range.
-CAMERA = {"tag": (2.0, 0.0, 0.5), "fov": (18.0, 12.4, 15.0), "fps": 29.4, "latency": 0.06, "noise": 0.01}
+# Rate, delay and noise as flown on 2026-10-28 (06:55-07:01 hovers): 21-22 sightings a second, 50 ms median age at use (90th percentile 70), range noise 0.5% of range about a 9-frame mean.
+CAMERA = {"tag": (2.0, 0.0, 0.5), "fov": (18.0, 12.4, 15.0), "fps": 22.0, "latency": 0.045, "noise": 0.005}
 # The full 2048x1536 array (before a780870): fx 369.5 px, cy 111, at about 22 fps.
 FULL_ARRAY = {"fov": (23.4, 16.7, 19.2), "fps": 22.0}
 # The drone has no landing legs: it rests on the bottom of its body (contact points relative to the CoM, m).
@@ -401,8 +402,12 @@ FITTED = {"thrust_k": 1.03, "mass": 0.86, "height": 1.42 * 0.03 / MODEL["pivot_h
           "gust": 5.0, "gust_tau": 0.7, "gyro_noise": 2.0, "camera": {"tag": (2.3, 0.0, 0.3)}, "rotor_drag": 0.5, "vibration": (0.1, 0.1, 0.05)}
 # Identified from the 34 hover flights of 2026-10-27 (both rubber bands on) by closed-loop multi-step prediction with the firmware controller in the loop (sw/sim/identify_airframe.py, parameters in models/airframe_2026-10-27.json). Held out by flight it predicts roll to 1.3° and pitch to 3.7° a second ahead (yaw rate R² 0.55) from the logged references alone. Rotor drag is from the camera velocity over 0.25-1 s against thrust through the logged attitude and modelled tilts (gain within 10 % of 1). The random disturbance is what of the one-step residual lies below 2 Hz (the rest, mostly 10-50 Hz in pitch, does not move the attitude): 0.89 rad/s² RMS in roll and 0.49 in pitch at 0.5 s.
 AIRFRAME = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-27.json").read_text())
+# Refit 2026-10-28 on the four hovers after both ESCs were recalibrated (06:54-07:01 UTC, 170 s, the rescaled thrust table): the motors now respond alike (82/90 ms dead time, 110/122 ms lag). The sim flies the logged settings like those hovers (range error RMS 0.27 m against 0.15-0.25, sideways 0.16 against 0.15-0.19, roll rate 9 against 9.7 deg/s; pitch rate 18.5 against 23-24 and errors fade in 2.9 s against 1.8-2.1, both a little calm and slow) with the fitted horizontal drag and twice the gust above (sw/sim/models/hover_gains_2026-10-28.png).
+AIRFRAME_ESC = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-28.json").read_text())
 IDENTIFIED = FITTED | {"airframe": AIRFRAME, "mass": 0.94, "thrust_k": 1.0, "height": 1.0, "disturbance": 0.0, "angle_moment": 0.0, "velocity_moment": 0.0, "gust": 0.49, "gust_tau": 0.5, "roll_gust": 0.89,
                        "camera": {"tag": (2.0, 0.1, 0.45), "miss": 0.006, "burst": 6}, "rotor_drag": (0.6, 0.27)}
+# The ESC-recalibrated drone as flown on 2026-10-28 (see AIRFRAME_ESC).
+IDENTIFIED_ESC = IDENTIFIED | {"airframe": AIRFRAME_ESC, "rotor_drag": (AIRFRAME_ESC["vx_drag"], AIRFRAME_ESC["vy_drag"]), "gust": 0.98, "roll_gust": 1.78}
 # Plausible mismatch: pivot height ±40 %, inertia ×0.7–1.5, servo delay 40–70 ms (2026-10-21 bench: motion starts 50–60 ms after the command), motor delay 20–40 ms.
 PLANTS = [NOMINAL | {"height": h, "roll_inertia": i, "pitch_inertia": i, "yaw_inertia": i, "servo_delay": sd, "motor_delay": md}
           for h, i, sd, md in itertools.product((0.6, 1.0, 1.4), (0.7, 1.5), (0.04, 0.07), (0.02, 0.04))]
