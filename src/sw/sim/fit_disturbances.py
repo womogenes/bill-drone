@@ -39,7 +39,7 @@ def drift(series, dt=A.DT):
 
 def torques(params, data):
     flights = list(range(len(data.records)))
-    keep, _ = N.teacher(params, data, flights)
+    keep, _, trim = N.teacher(params, data, flights)
     b, a = butter(2, CUTOFF / (0.5 / A.DT))
     out = {axis: [] for axis in ("roll", "pitch", "yaw")}
     f = np.array(flights)
@@ -50,7 +50,7 @@ def torques(params, data):
         for key in keep:
             setattr(state, key, keep[key][:, k].copy())
         state.rate, state.att = data.rate[f, k].copy(), data.att[f, k].copy()
-        state, _ = A.step(params, state, data.throttle[f], data.command[f], np.full(len(f), k), data.voltage[f, k], zero)
+        state, _ = A.step(params, state, data.throttle[f], data.command[f], np.full(len(f), k), data.voltage[f, k], zero, trim, geometry=N.GEOM, table=data.table)
         residual[:, k] = (data.rate[f, k + 1] - state.rate) / A.DT
     for j, r in enumerate(data.records):
         window = residual[j, r["lift"] + 50:r["end"] - 1]
@@ -102,7 +102,9 @@ def main():
     parser.add_argument("--airframe", type=Path, help="default: the newest sw/sim/models/airframe_*.json")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
-    params = A.complete(json.loads((args.airframe or sorted(MODELS.glob("airframe_*.json"))[-1]).read_text()))
+    saved = json.loads((args.airframe or sorted(MODELS.glob("airframe_2*.json"))[-1]).read_text())
+    params = A.complete(saved)
+    N.GEOM = A.geometry_of(saved)
     records = [r for r in (N.load(p, 3.0) for p in N.paths(args.recordings)) if r]
     print(f"{len(records)} flights")
     terms = []

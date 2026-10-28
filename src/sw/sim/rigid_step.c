@@ -1,4 +1,4 @@
-// The per-tick physics of sw/sim/rigid.py Sim.step for every env in one call: the identified airframe's actuators and angular accelerations (a port of sw/sim/airframe.py step at sample history - 1, voltage 1 and no floor proximity), then SUB substeps of rigid-body rotation, ground contact and translation. Arrays are contiguous float64 [env, ...]; the operations follow the numpy code's order so both agree to rounding.
+// The per-tick physics of sw/sim/rigid.py Sim.step for every env in one call: the identified airframe's actuators and angular accelerations (a port of sw/sim/airframe.py step at sample history - 1, voltage 1, the sim's thrust trim and no floor proximity, with the geometry's constants as airframe.resolve gives them), then SUB substeps of rigid-body rotation, ground contact and translation. Arrays are contiguous float64 [env, ...]; the operations follow the numpy code's order so both agree to rounding.
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
@@ -11,16 +11,16 @@
 // Below this slip speed (m/s) friction is viscous, so the contact stays stable at the substep (rigid.py SLIP).
 #define SLIP 0.15
 
-// The scalar parameters, in the order of sw/sim/rigid.py C_PARAMS.
+// The scalar parameters, in the order of sw/sim/rigid.py C_AIRFRAME, C_GEOMETRY, the thrust trim, then the sim's constants.
 typedef struct {
     double motor_delay, right_motor_delay, motor_tau, right_motor_tau, right_thrust_gain;
     double servo_delay, right_servo_delay, servo_wn, right_servo_wn, servo_zeta, servo_slew;
-    double link_wn, link_zeta, inertia_ratio, left_play, right_play, left_band, right_band, band_stiffness, right_gain;
-    double roll_gyro, roll_lift, roll_damping, roll_stiffness, roll_velocity, roll_from_yaw, roll_prop_drag;
-    double pitch_lift, pitch_damping, pitch_stiffness, pitch_velocity, pitch_wake, wake_tau;
-    double yaw_tilt, yaw_drag, yaw_damping, yaw_from_roll;
-    double vx_pitch, vx_tilt, vx_drag, vy_roll, vy_drag;
-    double arm, pivot_height, roll_inertia, pitch_inertia, yaw_inertia, reaction_torque_ratio;
+    double link_k, link_c, left_play, right_play, left_band, right_band, band_k, right_gain;
+    double prop_torque, prop_momentum, inflow_damping, edgewise_damping, wash, pitch_wake, wake_tau;
+    double roll_pendulum, pitch_pendulum, roll_from_yaw, yaw_from_roll;
+    double vx_pitch, vx_drag, vy_roll, vy_drag;
+    double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, geometry_mass, J;
+    double level, mean_left, mean_right;
     double mass, throttle_max, servo_limit, ground_k, ground_c, friction, air_drag;
     double hull[POINTS][3];
 } Params;
@@ -90,9 +90,9 @@ static void cross(const double *a, const double *b, double *out) {
 
 static double norm3(const double *v) { return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
 
-// One control tick for n envs. Per env: pitch_tilt, roll_thrust, inertia_scale [n]; inertia, push [n, 3]; rotor_drag [n, 2]; throttle, tilt_command [n, 2] this tick's commands; disturbance [n, 6] forces then torques. Updated in place: throttles, commands [n, history, 2]; pos, vel, omega, accel [n, 3]; quat [n, 4]; the airframe state rate [n, 3], att, body_vel, motor, horn, hvel, tilt, tvel [n, 2], wake [n]; contact, contact_now [n]; touched [n] (bytes).
+// One control tick for n envs. Per env: tilt_gain (on the tilt's pitch torque), differential_slope, inertia_scale [n]; inertia, push [n, 3]; rotor_drag [n, 2]; throttle, tilt_command [n, 2] this tick's commands; disturbance [n, 6] forces then torques. Updated in place: throttles, commands [n, history, 2]; pos, vel, omega, accel [n, 3]; quat [n, 4]; the airframe state rate [n, 3], att, body_vel, motor, horn, hvel, tilt, tvel [n, 2], wake [n]; contact, contact_now [n]; touched [n] (bytes).
 void rigid_step(size_t n, size_t history, const Params *p, const double *table, size_t count,
-                const double *pitch_tilt, const double *roll_thrust, const double *inertia, const double *inertia_scale, const double *rotor_drag, const double *push,
+                const double *tilt_gain, const double *differential_slope, const double *inertia, const double *inertia_scale, const double *rotor_drag, const double *push,
                 const double *throttle, const double *tilt_command, const double *disturbance,
                 double *throttles, double *commands, double *pos, double *vel, double *quat, double *omega,
                 double *rate, double *att, double *body_vel, double *motor, double *horn, double *hvel, double *tilt, double *tvel, double *wake,
@@ -103,8 +103,9 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
     const double thrust_gain[2] = {1.0, p->right_thrust_gain};
     const double wn[2] = {p->servo_wn, p->right_servo_wn};
     const double w2[2] = {wn[0] * wn[0], wn[1] * wn[1]}, z2[2] = {2 * p->servo_zeta * wn[0], 2 * p->servo_zeta * wn[1]};
-    const double c2 = p->link_wn * p->link_wn, cz = 2 * p->link_zeta * p->link_wn;
-    const double half[2] = {p->left_play / 2, p->right_play / 2}, band[2] = {p->left_band, p->right_band};
+    const double c2 = p->link_k / p->J, cz = p->link_c / p->J, band_k = p->band_k / p->J, ratio = p->J / p->Iyy;
+    const double half[2] = {p->left_play / 2, p->right_play / 2}, band[2] = {p->left_band / p->J / DEG, p->right_band / p->J / DEG};
+    const double mean[2] = {p->mean_left, p->mean_right};
     const double h = DT / SUB;
     const double wake_keep = exp(-DT / p->wake_tau);
     for (size_t e = 0; e < n; e++) {
@@ -135,32 +136,46 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         // The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down (rigid.py).
         double flying = contact_now[e] == 0 ? clip((st_motor[0] + st_motor[1]) / (p->mass * G), 0, 1) : 0.0;
         // airframe.py step.
-        double target[2], goal[2], tl[2], c[2], sn[2];
+        double table_thrust[2], departure[2], target[2], goal[2], tl[2], c[2], sn[2];
         for (int s = 0; s < 2; s++) {
-            target[s] = interp(delayed(throttle_buffer, history, s, motor_delay[s]), table, count) * 1.0 * thrust_gain[s];
+            table_thrust[s] = interp(delayed(throttle_buffer, history, s, motor_delay[s]), table, count) * 1.0 * thrust_gain[s];
+            departure[s] = table_thrust[s] - mean[s];
+        }
+        // airframe.py actual_thrust: the level times the mean, the common departure and differential_slope of the differential one.
+        double common = (departure[0] + departure[1]) / 2, differential = (departure[0] - departure[1]) / 2 * differential_slope[e];
+        target[0] = p->level * (mean[0] + (common + differential));
+        target[1] = p->level * (mean[1] + (common - differential));
+        for (int s = 0; s < 2; s++) {
             st_motor[s] = target[s] + (st_motor[s] - target[s]) * motor_keep[s];
             goal[s] = delayed(command_buffer, history, s, servo_delay[s]);
             tl[s] = st_tilt[s] * gain[s] * DEG;
             c[s] = cos(tl[s]), sn[s] = sin(tl[s]);
         }
-        double left = st_motor[0], right = st_motor[1];
-        double roll = roll_thrust[e] * p->arm / p->roll_inertia * (left * c[0] - right * c[1])
-            + p->roll_lift * flying * p->arm / p->roll_inertia * (left * c[0] + right * c[1])
-            + p->roll_prop_drag * p->reaction_torque_ratio / p->roll_inertia * (left * sn[0] - right * sn[1])
-            + p->roll_damping * rate0[0] + p->roll_stiffness * flying * att0[0] + p->roll_velocity * flying * vel0[1] + p->roll_from_yaw * rate0[2]
-            + p->roll_gyro * (st_tvel[0] - st_tvel[1]) * DEG
-            + push[3 * e] * flying;
+        double left = st_motor[0], right = st_motor[1], total = left + right, a = p->arm, cy = p->cy;
+        double root[2] = {sqrt(fmax(st_motor[0], 0.0)), sqrt(fmax(st_motor[1], 0.0))};
+        double roll_torque = (a - cy) * left * c[0] - (a + cy) * right * c[1]
+            - p->prop_torque * (left * sn[0] - right * sn[1])
+            + p->prop_momentum * (root[0] * st_tvel[0] - root[1] * st_tvel[1]) * DEG
+            - p->inflow_damping * a * a * total * rate0[0]
+            - flying * p->roll_pendulum * total * att0[0]
+            + flying * p->hy * p->vy_drag * p->geometry_mass * vel0[1]
+            + p->roll_from_yaw * rate0[2];
+        double roll = roll_torque / p->Ixx + push[3 * e] * flying;
         double tilted = left * sn[0] + right * sn[1];
         wake[e] = tilted + (wake[e] - tilted) * wake_keep;
-        double pitch_other = pitch_tilt[e] * (1 + 0.0) * p->pivot_height / p->pitch_inertia * tilted
-            + p->pitch_wake * p->pivot_height / p->pitch_inertia * wake[e]
-            + p->pitch_lift * (left * c[0] + right * c[1]) / p->pitch_inertia
-            + p->pitch_damping * rate0[1] + p->pitch_stiffness * flying * att0[1] + p->pitch_velocity * flying * vel0[0]
-            + push[3 * e + 1] * flying;
-        double yaw = p->yaw_tilt * p->arm / p->yaw_inertia * (right * sn[1] - left * sn[0])
-            + p->yaw_drag * (right * c[1] - left * c[0]) / p->yaw_inertia
-            + p->yaw_damping * rate0[2] + p->yaw_from_roll * rate0[0]
-            + push[3 * e + 2] * flying;
+        double arm_tilt = p->tilt_arm * tilt_gain[e];
+        double pitch_torque = arm_tilt * 1.0 * tilted
+            + p->pitch_wake * arm_tilt * wake[e]
+            + p->cx * (left * c[0] + right * c[1])
+            - p->edgewise_damping * p->hr * p->hr * total * rate0[1]
+            - flying * p->pitch_pendulum * total * att0[1]
+            - flying * p->hx * p->vx_drag * p->geometry_mass * vel0[0];
+        double pitch_other = pitch_torque / p->Iyy + push[3 * e + 1] * flying;
+        double yaw_torque = (1 - p->wash) * ((a + cy) * right * sn[1] - (a - cy) * left * sn[0])
+            + p->prop_torque * (right * c[1] - left * c[0])
+            - p->edgewise_damping * a * a * total * rate0[2]
+            + p->yaw_from_roll * rate0[0];
+        double yaw = yaw_torque / p->Izz + push[3 * e + 2] * flying;
         double pq = rate0[1], pitch = att0[1], pitch_sum = 0.0;
         for (int sub = 0; sub < SUB; sub++) {
             double link[2];
@@ -169,9 +184,9 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
                 st_horn[s] = st_horn[s] + st_hvel[s] * h;
                 double gap = st_horn[s] - st_tilt[s];
                 gap = sign(gap) * fmax(fabs(gap) - half[s], 0);
-                link[s] = c2 * gap + cz * (st_hvel[s] - st_tvel[s]) * (gap != 0 ? 1.0 : 0.0) + band[s] - p->band_stiffness * st_tilt[s];
+                link[s] = c2 * gap + cz * (st_hvel[s] - st_tvel[s]) * (gap != 0 ? 1.0 : 0.0) + band[s] - band_k * st_tilt[s];
             }
-            double body = pitch_other - p->inertia_ratio * (link[0] * DEG + link[1] * DEG);
+            double body = pitch_other - ratio * (link[0] * DEG + link[1] * DEG);
             for (int s = 0; s < 2; s++) {
                 st_tvel[s] = st_tvel[s] + (link[s] - body / DEG) * h;
                 st_tilt[s] = st_tilt[s] + st_tvel[s] * h;
@@ -184,7 +199,7 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         st_rate[0] = rate0[0] + roll * DT, st_rate[1] = pq, st_rate[2] = rate0[2] + yaw * DT;
         st_att[0] = att0[0] + st_rate[0] * DT, st_att[1] = pitch;
         double mean_tilt = (st_tilt[0] * gain[0] + st_tilt[1] * gain[1]) / 2 * DEG;
-        st_vel[0] = vel0[0] + (p->vx_pitch * att0[1] + p->vx_tilt * mean_tilt - p->vx_drag * vel0[0]) * DT;
+        st_vel[0] = vel0[0] + (p->vx_pitch * (att0[1] + (1 - p->wash) * mean_tilt) - p->vx_drag * vel0[0]) * DT;
         st_vel[1] = vel0[1] + (p->vy_roll * att0[0] - p->vy_drag * vel0[1]) * DT;
         // The rigid body.
         // The disturbances come with the rotors' wash: scaled by the thrust over the weight.

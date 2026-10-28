@@ -21,7 +21,7 @@ def windows(paths):
         lift = on[0] + np.argmax(data.az_g.values[on[0]:] > 1.25)
         shock = np.sqrt(data.ax_g**2 + data.ay_g**2 + data.az_g**2).values
         end = next((i for i in range(lift + 3, len(data)) if abs(data.pitch_deg[i]) > 35 or abs(data.roll_deg[i]) > 35 or shock[i] > 2.5 or data.base_throttle[i] == 0), len(data))
-        _, axes = terms(data, {"left_thrust_scale": 1.0, "right_thrust_scale": 1.0} | settings(path))
+        _, axes = terms(data, {"left_thrust_scale": 1.0, "right_thrust_scale": 1.0} | settings(path), path)
         torque, model = axes["pitch"]
         yield path, lift, end, torque * model, acceleration(data.gy_deg_s.values, 5)
 

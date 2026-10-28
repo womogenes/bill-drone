@@ -12,10 +12,9 @@ import numpy as np
 
 from sw.fit import acceleration, settings
 from sw.flight_log import read_flight
-from sw.sim.flight import THRUST_TABLE
+from sw.sim.flight import thrust_table
 
 DEG = np.pi / 180
-TABLE = np.array(THRUST_TABLE, float)
 DT = 0.01
 # Pitch-rate change over this many samples is the second score: less noisy than a differentiated gyro.
 HORIZON = 10
@@ -37,8 +36,9 @@ def window(path):
     if end - lift < 50:
         return None
     ratio = (data.battery_v.values / setting["thrust_voltage"]) ** 2 if setting.get("thrust_voltage") else 1.0
-    left = np.interp(data.left_throttle.values, TABLE[:, 0], TABLE[:, 1]) * ratio
-    right = np.interp(data.right_throttle.values, TABLE[:, 0], TABLE[:, 1]) * ratio
+    table = np.array(thrust_table(path), float)
+    left = np.interp(data.left_throttle.values, table[:, 0], table[:, 1]) * ratio
+    right = np.interp(data.right_throttle.values, table[:, 0], table[:, 1]) * ratio
     # Commanded physical tilt, positive forward: the right servo is mirrored, and the trims are each servo's zero.
     commands = np.column_stack([data.left_servo_deg.values - setting["left_trim"], -(data.right_servo_deg.values - setting["right_trim"])])
     return {

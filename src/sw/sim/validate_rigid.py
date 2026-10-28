@@ -28,13 +28,14 @@ def quat_from(att):
     return R.quat_multiply(qy, qx)
 
 
-def rigid_predict(p, data, flights, horizons, stride):
-    """identify_airframe.predict's closed-loop free runs, flown on rigid.Sim instead of the airframe model."""
-    keep, push = N.teacher(p, data, flights)
+def rigid_predict(p, saved, data, flights, horizons, stride):
+    """identify_airframe.predict's closed-loop free runs, flown on rigid.Sim (with the saved model's other entries) instead of the airframe model, at each flight's own thrust trim as the model is."""
+    keep, push, trim = N.teacher(p, data, flights)
     F, S0, valid = data.lanes(flights, horizons, stride)
     J = np.searchsorted(flights, F)
     n = len(F)
-    sim = R.Sim(n, plant=R.load_plant(disturbances=None), backend="numpy")
+    sim = R.Sim(n, plant=R.load_plant(disturbances=None) | {"airframe": saved | p, "geometry": N.GEOM}, backend="numpy")
+    sim.trim = (trim[0][J], trim[1][J])
     att, rate = data.att[F, S0], data.rate[F, S0]
     quat = quat_from(att)
     velocity = np.einsum("nij,nj->ni", R.rotation(quat), np.column_stack([data.vel[F, S0], np.zeros(n)]))
@@ -79,13 +80,15 @@ def main():
     parser.add_argument("--airframe", type=Path, default=Path(__file__).with_name("models") / "airframe_2026-10-28.json")
     parser.add_argument("--stride", type=int, default=25)
     args = parser.parse_args()
-    p = A.complete(json.loads(args.airframe.read_text()))
+    saved = json.loads(args.airframe.read_text())
+    p = A.complete(saved)
+    N.GEOM = A.geometry_of(saved)
     records = [r for r in (N.load(path) for path in N.paths(args.recordings)) if r]
     data = N.Data(records)
     flights = np.arange(len(records))
     print(f"{len(records)} flights, {sum(r['end'] - r['lift'] for r in records) * N.DT:.0f} s airborne")
     model = scores(N.predict(p, data, flights, HORIZONS, args.stride), data, HORIZONS)
-    rigid = scores(rigid_predict(p, data, flights, HORIZONS, args.stride), data, HORIZONS)
+    rigid = scores(rigid_predict(p, saved, data, flights, HORIZONS, args.stride), data, HORIZONS)
     print("horizon   rate R² roll/pitch/yaw: airframe | rigid      attitude error roll/pitch (°): airframe | rigid      starts")
     for h in HORIZONS:
         (ra, ea, count), (rr, er, _) = model[h], rigid[h]

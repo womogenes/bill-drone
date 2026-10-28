@@ -26,6 +26,20 @@ THRUST_BUFFER = array("f", (ctypes.c_float * (2 * count)).in_dll(library, "fligh
 # [throttle, thrust_N] rows, as the drone uses them.
 THRUST_TABLE = [[int(THRUST_BUFFER[2 * index]), THRUST_BUFFER[2 * index + 1]] for index in range(count)]
 PEAK = max(range(len(THRUST_TABLE)), key=lambda index: THRUST_TABLE[index][1])
+# Both ESCs were recalibrated to 1000-2200 us at this time (UTC, as recordings are named); the firmware's table was rescaled for it (commit a44c672). Recordings from before were flown with PRE_RECALIBRATION_TABLE, the earlier ESC range's table, and replay only with it.
+RECALIBRATED = "2026-10-28T06-40"
+PRE_RECALIBRATION_TABLE = [[0, 0.0], [200, 0.0], [250, 0.758689175], [300, 1.140325966], [350, 1.544788528], [400, 1.955279404], [450, 2.353557228], [500, 2.775707658], [550, 3.261558474], [600, 3.673818136], [650, 4.264941843],
+                           [700, 4.898708952], [750, 5.566624474], [800, 6.313341249], [850, 7.172694844], [900, 8.00416899], [950, 8.815765343], [1000, 9.61023936], [1050, 10.438741463], [1100, 11.216827129], [1150, 11.052149476], [1200, 10.992227314]]
+
+
+def thrust_table(recording):
+    """The thrust table a recording (its path or name, starting with its UTC time) was flown with: [throttle, thrust_N] rows."""
+    return PRE_RECALIBRATION_TABLE if Path(recording).name[:16] < RECALIBRATED else THRUST_TABLE
+
+
+def table_buffer(table):
+    """A thrust table as the C controller takes it (flat float32 throttle, thrust pairs)."""
+    return THRUST_BUFFER if table is THRUST_TABLE else array("f", [value for row in table for value in row])
 
 
 def attitude_step(state, accel, gyro, dt, tau):
@@ -40,12 +54,13 @@ def control_step(state, command, table, attitude, gyro, dt):
     return int(state[2]), int(state[3]), state[4], state[5]
 
 
-def control_many(states, commands):
+def control_many(states, commands, table=THRUST_TABLE):
     """
-    Step every lane's controller in place: states and commands are C-contiguous float32 arrays [lane, ...] laid out as Controller.state and Controller.command, with each command's motion filled in.
+    Step every lane's controller in place: states and commands are C-contiguous float32 arrays [lane, ...] laid out as Controller.state and Controller.command, with each command's motion filled in, all on one thrust table.
     """
     assert states.dtype == commands.dtype == "float32" and states.flags.c_contiguous and commands.flags.c_contiguous
-    library.flight_control_many(states.ctypes.data, states.shape[1], commands.ctypes.data, commands.shape[1], THRUST_BUFFER.buffer_info()[0], len(THRUST_BUFFER) // 2, len(states))
+    buffer = table_buffer(table)
+    library.flight_control_many(states.ctypes.data, states.shape[1], commands.ctypes.data, commands.shape[1], buffer.buffer_info()[0], len(buffer) // 2, len(states))
 
 
 def interpolate(value, points, input_column=0):
@@ -64,18 +79,19 @@ def interpolate(value, points, input_column=0):
     return points[-1][output_column]
 
 
-def thrust(throttle):
+def thrust(throttle, table=THRUST_TABLE):
     """
     Convert an ESC command to newtons.
     """
-    return interpolate(throttle, THRUST_TABLE)
+    return interpolate(throttle, table)
 
 
-def throttle(force):
+def throttle(force, table=THRUST_TABLE):
     """
     Convert newtons to an ESC command using the table's rising part, capped at its peak.
     """
-    return interpolate(force, THRUST_TABLE[:PEAK + 1], input_column=1)
+    peak = PEAK if table is THRUST_TABLE else max(range(len(table)), key=lambda index: table[index][1])
+    return interpolate(force, table[:peak + 1], input_column=1)
 
 
 # Geometry and inertia of the current 900 g drone, in metres and kg·m².

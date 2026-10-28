@@ -48,9 +48,10 @@ def main():
     models = [(args.airframe.stem, args.airframe)] + ([(args.compare.stem, args.compare)] if args.compare else [])
     predicted = []
     for name, path in models:
-        params = A.complete(json.loads(path.read_text()))
-        split = np.median(np.concatenate([A.thrust(r["left_throttle"][r["lift"]:r["end"]]) for r in records])) / np.median(np.concatenate([A.thrust(r["right_throttle"][r["lift"]:r["end"]]) for r in records]))
-        params["right_thrust_gain"] = float(split)
+        saved = json.loads(path.read_text())
+        params = A.complete(saved)
+        params["right_thrust_gain"] = N.thrust_split(records)
+        N.GEOM = A.geometry_of(saved)
         F, S0, attitudes = runs(params, data, horizon, every)
         rms = errors(data, F, S0, attitudes, horizon)
         print(f"{name}: {len(F)} runs, attitude-change error at {args.horizon:g} s roll {rms[0]:.2f}° pitch {rms[1]:.2f}°")

@@ -10,10 +10,9 @@ from pathlib import Path
 import numpy as np
 
 from sw.flight_log import read_flight
-from sw.sim.flight import THRUST_TABLE
+from sw.sim.flight import thrust_table
 
 DEG = np.pi / 180
-TABLE = np.array(THRUST_TABLE, float)
 
 
 def settings(path):
@@ -31,12 +30,13 @@ def acceleration(rate, window):
     return np.gradient(smooth, 0.01)
 
 
-def terms(data, setting):
+def terms(data, setting, path):
     """
-    Per-axis torque terms in N·m (actuator part only) and the model's angular acceleration per N·m.
+    Per-axis torque terms in N·m (actuator part only) and the model's angular acceleration per N·m, on the thrust table the recording at path was flown with.
     """
-    left = np.interp(data.left_throttle, TABLE[:, 0], TABLE[:, 1]) * setting["left_thrust_scale"]
-    right = np.interp(data.right_throttle, TABLE[:, 0], TABLE[:, 1]) * setting["right_thrust_scale"]
+    table = np.array(thrust_table(path), float)
+    left = np.interp(data.left_throttle, table[:, 0], table[:, 1]) * setting["left_thrust_scale"]
+    right = np.interp(data.right_throttle, table[:, 0], table[:, 1]) * setting["right_thrust_scale"]
     # Physical tilt: the right servo is mounted mirrored.
     left_tilt, right_tilt = data.left_servo_deg.values * DEG, -data.right_servo_deg.values * DEG
     arm, height = setting["arm"], setting["pivot_height"]
@@ -56,7 +56,7 @@ def main():
     rows = {axis: [] for axis in ("roll", "pitch", "yaw")}
     for path in args.files:
         data, _ = read_flight(path)
-        total, axes = terms(data, settings(path))
+        total, axes = terms(data, settings(path), path)
         mask = total > 0.95 * args.weight
         rates = {"roll": data.gx_deg_s, "pitch": data.gy_deg_s, "yaw": data.gz_deg_s}
         for axis, (torque, model) in axes.items():

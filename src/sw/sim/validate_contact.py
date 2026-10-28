@@ -12,7 +12,6 @@ import mujoco
 import numpy as np
 
 from sw.sim import rigid as R
-from sw.sim.flight import MODEL
 
 VERTICAL = (0.3, 0.7, 1.0, 1.5, 2.0)
 HORIZONTAL = (0.0, 0.5, 1.0, 1.5, 2.0)
@@ -66,7 +65,7 @@ def mujoco_model(inertia):
     <geom type="plane" size="20 20 0.1"/>
     <body name="drone">
       <freejoint/>
-      <inertial pos="0 0 0" mass="{R.MASS}" diaginertia="{inertia[0]} {inertia[1]} {inertia[2]}"/>
+      <inertial pos="0 0 0" mass="{R.A.GEOMETRY['mass']}" diaginertia="{inertia[0]} {inertia[1]} {inertia[2]}"/>
 {spheres}
     </body>
   </worldbody>
@@ -114,7 +113,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seconds", type=float, default=2.0)
     args = parser.parse_args()
-    model_inertia = (MODEL["roll_inertia"], MODEL["pitch_inertia"], MODEL["yaw_inertia"])
+    model_inertia = tuple(R.A.GEOMETRY[key] for key in ("roll_inertia", "pitch_inertia", "yaw_inertia"))
     rigid_up, rigid_peak = rigid_run(args.seconds)
     mj_up, mj_peak = mujoco_run(args.seconds, model_inertia)
     cad_up, cad_peak = mujoco_run(args.seconds, CAD_INERTIA)

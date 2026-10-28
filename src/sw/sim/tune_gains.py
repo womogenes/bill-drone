@@ -14,6 +14,7 @@ from multiprocessing import Pool
 from pathlib import Path
 
 from sw.fit import settings as recording_settings
+from sw.sim import airframe as A
 from sw.sim.sweep import IDENTIFIED_ESC, run
 
 KEYS = ("pitch_p", "pitch_damping", "pitch_i", "roll_p", "roll_damping", "roll_i", "hover_kp", "hover_kd", "hover_kside", "hover_kyaw", "hover_tilt", "hover_trim_tau", "hover_trim_max")
@@ -31,10 +32,11 @@ def variants(a):
     """Airframe changes to be robust to, by name."""
     return {
         "nominal": {},
-        "pitch gain ×2": {"pitch_tilt": a["pitch_tilt"] * 2},
-        "roll gain ×2": {"roll_thrust": a["roll_thrust"] * 2},
-        "pitch gain ×0.7": {"pitch_tilt": a["pitch_tilt"] * 0.7, "inertia_ratio": a["inertia_ratio"] * 1.5},
-        "roll gain ×0.7": {"roll_thrust": a["roll_thrust"] * 0.7},
+        "pitch gain ×2": {"tilt_gain": 2.0},
+        "roll gain ×2": {"differential_slope": a["differential_slope"] * 2},
+        # The motor assemblies' effective inertia ×1.5 too.
+        "pitch gain ×0.7": {"tilt_gain": 0.7, "servo_inertia": a["servo_inertia"] + 0.5 * A.resolve(A.complete(a), A.geometry_of(a))["J"]},
+        "roll gain ×0.7": {"differential_slope": a["differential_slope"] * 0.7},
         "servo +20 ms": {"servo_delay": a["servo_delay"] + 0.02, "right_servo_delay": a["right_servo_delay"] + 0.02},
         "motors alike": {"right_motor_delay": a["motor_delay"], "right_motor_tau": a["motor_tau"]},
         "no bands": {"left_band": 0.0, "right_band": 0.0},
@@ -88,7 +90,7 @@ def main():
     args = parser.parse_args()
     import cma
 
-    airframe = json.loads((args.airframe or sorted(MODELS.glob("airframe_*.json"))[-1]).read_text())
+    airframe = json.loads((args.airframe or sorted(MODELS.glob("airframe_2*.json"))[-1]).read_text())
     plants = {name + extra: IDENTIFIED_ESC | {"airframe": airframe | change, "disturbances": IDENTIFIED_ESC["disturbances"] + [{"channel": c, "kind": "constant", "value": v} for c, v in zip(("forward", "left"), push) if v]}
               for name, change in variants(airframe).items() for extra, push in PUSHES.items() if name == "nominal" or not extra}
     base = recording_settings(args.recording.with_suffix(".jsonl"))

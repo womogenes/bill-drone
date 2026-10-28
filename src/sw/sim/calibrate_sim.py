@@ -1,7 +1,7 @@
 """
 Calibrate the hover sim to the real camera hovers' closed-loop behaviour: uv run --with scipy --with cma -m sw.sim.calibrate_sim [--generations 30] [--workers 90]
 
-identify_airframe fits the airframe to short-horizon prediction, which the attitude controller's feedback dominates: it pins the plant above about 2 Hz but barely constrains its low-frequency gain, while fit_disturbances only sizes the torque residual's drift. Flown in closed loop, the sim then wobbles at the wrong frequency (0.7 Hz in pitch against the real 0.9-1 Hz). This CMA-ES search sets what both leave loose so that the sim flying each camera hover's settings (sweep.run with hover=True) matches the hover's statistics: the pitch and roll attitude spectra in three bands (0.3-0.8, 0.8-1.5, 1.5-3 Hz), the range error and sideways RMS and how fast they fade. Searched: scales on the pitch effectiveness (pitch_tilt and pitch_wake together), on the lagged share (pitch_wake) and its lag, and on the roll effectiveness, and on the calibrated disturbances (roll and pitch torque drift size and correlation time, force drift size). The prediction error on the logs (identify_airframe's closed-loop free runs at 250 ms, 500 ms and 1 s, all flights) is kept within reach by a penalty on its growth. Writes the scaled airframe and disturbances next to the sources (--out-airframe, --out-disturbances).
+identify_airframe fits the airframe to short-horizon prediction, which the attitude controller's feedback dominates: it pins the plant above about 2 Hz but barely constrains its low-frequency gain, while fit_disturbances only sizes the torque residual's drift. Flown in closed loop, the sim then wobbles at the wrong frequency (0.7 Hz in pitch against the real 0.9-1 Hz). This CMA-ES search sets what both leave loose so that the sim flying each camera hover's settings (sweep.run with hover=True) matches the hover's statistics: the pitch and roll attitude spectra in three bands (0.3-0.8, 0.8-1.5, 1.5-3 Hz), the range error and sideways RMS and how fast they fade. Searched: scales on the tilt's pitch torque (through wash_z, so its lagged share pitch_wake scales with it), on the lagged share and its lag, on the roll authority (differential_slope), on the attitude terms (roll_pendulum, pitch_pendulum), and on the calibrated disturbances (roll and pitch torque drift size and correlation time, force drift size). The prediction error on the logs (identify_airframe's closed-loop free runs at 250 ms, 500 ms and 1 s, all flights) is kept within reach by a penalty on its growth. Writes the scaled airframe and disturbances next to the sources (--out-airframe, --out-disturbances).
 """
 
 import argparse
@@ -30,8 +30,9 @@ FS = 100.0
 SETTLE, LANDING = 4.0, 4.0
 BANDS = ((0.3, 0.8), (0.8, 1.5), (1.5, 3.0))
 SEEDS = 4
-# Searched: name, low, high, start (log-scaled except the correlation times).
-SPACE = (("pitch_gain", 0.7, 1.8, 1.0), ("wake_gain", 0.3, 3.0, 1.0), ("wake_tau", 0.2, 2.0, 0.74), ("roll_gain", 0.7, 2.5, 1.0), ("pitch_drift", 0.3, 3.0, 1.0), ("roll_drift", 0.3, 3.0, 1.0), ("pitch_tau", 0.1, 1.5, 0.7), ("roll_tau", 0.1, 1.5, 0.7), ("force_drift", 0.3, 3.0, 1.0))
+# Searched: name, low, high, start (log-scaled; the lag and correlation times start at the current plant's, see starting).
+SPACE = (("pitch_gain", 0.6, 1.8, 1.0), ("wake_gain", 0.3, 3.0, 1.0), ("wake_tau", 0.2, 2.0, 1.0), ("roll_gain", 0.6, 2.5, 1.0), ("roll_pendulum_gain", 0.2, 3.0, 1.0), ("pitch_pendulum_gain", 0.2, 3.0, 1.0),
+         ("pitch_drift", 0.3, 3.0, 1.0), ("roll_drift", 0.3, 3.0, 1.0), ("pitch_tau", 0.05, 1.5, 0.1), ("roll_tau", 0.05, 1.5, 0.1), ("force_drift", 0.3, 3.0, 1.0))
 HORIZONS = (25, 50, 100)
 PENALTY = 4.0
 
@@ -69,11 +70,24 @@ def real(name):
     return statistics(fill(d.pitch_deg.values[span]), fill(d.roll_deg.values[span]), fill(reach - d.hover_range_target_m.values[span]), fill(side))
 
 
+def starting():
+    """The point of SPACE that leaves the current plant as it is: unit scales, and its own lag and torque drift correlation times."""
+    taus = {t["channel"]: t["tau"] for t in IDENTIFIED_ESC["disturbances"] if t["kind"] == "drift"}
+    current = {"wake_tau": A.complete(IDENTIFIED_ESC["airframe"])["wake_tau"], "pitch_tau": taus["pitch"], "roll_tau": taus["roll"]}
+    return np.array([np.clip(current.get(s[0], s[3]), s[1], s[2]) for s in SPACE])
+
+
 def plant(x):
     """The sim plant for a point of SPACE."""
     v = dict(zip([s[0] for s in SPACE], x))
     airframe = IDENTIFIED_ESC["airframe"]
-    airframe = airframe | {"pitch_tilt": airframe["pitch_tilt"] * v["pitch_gain"], "pitch_wake": airframe.get("pitch_wake", 0.0) * v["pitch_gain"] * v["wake_gain"], "wake_tau": v["wake_tau"], "roll_thrust": airframe["roll_thrust"] * v["roll_gain"]}
+    geometry = A.geometry_of(airframe)
+    p = A.complete(airframe)
+    # The tilt's pitch torque arm is dz - wash (wash_z - CoM height): scaling it moves wash_z.
+    cz = geometry["com"][2]
+    arm = A.resolve(p, geometry)["tilt_arm"] * v["pitch_gain"]
+    airframe = airframe | {"wash_z": cz + (geometry["pivot_z"] - cz - arm) / p["wash"], "pitch_wake": p["pitch_wake"] * v["wake_gain"], "wake_tau": v["wake_tau"], "differential_slope": p["differential_slope"] * v["roll_gain"],
+                           "roll_pendulum": p["roll_pendulum"] * v["roll_pendulum_gain"], "pitch_pendulum": p["pitch_pendulum"] * v["pitch_pendulum_gain"]}
     terms = []
     for t in IDENTIFIED_ESC["disturbances"]:
         t = dict(t)
@@ -120,8 +134,7 @@ def prediction(x):
     """identify_airframe's closed-loop attitude-change error (degrees, roll and pitch) at each of HORIZONS, all flights."""
     data = load_data()
     params = A.complete(plant(x)["airframe"])
-    split = np.median(np.concatenate([A.thrust(r["left_throttle"][r["lift"]:r["end"]]) for r in data.records])) / np.median(np.concatenate([A.thrust(r["right_throttle"][r["lift"]:r["end"]]) for r in data.records]))
-    params["right_thrust_gain"] = float(split)
+    params["right_thrust_gain"] = N.thrust_split(data.records)
     out = []
     for h in HORIZONS:
         F, S0, attitudes = P.runs(params, data, h, 10)
@@ -157,7 +170,7 @@ def main():
     parser.add_argument("--seconds", type=float, default=60.0)
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--start", default="", help="name=value,... to start the search from")
-    parser.add_argument("--out-airframe", type=Path, default=MODELS / "airframe_2026-10-28_calibrated.json")
+    parser.add_argument("--out-airframe", type=Path, default=MODELS / "airframe_2026-10-28.json")
     parser.add_argument("--out-disturbances", type=Path, default=MODELS / "disturbances_2026-10-28_calibrated.json")
     args = parser.parse_args()
     import cma
@@ -165,12 +178,12 @@ def main():
     names = ["pitch 0.3-0.8", "0.8-1.5", "1.5-3", "roll 0.3-0.8", "0.8-1.5", "1.5-3", "range", "side", "range fade", "side fade"]
     print("real   " + "  ".join(f"{n} {v:.2f}" for n, v in zip(names, np.mean(target, 0))), flush=True)
     given = dict((k, float(v)) for k, v in (item.split("=") for item in args.start.split(",") if item))
-    start = np.array([given.get(s[0], s[3]) for s in SPACE])
+    start = np.array([given.get(s[0], v) for s, v in zip(SPACE, starting())])
     low, high = np.array([s[1] for s in SPACE]), np.array([s[2] for s in SPACE])
     to_x = lambda u: np.exp(np.log(low) + (np.log(high) - np.log(low)) * np.clip(u, 0, 1))
     to_u = lambda x: (np.log(x) - np.log(low)) / (np.log(high) - np.log(low))
     with Pool(args.workers) as pool:
-        base_error = prediction(np.array([s[3] for s in SPACE]))
+        base_error = prediction(starting())
         costs, details = evaluate(pool, [start], target, base_error, args.seconds)
         print(f"start: cost {costs[0]:.3f}, mismatch {details[0][0]:.3f} | " + "  ".join(f"{n} {v:.2f}" for n, v in zip(names, details[0][3])), flush=True)
         best = (costs[0], start, details[0])
@@ -188,7 +201,7 @@ def main():
     print("best   " + "  ".join(f"{n} {v:.2f}" for n, v in zip(names, stats)), flush=True)
     print("prediction error roll/pitch (°) " + "  ".join(f"{h * 10} ms {e[0]:.2f}/{e[1]:.2f} (was {b[0]:.2f}/{b[1]:.2f})" for h, e, b in zip(HORIZONS, errors, base_error)), flush=True)
     calibrated = plant(x)
-    args.out_airframe.write_text(json.dumps({key: round(value, 6) if isinstance(value, float) else value for key, value in calibrated["airframe"].items()}, indent=1) + "\n")
+    args.out_airframe.write_text(json.dumps({key: round(value, 6) if isinstance(value, float) else value for key, value in calibrated["airframe"].items()} | {"calibrated": {s[0]: round(float(v), 4) for s, v in zip(SPACE, x)}}, indent=1) + "\n")
     args.out_disturbances.write_text(json.dumps([{key: round(value, 3) if isinstance(value, float) else value for key, value in t.items()} for t in calibrated["disturbances"]], indent=1) + "\n")
     print(f"saved {args.out_airframe} and {args.out_disturbances}: " + ", ".join(f"{s[0]} {v:.3g}" for s, v in zip(SPACE, x)), flush=True)
 
