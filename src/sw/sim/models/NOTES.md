@@ -133,3 +133,21 @@ The fitter now also uses hops from 0.5 s airborne (scoring each start only at ho
 Held out by flight with the short and diverged hops added, the refit predicts as before (1 s ahead: roll 1.35°, pitch 3.64°; 100 ms: 0.69°, 1.02°).
 
 Tuning from the 06-42-15 settings, searching each gain from ÷8 to ×8 of its flown value (40 generations): without the margin variants the optimum is pitch_p 58, pitch_damping 8, roll_p 197, which the margin rejects. With them it is pitch_p 38, pitch_damping 7.9, pitch_i 36, roll_p 189, roll_damping 2.6, roll_i 55, hover_kp 3.8, hover_kd 1.2, hover_kside 0.37, hover_kyaw 1.45 (worst case 0.57 against 17.8 for the flown settings, which crash at pitch ×2). Roll has no observed divergence to calibrate against and the data never flew roll_p much above 40, so roll_p 189 is an extrapolation of the model, not a recommendation; step gains out from what has flown and refit between steps.
+
+## How far the sims are validated (2026-10-28)
+
+All checks use only the recorded flights; nothing here is a new physical measurement.
+
+**Airframe model (airframe.py, identify_airframe.py).** Identified by closed-loop multi-step prediction from the four hovers after the 2026-10-28 ESC recalibration (170 s airborne). Started from each airborne sample, the firmware controller flies the model on the logged references alone. Attitude-change error, roll/pitch: 0.18°/0.57° at 50 ms, 1.5°/4.2° at 250 ms, 1.9°/5.1° at 500 ms, 1.8°/3.3° at 1 s. Pulling the refit toward the 2026-10-27 model's servo and body parameters (prior weight 0.3 or 1.0) scores the same on held-out flights, so the current fit stands. Pitch is the weakest axis; this is now the limit on fidelity.
+
+**Full-attitude sim in the air (validate_rigid.py).** rigid.py flown in closed loop from the same starts, with no random disturbances or sensor noise, matches the airframe model to within 0.1° up to 500 ms. At 1 s its pitch error is 3.9° against the model's 3.3°, and yaw R² 0.27 against 0.35. About a third of that gap is the horizontal drag: rigid.py uses the drag calibrated from the camera's position statistics (0.58, 0.34 per s), the airframe model its own velocity fit (1.17, 0.68). Battery sag and the thrust-scaled flying terms change nothing. Limits: hover-like flight only (attitudes within about 20°, the range the flights covered); the aggressive states of recovery and flips are extrapolation.
+
+**Ground contact (validate_contact.py).** 500 motors-off touchdowns (vertical 0.3–2 m/s, horizontal 0–2 m/s, tilt 0–40° in roll or pitch, sliding toward or away from the low side) in rigid.py and in MuJoCo's own contact physics with the same body and contact points. They agree on which landings end upright in 100% of cases (97% with the CAD inertia). The legless belly tips on this grid only when pitched 40° nose-down while sliding forward at 1–1.5 m/s or more. Peak contact forces in rigid.py are about 1.7× MuJoCo's on level drops; GROUND_K 650 / GROUND_C 25 would match them, but neither engine's stiffness is measured, so force thresholds are only a loose backstop to the touchdown-speed limit.
+
+**Recovery (recover.py, models/recover_params.json; map from recover_map.py).** Drops from 2–9 m at 0–180° from upright, still or tumbling at 3 rad/s, at rest or moving N(0, 1) m/s, plants randomized, 64 drops per cell: 83% safe overall. Within 60° of upright, 86–100% at every height, touching down at a median 0.9–1.1 m/s and 2–7°. From 5–9 m, 88–100% from nearly any start, inverted included. What fails is low and steep: on its side at 2 m, 120–150° below 4 m, inverted below about 5 m. There is not enough height to right and then brake, and these hit at 2–7 m/s. The controller senses only the IMU, plus the height it started from to within 0.3 m.
+
+**Flip (flip.py, models/flip_params.json).** From a 3 m hover over 256 randomized plants: 96.5% clean (never touches the ground, ends within 10° of upright and still), median height lost 0.48 m (90th percentile 0.91), after punching up a median 1.1 m first. 100% clean on the nominal plant.
+
+**Not validated.** Anything beyond hover attitudes in the air (righting from inverted, the flip's roll at full differential thrust), the motors' response at full throttle steps, accelerometer bias, and how hard the real belly hits a floor.
+
+Success map: recover_map_2026-10-28.png.
