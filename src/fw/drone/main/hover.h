@@ -34,8 +34,8 @@ typedef struct {
     float trim_tau, trim_max;
     // Thrust tilt: on a tilt-rotor the motors' tilt moves the drone as the body's pitch does, and a steady tilt (holding the body against a CoM offset) would push it along unseen. thrust_tilt (0 = off, 1 = all of it) counts the servos' steady thrust tilt beyond the one pitch_trim expects, low-passed over thrust_tilt_tau (s), in the velocity dead reckoning and takes it off the pitch the hold asks for, so the thrust points where the hold wants.
     float thrust_tilt, thrust_tilt_tau;
-    // Not settings: the laptop's nudge of the hold point (m; toward the tag, and to the drone's left), streamed with the targets (the dashboard's arrow keys in hover).
-    float nudge_forward, nudge_left;
+    // Not settings: the laptop's nudge of the hold point (m; toward the tag, to the drone's left, and up), streamed with the targets (the dashboard's arrows and W/S in hover).
+    float nudge_forward, nudge_left, nudge_up;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
     float pitch_trim;
 } HoverGains;
@@ -81,6 +81,8 @@ typedef struct {
     float thrust_tilt;
     // How long a landing's descent has stalled (s).
     float stall_time;
+    // The hold-point nudge last seen and how fast it is moving (m, m/s; toward the tag, left, up), so a moving hold point is flown at its speed instead of lagging it by kd / kp.
+    float nudge[3], nudge_rate[3];
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

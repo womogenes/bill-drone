@@ -41,9 +41,9 @@ const ZERO_TARGETS: Targets = {
   servo: [0, 0],
   throttle: [0, 0],
   mode: 0,
-  nudge: [0, 0],
+  nudge: [0, 0, 0],
 };
-const NO_NUDGE: [number, number] = [0, 0];
+const NO_NUDGE: [number, number, number] = [0, 0, 0];
 // The drone accepts 1.5 m each way; the keys stop short of that.
 const NUDGE_MAX = 1;
 // A hover message this recent means a hold is being flown and recorded.
@@ -346,13 +346,13 @@ export default function Page() {
   }, [armed, setTargets]);
 
   const nudgeHold = useCallback(
-    (forward: number, left: number) => {
+    (forward: number, left: number, up: number) => {
       const step = (value: number, change: number) =>
         Math.round(
-          Math.max(-NUDGE_MAX, Math.min(NUDGE_MAX, value + change)) * 100
-        ) / 100;
-      const [x, y] = targets.current.nudge;
-      setTargets({ nudge: [step(x, forward), step(y, left)] });
+          Math.max(-NUDGE_MAX, Math.min(NUDGE_MAX, value + change)) * 1000
+        ) / 1000;
+      const [x, y, z] = targets.current.nudge;
+      setTargets({ nudge: [step(x, forward), step(y, left), step(z, up)] });
     },
     [setTargets]
   );

@@ -38,6 +38,14 @@
 #define LAND_SHOCK 1.45f
 // The descent command ramps in over LAND_EASE (s), so pressing land does not step collective down.
 #define LAND_EASE 0.5f
+// The nudge's speed is smoothed over this long (s): the laptop moves it in small steps every 50 ms.
+// Above this nudge speed (m/s) the hold point counts as moving.
+#ifndef NUDGE_MOVING
+#define NUDGE_MOVING 0.02f
+#endif
+#ifndef NUDGE_TAU
+#define NUDGE_TAU 0.2f
+#endif
 // Below this height (m) a hold is still on the ground taking off: the IMU climb rate leaks toward zero, and centring neither tilts nor turns and lets the range target follow the drone. The tag-height target never asks for less than MIN_HEIGHT above the engage point (m).
 #define AIRBORNE 0.05f
 #define MIN_HEIGHT 0.2f
@@ -249,15 +257,21 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         state->place[0] = state->place[1] = 0;
     }
     state->height += state->climb_rate * dt;
+    float smooth = 1 - expf(-dt / NUDGE_TAU), nudge[3] = {g->nudge_forward, g->nudge_left, g->nudge_up};
+    for (int i = 0; i < 3; i++) {
+        state->nudge_rate[i] += ((nudge[i] - state->nudge[i]) / fmaxf(dt, 1e-4f) - state->nudge_rate[i]) * smooth;
+        state->nudge[i] = nudge[i];
+    }
 
     // Climb-rate command: hold moves the target height toward its goal at climb_rate; landing descends at a set rate.
     float command;
     if (mode == HOVER_HOLD) {
         // The goal is climb; centring goes to the tag's height instead, climbs toward the ceiling to bring the tag into view until it has been flown on (a glimpse from the ground does not count), and holds the height reached when it is lost.
-        float goal = g->climb;
-        if (g->center) goal = seeing ? clamp(state->tag_height, MIN_HEIGHT, g->ceiling) : state->tracking ? fmaxf(g->climb, state->target) : g->ceiling;
+        // The height nudge raises the goal once flying (the takeoff climb and the search for the tag keep theirs), and its speed feeds the climb command.
+        float goal = g->climb, up = state->tracking ? g->nudge_up : 0;
+        if (g->center) goal = seeing ? clamp(state->tag_height + up, MIN_HEIGHT, g->ceiling) : state->tracking ? fmaxf(g->climb, state->target) : g->ceiling;
         state->target += clamp(goal - state->target, -g->climb_rate * dt, g->climb_rate * dt);
-        command = clamp(g->kz * (state->target - state->height), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
+        command = clamp(g->kz * (state->target - state->height) + (state->tracking ? state->nudge_rate[2] : 0), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
     } else {
         float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? 3 : 1);
         command = fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
@@ -336,7 +350,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         float sideways = -state->velocity[0] * uy + state->velocity[1] * ux;
         // The nudged hold point: nearer the tag by nudge_forward, and nudge_left to the drone's left (seen from the drone, the tag then sits that far further round to the right).
         float hold = g->kp * (range - (state->setpoint - g->nudge_forward)), place = g->kside * range * wrap(around - (state->arc - g->nudge_left / range));
-        float toward = hold - g->kd * (closing + rate), across = place - g->kd * (sideways + arc_rate * range);
+        // The velocity damping aims at the nudged hold point's own speed.
+        float toward = hold - g->kd * (closing + rate - state->nudge_rate[0]), across = place - g->kd * (sideways + arc_rate * range - state->nudge_rate[1]);
         float ax = toward * ux - across * uy;
         float ay = toward * uy + across * ux;
         forward = ax * cy + ay * sy;
@@ -347,7 +362,10 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         float step[2] = {(hx * cy + hy * sy) * dt / fmaxf(g->trim_tau, dt), (-hx * sy + hy * cy) * dt / fmaxf(g->trim_tau, dt)};
         float limit = GRAVITY * tanf(g->tilt);
         float total[2] = {forward + state->trim[0], left + state->trim[1]};
+        bool moving = hypotf(state->nudge_rate[0], state->nudge_rate[1]) > NUDGE_MOVING;
         for (int i = 0; i < 2; i++) {
+            // Nor while the hold point is being moved: the error then is the move, not a steady push.
+            if (moving) continue;
             if (fabsf(total[i]) < limit || step[i] * total[i] < 0) state->trim[i] = clamp(state->trim[i] + step[i], -g->trim_max, g->trim_max);
         }
         forward += state->trim[0];

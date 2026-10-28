@@ -89,17 +89,20 @@ const tiltKeys = {
   ArrowLeft: { axis: 'roll', direction: -1 },
   ArrowRight: { axis: 'roll', direction: 1 },
 } as const;
-// In hover and landing the arrows move the hold point instead, at NUDGE_SPEED (m/s) while held: up toward the tag, left to the drone's left.
+// In hover and landing the arrows move the hold point instead while held (m/s): up toward the tag, left to the drone's left; W and S raise and lower it.
 const NUDGE_SPEED = 0.2;
+const NUDGE_CLIMB = 0.15;
 const NUDGE_TICK_MS = 50;
 const nudgeKeys = {
-  ArrowUp: [1, 0],
-  ArrowDown: [-1, 0],
-  ArrowLeft: [0, 1],
-  ArrowRight: [0, -1],
+  ArrowUp: [NUDGE_SPEED, 0, 0],
+  ArrowDown: [-NUDGE_SPEED, 0, 0],
+  ArrowLeft: [0, NUDGE_SPEED, 0],
+  ArrowRight: [0, -NUDGE_SPEED, 0],
+  KeyW: [0, 0, NUDGE_CLIMB],
+  KeyS: [0, 0, -NUDGE_CLIMB],
 } as const;
 
-function nudgeText([forward, left]: [number, number]) {
+function nudgeText([forward, left, up]: [number, number, number]) {
   const parts = [];
   if (forward)
     parts.push(
@@ -107,6 +110,7 @@ function nudgeText([forward, left]: [number, number]) {
     );
   if (left)
     parts.push(`${Math.abs(left).toFixed(2)} m ${left > 0 ? 'left' : 'right'}`);
+  if (up) parts.push(`${Math.abs(up).toFixed(2)} m ${up > 0 ? 'up' : 'down'}`);
   return `Hold nudge: ${parts.join(', ') || 'none'}`;
 }
 
@@ -219,11 +223,11 @@ export const ControlPanel = memo(function ControlPanel({
   status: Reading['control_status'];
   connected: boolean;
   mode: number;
-  nudge: [number, number];
+  nudge: [number, number, number];
   onChange: (settings: Partial<ControlSettings>) => void;
   onMode: (mode: number) => void;
   onHover: () => void;
-  onNudge: (forward: number, left: number) => void;
+  onNudge: (forward: number, left: number, up: number) => void;
   onStop: () => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
@@ -356,14 +360,16 @@ export const ControlPanel = memo(function ControlPanel({
     }
 
     function nudge() {
-      const step = (NUDGE_SPEED * NUDGE_TICK_MS) / 1000;
+      const tick = NUDGE_TICK_MS / 1000;
       let forward = 0;
       let left = 0;
+      let up = 0;
       for (const code of nudging) {
-        forward += nudgeKeys[code][0] * step;
-        left += nudgeKeys[code][1] * step;
+        forward += nudgeKeys[code][0] * tick;
+        left += nudgeKeys[code][1] * tick;
+        up += nudgeKeys[code][2] * tick;
       }
-      if (forward || left) onNudge(forward, left);
+      if (forward || left || up) onNudge(forward, left, up);
     }
 
     function stopNudging() {
@@ -719,7 +725,10 @@ export const ControlPanel = memo(function ControlPanel({
       </div>
       <div className="flex flex-col gap-2 text-muted-foreground">
         {[
-          { keys: ['W', 'S'], label: 'Throttle' },
+          {
+            keys: ['W', 'S'],
+            label: 'Throttle; in hover, raise or lower the hold',
+          },
           { keys: ['T'], label: 'Takeoff' },
           { keys: ['H'], label: 'Hover (arms if needed)' },
           { keys: ['L'], label: 'Land (hold for fast)' },

@@ -82,8 +82,8 @@ export type Targets = {
   throttle: [number, number];
   // FLIGHT_MODES index. In hover and landing the drone flies itself from the camera and ignores the setpoints above.
   mode: number;
-  // Moves the hover hold point (m): [0] toward the tag, [1] to the drone's left. Hover and landing only.
-  nudge: [number, number];
+  // Moves the hover hold point (m): [0] toward the tag, [1] to the drone's left, [2] up. Hover and landing only.
+  nudge: [number, number, number];
 };
 
 export const FLIGHT_MODES = ['Manual', 'Hover', 'Landing', 'Landing fast'];

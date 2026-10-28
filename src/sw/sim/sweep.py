@@ -235,6 +235,11 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 up = left_force * math.cos(left_tilt) + right_force * math.cos(right_tilt)
                 tilt = math.atan2(left_force * math.sin(left_tilt) + right_force * math.sin(right_tilt), up) if up > 0 else 0.0
                 drag = (level_turn(accel_filter, *level_error), tilt)
+                if plant.get("nudge"):
+                    # (start s after liftoff, toward-tag and left speeds in m/s, seconds): the hold point moving as the dashboard's held arrows move it.
+                    start, forward_speed, left_speed, length = plant["nudge"]
+                    moving = 0.0 if lifted is None else min(max(now - lifted - start, 0.0), length)
+                    outer.gains.nudge_forward, outer.gains.nudge_left = forward_speed * moving, left_speed * moving
                 mode = HOLD if plant.get("land_at") is None or lifted is None or now - lifted < plant["land_at"] else LAND_FAST if plant.get("land_fast") else LAND
                 out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag)
                 settings["base_throttle"] = min(1100.0, throttle(out.force / 2 / math.cos(trim))) if out.force > 0 else 0

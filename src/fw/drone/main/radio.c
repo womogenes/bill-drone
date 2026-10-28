@@ -36,7 +36,7 @@ static const uint8_t peer[ESP_NOW_ETH_ALEN] = {0x04, 0xb2, 0x47, 0x54, 0x80, 0x4
 #define SECTOR 4096
 #define HASH 8
 // Target floats: base, roll, pitch, yaw rate, two servos, two throttles, then the hover mode (hover.h), which older senders leave out.
-#define TARGETS 11
+#define TARGETS 12
 // An image that is still unconfirmed this long after boot restarts, so the bootloader rolls back to the previous one.
 #define CONFIRM_US 90000000
 // Most records per FLG1 batch (controller/log_format.py MAX_BATCH) and the batch header size: a full batch fits two fragments, so one goes out per tick.
@@ -195,8 +195,8 @@ static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, 
         return;
     }
     if ((channel != 1 && channel != 4) || !length) return;
-    // Older laptops send 8 targets (no mode) or 9 (no hold-point nudge); the rest stay zero.
-    if (channel == 1 && ((length != 1 + TARGETS * 4 && length != 1 + 9 * 4 && length != 1 + 8 * 4) || data[0] != 'T')) return;
+    // Older laptops send 8 targets (no mode), 9 (no hold-point nudge) or 11 (no height nudge); the rest stay zero.
+    if (channel == 1 && ((length != 1 + TARGETS * 4 && length != 1 + 11 * 4 && length != 1 + 9 * 4 && length != 1 + 8 * 4) || data[0] != 'T')) return;
     int64_t now = esp_timer_get_time();
     portENTER_CRITICAL(&lock);
     bool newer = !seen[channel] || (uint32_t)(number - latest[channel]) - 1 < 0x7fffffffU;

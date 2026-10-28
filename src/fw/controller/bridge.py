@@ -233,12 +233,13 @@ class Recorder:
 
 def encode_targets(message):
     """
-    A 'T' target packet (drone/main/flight_rt.c flight_runtime_targets) from the browser's current controls: base throttle, roll, pitch, yaw rate, two servo angles, two throttles, the flight mode and the hover hold-point nudge (m; toward the tag, left).
+    A 'T' target packet (drone/main/flight_rt.c flight_runtime_targets) from the browser's current controls: base throttle, roll, pitch, yaw rate, two servo angles, two throttles, the flight mode and the hover hold-point nudge (m; toward the tag, left, up).
 
     Mode 0 is manual, 1 hover (the drone holds position, height and heading from the camera), 2 land and 3 land fast. In modes 1-3 the drone computes its own base throttle, roll, pitch and yaw rate and ignores the streamed ones. Clients that send no mode get manual.
     """
     values = [message[key] for key in ("base_throttle", "roll", "pitch", "yaw_rate")]
-    return b"T" + struct.pack("<11f", *values, *message["servo"], *message["throttle"], message.get("mode", 0), *message.get("nudge", (0, 0)))
+    nudge = (list(message.get("nudge", ())) + [0, 0, 0])[:3]
+    return b"T" + struct.pack("<12f", *values, *message["servo"], *message["throttle"], message.get("mode", 0), *nudge)
 
 
 class ClientSender:
