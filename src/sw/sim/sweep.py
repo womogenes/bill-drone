@@ -9,6 +9,7 @@ import random
 from collections import deque
 from pathlib import Path
 
+from sw.sim.disturbance import Disturbances
 from sw.sim.flight import MODEL, MODEL_KEYS, MODEL_OFFSET, Attitude, Controller, throttle, thrust
 
 MASS = 0.940  # kg, the final assembly with the printed deck and IMU bracket (Bill's estimate, 2026-10-24)
@@ -92,7 +93,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     With hover and plant["land_at"], the hover loop is switched to its landing (HOVER_LAND, or HOVER_LAND_FAST with plant["land_fast"]) that many seconds after liftoff, as the dashboard's L does; the result then also holds when it came down and how.
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py), sw/sim/airframe.py supplies the motors, servos and angular accelerations instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
-    IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "vibration" (g RMS, white; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands.
+    IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "vibration" (g RMS, white; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white and periodic (sw/sim/disturbance.py).
     """
     rng = random.Random(seed)
     accel_rng = random.Random(seed + 1000)
@@ -123,6 +124,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     roll_rng = random.Random(seed + 5000)
     trim = math.radians(settings["pitch_trim"])
     rotor_drag, wind_size, wind_tau, wind = plant.get("rotor_drag", 0.0), plant.get("wind", 0.0), plant.get("wind_tau", 2.0), [0.0, 0.0, 0.0]
+    disturbances = Disturbances(plant.get("disturbances"), seed)
+    extra_force, extra_torque = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
     accel_bias = list(plant.get("accel_bias", (0.0, 0.0))) + [0.0]
     vibration = plant.get("vibration", 0.0)
     vibration = list(vibration) if isinstance(vibration, (list, tuple)) else [vibration] * 3
@@ -260,6 +263,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         if gust_size:
             keep = math.exp(-DT / gust_tau)
             gust = keep * gust + gust_size * math.sqrt(1 - keep * keep) * gust_rng.gauss(0, 1)
+        sampled = disturbances.step(DT)
+        extra_force, extra_torque = sampled[:3], sampled[3:]
         if roll_gust_size:
             keep = math.exp(-DT / gust_tau)
             roll_gust = keep * roll_gust + roll_gust_size * math.sqrt(1 - keep * keep) * roll_rng.gauss(0, 1)
@@ -293,16 +298,16 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
             vertical = [motor[s] * math.cos(servo[s]) for s in range(2)]
             forward = [motor[s] * math.sin(servo[s]) for s in range(2)]
             # The extra pitch terms act only in flight: on the ground the feet carry them.
-            extra = disturbance + gust + (rate_moment * rate[1] + angle_moment * (angles[1] - trim) + velocity_moment * apply(rotation(*angles), velocity, transpose=True)[0] if lifted is not None or not liftoff else 0.0)
+            extra = disturbance + gust + (extra_torque[1] if lifted is not None or not liftoff else 0.0) + (rate_moment * rate[1] + angle_moment * (angles[1] - trim) + velocity_moment * apply(rotation(*angles), velocity, transpose=True)[0] if lifted is not None or not liftoff else 0.0)
             torque = [
-                arm * (vertical[0] - vertical[1]) + ((roll_disturbance + roll_gust) * inertia[0] if lifted is not None or not liftoff else 0.0),
+                arm * (vertical[0] - vertical[1]) + ((roll_disturbance + roll_gust + extra_torque[0]) * inertia[0] if lifted is not None or not liftoff else 0.0),
                 height * (forward[0] + forward[1]) + plant["com_x"] * (vertical[0] + vertical[1]) + extra * inertia[1],
                 arm * (forward[1] - forward[0]) + 0.015 * (vertical[1] - vertical[0]),
             ]
             if airframe:
                 # The airframe's accelerations already hold the thrust torques; the random and constant extras still add.
                 airborne = lifted is not None or not liftoff
-                torque = [accel[0] * inertia[0] + ((roll_disturbance + roll_gust) * inertia[0] if airborne else 0.0), accel[1] * inertia[1] + (gust + disturbance if airborne else 0.0) * inertia[1], accel[2] * inertia[2]]
+                torque = [accel[0] * inertia[0] + ((roll_disturbance + roll_gust + extra_torque[0]) * inertia[0] if airborne else 0.0), accel[1] * inertia[1] + (gust + disturbance + extra_torque[1] if airborne else 0.0) * inertia[1], accel[2] * inertia[2] + (extra_torque[2] * inertia[2] if airborne else 0.0)]
             matrix = rotation(*angles)
             speed = math.sqrt(sum(v * v for v in velocity))
             # Every force except gravity, in the world frame: thrust, drag, then each foot below the floor.
@@ -328,7 +333,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 torque = [t + c for t, c in zip(torque, cross(foot, apply(matrix, reaction, transpose=True)))]
             if lifted is None and liftoff and not touching:
                 lifted = now
-            velocity = [v + (p / mass - (9.81 if axis == 2 else 0.0)) * h for axis, (v, p) in enumerate(zip(velocity, push))]
+            velocity = [v + (p / mass - (9.81 if axis == 2 else 0.0) + (extra_force[axis] if lifted is not None else 0.0)) * h for axis, (v, p) in enumerate(zip(velocity, push))]
             position = [x + v * h for x, v in zip(position, velocity)]
             specific = [value / weight for value in apply(matrix, push, transpose=True)]
             rate = [r + t / i * h for r, t, i in zip(rate, torque, inertia)]
@@ -402,12 +407,14 @@ FITTED = {"thrust_k": 1.03, "mass": 0.86, "height": 1.42 * 0.03 / MODEL["pivot_h
           "gust": 5.0, "gust_tau": 0.7, "gyro_noise": 2.0, "camera": {"tag": (2.3, 0.0, 0.3)}, "rotor_drag": 0.5, "vibration": (0.1, 0.1, 0.05)}
 # Identified from the 34 hover flights of 2026-10-27 (both rubber bands on) by closed-loop multi-step prediction with the firmware controller in the loop (sw/sim/identify_airframe.py, parameters in models/airframe_2026-10-27.json). Held out by flight it predicts roll to 1.3° and pitch to 3.7° a second ahead (yaw rate R² 0.55) from the logged references alone. Rotor drag is from the camera velocity over 0.25-1 s against thrust through the logged attitude and modelled tilts (gain within 10 % of 1). The random disturbance is what of the one-step residual lies below 2 Hz (the rest, mostly 10-50 Hz in pitch, does not move the attitude): 0.89 rad/s² RMS in roll and 0.49 in pitch at 0.5 s.
 AIRFRAME = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-27.json").read_text())
-# Refit 2026-10-28 on the four hovers after both ESCs were recalibrated (06:54-07:01 UTC, 170 s, the rescaled thrust table): the motors now respond alike (82/90 ms dead time, 110/122 ms lag). The sim flies the logged settings like those hovers (range error RMS 0.27 m against 0.15-0.25, sideways 0.16 against 0.15-0.19, roll rate 9 against 9.7 deg/s; pitch rate 18.5 against 23-24 and errors fade in 2.9 s against 1.8-2.1, both a little calm and slow) with the fitted horizontal drag and twice the gust above (sw/sim/models/hover_gains_2026-10-28.png).
+# Refit 2026-10-28 on the four hovers after both ESCs were recalibrated (06:54-07:01 UTC, 170 s, the rescaled thrust table): the motors now respond alike (82/90 ms dead time, 110/122 ms lag). The sim flies the logged settings like those hovers (range error RMS 0.27 m against 0.15-0.25, sideways 0.16 against 0.15-0.19, roll rate 9 against 9.7 deg/s; pitch rate 18.5 against 23-24 and errors fade in 2.9 s against 1.8-2.1, both a little calm and slow) (sw/sim/models/hover_gains_2026-10-28.png).
 AIRFRAME_ESC = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-28.json").read_text())
 IDENTIFIED = FITTED | {"airframe": AIRFRAME, "mass": 0.94, "thrust_k": 1.0, "height": 1.0, "disturbance": 0.0, "angle_moment": 0.0, "velocity_moment": 0.0, "gust": 0.49, "gust_tau": 0.5, "roll_gust": 0.89,
                        "camera": {"tag": (2.0, 0.1, 0.45), "miss": 0.006, "burst": 6}, "rotor_drag": (0.6, 0.27)}
 # The ESC-recalibrated drone as flown on 2026-10-28 (see AIRFRAME_ESC).
-IDENTIFIED_ESC = IDENTIFIED | {"airframe": AIRFRAME_ESC, "rotor_drag": (AIRFRAME_ESC["vx_drag"], AIRFRAME_ESC["vy_drag"]), "gust": 0.98, "roll_gust": 1.78}
+# Its disturbances are sw/sim/fit_disturbances.py's terms (models/disturbances_2026-10-28.json: a steady -1.09 m/s² push away from the tag, drifting forces and torques), sized so the sim's closed-loop hover statistics match the real ones; the horizontal drag is half the airframe fit's (which was fitted to the drone's own velocity estimate). Flying each hover's settings it matches range error RMS 0.23 against 0.20 m, its fading time 2.2 against 2.0 s, sideways 0.18 against 0.17 m, pitch rate 23.3 against 23.4 deg/s and roll rate 9.4 against 9.7 (sideways errors fade in 1.2 s against 1.8).
+IDENTIFIED_ESC = IDENTIFIED | {"airframe": AIRFRAME_ESC, "rotor_drag": (0.58, 0.34), "gust": 0.0, "roll_gust": 0.0,
+                               "disturbances": json.loads((Path(__file__).with_name("models") / "disturbances_2026-10-28_calibrated.json").read_text())}
 # Plausible mismatch: pivot height ±40 %, inertia ×0.7–1.5, servo delay 40–70 ms (2026-10-21 bench: motion starts 50–60 ms after the command), motor delay 20–40 ms.
 PLANTS = [NOMINAL | {"height": h, "roll_inertia": i, "pitch_inertia": i, "yaw_inertia": i, "servo_delay": sd, "motor_delay": md}
           for h, i, sd, md in itertools.product((0.6, 1.0, 1.4), (0.7, 1.5), (0.04, 0.07), (0.02, 0.04))]
