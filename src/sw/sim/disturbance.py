@@ -21,7 +21,7 @@ class Disturbances:
         for term in self.terms:
             if term["channel"] not in CHANNELS:
                 raise ValueError(f"unknown disturbance channel {term['channel']!r}")
-            term["state"] = 0.0
+            term["state"], term["index"] = 0.0, CHANNELS.index(term["channel"])
         self.rng = random.Random(seed + 7000)
         self.time = 0.0
 
@@ -43,5 +43,5 @@ class Disturbances:
                 value = term["amplitude"] * math.sin(2 * math.pi * self.time / term["period"] + term.get("phase", 0.0))
             else:
                 raise ValueError(f"unknown disturbance kind {kind!r}")
-            out[CHANNELS.index(term["channel"])] += value
+            out[term["index"]] += value
         return out

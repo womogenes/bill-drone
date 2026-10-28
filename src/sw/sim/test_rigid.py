@@ -58,26 +58,26 @@ def resync(target, source):
 
 def parity(n=256, ticks=300, seed=0, disturbances=True, synced=True, free=None, height=(-0.05, 0.8)):
     """The largest relative difference over the run; synced resynchronises before every tick after the first free ticks."""
-    sims = [start(n, seed, disturbances, backend, height) for backend in ("numpy", "c")]
+    sims = [start(n, seed, disturbances, backend, height)[0] for backend in ("numpy", "c")]
     rng = np.random.default_rng(seed + 2)
     worst, windows = {}, []
     free = ticks if free is None else free
     for tick in range(ticks):
         if synced and tick >= free:
-            resync(sims[1][0], sims[0][0])
+            resync(sims[1], sims[0])
         # Random commands held for a few ticks, beyond the clip limits now and then.
         if tick % 5 == 0:
             throttle = rng.uniform(-100, 1400, (n, 2)) * (rng.random((n, 1)) < 0.9)
             tilt = rng.uniform(-1.3, 1.3, (n, 2))
-        states = [snapshot(sim, sim.step(throttle, tilt)) for sim, obs in sims]
+        states = [snapshot(sim, sim.step(throttle, tilt)) for sim in sims]
         error = difference(states[1], states[0])
-        assert (sims[0][0].touched == sims[1][0].touched).all(), f"touch flags differ at tick {tick}"
+        assert (sims[0].touched == sims[1].touched).all(), f"touch flags differ at tick {tick}"
         for key, value in error.items():
             worst[key] = max(worst.get(key, 0.0), value)
         if tick % 50 == 49 or tick == free - 1:
             windows.append((tick + 1, max(worst.values())))
-    touched = sims[0][0].touched.mean()
-    landed = (sims[0][0].contact_now > 0).mean()
+    touched = sims[0].touched.mean()
+    landed = (sims[0].contact_now > 0).mean()
     mode = f"free {free} ticks then resynchronised every tick" if synced and free < ticks else "free run"
     print(f"disturbances {'on' if disturbances else 'off'}, {mode}: {n} envs, {ticks} ticks, heights {height[0]}-{height[1]} m, {100 * touched:.0f}% touched the ground, {100 * landed:.0f}% in contact at the end")
     print("  largest relative difference so far, by tick: " + ", ".join(f"{tick}: {value:.1e}" for tick, value in windows))
@@ -86,7 +86,7 @@ def parity(n=256, ticks=300, seed=0, disturbances=True, synced=True, free=None, 
 
 
 def bench(n, backend, seconds=1.0):
-    sim, obs = start(n, 0, True, backend)
+    sim = start(n, 0, True, backend)[0]
     throttle, tilt = np.full((n, 2), 600.0), np.zeros((n, 2))
     sim.step(throttle, tilt)
     count, began = 0, time.perf_counter()

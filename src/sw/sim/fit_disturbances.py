@@ -39,7 +39,7 @@ def drift(series, dt=A.DT):
 
 def torques(params, data):
     flights = list(range(len(data.records)))
-    keep, push = N.teacher(params, data, flights)
+    keep, _ = N.teacher(params, data, flights)
     b, a = butter(2, CUTOFF / (0.5 / A.DT))
     out = {axis: [] for axis in ("roll", "pitch", "yaw")}
     f = np.array(flights)

@@ -21,14 +21,13 @@ import numpy as np
 from sw.fit import settings as recording_settings
 from sw.flight_log import read_flight
 from sw.sim import airframe as A
-from sw.sim.flight import MODEL, MODEL_KEYS, MODEL_OFFSET, MODEL_TUNING_KEYS, TUNING_LAYOUT, Controller, control_many
+from sw.sim.flight import MODEL, MODEL_TUNING_KEYS, THRUST_VOLTAGE, TUNING_LAYOUT, YAW_I, Controller, control_many
 
 DT = A.DT
 DEG = A.DEG
 HORIZONS = (5, 10, 25, 50, 100, 200)
 SCORE_HORIZONS = (1, 5, 10, 25, 50, 100)
 INDEX = {key: 6 + TUNING_LAYOUT.index(key) for key in TUNING_LAYOUT}
-THRUST_VOLTAGE = MODEL_OFFSET + len(MODEL_KEYS)
 VOLTAGE_TAU = 0.3  # the runtime's battery smoothing for thrust compensation (flight_rt.c)
 VOLTAGE_RANGE = 0.15
 MODELS = Path(__file__).with_name("models")
@@ -102,7 +101,7 @@ def controller(record):
     c.configure(s)
     c.reset()
     c.command[THRUST_VOLTAGE] = 0.0  # applied through the thrust scales (Data.thrust_scales), as the runtime does
-    c.command[THRUST_VOLTAGE + 1] = s.get("yaw_i", 0.0)
+    c.command[YAW_I] = s.get("yaw_i", 0.0)
     return np.array(c.state, np.float32), np.array(c.command, np.float32)
 
 
@@ -121,10 +120,10 @@ class Data:
         self.voltage = self.pad(lambda r: np.where(r["battery_v"] > 5, r["battery_v"], self.reference(r)) / self.reference(r))
         self.targets = self.pad(lambda r: np.column_stack([r["base_throttle"] > 0, r["target_roll_deg"] * DEG, r["target_pitch_deg"] * DEG, r["target_yaw_deg_s"] * DEG, r["base_throttle"]]))
         self.scale = self.pad(self.thrust_scales)
-        # Dropped log records up to each sample, to leave out windows that span one.
         # How far each sample is from the floor for the near-ground term: the logged height above the engage point (m) or the time since liftoff (s).
         self.near = None if ground is None else self.pad(lambda r: np.maximum(np.nan_to_num(r["hover_height_m"], nan=10.0), 0.0) if ground == "height" else np.maximum(np.arange(len(r["base_throttle"])) - r["lift"], 0) * DT)
         self.excite = self.pad(lambda r: r["excite"])
+        # Dropped log records up to each sample, to leave out windows that span one.
         self.gaps = self.pad(lambda r: np.cumsum(np.abs(np.diff(r["esp_time_us"], prepend=r["esp_time_us"][0] - 10000) - 10000) > 3000))
         buffers = [controller(r) for r in records]
         self.initial = np.array([b[0] for b in buffers])
@@ -192,8 +191,9 @@ class Data:
         """
         Starts every stride samples in the flights' airborne windows as (flight, start) arrays, and which of the horizons each may be scored at [horizon, lane]: those still airborne with no dropped record from 200 ms before the start.
         """
-        F = np.concatenate([np.full(len(range(self.records[i]["lift"] + 5, self.records[i]["end"] - horizons[0] - 1, stride)), i) for i in flights]).astype(int)
-        S = np.concatenate([np.arange(self.records[i]["lift"] + 5, self.records[i]["end"] - horizons[0] - 1, stride) for i in flights]).astype(int)
+        starts = [np.arange(self.records[i]["lift"] + 5, self.records[i]["end"] - horizons[0] - 1, stride) for i in flights]
+        F = np.concatenate([np.full(len(s), i) for i, s in zip(flights, starts)]).astype(int)
+        S = np.concatenate(starts).astype(int)
         end = np.array([self.records[i]["end"] for i in F])
         before = self.gaps[F, np.maximum(S - 20, 0)]
         valid = np.array([(S + h < end) & (self.gaps[F, np.minimum(S + h + 1, self.size - 1)] == before) for h in horizons])
@@ -355,7 +355,7 @@ def main():
     saved = sorted(MODELS.glob("airframe_*.json"))
     start_path = None if args.start == "defaults" else Path(args.start) if args.start else saved[-1] if saved else None
     loaded = json.loads(start_path.read_text()) if start_path else {}
-    start = A.complete(loaded) if start_path else {key: A.PARAMS[key][2] if key not in A.OPTIONAL else 0.0 for key in A.KEYS}
+    start = A.complete(loaded)
     print(f"starting from {start_path or 'the plant defaults'}", flush=True)
     ground = args.ground or loaded.get("ground_by")
     if ground and not start["pitch_ground"]:

@@ -2,7 +2,7 @@
 
 ## Code and operation
 
-Firmware and simulation share the C attitude estimator, controller and thrust table in `fw/drone/main/flight_math.c`; `sw/sim/flight.py` wraps it for the simulation and adds thrust conversion and gyro calibration. The controller receives accelerometer and gyro readings. It uses fixed geometry and inertia estimates; position and altitude are recorded for evaluation.
+Firmware and simulation share the C attitude estimator, controller and thrust table in `fw/drone/main/flight_math.c`; `sw/sim/flight.py` wraps it for the simulation and adds thrust conversion. The controller receives accelerometer and gyro readings. It uses fixed geometry and inertia estimates; position and altitude are recorded for evaluation.
 
 ## Thrust calibration
 

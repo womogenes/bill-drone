@@ -23,7 +23,7 @@ library.flight_control_many.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes
 library.flight_control_many.restype = None
 count = ctypes.c_size_t.in_dll(library, "flight_thrust_count").value
 THRUST_BUFFER = array("f", (ctypes.c_float * (2 * count)).in_dll(library, "flight_thrust"))
-# [throttle, thrust_N] rows, as the drone uses them; thrust declines above 1100.
+# [throttle, thrust_N] rows, as the drone uses them.
 THRUST_TABLE = [[int(THRUST_BUFFER[2 * index]), THRUST_BUFFER[2 * index + 1]] for index in range(count)]
 PEAK = max(range(len(THRUST_TABLE)), key=lambda index: THRUST_TABLE[index][1])
 
@@ -66,69 +66,16 @@ def interpolate(value, points, input_column=0):
 
 def thrust(throttle):
     """
-    Convert an ESC command to newtons, including the measured decline above 1100.
+    Convert an ESC command to newtons.
     """
     return interpolate(throttle, THRUST_TABLE)
 
 
 def throttle(force):
     """
-    Convert newtons to an ESC command using the rising curve, capped at 1100.
+    Convert newtons to an ESC command using the table's rising part, capped at its peak.
     """
     return interpolate(force, THRUST_TABLE[:PEAK + 1], input_column=1)
-
-
-class GyroCalibration:
-    def __init__(self):
-        self.bias = [0.0, 0.0, 0.0]
-        self.remaining = 0
-
-    def start(self, samples=200):
-        self.samples = samples
-        self.total = [0.0, 0.0, 0.0]
-        self.remaining = samples
-
-    def update(self, gyro):
-        if self.remaining:
-            for axis in range(3):
-                self.total[axis] += gyro[axis]
-            self.remaining -= 1
-            count = self.samples - self.remaining
-            self.bias = [value / count for value in self.total]
-
-        return [value - bias for value, bias in zip(gyro, self.bias)]
-
-
-DEFAULT_TUNING = {
-    "roll_p": 20.0,
-    "roll_i": 3.0,
-    "roll_damping": 6.0,
-    "pitch_p": 20.0,
-    "pitch_i": 3.0,
-    "pitch_damping": 10.0,
-    "yaw_damping": 4.0,
-    "integral_limit": 3.0,
-    "pitch_trim": 0.0,
-    "left_trim": 0.9,
-    "right_trim": -0.9,
-    # Integrator starting values in rad/s², for a known steady disturbance.
-    "roll_bias": 0.0,
-    "pitch_bias": 0.0,
-    # Constant yaw torque term in rad/s².
-    "yaw_bias": 0.0,
-    # Per-motor thrust multipliers; a weak motor below 1.0 gets more throttle for the same force.
-    "left_thrust_scale": 1.0,
-    "right_thrust_scale": 1.0,
-    # Degrees added to each servo command in the direction it last moved (servo deadband and play).
-    "servo_compensation": 0.75,
-    # Collective throttle below which the integrators hold their biases.
-    "integrate_throttle": 580,
-    # Degrees per second the roll/pitch setpoint may move; liftoff ramps from the ground attitude.
-    "target_rate": 360,
-    # Degrees of target tilt per m/s of dead-reckoned velocity (0 = off), and its leak time in seconds.
-    "velocity_damping": 8,
-    "velocity_leak": 3,
-}
 
 
 # Geometry and inertia of the current 900 g drone, in metres and kg·m².
@@ -157,7 +104,6 @@ MODEL_TUNING_KEYS = (
     "pivot_height", "com_x", "roll_inertia", "pitch_inertia", "yaw_inertia",
     "reaction_torque_ratio", "arm",
 )
-DEFAULT_TUNING.update({key: MODEL[key] for key in MODEL_TUNING_KEYS})
 
 # Equivalent to retaining 0.99 / 0.9998 of gyro integration every 10 ms.
 GRAVITY_TAU = -0.01 / math.log(0.99)
@@ -175,8 +121,9 @@ FEEDFORWARD_KEYS = BIAS_KEYS + THRUST_SCALE_KEYS
 # C Command tuning layout after the six motion floats; the model block follows.
 TUNING_LAYOUT = COMMAND_KEYS + FEEDFORWARD_KEYS + ("servo_compensation", "integrate_throttle", "target_rate", "velocity_damping", "velocity_leak")
 MODEL_OFFSET = 6 + len(TUNING_LAYOUT)
-# Dashboard field IDs and TEL1 order. Append only; this is independent of TUNING_LAYOUT.
-CONTROL_KEYS = COMMAND_KEYS + MODEL_TUNING_KEYS + FEEDFORWARD_KEYS
+# The runtime-only Command fields after the model block: the battery voltage thrust compensation is relative to, and the yaw-rate integral gain.
+THRUST_VOLTAGE = MODEL_OFFSET + len(MODEL_KEYS)
+YAW_I = THRUST_VOLTAGE + 1
 
 
 class Attitude:
@@ -206,7 +153,7 @@ class Controller:
         # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, the takeoff setpoint state, then the upright-takeoff flag.
         self.state = array("f", [0.0] * 17)
         # Motion (6 floats), tuning (TUNING_LAYOUT), then model parameters.
-        # Runtime-only Command fields after the model (thrust_voltage, yaw_i, hover) stay zero: off in the simulation.
+        # Runtime-only Command fields after the model (thrust_voltage at THRUST_VOLTAGE, yaw_i at YAW_I, hover) start at zero: off unless the caller sets them.
         self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS] + [0.0] * 64)
         for key in THRUST_SCALE_KEYS:
             self.command[6 + TUNING_LAYOUT.index(key)] = 1.0
