@@ -1,7 +1,8 @@
 """
-Identify the airframe model (sw/sim/airframe.py) from hover recordings by closed-loop multi-step prediction: uv run --with scipy -m sw.sim.identify_airframe <recordings or globs> [--start params.json] [--freeze key,...] [--folds 5] [--workers N] [--out file]
+Identify the airframe model (sw/sim/airframe.py) from hover recordings by closed-loop multi-step prediction: uv run --with scipy -m sw.sim.identify_airframe <recordings or globs> [--start params.json] [--freeze key,...] [--ground height|time] [--folds 5] [--workers N] [--out file]
 
 Each recording's controller is replayed from arming on its logged attitude, gyro, references, collective and battery (it reproduces the logged throttles to rounding and servo commands to 0.04°), and the airframe is run one step ahead along the logged commands for its actuator states and the flight's constant push. From every start (every 10th airborne sample) the firmware controller, with its state at that sample, then flies the airframe for up to 2 s on the logged references alone, and the fit is least squares on the predicted rates at 50 ms to 2 s ahead (over the rates' spread) and on the attitude (over the attitude change's spread at that horizon). A start counts only at the horizons that stay airborne and clear of dropped log records, so short hops and flights that diverged count too: they hold most of what there is on the stability margin. Because the controller is in the loop, a disturbance shows only as output error: fitting the plant to logged commands instead (open loop) credits the controller's reactions to the airframe. All lanes' controllers step in one C call (sw/sim/flight_many.c), and the Jacobian's columns run in parallel.
+With --ground, the tilt's pitch effectiveness grows near the floor (sw/sim/airframe.py pitch_ground, ground_scale), by the logged hover height (flights without one are left out) or by the time since liftoff.
 The per-flight push absorbs any steady torque, so the right motor's static thrust gain is not identifiable from the motion: it is pinned to the airborne thrust split (median left over right table thrust, taking the CoM as centred between the motors, as measured), and only the motors' dead times and lags may differ.
 It starts from the newest saved model (sw/sim/models/airframe_*.json), so after a hardware change a few flights refit what changed. Then each of --folds groups of flights is predicted by a fit to the others, and the held-out frame-by-frame scores (R² of the rates, attitude error and R² of the attitude change at 10 ms to 1 s) are printed, closed loop and on the logged commands.
 """
@@ -76,7 +77,7 @@ def controller(record):
 class Data:
     """The recordings as padded arrays [flight, sample, ...]: the logged signals, the controller's references and voltage-compensated thrust scales, and every sample's replayed controller state."""
 
-    def __init__(self, records):
+    def __init__(self, records, ground=None):
         self.records = records
         self.size = max(len(r["base_throttle"]) for r in records)
         self.trims = np.array([(r["setting"].get("left_trim", 0.0), r["setting"].get("right_trim", 0.0)) for r in records])
@@ -89,6 +90,8 @@ class Data:
         self.targets = self.pad(lambda r: np.column_stack([r["base_throttle"] > 0, r["target_roll_deg"] * DEG, r["target_pitch_deg"] * DEG, r["target_yaw_deg_s"] * DEG, r["base_throttle"]]))
         self.scale = self.pad(self.thrust_scales)
         # Dropped log records up to each sample, to leave out windows that span one.
+        # How far each sample is from the floor for the near-ground term: the logged height above the engage point (m) or the time since liftoff (s).
+        self.near = None if ground is None else self.pad(lambda r: np.maximum(np.nan_to_num(r["hover_height_m"], nan=10.0), 0.0) if ground == "height" else np.maximum(np.arange(len(r["base_throttle"])) - r["lift"], 0) * DT)
         self.gaps = self.pad(lambda r: np.cumsum(np.abs(np.diff(r["esp_time_us"], prepend=r["esp_time_us"][0] - 10000) - 10000) > 3000))
         buffers = [controller(r) for r in records]
         self.initial = np.array([b[0] for b in buffers])
@@ -185,7 +188,7 @@ def teacher(p, data, flights):
         state.vel = np.where(v != 0, v, state.vel)
         for key in keep:
             keep[key][:, k] = getattr(state, key)
-        state, _ = A.step(p, state, throttle, command, np.full(n, k), data.voltage[f, k], zero)
+        state, _ = A.step(p, state, throttle, command, np.full(n, k), data.voltage[f, k], zero, near=None if data.near is None else data.near[f, k])
         residual[:, k] = data.rate[f, k + 1] - state.rate
     push = np.array([residual[j, data.records[i]["lift"]:data.records[i]["end"] - 1].mean(0) / DT for j, i in enumerate(flights)])
     return keep, push
@@ -211,7 +214,7 @@ def predict(p, data, flights, horizons, stride, closed=True):
         k = np.minimum(S0 + j, data.size - 1)
         if closed:
             throttle[lane, k], command[lane, k] = data.control(states, commands, F, k, state.att, state.rate)
-        state, _ = A.step(p, state, throttle, command, k, voltage[lane, k], push[J])
+        state, _ = A.step(p, state, throttle, command, k, voltage[lane, k], push[J], near=None if data.near is None else data.near[F, k])
         rates[j] = state.rate
         attitudes[j] = state.att
     return F, S0, valid, rates, attitudes
@@ -293,23 +296,29 @@ def main():
     parser.add_argument("recordings", nargs="+")
     parser.add_argument("--start", help="parameters to start from (default: the newest sw/sim/models/airframe_*.json; 'defaults' for the plant's starting values)")
     parser.add_argument("--freeze", default="roll_lift,band_stiffness", help="parameters held at their start (default: the terms the 2026-10-27 fit did without); right_thrust_gain is always held at the thrust split")
+    parser.add_argument("--ground", choices=("height", "time"), help="fit the near-ground pitch term by logged height or time since liftoff (default: off, unless the start model has one)")
     parser.add_argument("--evaluations", type=int, default=60)
     parser.add_argument("--folds", type=int, default=5, help="held-out groups of flights to score (0 to skip)")
     parser.add_argument("--shortest", type=float, default=0.5, help="seconds airborne a flight needs")
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--out", help="default: sw/sim/models/airframe_<newest recording's day>.json")
     args = parser.parse_args()
-    records = [r for r in (load(p, args.shortest) for p in paths(args.recordings)) if r]
-    print(f"{len(records)} flights, {sum(r['end'] - r['lift'] for r in records) * DT:.0f} s airborne", flush=True)
-    data = Data(records)
     saved = sorted(MODELS.glob("airframe_*.json"))
     start_path = None if args.start == "defaults" else Path(args.start) if args.start else saved[-1] if saved else None
-    start = A.complete(json.loads(start_path.read_text())) if start_path else {key: A.PARAMS[key][2] if key not in A.OPTIONAL else 0.0 for key in A.KEYS}
+    loaded = json.loads(start_path.read_text()) if start_path else {}
+    start = A.complete(loaded) if start_path else {key: A.PARAMS[key][2] if key not in A.OPTIONAL else 0.0 for key in A.KEYS}
     print(f"starting from {start_path or 'the plant defaults'}", flush=True)
+    ground = args.ground or loaded.get("ground_by")
+    if ground and not start["pitch_ground"]:
+        # From zero the scale has no gradient.
+        start["pitch_ground"] = 0.3
+    records = [r for r in (load(p, args.shortest) for p in paths(args.recordings)) if r and (ground != "height" or not np.isnan(r["hover_height_m"]).all())]
+    print(f"{len(records)} flights, {sum(r['end'] - r['lift'] for r in records) * DT:.0f} s airborne", flush=True)
+    data = Data(records, ground)
     split = np.median(np.concatenate([A.thrust(r["left_throttle"][r["lift"]:r["end"]]) for r in records])) / np.median(np.concatenate([A.thrust(r["right_throttle"][r["lift"]:r["end"]]) for r in records]))
     start["right_thrust_gain"] = float(split)
     print(f"right motor static thrust gain {split:.3f} (airborne thrust split)", flush=True)
-    frozen = [key for key in args.freeze.split(",") if key] + ["right_thrust_gain"]
+    frozen = [key for key in args.freeze.split(",") if key] + ["right_thrust_gain"] + ([] if ground else ["pitch_ground", "ground_scale"])
     free = [key for key in A.KEYS if key not in frozen]
     base = {key: start[key] for key in A.KEYS}
     initialise(data, free, base)
@@ -321,7 +330,7 @@ def main():
         _, push = teacher(params, data, everything)
         print(f"fit cost {cost:.1f}: " + ", ".join(f"{key} {value:.4g}" for key, value in params.items()), flush=True)
         print(f"pushes (rad/s²) roll {push[:, 0].mean():+.2f} ± {push[:, 0].std():.2f}, pitch {push[:, 1].mean():+.2f} ± {push[:, 1].std():.2f}, yaw {push[:, 2].mean():+.2f} ± {push[:, 2].std():.2f}", flush=True)
-        result = {key: round(value, 6) for key, value in params.items()} | {f"{axis}_push": round(push[:, j].mean(), 4) for j, axis in enumerate(("roll", "pitch", "yaw"))} | {f"{axis}_push_sd": round(push[:, j].std(), 4) for j, axis in enumerate(("roll", "pitch", "yaw"))}
+        result = {key: round(value, 6) for key, value in params.items() if ground or key not in ("pitch_ground", "ground_scale")} | ({"ground_by": ground} if ground else {}) | {f"{axis}_push": round(push[:, j].mean(), 4) for j, axis in enumerate(("roll", "pitch", "yaw"))} | {f"{axis}_push_sd": round(push[:, j].std(), 4) for j, axis in enumerate(("roll", "pitch", "yaw"))}
         out.write_text(json.dumps(result, indent=1) + "\n")
         print(f"saved {out}", flush=True)
         folds = min(args.folds, len(records))

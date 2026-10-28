@@ -259,7 +259,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         if airframe:
             body_velocity = apply(rotation(*angles), velocity, transpose=True)
             tilt_commands = [math.degrees(left_angle - servo_zero[0]) * MODEL["left_servo_direction"], math.degrees(right_angle - servo_zero[1]) * MODEL["right_servo_direction"]]
-            accel, motor, servo = airframe.step((left, right), tilt_commands, 1.0, rate, angles[:2], body_velocity[:2], airborne=lifted is not None or not liftoff)
+            # The near-ground pitch term goes by the lowest foot's height (as the logged height above the engage point) or the time since liftoff, as it was fitted.
+            ground_by = plant["airframe"].get("ground_by")
+            near = None if not ground_by else max(0.0, position[2] + min(apply(rotation(*angles), foot)[2] for foot in feet)) if ground_by == "height" else (now - lifted if lifted is not None else 0.0) if liftoff else 10.0
+            accel, motor, servo = airframe.step((left, right), tilt_commands, 1.0, rate, angles[:2], body_velocity[:2], airborne=lifted is not None or not liftoff, near=near)
             motor, servo = list(motor), list(servo)
         clearance = position[2] + min(apply(rotation(*angles), foot)[2] for foot in feet)
         substeps = AIR_SUB if clearance > CLEAR + math.hypot(*velocity) * DT else SUB

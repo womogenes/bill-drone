@@ -26,7 +26,7 @@ PARAMS = {
     "link_wn": (10.0, 300.0, 80.0), "link_zeta": (0.05, 2.0, 0.5), "inertia_ratio": (0.0, 3.0, 0.3),
     "left_play": (0.0, 3.0, 0.6), "right_play": (0.0, 3.0, 0.6), "left_band": (-20000.0, 20000.0, 2000.0), "right_band": (-20000.0, 20000.0, 2000.0), "band_stiffness": (-2000.0, 2000.0, 0.0), "right_gain": (0.6, 1.4, 1.0),
     "roll_thrust": (-3, 3, 1.0), "roll_gyro": (-50, 50, 0.0), "roll_lift": (-3, 3, 0.0), "roll_damping": (-50, 50, 0.0), "roll_stiffness": (-100, 100, 0.0), "roll_velocity": (-100, 100, 0.0), "roll_from_yaw": (-30, 30, 0.0), "roll_prop_drag": (-3, 3, 0.0),
-    "pitch_tilt": (-3, 3, 1.0), "pitch_lift": (-0.05, 0.05, 0.0), "pitch_damping": (-50, 50, 0.0), "pitch_stiffness": (-100, 100, 0.0), "pitch_velocity": (-100, 100, 0.0),
+    "pitch_tilt": (-3, 3, 1.0), "pitch_ground": (-1, 3, 0.0), "ground_scale": (0.01, 2.0, 0.1), "pitch_lift": (-0.05, 0.05, 0.0), "pitch_damping": (-50, 50, 0.0), "pitch_stiffness": (-100, 100, 0.0), "pitch_velocity": (-100, 100, 0.0),
     "yaw_tilt": (-3, 3, 1.0), "yaw_drag": (-0.2, 0.2, 0.0), "yaw_damping": (-50, 50, 0.0), "yaw_from_roll": (-30, 30, 0.0),
     # Horizontal speed (only for prediction from logs; the simulation moves the vehicle itself): forward from pitch and the motors' mean tilt, left from roll, each with linear drag.
     "vx_pitch": (-40, 40, 7.7), "vx_tilt": (-40, 40, 0.0), "vx_drag": (0, 5, 0.1), "vy_roll": (-20, 20, -9.0), "vy_drag": (0, 5, 0.2),
@@ -35,7 +35,7 @@ KEYS = list(PARAMS)
 # Zeroed on the ground, where the feet carry them (as is the constant push): the collective roll term the roll push cancels, and the moments from attitude and speed.
 GROUND = ("roll_lift", "roll_stiffness", "pitch_stiffness", "roll_velocity", "pitch_velocity")
 # Terms a parameter set may leave out (they then stay off).
-OPTIONAL = ("roll_lift", "band_stiffness", "roll_prop_drag")
+OPTIONAL = ("roll_lift", "band_stiffness", "roll_prop_drag", "pitch_ground")
 
 
 def thrust(throttle):
@@ -64,9 +64,9 @@ def delayed(buffer, k, delay):
     return buffer[lane, first, side] * (1 - fraction) + buffer[lane, second, side] * fraction
 
 
-def step(p, state, throttles, commands, k, voltage, push, airborne=None, model=MODEL):
+def step(p, state, throttles, commands, k, voltage, push, airborne=None, near=None, model=MODEL):
     """
-    Advance every lane one control tick from sample k: throttles and commands are [lane, sample, side] buffers holding each lane's inputs up to k, voltage [lane] the battery over thrust_voltage, push [lane, axis] the constant angular accelerations (rad/s²). Lanes with airborne False (default all airborne) drop the GROUND terms and the push.
+    Advance every lane one control tick from sample k: throttles and commands are [lane, sample, side] buffers holding each lane's inputs up to k, voltage [lane] the battery over thrust_voltage, push [lane, axis] the constant angular accelerations (rad/s²). Lanes with airborne False (default all airborne) drop the GROUND terms and the push. near [lane] is how far each lane is from the floor (default far): the tilt's pitch effectiveness is pitch_tilt × (1 + pitch_ground × exp(−near / ground_scale)).
     Returns the state and the tick's mean angular accelerations [lane, axis].
     """
     m = model
@@ -91,7 +91,7 @@ def step(p, state, throttles, commands, k, voltage, push, airborne=None, model=M
         + push[:, 0]
     )
     pitch_other = (
-        p["pitch_tilt"] * m["pivot_height"] / m["pitch_inertia"] * (left * sl + right * sr)
+        p["pitch_tilt"] * (1 + (0.0 if near is None else p["pitch_ground"] * np.exp(-np.asarray(near, float) / p["ground_scale"]))) * m["pivot_height"] / m["pitch_inertia"] * (left * sl + right * sr)
         + p["pitch_lift"] * (left * cl + right * cr) / m["pitch_inertia"]
         + p["pitch_damping"] * rate[:, 1] + term["pitch_stiffness"] * att[:, 1] + term["pitch_velocity"] * vel[:, 0]
         + push[:, 1]
@@ -160,9 +160,9 @@ class Airframe:
     def motor(self):
         return tuple(self.state.motor[0])
 
-    def step(self, throttles, commands, voltage, rate, angles, velocity, airborne=True):
+    def step(self, throttles, commands, voltage, rate, angles, velocity, airborne=True, near=None):
         """
-        One control tick: the motors' throttle commands, each servo's commanded physical tilt (degrees, positive forward), battery over thrust_voltage, the body's rates (rad/s), roll and pitch (rad) and forward/left speed (m/s). Returns the tick's mean angular accelerations (rad/s², roll/pitch/yaw), each motor's thrust (N) and each assembly's tilt (rad, positive forward).
+        One control tick: the motors' throttle commands, each servo's commanded physical tilt (degrees, positive forward), battery over thrust_voltage, the body's rates (rad/s), roll and pitch (rad), forward/left speed (m/s) and how far from the floor (see step). Returns the tick's mean angular accelerations (rad/s², roll/pitch/yaw), each motor's thrust (N) and each assembly's tilt (rad, positive forward).
         """
         self.throttles[0, :-1] = self.throttles[0, 1:]
         self.commands[0, :-1] = self.commands[0, 1:]
@@ -171,6 +171,6 @@ class Airframe:
         self.state.rate[0] = rate
         self.state.att[0] = angles
         self.state.vel[0] = velocity
-        self.state, accel = step(self.p, self.state, self.throttles, self.commands, np.array([self.history - 1]), np.array([voltage]), self.push, np.array([airborne]))
+        self.state, accel = step(self.p, self.state, self.throttles, self.commands, np.array([self.history - 1]), np.array([voltage]), self.push, np.array([airborne]), None if near is None else np.array([near]))
         tilt = self.state.tilt[0] * np.array([1.0, self.p["right_gain"]]) * DEG
         return tuple(accel[0]), self.motor, tuple(tilt)
