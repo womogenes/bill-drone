@@ -39,7 +39,7 @@ def rigid_predict(p, data, flights, horizons, stride):
     quat = quat_from(att)
     velocity = np.einsum("nij,nj->ni", R.rotation(quat), np.column_stack([data.vel[F, S0], np.zeros(n)]))
     sim.reset(np.tile([0.0, 0.0, 1.0], (n, 1)), velocity, quat, rate)
-    for key in ("motor", "horn", "hvel", "tilt", "tvel"):
+    for key in ("motor", "horn", "hvel", "tilt", "tvel", "wake"):
         getattr(sim.state, key)[:] = keep[key][J, S0]
     back = np.clip(S0[:, None] - sim.history + np.arange(sim.history)[None], 0, None)
     sim.throttles[:] = data.throttle[F[:, None], back]

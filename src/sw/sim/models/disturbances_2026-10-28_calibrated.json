@@ -2,41 +2,41 @@
  {
   "channel": "roll",
   "kind": "drift",
-  "sd": 2.136,
+  "sd": 1.156,
   "tau": 0.7
  },
  {
   "channel": "pitch",
   "kind": "drift",
-  "sd": 1.126,
+  "sd": 1.782,
   "tau": 0.7
  },
  {
   "channel": "yaw",
   "kind": "drift",
-  "sd": 0.528,
-  "tau": 0.34
+  "sd": 0.396,
+  "tau": 0.26
  },
  {
   "channel": "forward",
   "kind": "constant",
-  "value": -1.088
+  "value": -1.094
  },
  {
   "channel": "forward",
   "kind": "drift",
-  "sd": 0.262,
-  "tau": 3.72
+  "sd": 0.193,
+  "tau": 2.96
  },
  {
   "channel": "left",
   "kind": "constant",
-  "value": -0.136
+  "value": -0.134
  },
  {
   "channel": "left",
   "kind": "drift",
-  "sd": 0.131,
-  "tau": 0.37
+  "sd": 0.112,
+  "tau": 0.47
  }
 ]

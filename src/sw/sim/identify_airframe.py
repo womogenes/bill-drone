@@ -342,7 +342,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recordings", nargs="+")
     parser.add_argument("--start", help="parameters to start from (default: the newest sw/sim/models/airframe_*.json; 'defaults' for the plant's starting values)")
-    parser.add_argument("--freeze", default="roll_lift,band_stiffness", help="parameters held at their start (default: the terms the 2026-10-27 fit did without); right_thrust_gain is always held at the thrust split")
+    parser.add_argument("--freeze", default="roll_lift", help="parameters held at their start (default: the collective roll term the 2026-10-27 fit did without); right_thrust_gain is always held at the thrust split")
     parser.add_argument("--ground", choices=("height", "time"), help="fit the near-ground pitch term by logged height or time since liftoff (default: off, unless the start model has one)")
     parser.add_argument("--prior", type=Path, help="an earlier model whose shared parameters (SHARED) the fit is pulled toward")
     parser.add_argument("--prior-weight", type=float, default=0.3)

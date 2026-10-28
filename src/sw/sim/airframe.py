@@ -3,7 +3,7 @@ The airframe's attitude dynamics as identified from flight logs (sw/sim/identify
 
 Motors: dead time, then a first-order lag on the thrust (the thrust table, times battery voltage over thrust_voltage to voltage_power; the right motor can differ in dead time, lag and gain).
 Servos: dead time, then a second-order position loop (servo_wn, servo_zeta) whose horn speed is limited to servo_slew. The horn drives the motor assembly through a link (link_wn, link_zeta) with play; the rubber bands pull each assembly forward with a preload (left_band, right_band) less band_stiffness per degree of tilt. The assembly's inertia about the servo axis is inertia_ratio of the body's pitch inertia, so what the link does to the assembly it does the other way to the body.
-Body: each axis's angular acceleration is a sum of physical terms (thrust torques at the controller model's geometry times an effectiveness, the props' gyroscopic and tilted drag torques, rate damping, attitude stiffness, moments from horizontal speed, cross-coupling) plus a constant push.
+Body: each axis's angular acceleration is a sum of physical terms (thrust torques at the controller model's geometry times an effectiveness, in pitch with a share pitch_wake of the tilted thrust's torque that builds up with lag wake_tau (fitted negative at about 0.7 s: the tilt is less effective held than swung), the props' gyroscopic and tilted drag torques, rate damping, attitude stiffness, moments from horizontal speed, cross-coupling) plus a constant push.
 Angles are radians; servo commands, horn and tilt are degrees, positive forward (the right servo mirrored, as in the logs); velocity is forward and left in m/s.
 """
 
@@ -26,7 +26,7 @@ PARAMS = {
     "link_wn": (10.0, 300.0, 80.0), "link_zeta": (0.05, 2.0, 0.5), "inertia_ratio": (0.0, 3.0, 0.3),
     "left_play": (0.0, 3.0, 0.6), "right_play": (0.0, 3.0, 0.6), "left_band": (-20000.0, 20000.0, 2000.0), "right_band": (-20000.0, 20000.0, 2000.0), "band_stiffness": (-2000.0, 2000.0, 0.0), "right_gain": (0.6, 1.4, 1.0),
     "roll_thrust": (-3, 3, 1.0), "roll_gyro": (-50, 50, 0.0), "roll_lift": (-3, 3, 0.0), "roll_damping": (-50, 50, 0.0), "roll_stiffness": (-100, 100, 0.0), "roll_velocity": (-100, 100, 0.0), "roll_from_yaw": (-30, 30, 0.0), "roll_prop_drag": (-3, 3, 0.0),
-    "pitch_tilt": (-3, 3, 1.0), "pitch_ground": (-1, 3, 0.0), "ground_scale": (0.01, 2.0, 0.1), "pitch_lift": (-0.05, 0.05, 0.0), "pitch_damping": (-50, 50, 0.0), "pitch_stiffness": (-100, 100, 0.0), "pitch_velocity": (-100, 100, 0.0),
+    "pitch_tilt": (-3, 3, 1.0), "pitch_wake": (-3, 3, 0.0), "wake_tau": (0.01, 1.0, 0.15), "pitch_ground": (-1, 3, 0.0), "ground_scale": (0.01, 2.0, 0.1), "pitch_lift": (-0.05, 0.05, 0.0), "pitch_damping": (-50, 50, 0.0), "pitch_stiffness": (-100, 100, 0.0), "pitch_velocity": (-100, 100, 0.0),
     "yaw_tilt": (-3, 3, 1.0), "yaw_drag": (-0.2, 0.2, 0.0), "yaw_damping": (-50, 50, 0.0), "yaw_from_roll": (-30, 30, 0.0),
     # Horizontal speed (only for prediction from logs; the simulation moves the vehicle itself): forward from pitch and the motors' mean tilt, left from roll, each with linear drag.
     "vx_pitch": (-40, 40, 7.7), "vx_tilt": (-40, 40, 0.0), "vx_drag": (0, 5, 0.1), "vy_roll": (-20, 20, -9.0), "vy_drag": (0, 5, 0.2),
@@ -35,7 +35,7 @@ KEYS = list(PARAMS)
 # Zeroed on the ground, where the feet carry them (as is the constant push): the collective roll term the roll push cancels, and the moments from attitude and speed.
 GROUND = ("roll_lift", "roll_stiffness", "pitch_stiffness", "roll_velocity", "pitch_velocity")
 # Terms a parameter set may leave out (they then stay off).
-OPTIONAL = ("roll_lift", "band_stiffness", "roll_prop_drag", "pitch_ground")
+OPTIONAL = ("roll_lift", "band_stiffness", "roll_prop_drag", "pitch_ground", "pitch_wake")
 
 
 def thrust(throttle):
@@ -43,10 +43,10 @@ def thrust(throttle):
 
 
 class State:
-    """Every lane's state: body rates, roll and pitch, horizontal velocity, then each side's motor thrust, horn angle and speed, and assembly tilt and speed."""
+    """Every lane's state: body rates, roll and pitch, horizontal velocity, then each side's motor thrust, horn angle and speed, and assembly tilt and speed, and the lagged tilted thrust (N, summed over the sides) for pitch_wake."""
 
     def __init__(self, n):
-        for name, width in (("rate", 3), ("att", 2), ("vel", 2), ("motor", 2), ("horn", 2), ("hvel", 2), ("tilt", 2), ("tvel", 2)):
+        for name, width in (("rate", 3), ("att", 2), ("vel", 2), ("motor", 2), ("horn", 2), ("hvel", 2), ("tilt", 2), ("tvel", 2), ("wake", 1)):
             setattr(self, name, np.zeros((n, width)))
 
 
@@ -90,8 +90,11 @@ def step(p, state, throttles, commands, k, voltage, push, airborne=None, near=No
         + p["roll_gyro"] * (state.tvel[:, 0] - state.tvel[:, 1]) * DEG
         + push[:, 0]
     )
+    tilted = left * sl + right * sr
+    state.wake = tilted[:, None] + (state.wake - tilted[:, None]) * math.exp(-DT / p["wake_tau"])
     pitch_other = (
-        p["pitch_tilt"] * (1 + (0.0 if near is None else p["pitch_ground"] * np.exp(-np.asarray(near, float) / p["ground_scale"]))) * m["pivot_height"] / m["pitch_inertia"] * (left * sl + right * sr)
+        p["pitch_tilt"] * (1 + (0.0 if near is None else p["pitch_ground"] * np.exp(-np.asarray(near, float) / p["ground_scale"]))) * m["pivot_height"] / m["pitch_inertia"] * tilted
+        + p["pitch_wake"] * m["pivot_height"] / m["pitch_inertia"] * state.wake[:, 0]
         + p["pitch_lift"] * (left * cl + right * cr) / m["pitch_inertia"]
         + p["pitch_damping"] * rate[:, 1] + term["pitch_stiffness"] * att[:, 1] + term["pitch_velocity"] * vel[:, 0]
         + push[:, 1]
@@ -155,6 +158,7 @@ class Airframe:
         self.state.motor[0] = thrust(throttle) * voltage ** p["voltage_power"] * np.array([1.0, p["right_thrust_gain"]])
         self.state.horn[0] = self.state.tilt[0] = tilt
         self.state.hvel[0] = self.state.tvel[0] = 0.0
+        self.state.wake[0] = (self.state.motor[0] * np.sin(np.asarray(tilt) * np.array([1.0, p["right_gain"]]) * DEG)).sum()
 
     @property
     def motor(self):

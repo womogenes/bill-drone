@@ -17,7 +17,7 @@ typedef struct {
     double servo_delay, right_servo_delay, servo_wn, right_servo_wn, servo_zeta, servo_slew;
     double link_wn, link_zeta, inertia_ratio, left_play, right_play, left_band, right_band, band_stiffness, right_gain;
     double roll_gyro, roll_lift, roll_damping, roll_stiffness, roll_velocity, roll_from_yaw, roll_prop_drag;
-    double pitch_lift, pitch_damping, pitch_stiffness, pitch_velocity;
+    double pitch_lift, pitch_damping, pitch_stiffness, pitch_velocity, pitch_wake, wake_tau;
     double yaw_tilt, yaw_drag, yaw_damping, yaw_from_roll;
     double vx_pitch, vx_tilt, vx_drag, vy_roll, vy_drag;
     double arm, pivot_height, roll_inertia, pitch_inertia, yaw_inertia, reaction_torque_ratio;
@@ -90,12 +90,12 @@ static void cross(const double *a, const double *b, double *out) {
 
 static double norm3(const double *v) { return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
 
-// One control tick for n envs. Per env: pitch_tilt, roll_thrust, inertia_scale [n]; inertia, push [n, 3]; rotor_drag [n, 2]; throttle, tilt_command [n, 2] this tick's commands; disturbance [n, 6] forces then torques. Updated in place: throttles, commands [n, history, 2]; pos, vel, omega, accel [n, 3]; quat [n, 4]; the airframe state rate [n, 3], att, body_vel, motor, horn, hvel, tilt, tvel [n, 2]; contact, contact_now [n]; touched [n] (bytes).
+// One control tick for n envs. Per env: pitch_tilt, roll_thrust, inertia_scale [n]; inertia, push [n, 3]; rotor_drag [n, 2]; throttle, tilt_command [n, 2] this tick's commands; disturbance [n, 6] forces then torques. Updated in place: throttles, commands [n, history, 2]; pos, vel, omega, accel [n, 3]; quat [n, 4]; the airframe state rate [n, 3], att, body_vel, motor, horn, hvel, tilt, tvel [n, 2], wake [n]; contact, contact_now [n]; touched [n] (bytes).
 void rigid_step(size_t n, size_t history, const Params *p, const double *table, size_t count,
                 const double *pitch_tilt, const double *roll_thrust, const double *inertia, const double *inertia_scale, const double *rotor_drag, const double *push,
                 const double *throttle, const double *tilt_command, const double *disturbance,
                 double *throttles, double *commands, double *pos, double *vel, double *quat, double *omega,
-                double *rate, double *att, double *body_vel, double *motor, double *horn, double *hvel, double *tilt, double *tvel,
+                double *rate, double *att, double *body_vel, double *motor, double *horn, double *hvel, double *tilt, double *tvel, double *wake,
                 double *accel, double *contact, double *contact_now, unsigned char *touched) {
     const double gain[2] = {1.0, p->right_gain};
     const double motor_delay[2] = {p->motor_delay, p->right_motor_delay}, servo_delay[2] = {p->servo_delay, p->right_servo_delay};
@@ -106,6 +106,7 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
     const double c2 = p->link_wn * p->link_wn, cz = 2 * p->link_zeta * p->link_wn;
     const double half[2] = {p->left_play / 2, p->right_play / 2}, band[2] = {p->left_band, p->right_band};
     const double h = DT / SUB;
+    const double wake_keep = exp(-DT / p->wake_tau);
     for (size_t e = 0; e < n; e++) {
         double *throttle_buffer = throttles + 2 * history * e, *command_buffer = commands + 2 * history * e;
         double *ps = pos + 3 * e, *v = vel + 3 * e, *q = quat + 4 * e, *w = omega + 3 * e;
@@ -149,7 +150,10 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
             + p->roll_damping * rate0[0] + p->roll_stiffness * flying * att0[0] + p->roll_velocity * flying * vel0[1] + p->roll_from_yaw * rate0[2]
             + p->roll_gyro * (st_tvel[0] - st_tvel[1]) * DEG
             + push[3 * e] * flying;
-        double pitch_other = pitch_tilt[e] * (1 + 0.0) * p->pivot_height / p->pitch_inertia * (left * sn[0] + right * sn[1])
+        double tilted = left * sn[0] + right * sn[1];
+        wake[e] = tilted + (wake[e] - tilted) * wake_keep;
+        double pitch_other = pitch_tilt[e] * (1 + 0.0) * p->pivot_height / p->pitch_inertia * tilted
+            + p->pitch_wake * p->pivot_height / p->pitch_inertia * wake[e]
             + p->pitch_lift * (left * c[0] + right * c[1]) / p->pitch_inertia
             + p->pitch_damping * rate0[1] + p->pitch_stiffness * flying * att0[1] + p->pitch_velocity * flying * vel0[0]
             + push[3 * e + 1] * flying;

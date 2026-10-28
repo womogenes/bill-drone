@@ -47,7 +47,7 @@ MODELS = Path(__file__).with_name("models")
 SOURCE = Path(__file__).with_name("rigid_step.c")
 LIBRARY = Path(__file__).with_name("rigid_step.so")
 # The scalar parameters in rigid_step.c's Params order (airframe parameters, then the controller model's geometry, then this sim's constants, then HULL).
-C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_wn", "link_zeta", "inertia_ratio", "left_play", "right_play", "left_band", "right_band", "band_stiffness", "right_gain", "roll_gyro", "roll_lift", "roll_damping", "roll_stiffness", "roll_velocity", "roll_from_yaw", "roll_prop_drag", "pitch_lift", "pitch_damping", "pitch_stiffness", "pitch_velocity", "yaw_tilt", "yaw_drag", "yaw_damping", "yaw_from_roll", "vx_pitch", "vx_tilt", "vx_drag", "vy_roll", "vy_drag")
+C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_wn", "link_zeta", "inertia_ratio", "left_play", "right_play", "left_band", "right_band", "band_stiffness", "right_gain", "roll_gyro", "roll_lift", "roll_damping", "roll_stiffness", "roll_velocity", "roll_from_yaw", "roll_prop_drag", "pitch_lift", "pitch_damping", "pitch_stiffness", "pitch_velocity", "pitch_wake", "wake_tau", "yaw_tilt", "yaw_drag", "yaw_damping", "yaw_from_roll", "vx_pitch", "vx_tilt", "vx_drag", "vy_roll", "vy_drag")
 C_MODEL = ("arm", "pivot_height", "roll_inertia", "pitch_inertia", "yaw_inertia", "reaction_torque_ratio")
 loaded = None
 
@@ -63,7 +63,7 @@ def library():
             os.replace(partial, LIBRARY)
         loaded = ctypes.CDLL(str(LIBRARY))
         loaded.rigid_param_count.restype = ctypes.c_size_t
-        loaded.rigid_step.argtypes = [ctypes.c_size_t, ctypes.c_size_t] + [ctypes.c_void_p] * 2 + [ctypes.c_size_t] + [ctypes.c_void_p] * 27
+        loaded.rigid_step.argtypes = [ctypes.c_size_t, ctypes.c_size_t] + [ctypes.c_void_p] * 2 + [ctypes.c_size_t] + [ctypes.c_void_p] * 28
         loaded.rigid_step.restype = None
         assert loaded.rigid_param_count() == len(C_AIRFRAME) + len(C_MODEL) + 7 + HULL.size
     return loaded
@@ -195,6 +195,8 @@ class Sim:
         self.state.motor[:] = 0.0 if motor is None else np.array(motor, float)
         tilt_deg = np.zeros((n, 2)) if tilt is None else np.degrees(np.array(tilt, float))
         self.state.horn[:] = self.state.tilt[:] = tilt_deg
+        # The lagged tilted thrust (pitch_wake) starts steady at the starting thrust and tilt.
+        self.state.wake[:, 0] = (self.state.motor * np.sin(np.radians(tilt_deg * np.array([1.0, self.p["right_gain"]])))).sum(1)
         self.throttles = np.zeros((n, self.history, 2)) if motor is None else np.repeat(throttle_for(self.state.motor / self.thrust_gain)[:, None], self.history, 1)
         self.commands = np.repeat(tilt_deg[:, None], self.history, 1)
         self.time = 0.0
@@ -210,7 +212,7 @@ class Sim:
     def bind(self):
         """The C backend's arguments: the parameters and pointers to every (contiguous, float64) array it reads or updates in place."""
         p, st = self.p, self.state
-        for name in ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel"):
+        for name in ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel", "wake"):
             setattr(st, name, np.ascontiguousarray(getattr(st, name), float))
         for name in ("throttles", "commands", "pos", "vel", "quat", "omega", "accel", "contact", "contact_now", "pitch_tilt", "roll_thrust", "inertia", "inertia_scale", "rotor_drag", "push"):
             if name in ("pitch_tilt", "roll_thrust"):
@@ -227,7 +229,7 @@ class Sim:
         self.c_args = (
             [self.n, self.history, address(self.c_params), address(self.c_table), len(self.c_table)]
             + [address(a) for a in (p["pitch_tilt"], p["roll_thrust"], self.inertia, self.inertia_scale, self.rotor_drag, self.push, self.c_throttle, self.c_tilt, self.c_disturbance)]
-            + [address(a) for a in (self.throttles, self.commands, self.pos, self.vel, self.quat, self.omega, st.rate, st.att, st.vel, st.motor, st.horn, st.hvel, st.tilt, st.tvel, self.accel, self.contact, self.contact_now, self.touched)]
+            + [address(a) for a in (self.throttles, self.commands, self.pos, self.vel, self.quat, self.omega, st.rate, st.att, st.vel, st.motor, st.horn, st.hvel, st.tilt, st.tvel, st.wake, self.accel, self.contact, self.contact_now, self.touched)]
         )
         self.c_bound = (self.pos, self.vel, self.quat, self.omega, self.state.motor, self.state.tilt, self.touched)
 
