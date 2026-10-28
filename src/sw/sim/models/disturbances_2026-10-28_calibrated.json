@@ -2,14 +2,14 @@
  {
   "channel": "roll",
   "kind": "drift",
-  "sd": 1.351,
-  "tau": 0.063
+  "sd": 1.11,
+  "tau": 0.091
  },
  {
   "channel": "pitch",
   "kind": "drift",
-  "sd": 2.313,
-  "tau": 0.052
+  "sd": 2.28,
+  "tau": 0.058
  },
  {
   "channel": "yaw",
@@ -25,7 +25,7 @@
  {
   "channel": "forward",
   "kind": "drift",
-  "sd": 0.085,
+  "sd": 0.051,
   "tau": 1.37
  },
  {
@@ -36,7 +36,7 @@
  {
   "channel": "left",
   "kind": "drift",
-  "sd": 0.051,
-  "tau": 0.48
+  "sd": 0.076,
+  "tau": 1.418
  }
 ]

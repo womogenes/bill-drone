@@ -1,7 +1,7 @@
 """
 Calibrate the hover sim to the real camera hovers' closed-loop behaviour: uv run --with scipy --with cma -m sw.sim.calibrate_sim [--generations 30] [--workers 90]
 
-identify_airframe fits the airframe to short-horizon prediction, which the attitude controller's feedback dominates: it pins the plant above about 2 Hz but barely constrains its low-frequency gain, while fit_disturbances only sizes the torque residual's drift. Flown in closed loop, the sim then wobbles at the wrong frequency (0.7 Hz in pitch against the real 0.9-1 Hz). This CMA-ES search sets what both leave loose so that the sim flying each camera hover's settings (sweep.run with hover=True) matches the hover's statistics: the pitch and roll attitude spectra in three bands (0.3-0.8, 0.8-1.5, 1.5-3 Hz), the range error and sideways RMS and how fast they fade. Searched: scales on the tilt's pitch torque (through wash_z, so its lagged share pitch_wake scales with it), on the lagged share and its lag, on the roll authority (differential_slope), on the attitude terms (roll_pendulum, pitch_pendulum), and on the calibrated disturbances (roll and pitch torque drift size and correlation time, force drift size). The prediction error on the logs (identify_airframe's closed-loop free runs at 250 ms, 500 ms and 1 s, all flights) is kept within reach by a penalty on its growth. Writes the scaled airframe and disturbances next to the sources (--out-airframe, --out-disturbances).
+identify_airframe fits the airframe to short-horizon prediction, which the attitude controller's feedback dominates: it pins the plant above about 2 Hz but barely constrains its low-frequency gain, while fit_disturbances only sizes the torque residual's drift. Flown in closed loop, the sim then wobbles at the wrong frequency (0.7 Hz in pitch against the real 0.9-1 Hz). This CMA-ES search sets what both leave loose so that the sim flying each camera hover's settings (sweep.run with hover=True) matches the hover's statistics: the pitch and roll attitude spectra in three bands (0.3-0.8, 0.8-1.5, 1.5-3 Hz), the range error and sideways RMS and how fast they fade. Searched: scales on the tilt's pitch torque (through wash_z, so its lagged share pitch_wake scales with it), on the lagged share and its lag, on the roll authority (differential_slope), on the attitude terms (roll_pendulum, pitch_pendulum), and on the calibrated disturbances (roll and pitch torque drift size and correlation time, forward force drift size, sideways force drift size and correlation time). The prediction error on the logs (identify_airframe's closed-loop free runs at 250 ms, 500 ms and 1 s, all flights) is kept within reach by a penalty on its growth. Writes the scaled airframe and disturbances next to the sources (--out-airframe, --out-disturbances).
 """
 
 import argparse
@@ -32,7 +32,7 @@ BANDS = ((0.3, 0.8), (0.8, 1.5), (1.5, 3.0))
 SEEDS = 4
 # Searched: name, low, high, start (log-scaled; the lag and correlation times start at the current plant's, see starting).
 SPACE = (("pitch_gain", 0.6, 1.8, 1.0), ("wake_gain", 0.3, 3.0, 1.0), ("wake_tau", 0.2, 2.0, 1.0), ("roll_gain", 0.6, 2.5, 1.0), ("roll_pendulum_gain", 0.2, 3.0, 1.0), ("pitch_pendulum_gain", 0.2, 3.0, 1.0),
-         ("pitch_drift", 0.3, 3.0, 1.0), ("roll_drift", 0.3, 3.0, 1.0), ("pitch_tau", 0.05, 1.5, 0.1), ("roll_tau", 0.05, 1.5, 0.1), ("force_drift", 0.3, 3.0, 1.0))
+         ("pitch_drift", 0.3, 3.0, 1.0), ("roll_drift", 0.3, 3.0, 1.0), ("pitch_tau", 0.05, 1.5, 0.1), ("roll_tau", 0.05, 1.5, 0.1), ("force_drift", 0.3, 3.0, 1.0), ("side_drift", 0.3, 5.0, 1.0), ("side_tau", 0.2, 10.0, 0.47))
 HORIZONS = (25, 50, 100)
 PENALTY = 4.0
 
@@ -95,8 +95,11 @@ def plant(x):
             if t["channel"] in ("pitch", "roll"):
                 t["sd"] *= v[f"{t['channel']}_drift"]
                 t["tau"] = v[f"{t['channel']}_tau"]
-            elif t["channel"] in ("forward", "left"):
+            elif t["channel"] == "forward":
                 t["sd"] *= v["force_drift"]
+            elif t["channel"] == "left":
+                t["sd"] *= v["side_drift"]
+                t["tau"] = v["side_tau"]
         terms.append(t)
     return IDENTIFIED_ESC | {"airframe": airframe, "disturbances": terms}
 
