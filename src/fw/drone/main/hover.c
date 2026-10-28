@@ -9,6 +9,9 @@
 // How fast the camera corrects the velocity (s); sightings further apart than GAP_US restart it.
 #define VELOCITY_TAU 0.4f
 #define GAP_US 200000
+// The push observer: each camera velocity correction, spread over PUSH_TAU (s), moves the push estimate (critically damped with VELOCITY_TAU at 4 VELOCITY_TAU), up to MAX_PUSH (m/s²).
+#define PUSH_TAU 1.6f
+#define MAX_PUSH 3.0f
 // Without the tag the dead-reckoned velocity leaks toward zero over this long (s), as the trim never quite matches the push it cancels.
 #define DRIFT_TAU 3.0f
 // Each sighting with a settled tilt moves the wall-normal estimate this fraction of the way to its own.
@@ -130,6 +133,8 @@ static void take(HoverState *state, const HoverGains *g, const HoverPose *pose) 
             float correction = (1 - keep) * ((state->position[i] - position[i]) / interval - then[3 + i]);
             state->velocity[i] += correction;
             for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3 + i] += correction;
+            // A velocity the tilt keeps getting wrong the same way is a push it does not know about: learn it (only once flying on the tag, so the takeoff's ground contact does not teach it).
+            if (state->tracking) state->push[i] = clamp(state->push[i] + correction / PUSH_TAU, -MAX_PUSH, MAX_PUSH);
         }
         state->velocity[2] = keep * state->velocity[2] + (1 - keep) * (state->position[2] - position[2]) / interval;
     } else {
@@ -157,8 +162,9 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         // Continue from the thrust being flown, so taking over a manual flight does not step.
         state->integral = force > 0.5f * weight ? clamp(force / g->mass - GRAVITY, -MAX_INTEGRAL, MAX_INTEGRAL) : 0;
         state->force = force;
-        state->trim[0] = clamp(g->trim_start_x, -g->trim_max, g->trim_max);
-        state->trim[1] = clamp(g->trim_start_y, -g->trim_max, g->trim_max);
+        // The carried-over trim is the push the last hold cancelled: start the push estimate from it (yaw is zero at engage, so body and yaw-turned axes agree), and the body trim from zero.
+        state->push[0] = clamp(-g->trim_start_x, -MAX_PUSH, MAX_PUSH);
+        state->push[1] = clamp(-g->trim_start_y, -MAX_PUSH, MAX_PUSH);
         // Asked to land without enough thrust to be flying: it is already down.
         if (mode != HOVER_HOLD && force < 0.5f * weight) state->landed = true;
     }
@@ -180,11 +186,13 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
             ahead = GRAVITY * (cp * f[0] + sp * (sr * f[1] + cr * f[2])) - state->drag_bias[0];
             left = GRAVITY * (cr * f[1] - sr * f[2]) - state->drag_bias[1];
         } else {
-            ahead = GRAVITY * tanf(pitch - g->pitch_trim + g->thrust_tilt * state->thrust_tilt) - state->trim[0];
-            left = -GRAVITY * tanf(roll) - state->trim[1];
+            ahead = GRAVITY * tanf(pitch - g->pitch_trim + g->thrust_tilt * state->thrust_tilt);
+            left = -GRAVITY * tanf(roll);
         }
-        state->velocity[0] += (ahead * cy - left * sy) * dt;
-        state->velocity[1] += (ahead * sy + left * cy) * dt;
+        // Plus the push learned from the camera (the trim is already in the attitude flown, so it is not subtracted again).
+        float push[2] = {dragging ? 0 : state->push[0], dragging ? 0 : state->push[1]};
+        state->velocity[0] += (ahead * cy - left * sy + push[0]) * dt;
+        state->velocity[1] += (ahead * sy + left * cy + push[1]) * dt;
     }
     float *now = state->history[state->next];
     state->history_us[state->next] = now_us;
@@ -307,7 +315,7 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     if (!seeing) {
         // Tag lost after flying on it: keep damping the dead-reckoned velocity, with the trim learned on the tag. Before the tag is first flown on, the attitude controller's own damping holds the drone, unless the drag model keeps the velocity: then the hold flies on it from takeoff, and also returns to the place where the tag was last seen (or where it took off), as far as the dead reckoning knows it.
         if ((!state->tracking && !dragging) || state->height < AIRBORNE) return;
-        float ax = -g->kd * state->velocity[0], ay = -g->kd * state->velocity[1];
+        float ax = -g->kd * state->velocity[0] - state->push[0], ay = -g->kd * state->velocity[1] - state->push[1];
         if (dragging) {
             ax -= g->kp * state->place[0];
             ay -= g->kp * state->place[1];
@@ -354,8 +362,9 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         float hold = g->kp * (range - (state->setpoint - g->nudge_forward)), place = g->kside * range * wrap(around - (state->arc - g->nudge_left / range));
         // The velocity damping aims at the nudged hold point's own speed.
         float toward = hold - g->kd * (closing + rate - state->nudge_rate[0]), across = place - g->kd * (sideways + arc_rate * range - state->nudge_rate[1]);
-        float ax = toward * ux - across * uy;
-        float ay = toward * uy + across * ux;
+        // Cancel the learned push outright, in the yaw-turned frame, so a turn does not swing it sideways as a body-fixed trim would.
+        float ax = toward * ux - across * uy - state->push[0];
+        float ay = toward * uy + across * ux - state->push[1];
         forward = ax * cy + ay * sy;
         left = -ax * sy + ay * cy;
         // A steady push fixed to the body (level-reference error, thrust-vector trim) would leave steady range and place errors: their position terms, in body axes, slowly build a trim that takes it over.
@@ -377,6 +386,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         state->tracking = true;
     }
     output->tracking = true;
+    state->carry[0] = clamp(state->trim[0] - (state->push[0] * cy + state->push[1] * sy), -g->trim_max, g->trim_max);
+    state->carry[1] = clamp(state->trim[1] - (-state->push[0] * sy + state->push[1] * cy), -g->trim_max, g->trim_max);
     output->velocity[0] = state->velocity[0] * sy - state->velocity[1] * cy;
     output->velocity[1] = state->velocity[0] * cy + state->velocity[1] * sy;
     output->pitch = clamp(atanf(forward / GRAVITY) - g->thrust_tilt * state->thrust_tilt, -g->tilt, g->tilt);

@@ -85,6 +85,10 @@ typedef struct {
     float stall_time;
     // The hold-point nudge last seen and how fast it is moving (m, m/s; toward the tag, left, up), so a moving hold point is flown at its speed instead of lagging it by kd / kp.
     float nudge[3], nudge_rate[3];
+    // The horizontal acceleration the tilt does not explain (m/s²; yaw-turned frame: room wash, level-reference error, unmodelled thrust tilt), learned from the camera's velocity corrections; the hold cancels it directly.
+    float push[2];
+    // What a later hold should start its trim from (m/s²; body forward, left): the trim plus the push's opposite turned into the body, for flight_rt.c's carry-over.
+    float carry[2];
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

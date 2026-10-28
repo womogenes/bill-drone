@@ -1,7 +1,7 @@
 """
 Robust gain tuning on the identified airframe: uv run --with cma -m sw.sim.tune_gains <recording> [--airframe sw/sim/models/airframe_<day>.json] [--range 8] [--generations 50] [--workers N] [--seed 1] [--out result.json]
 
-CMA-ES over the attitude and camera-hover gains, starting from the recording's settings (which also supply everything not tuned), each gain searched on a log scale from its flown value divided by --range to times it, within the firmware's limits (LIMITS, from fw/drone/main/settings.def). A candidate flies the camera hover (sweep.run with hover=True, on the ESC-recalibrated drone IDENTIFIED_ESC with its calibrated pushes and drifting forces) for 10 s on every variant below with three noise seeds, and scores as its worst run: how far it strays from its hold over the last 7 s (the RMS range error from hover_distance plus the RMS sideways wander from where it was at 3 s) plus a share of the pitch error, with a run that loses the tag counting as up to 1 m and a crash as more than any flight.
+CMA-ES over the attitude and camera-hover gains, starting from the recording's settings (which also supply everything not tuned), each gain searched on a log scale from its flown value divided by --range to times it, within the firmware's limits (LIMITS, from fw/drone/main/settings.def). A candidate flies the camera hover (sweep.run with hover=True, on the ESC-recalibrated drone IDENTIFIED_ESC with its calibrated pushes and drifting forces) for 10 s on every variant below with three noise seeds, and scores as the mean of its runs plus WORST times its worst one (the worst alone is mostly set by the odd run that loses the tag): how far it strays from its hold over the last 7 s (the RMS range error from hover_distance plus the RMS sideways wander from where it was at 3 s) plus a share of the pitch error, with a run that loses the tag counting as up to 1 m and a crash as more than any flight.
 The variants are what the identification cannot pin down, CoM shifts (COM_PUSH) the integrators must absorb, plus a 6 dB gain margin: the identified sim needs its pitch effectiveness ×1.5–2 before the 2026-10-27 pitch_p 30 / pitch_damping 12 hop (06-42-15) diverges as it did, while the p20/d8 and p30/d8 hops stay up, so tuning against the nominal model alone would go past what flies.
 """
 
@@ -23,6 +23,8 @@ SEEDS = (0, 1, 2)
 MODELS = Path(__file__).with_name("models")
 # The steady torque of a CoM shift the gains must absorb without retrimming (rad/s²): on 2026-10-28 moving the battery changed the trim biases learn_bias found by up to ~5 in pitch and roll.
 COM_PUSH = 5.0
+# Share of a candidate's worst run in its score, on top of the mean of all its runs.
+WORST = 0.3
 
 
 def variants(a):
@@ -66,6 +68,10 @@ def fly(job):
     return rms(ranges) + rms(across) + 0.02 * spread([math.degrees(e[2][1] - e[6]) for e in late]) + (1 - r["seen"])
 
 
+def score(costs):
+    return sum(costs) / len(costs) + WORST * max(costs)
+
+
 def rms(values):
     return math.sqrt(sum(v * v for v in values) / len(values))
 
@@ -101,22 +107,22 @@ def main():
             return [costs[i * n:(i + 1) * n] for i in range(len(candidates))]
 
         flown_costs = evaluate([flown])[0]
-        print("flown", {k: round(v, 2) for k, v in flown.items()}, f"cost {max(flown_costs):.3f}", flush=True)
+        print("flown", {k: round(v, 2) for k, v in flown.items()}, f"cost {score(flown_costs):.3f}", flush=True)
         for j, name in enumerate(plants):
             print(f"  {name}: " + ", ".join(f"{c:.2f}" for c in flown_costs[j * len(SEEDS):(j + 1) * len(SEEDS)]), flush=True)
         es = cma.CMAEvolutionStrategy([0.0] * len(KEYS), 0.25, {"bounds": [-1, 1], "popsize": 14, "maxiter": args.generations, "seed": args.seed, "verbose": -9})
         start = time.time()
         while not es.stop():
             xs = es.ask()
-            es.tell(xs, [max(c) for c in evaluate([gains(x) for x in xs])])
+            es.tell(xs, [score(c) for c in evaluate([gains(x) for x in xs])])
             print(f"generation {es.countiter} {time.time() - start:.0f} s: best {es.result.fbest:.3f}", {k: round(v, 2) for k, v in gains(es.result.xbest).items()}, flush=True)
         best = gains(es.result.xbest)
         best_costs = evaluate([best])[0]
-    print("best", {k: round(v, 2) for k, v in best.items()}, f"cost {max(best_costs):.3f}", flush=True)
+    print("best", {k: round(v, 2) for k, v in best.items()}, f"cost {score(best_costs):.3f}", flush=True)
     for j, name in enumerate(plants):
         print(f"  {name}: " + ", ".join(f"{c:.2f}" for c in best_costs[j * len(SEEDS):(j + 1) * len(SEEDS)]), flush=True)
     if args.out:
-        args.out.write_text(json.dumps({"best": best, "cost": max(best_costs), "flown": flown}, indent=1) + "\n")
+        args.out.write_text(json.dumps({"best": best, "cost": score(best_costs), "flown": flown}, indent=1) + "\n")
 
 
 if __name__ == "__main__":

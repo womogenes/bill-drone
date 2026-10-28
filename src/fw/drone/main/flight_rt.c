@@ -166,7 +166,7 @@ static void stop_locked(int reason) {
     if (state.enabled && command.auto_trim > 0 && hover.tracking && trim.count >= TRIM_SAMPLES) {
         float start[2] = {command.hover.trim_start_x, command.hover.trim_start_y};
         for (int axis = 0; axis < 2; axis++)
-            trim.hover[axis] = limit(start[axis] + command.auto_trim * (hover.trim[axis] - start[axis]), -command.hover.trim_max, command.hover.trim_max);
+            trim.hover[axis] = limit(start[axis] + command.auto_trim * (hover.carry[axis] - start[axis]), -command.hover.trim_max, command.hover.trim_max);
         trim.hover_ready = true;
     }
     if (state.enabled && trim.count >= TRIM_SAMPLES) {
@@ -261,7 +261,7 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->tag_age = !hover.have_pose ? UINT16_MAX : age < 0 ? 0 : age >= UINT16_MAX ? UINT16_MAX : age;
     for (int i = 0; i < 2; i++) {
         record->velocity[i] = scaled(hover.velocity[i], 1000);
-        record->trim[i] = scaled(hover.trim[i], 1000);
+        record->trim[i] = scaled(hover.carry[i], 1000);
         record->drag_velocity[i] = scaled(hover.drag_velocity[i], 1000);
     }
     record->height = scaled(hover.height, 1000);
