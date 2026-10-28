@@ -19,7 +19,7 @@ from sw.sim import recover as C
 # Searched parameters: (name, low, high), on a log scale except the angles.
 SPACE = [
     ("kp", 1.0, 20.0), ("brake", 3.0, 60.0), ("max_rate", 1.5, 12.0), ("k_roll", 2.0, 60.0), ("k_pitch", 2.0, 80.0), ("kd_yaw", 0.5, 20.0),
-    ("kv", 0.5, 8.0), ("kh", 0.2, 4.0), ("descent", 0.2, 1.0), ("flip_thrust", 0.1, 1.0), ("right_angle", 15.0, 80.0), ("tilt_max", 5.0, 35.0),
+    ("kv", 0.5, 8.0), ("kh", 0.2, 4.0), ("descent", 0.2, 1.0), ("flip_thrust", 0.1, 2.5), ("right_angle", 15.0, 80.0), ("tilt_max", 5.0, 35.0),
     ("servo_max", 20.0, 60.0), ("level_tau", 0.3, 5.0), ("cut_time", 0.1, 1.5), ("flare", 0.3, 3.0), ("k_alt", 0.2, 5.0), ("leak_tau", 0.5, 30.0)
 ]
 HEIGHTS = (3.0, 8.0)

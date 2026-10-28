@@ -2,7 +2,7 @@
 A vectorized full-attitude simulation of the bicopter for recovery control and policy training: many drones at once (numpy, [env, ...] arrays), any orientation (quaternions), any rates, with the identified actuators and the calibrated disturbances.
 
 Frames: world x forward, y left, z up; body x forward, y left, z up through the rotors' shafts at zero tilt. Quaternions are (w, x, y, z), body to world.
-Actuators and torques are the identified airframe model itself (sw/sim/airframe.py step, the post-ESC-recalibration fit by default), so near hover this sim predicts exactly as well as the identification: motors with dead time and lag on the thrust table, servos with dead time, a second-order loop, slew, link and play, the rubber bands, the identified effectiveness, damping, attitude and speed terms and steady pushes. Its attitude terms are fed the roll and pitch of the body's tilt (clipped to ±0.6 rad, beyond which they were never measured). This sim adds what that model leaves out: rotation in any orientation (quaternions, with the full ω × Iω coupling), translation (the thrust vector, gravity, the calibrated rotor drag and quadratic air drag), ground contact, and sw/sim/disturbance.py terms, which come from the rotors' wash and the flight model's error, so both the force and the torque terms are scaled by the motors' total thrust over the weight (clipped to 0-1) and fade out on a landed drone. Motors cannot reverse, and servos stop at ±60°.
+Actuators and torques are the identified airframe model itself (sw/sim/airframe.py step, the post-ESC-recalibration fit by default), so near hover this sim predicts exactly as well as the identification: motors with dead time and lag on the thrust table, servos with dead time, a second-order loop, slew, link and play, the rubber bands, the identified effectiveness, damping, attitude and speed terms and steady pushes. Its attitude terms are fed the roll and pitch of the body's tilt, clipped to ±0.6 rad (beyond which they were never measured) and faded to nothing as the tilt goes on to 90° (ATTITUDE_RANGE), and its speed terms the body-plane speed clipped to SPEED_RANGE with the same fade: held at the clip at any attitude, and fed a fall's speed, the hover's restoring stiffness and speed moments would right an inverted drone by themselves. This sim adds what that model leaves out: rotation in any orientation (quaternions, with the full ω × Iω coupling), translation (the thrust vector, gravity, the calibrated rotor drag and quadratic air drag), ground contact, and sw/sim/disturbance.py terms, which come from the rotors' wash and the flight model's error, so both the force and the torque terms are scaled by the motors' total thrust over the weight (clipped to 0-1) and fade out on a landed drone. Motors cannot reverse, and servos stop at ±60°.
 Ground: penalty contact (spring, damper, Coulomb friction) at points on the body's hull (the belly the drone rests on, the motor pods and the top), so a landing on any side is simulated. Impact is the largest contact force.
 Sensors: a gyro with bias and noise and an accelerometer with noise, as specific force in the body frame.
 Backends: the per-tick physics runs in C (sw/sim/rigid_step.c, compiled on first use) by default; backend="numpy" is the reference it is tested against (sw/sim/test_rigid.py). The C backend updates the state arrays in place.
@@ -35,6 +35,10 @@ HULL = np.array(
     + [(x, y, 0.06) for x in (0.055, -0.055) for y in (0.078, -0.078)]
 )
 GROUND_K, GROUND_C, FRICTION = 3000.0, 40.0, 0.6
+# The tilt (rad) up to which the airframe model's attitude terms were measured; they fade out from there to 90°.
+ATTITUDE_RANGE = 0.6
+# Likewise the body-plane speed (m/s) its speed terms were measured to: a fall's speed, seen in the axes of a drone on its side, would otherwise turn them into large torques.
+SPEED_RANGE = 1.5
 # Below this slip speed (m/s) friction is viscous; much lower and its damping, through the small pitch inertia, reaches the substep's stability limit (rigid_step.c SLIP).
 SLIP = 0.15
 # Quadratic air drag (N per (m/s)²) for falls; the rotor drag at hover speeds is the calibrated linear term.
@@ -258,8 +262,9 @@ class Sim:
         up = R0[:, 2, :]  # world up in the body frame
         st = self.state
         st.rate = self.omega.copy()
-        st.att = np.clip(np.column_stack([np.arctan2(up[:, 1], up[:, 2]), np.arctan2(-up[:, 0], np.hypot(up[:, 1], up[:, 2]))]), -0.6, 0.6)
-        st.vel = np.einsum("nji,nj->ni", R0, self.vel)[:, :2]
+        fade = np.clip((math.pi / 2 - np.arccos(np.clip(up[:, 2], -1, 1))) / (math.pi / 2 - ATTITUDE_RANGE), 0, 1)
+        st.att = np.clip(np.column_stack([np.arctan2(up[:, 1], up[:, 2]), np.arctan2(-up[:, 0], np.hypot(up[:, 1], up[:, 2]))]), -ATTITUDE_RANGE, ATTITUDE_RANGE) * fade[:, None]
+        st.vel = np.clip(np.einsum("nji,nj->ni", R0, self.vel)[:, :2], -SPEED_RANGE, SPEED_RANGE) * fade[:, None]
         # The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down, so a drone that has cut its motors is not pushed over.
         airborne = (self.contact_now == 0) * np.clip((self.state.motor[:, 0] + self.state.motor[:, 1]) / (self.mass * G), 0, 1)
         self.state, alpha_model = A.step(self.p, st, self.throttles, self.commands, np.full(self.n, self.history - 1), np.ones(self.n), self.push, airborne)

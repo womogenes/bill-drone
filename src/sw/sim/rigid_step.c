@@ -124,10 +124,13 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         rotation(q, r0);
         double *up = r0[2];
         double rate0[3] = {w[0], w[1], w[2]};
-        double att0[2] = {clip(atan2(up[1], up[2]), -0.6, 0.6), clip(atan2(-up[0], hypot(up[1], up[2])), -0.6, 0.6)};
+        // Clipped to the measured range and faded out toward 90° of tilt (rigid.py ATTITUDE_RANGE).
+        double fade = clip((M_PI / 2 - acos(clip(up[2], -1, 1))) / (M_PI / 2 - 0.6), 0, 1);
+        double att0[2] = {clip(atan2(up[1], up[2]), -0.6, 0.6) * fade, clip(atan2(-up[0], hypot(up[1], up[2])), -0.6, 0.6) * fade};
         double rotated[3];
         apply_transpose(r0, v, rotated);
-        double vel0[2] = {rotated[0], rotated[1]};
+        // Clipped to the measured speeds and faded like the attitude (rigid.py SPEED_RANGE).
+        double vel0[2] = {clip(rotated[0], -1.5, 1.5) * fade, clip(rotated[1], -1.5, 1.5) * fade};
         // The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down (rigid.py).
         double flying = contact_now[e] == 0 ? clip((st_motor[0] + st_motor[1]) / (p->mass * G), 0, 1) : 0.0;
         // airframe.py step.
