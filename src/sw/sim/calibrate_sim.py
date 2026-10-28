@@ -1,7 +1,7 @@
 """
 Calibrate the hover sim to the real camera hovers' closed-loop behaviour: uv run --with scipy --with cma -m sw.sim.calibrate_sim [--generations 30] [--workers 90]
 
-identify_airframe fits the airframe to short-horizon prediction, which the attitude controller's feedback dominates: it pins the plant above about 2 Hz but barely constrains its low-frequency gain, while fit_disturbances only sizes the torque residual's drift. Flown in closed loop, the sim then wobbles at the wrong frequency (0.7 Hz in pitch against the real 0.9-1 Hz). This CMA-ES search sets what both leave loose so that the sim flying each camera hover's settings (sweep.run with hover=True) matches the hover's statistics: the pitch and roll attitude spectra in three bands (0.3-0.8, 0.8-1.5, 1.5-3 Hz), the range error and sideways RMS and how fast they fade. Searched: scales on the tilt's pitch torque (through wash_z, so its lagged share pitch_wake scales with it), on the lagged share and its lag, on the roll authority (differential_slope), on the attitude terms (roll_pendulum, pitch_pendulum), and on the calibrated disturbances (roll and pitch torque drift size and correlation time, forward force drift size, sideways force drift size and correlation time). The prediction error on the logs (identify_airframe's closed-loop free runs at 250 ms, 500 ms and 1 s, all flights) is kept within reach by a penalty on its growth. Writes the scaled airframe and disturbances next to the sources (--out-airframe, --out-disturbances).
+identify_airframe fits the airframe to short-horizon prediction, which the attitude controller's feedback dominates: it pins the plant above about 2 Hz but barely constrains its low-frequency gain, while fit_disturbances only sizes the torque residual's drift. Flown in closed loop, the sim then wobbles at the wrong frequency (0.7 Hz in pitch against the real 0.9-1 Hz). This CMA-ES search sets what both leave loose so that the sim flying each camera hover's settings (sweep.run with hover=True) matches the hover's statistics: the pitch and roll attitude spectra in three bands (0.3-0.8, 0.8-1.5, 1.5-3 Hz) and their rates below 5 Hz, the range error and sideways RMS (from the hover's own position estimate on both sides) and how fast they fade. Searched: scales on the tilt's pitch torque (through wash_z, so its lagged share pitch_wake scales with it), on the lagged share and its lag, on the roll authority (differential_slope), on the attitude terms (roll_pendulum, pitch_pendulum), and on the calibrated disturbances (roll and pitch torque drift size and correlation time, forward force drift size, sideways force drift size and correlation time). The prediction error on the logs (identify_airframe's closed-loop free runs at 250 ms, 500 ms and 1 s, all flights) is kept within reach by a penalty on its growth. Writes the scaled airframe and disturbances next to the sources (--out-airframe, --out-disturbances).
 """
 
 import argparse
@@ -29,7 +29,7 @@ FLIGHTS = ("2026-10-28T06-54-20-503Z_1581871433", "2026-10-28T06-55-20-397Z_7573
 FS = 100.0
 SETTLE, LANDING = 4.0, 4.0
 BANDS = ((0.3, 0.8), (0.8, 1.5), (1.5, 3.0))
-SEEDS = 4
+SEEDS = 6
 # Searched: name, low, high, start (log-scaled; the lag and correlation times start at the current plant's, see starting).
 SPACE = (("pitch_gain", 0.6, 1.8, 1.0), ("wake_gain", 0.3, 3.0, 1.0), ("wake_tau", 0.2, 2.0, 1.0), ("roll_gain", 0.6, 2.5, 1.0), ("roll_pendulum_gain", 0.2, 3.0, 1.0), ("pitch_pendulum_gain", 0.2, 3.0, 1.0),
          ("pitch_drift", 0.3, 3.0, 1.0), ("roll_drift", 0.3, 3.0, 1.0), ("pitch_tau", 0.05, 1.5, 0.1), ("roll_tau", 0.05, 1.5, 0.1), ("force_drift", 0.3, 3.0, 1.0), ("side_drift", 0.3, 5.0, 1.0), ("side_tau", 0.2, 10.0, 0.47))
@@ -38,8 +38,11 @@ PENALTY = 4.0
 
 
 def bands(series):
+    """Band RMS of an angle (degrees), then its rate's RMS over 0.3-5 Hz (deg/s; the gyro above that is mostly rotor vibration)."""
     f, power = welch(series - series.mean(), fs=FS, nperseg=min(len(series), 1024))
-    return [math.sqrt(power[(f >= lo) & (f < hi)].sum() * (f[1] - f[0])) for lo, hi in BANDS]
+    df = f[1] - f[0]
+    rate = (f >= 0.3) & (f < 5.0)
+    return [math.sqrt(power[(f >= lo) & (f < hi)].sum() * df) for lo, hi in BANDS] + [math.sqrt((power[rate] * (2 * math.pi * f[rate]) ** 2).sum() * df)]
 
 
 def decorrelation(series):
@@ -49,7 +52,7 @@ def decorrelation(series):
 
 
 def statistics(pitch, roll, reach, side):
-    """The matched statistics of one hover: pitch and roll band RMS (degrees), range and sideways RMS (m) and fade times (s)."""
+    """The matched statistics of one hover: pitch and roll band RMS (degrees) and rate RMS (deg/s), range and sideways RMS (m) and fade times (s)."""
     return np.array(bands(pitch) + bands(roll) + [reach.std(), side.std(), decorrelation(reach), decorrelation(side)])
 
 
@@ -115,11 +118,13 @@ def fly(job):
         return None
     t = np.array([e[0] for e in log]) - result["liftoff_s"]
     keep = t > SETTLE
-    position = np.array([e[1] for e in log])[keep]
     estimate = np.degrees([e[3] for e in log])[keep]
-    tag = np.array(p["camera"]["tag"])
-    reach = np.hypot(tag[0] - position[:, 0], tag[1] - position[:, 1]) - 2.0
-    return statistics(estimate[:, 1], estimate[:, 0], reach, position[:, 1] - tag[1])
+    # The hover's own position estimate, as the real hovers log it (sweep.run's log).
+    hover = [e[8] for e, k in zip(log, keep) if k]
+    x, y = np.array([h[0][0] for h in hover]), np.array([h[0][1] for h in hover])
+    reach = np.hypot(x, y)
+    side = np.angle(np.exp(1j * (np.arctan2(y, x) - np.array([h[1] for h in hover])))) * reach
+    return statistics(estimate[:, 1], estimate[:, 0], reach - np.array([h[2] for h in hover]), side)
 
 
 DATA = None
@@ -178,7 +183,7 @@ def main():
     args = parser.parse_args()
     import cma
     target = [real(name) for name in HOVERS]
-    names = ["pitch 0.3-0.8", "0.8-1.5", "1.5-3", "roll 0.3-0.8", "0.8-1.5", "1.5-3", "range", "side", "range fade", "side fade"]
+    names = ["pitch 0.3-0.8", "0.8-1.5", "1.5-3", "rate", "roll 0.3-0.8", "0.8-1.5", "1.5-3", "rate", "range", "side", "range fade", "side fade"]
     print("real   " + "  ".join(f"{n} {v:.2f}" for n, v in zip(names, np.mean(target, 0))), flush=True)
     given = dict((k, float(v)) for k, v in (item.split("=") for item in args.start.split(",") if item))
     start = np.array([given.get(s[0], v) for s, v in zip(SPACE, starting())])
