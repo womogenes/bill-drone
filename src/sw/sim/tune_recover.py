@@ -23,7 +23,7 @@ SPACE = [
     ("servo_max", 20.0, 60.0), ("level_tau", 0.3, 5.0), ("cut_time", 0.1, 1.5), ("flare", 0.3, 3.0), ("k_alt", 0.2, 5.0)
 ]
 HEIGHTS = (3.0, 8.0)
-# Not searched: recover.DEFAULTS roll_over (135°) only matters near inverted, which random falls rarely reach, so the search drifted it to 179° where a direct check at 180° drops 5 m recoveries from 96% to 68%.
+# Not searched: recover.DEFAULTS roll_over (165°) only matters near inverted, which random falls rarely reach, so the search drifted it to 179°, where 180° drops from 5 m fall from 95% to 67% safe; from 150° rolling the long way does not pay (3 m: 46% at 165°, 38% at 135°).
 # The flip's parameters, searched with the recovery controller's (from models/recover_params.json unless --recovery) for the hold after it.
 FLIP_SPACE = [("climb_thrust", 1.0, 2.2), ("climb_time", 0.1, 1.0), ("spin_rate", 4.0, 30.0), ("k_spin", 5.0, 80.0), ("spin_thrust", 0.1, 1.5), ("handoff", 0.3, 2.5)]
 # Height a flip may climb before the cost counts it (m).

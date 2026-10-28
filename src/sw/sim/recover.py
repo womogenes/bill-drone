@@ -21,7 +21,7 @@ from sw.sim import rigid as R
 DEFAULTS = {
     "kp": 6.0, "brake": 15.0, "max_rate": 5.0, "k_roll": 8.0, "k_pitch": 12.0, "kd_yaw": 4.0,
     "kv": 3.0, "kh": 1.0, "descent": 0.5, "flip_thrust": 0.35, "right_angle": 45.0, "tilt_max": 15.0,
-    "touch_g": 1.0, "engage": 0.05, "servo_max": 45.0, "level_tau": 1.0, "cut_time": 0.5, "flare": 1.0, "k_alt": 1.0, "roll_over": 135.0,
+    "touch_g": 1.0, "engage": 0.05, "servo_max": 45.0, "level_tau": 1.0, "cut_time": 0.5, "flare": 1.0, "k_alt": 1.0, "roll_over": 165.0,
 }
 RIGHT, ARREST, LANDED = 0, 1, 2
 # The attitude estimate's error when control is lost (rad, standard deviation of the rotation about each world axis: roll, pitch, yaw).
