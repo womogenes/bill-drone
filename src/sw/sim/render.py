@@ -23,8 +23,11 @@ PHASES = ("righting", "arresting / descending", "landed, motors off")
 
 
 def big_floor(xml):
-    """The model with a floor large enough for falls from several metres, and a sky."""
+    """The model with a floor large enough for falls from several metres, and a sky; without its landing legs, as the drone now flies."""
     xml = xml.replace('size="3 3 0.1" rgba="0.85 0.85 0.85 1"', 'size="30 30 0.1" material="grid" rgba="1 1 1 1"')
+    for legs in ("front_legs", "rear_legs"):
+        xml = xml.replace(f'<geom name="{legs}" class="cad"', f'<geom name="{legs}" class="cad" rgba="0 0 0 0"')
+    xml = xml.replace('<geom type="sphere" pos=', '<geom type="sphere" rgba="0 0 0 0" pos=')
     return xml.replace("<asset>", '<asset>\n    <texture name="grid" type="2d" builtin="checker" rgb1="0.93 0.93 0.91" rgb2="0.80 0.82 0.84" width="512" height="512"/>\n    <material name="grid" texture="grid" texrepeat="40 40"/>\n    <texture type="skybox" builtin="gradient" rgb1="0.75 0.85 0.95" rgb2="0.95 0.97 1.0" width="256" height="256"/>', 1)
 
 

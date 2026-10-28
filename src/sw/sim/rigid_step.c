@@ -128,7 +128,8 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         double rotated[3];
         apply_transpose(r0, v, rotated);
         double vel0[2] = {rotated[0], rotated[1]};
-        double flying = contact_now[e] == 0 ? 1.0 : 0.0;
+        // The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down (rigid.py).
+        double flying = contact_now[e] == 0 ? clip((st_motor[0] + st_motor[1]) / (p->mass * G), 0, 1) : 0.0;
         // airframe.py step.
         double target[2], goal[2], tl[2], c[2], sn[2];
         for (int s = 0; s < 2; s++) {

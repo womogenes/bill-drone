@@ -1,10 +1,10 @@
 """
 Recovery from a fall in any orientation, in the full-attitude simulation (sw/sim/rigid.py): uv run -m sw.sim.recover [--params params.json] [--n 512] [--seed 0]
 
-The controller sees only what the drone senses: it integrates the gyro into a quaternion and the accelerometer, turned to the world, into a velocity, both from the estimate it had when control was lost (the truth plus a little error); no camera and no height. Once upright, while the specific force is close to 1 g, the accelerometer's direction pulls the estimated up back over level_tau s (as the firmware's attitude filter does), so gyro bias cannot tilt the velocity estimate away.
+The controller sees only what the drone senses: it integrates the gyro into a quaternion and the accelerometer, turned to the world, into a velocity, both from the estimate it had when control was lost (the truth plus a little error); no camera and no height. Once upright, while the specific force is close to 1 g, the accelerometer's direction pulls the estimated up back over level_tau s (as the firmware's attitude filter does), so gyro bias cannot tilt the velocity estimate away. (The firmware hover's rotor-drag velocity, the body-plane specific force over the drag, is no use here: the steady pushes the sim was calibrated with are real forces the accelerometer feels, and the drag model reads the -1.1 m/s² one as nearly 2 m/s; integrating the accelerometer counts them right.) The attitude estimate starts within about 1° of the truth in tilt and 6° in yaw (the firmware's filter is held to gravity while it hovers), so the velocity integral drifts a few tenths of a m/s per second at worst. It also knows roughly how high it was (the hover's height, or the height it was dropped from: within HEIGHT_ERROR) and integrates the estimated vertical velocity from there, which tilt errors hardly touch.
   right    while the thrust axis points more than right_angle from up: aim it up with little collective (inverted, thrust would only push down), rolling with differential thrust and pitching with the motors' common tilt
-  arrest   aim the thrust to stop the vertical and horizontal velocity, then descend at descent m/s
-  landed   a touchdown (specific force touch_g beyond what the commanded thrust explains, or the descent stalled with thrust low) stops the motors
+  arrest   aim the thrust to stop the vertical and horizontal velocity, then descend: k_alt per m of estimated height above flare m faster than descent m/s, at most FAST
+  landed   a touchdown (specific force touch_g beyond what the commanded thrust explains, or the descent stalled with thrust low) winds the collective down to nothing over cut_time s while still holding the attitude level, as the firmware's landing does (cutting the motors outright leaves their spinning-down thrusts unbalanced with nothing correcting them, and the legless drone rolls over)
 Each tick turns the attitude error into a wanted rotation rate toward the target, no faster than the drone can brake from (sqrt(2 brake angle), at most max_rate, and kp per rad near the target), then into wanted angular accelerations (k_rate per axis) and allocates them to the two thrusts and two tilts with the identified effectiveness (sw/sim/airframe.py), keeping roll authority when a thrust would saturate. The motors take about 0.2 s to follow (dead time and lag), so the tilts that turn thrust into pitch and yaw are worked out from the thrust a motor model says the motors have now, not from what was just asked.
 A fall counts as a safe landing when the drone first touches with its thrust axis within 30° of up, below 1.5 m/s down and under 300 N of contact force (what a 0.7 m/s touchdown gives on this contact model), and ends upright.
 """
@@ -21,9 +21,14 @@ from sw.sim import rigid as R
 DEFAULTS = {
     "kp": 6.0, "brake": 15.0, "max_rate": 5.0, "k_roll": 8.0, "k_pitch": 12.0, "kd_yaw": 4.0,
     "kv": 3.0, "kh": 1.0, "descent": 0.5, "flip_thrust": 0.35, "right_angle": 45.0, "tilt_max": 15.0,
-    "touch_g": 1.0, "engage": 0.15, "servo_max": 45.0, "level_tau": 1.0,
+    "touch_g": 1.0, "engage": 0.15, "servo_max": 45.0, "level_tau": 1.0, "cut_time": 0.5, "flare": 1.0, "k_alt": 1.0,
 }
 RIGHT, ARREST, LANDED = 0, 1, 2
+# The attitude estimate's error when control is lost (rad, standard deviation of the rotation about each world axis: roll, pitch, yaw).
+ATTITUDE_ERROR = (0.017, 0.017, 0.1)
+# The height estimate's error then (m, standard deviation), and the fastest descent the controller asks for (m/s).
+HEIGHT_ERROR = 0.3
+FAST = 3.0
 
 
 class Controller:
@@ -32,11 +37,14 @@ class Controller:
         n = sim.n
         self.phase = np.zeros(n, int)
         self.low_time = np.zeros(n)
+        self.landed_at = np.full(n, np.inf)
 
-    def reset(self, quat_estimate, velocity_estimate):
+    def reset(self, quat_estimate, velocity_estimate, height_estimate):
         self.q = np.array(quat_estimate, float)
         self.v = np.array(velocity_estimate, float)
+        self.h = np.array(height_estimate, float)
         self.collective = np.zeros(self.sim.n)
+        self.landed_at = np.full(self.sim.n, np.inf)
         a = self.sim.a
         self.delay = round((a["motor_delay"] + a["right_motor_delay"]) / 2 / R.DT)
         self.tau = (a["motor_tau"] + a["right_motor_tau"]) / 2
@@ -61,13 +69,17 @@ class Controller:
         self.q = R.integrate_quat(self.q, rates, R.DT)
         Rq = R.rotation(self.q)
         self.v += (np.einsum("nij,nj->ni", Rq, obs["accel"]) - np.array([0, 0, R.G])) * R.DT
+        self.h += self.v[:, 2] * R.DT
         up_body = Rq[:, 2, :]  # world up in the body frame
         upright = up_body[:, 2]
         # Wanted thrust direction (world): straight up while righting; afterwards to stop the fall and drift.
         a_xy = np.clip(-p["kh"] * self.v[:, :2], -R.G * math.tan(math.radians(p["tilt_max"])), R.G * math.tan(math.radians(p["tilt_max"])))
-        a_z = -p["kv"] * (self.v[:, 2] + self.descent)
+        # Landing (descent > 0) comes down faster while high; a manoeuvre's hold or climb (descent <= 0) is kept as it is.
+        sink = np.where(self.descent > 0, np.clip(self.descent + p["k_alt"] * (self.h - p["flare"]), self.descent, FAST), self.descent)
+        a_z = -p["kv"] * (self.v[:, 2] + sink)
         arresting = self.phase == ARREST
-        wanted = np.where(arresting[:, None], np.column_stack([a_xy, R.G + a_z]), np.array([0, 0, 1.0]))
+        landing = self.phase == LANDED
+        wanted = np.where((arresting & ~landing)[:, None], np.column_stack([a_xy, R.G + a_z]), np.array([0, 0, 1.0]))
         wanted /= np.linalg.norm(wanted, axis=1, keepdims=True)
         d_body = np.einsum("nji,nj->ni", Rq, wanted)
         axis = np.cross(np.array([0, 0, 1.0]), d_body)
@@ -82,6 +94,9 @@ class Controller:
         weight = sim.mass * R.G
         collective = np.where(arresting, sim.mass * (R.G + a_z) / np.maximum(upright, 0.5), p["flip_thrust"] * weight)
         collective = np.clip(collective, 0.15 * weight, 2.2 * weight)
+        # Landed: the collective winds down from what was flown at touchdown, the attitude held level meanwhile.
+        fade = np.clip(1 - (time - self.landed_at) / p["cut_time"], 0, 1)
+        collective = np.where(landing, self.collective * fade, collective)
         if self.override is not None:
             alpha, collective = self.override(alpha, collective, omega)
         self.phase = np.where((self.phase == RIGHT) & (upright > math.cos(math.radians(p["right_angle"]))), ARREST, self.phase)
@@ -101,9 +116,11 @@ class Controller:
         # Touchdown: a hit, or a descent that has stalled with the thrust low.
         hit = np.linalg.norm(obs["accel"], axis=1) - self.thrust.sum(1) / sim.mass > p["touch_g"] * R.G
         self.low_time = np.where(arresting & (np.abs(self.v[:, 2]) < 0.1) & (collective < 0.9 * weight), self.low_time + R.DT, 0)
-        self.phase = np.where(arresting & (time > p["engage"] + 0.5) & (hit | (self.low_time > 0.3)), LANDED, self.phase)
-        self.collective = collective
-        off = (self.phase == LANDED) | (time < p["engage"])
+        touched = arresting & (time > p["engage"] + 0.5) & (hit | (self.low_time > 0.3))
+        self.landed_at = np.where(touched, time, self.landed_at)
+        self.phase = np.where(touched, LANDED, self.phase)
+        self.collective = np.where(landing, self.collective, collective)
+        off = (landing & (time - self.landed_at > p["cut_time"])) | (time < p["engage"])
         self.asked = np.roll(self.asked, -1, 1)
         self.asked[:, -1] = np.where(off[:, None], 0.0, np.column_stack([left, right]))
         throttle[off] = 0
@@ -127,16 +144,24 @@ def randomization(n, seed, spread=1.0):
     return {"pitch_tilt": u(0.7, 1.5), "roll_thrust": u(0.8, 1.25), "thrust": u(0.9, 1.1), "motor_delay": u(0.8, 1.4), "servo_delay": u(0.8, 1.4), "inertia": u(0.85, 1.2), "drag": u(0.6, 1.6), "disturbance": u(0.5, 2.0)}
 
 
+def estimate(quat, rng):
+    """The attitude estimate at the loss of control: the truth turned by a small world-frame rotation (ATTITUDE_ERROR)."""
+    half = rng.normal(0, 1, (len(quat), 3)) * np.array(ATTITUDE_ERROR) / 2
+    error = np.column_stack([np.ones(len(quat)), half])
+    return R.quat_multiply(error / np.linalg.norm(error, axis=1, keepdims=True), quat)
+
+
 def run(params, n=256, seed=0, seconds=8.0, randomize=True, record=False):
     sim = R.Sim(n, seed=seed, scale=randomization(n, seed) if randomize else None)
     position, velocity, quat, omega = scenarios(n, seed)
     obs = sim.reset(position, velocity, quat, omega)
     control = Controller(sim, params)
     rng = np.random.default_rng(seed + 7)
-    control.reset(R.quat_multiply(quat, np.column_stack([np.ones(n), rng.normal(0, 0.02, (n, 3))])), velocity + rng.normal(0, 0.2, (n, 3)))
+    control.reset(estimate(quat, rng), velocity + rng.normal(0, 0.2, (n, 3)), position[:, 2] + rng.normal(0, HEIGHT_ERROR, n))
     first_tilt = np.full(n, np.nan)
     first_speed = np.full(n, np.nan)
     trace = []
+    settled = 0.0
     for k in range(int(seconds / R.DT)):
         throttle, tilt = control(obs, sim.time)
         before = sim.touched.copy()
@@ -148,7 +173,9 @@ def run(params, n=256, seed=0, seconds=8.0, randomize=True, record=False):
         first_speed[new] = -vz[new]
         if record:
             trace.append((sim.time, sim.pos.copy(), sim.quat.copy(), sim.motor.copy(), sim.tilt.copy(), control.phase.copy()))
-        if (control.phase == LANDED).all() and sim.touched.all():
+        # Done once every drone has been down a while (to see it settle).
+        settled = settled + R.DT if (control.phase == LANDED).all() and sim.touched.all() else 0.0
+        if settled > 1.5:
             break
     final_up = sim.up()[:, 2]
     safe = (first_tilt < 30) & (first_speed < 1.5) & (sim.contact < 300) & (final_up > 0.8)

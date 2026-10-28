@@ -20,11 +20,11 @@ from sw.sim import recover as C
 SPACE = [
     ("kp", 1.0, 20.0), ("brake", 3.0, 60.0), ("max_rate", 1.5, 12.0), ("k_roll", 2.0, 60.0), ("k_pitch", 2.0, 80.0), ("kd_yaw", 0.5, 20.0),
     ("kv", 0.5, 8.0), ("kh", 0.2, 4.0), ("descent", 0.2, 1.0), ("flip_thrust", 0.1, 1.0), ("right_angle", 15.0, 80.0), ("tilt_max", 5.0, 35.0),
-    ("servo_max", 20.0, 60.0), ("level_tau", 0.3, 5.0),
+    ("servo_max", 20.0, 60.0), ("level_tau", 0.3, 5.0), ("cut_time", 0.1, 1.5), ("flare", 0.3, 3.0), ("k_alt", 0.2, 5.0),
 ]
-HEIGHTS = (5.0, 9.0)
-# The flip's parameters, and the recovery parameters it flies with (models/recover_params.json unless --recovery).
-FLIP_SPACE = [("climb", 0.3, 4.0), ("climb_time", 0.1, 1.0), ("spin_rate", 4.0, 30.0), ("k_spin", 5.0, 80.0), ("spin_thrust", 0.1, 1.5), ("handoff", 0.3, 2.5)]
+HEIGHTS = (3.0, 8.0)
+# The flip's parameters, searched with the recovery controller's (from models/recover_params.json unless --recovery) for the hold after it.
+FLIP_SPACE = [("climb_thrust", 1.0, 2.2), ("climb_time", 0.1, 1.0), ("spin_rate", 4.0, 30.0), ("k_spin", 5.0, 80.0), ("spin_thrust", 0.1, 1.5), ("handoff", 0.3, 2.5)]
 TASK = {"space": SPACE, "flip": False, "recovery": {}}
 
 
@@ -74,8 +74,9 @@ def main():
     import cma
     if args.flip:
         from sw.sim import flip as F
-        TASK.update(space=FLIP_SPACE, flip=True, recovery=json.loads(args.recovery.read_text()))
-        start = F.DEFAULTS | (json.loads(args.start.read_text()) if args.start else {})
+        recovery = json.loads(args.recovery.read_text())
+        TASK.update(space=FLIP_SPACE + SPACE, flip=True, recovery=recovery)
+        start = F.DEFAULTS | C.DEFAULTS | recovery | (json.loads(args.start.read_text()) if args.start else {})
     else:
         start = C.DEFAULTS | (json.loads(args.start.read_text()) if args.start else {})
     task = dict(TASK)

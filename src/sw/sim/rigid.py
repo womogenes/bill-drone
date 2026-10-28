@@ -28,9 +28,9 @@ MASS = 0.94
 TABLE = np.array(THRUST_TABLE, float)
 THROTTLE_MAX = 1200
 SERVO_LIMIT = math.radians(60)
-# Hull contact points in the body frame (m): the belly's four corners (sw/sim/sweep.py FEET), the motor pods at the arm tips, and the top of the deck.
+# Hull contact points in the body frame (m): the belly's four corners (the drone flies without its landing legs: sw/sim/sweep.py BODY_FEET), the motor pods at the arm tips, and the top of the deck.
 HULL = np.array(
-    [(x, y, -0.087 - 0.0172) for x in (0.055, -0.055) for y in (0.078, -0.078)]
+    [(x, y, -0.035) for x in (0.07, -0.07) for y in (0.1, -0.1)]
     + [(0.0, y, z) for y in (0.172, -0.172) for z in (0.03, -0.03)]
     + [(x, y, 0.06) for x in (0.055, -0.055) for y in (0.078, -0.078)]
 )
@@ -240,7 +240,8 @@ class Sim:
         st.rate = self.omega.copy()
         st.att = np.clip(np.column_stack([np.arctan2(up[:, 1], up[:, 2]), np.arctan2(-up[:, 0], np.hypot(up[:, 1], up[:, 2]))]), -0.6, 0.6)
         st.vel = np.einsum("nji,nj->ni", R0, self.vel)[:, :2]
-        airborne = self.contact_now == 0
+        # The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down, so a drone that has cut its motors is not pushed over.
+        airborne = (self.contact_now == 0) * np.clip((self.state.motor[:, 0] + self.state.motor[:, 1]) / (self.mass * G), 0, 1)
         self.state, alpha_model = A.step(self.p, st, self.throttles, self.commands, np.full(self.n, self.history - 1), np.ones(self.n), self.push, airborne)
         alpha_model = alpha_model / self.inertia_scale[:, None]
         wash = np.clip((self.state.motor[:, 0] + self.state.motor[:, 1]) / (self.mass * G), 0, 1)

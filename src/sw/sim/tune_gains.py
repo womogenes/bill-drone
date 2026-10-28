@@ -1,7 +1,7 @@
 """
 Robust gain tuning on the identified airframe: uv run --with cma -m sw.sim.tune_gains <recording> [--airframe sw/sim/models/airframe_<day>.json] [--range 8] [--generations 50] [--workers N] [--seed 1] [--out result.json]
 
-CMA-ES over the attitude and camera-hover gains, starting from the recording's settings (which also supply everything not tuned), each gain searched on a log scale from its flown value divided by --range to times it. A candidate flies the camera hover (sweep.run with hover=True) for 10 s on every variant below with three noise seeds, and scores as its worst run: the camera position's spread over the last 7 s plus a share of the pitch error, with a run that loses the tag counting as up to 1 m and a crash as more than any flight.
+CMA-ES over the attitude and camera-hover gains, starting from the recording's settings (which also supply everything not tuned), each gain searched on a log scale from its flown value divided by --range to times it, within the firmware's limits (LIMITS, from fw/drone/main/settings.def). A candidate flies the camera hover (sweep.run with hover=True, on the ESC-recalibrated drone IDENTIFIED_ESC with its calibrated pushes and drifting forces) for 10 s on every variant below with three noise seeds, and scores as its worst run: how far it strays from its hold over the last 7 s (the RMS range error from hover_distance plus the RMS sideways wander from where it was at 3 s) plus a share of the pitch error, with a run that loses the tag counting as up to 1 m and a crash as more than any flight.
 The variants are what the identification cannot pin down, CoM shifts (COM_PUSH) the integrators must absorb, plus a 6 dB gain margin: the identified sim needs its pitch effectiveness ×1.5–2 before the 2026-10-27 pitch_p 30 / pitch_damping 12 hop (06-42-15) diverges as it did, while the p20/d8 and p30/d8 hops stay up, so tuning against the nominal model alone would go past what flies.
 """
 
@@ -14,9 +14,11 @@ from multiprocessing import Pool
 from pathlib import Path
 
 from sw.fit import settings as recording_settings
-from sw.sim.sweep import IDENTIFIED, run
+from sw.sim.sweep import IDENTIFIED_ESC, run
 
-KEYS = ("pitch_p", "pitch_damping", "pitch_i", "roll_p", "roll_damping", "roll_i", "hover_kp", "hover_kd", "hover_kside", "hover_kyaw")
+KEYS = ("pitch_p", "pitch_damping", "pitch_i", "roll_p", "roll_damping", "roll_i", "hover_kp", "hover_kd", "hover_kside", "hover_kyaw", "hover_tilt", "hover_trim_tau", "hover_trim_max")
+# The settings' ranges in the firmware (settings.def), which the search stays within.
+LIMITS = {"hover_kp": (0, 20), "hover_kd": (0, 20), "hover_kside": (0, 5), "hover_kyaw": (0, 10), "hover_tilt": (0, 15), "hover_trim_tau": (0.1, 20), "hover_trim_max": (0, 3)}
 SEEDS = (0, 1, 2)
 MODELS = Path(__file__).with_name("models")
 # The steady torque of a CoM shift the gains must absorb without retrimming (rad/s²): on 2026-10-28 moving the battery changed the trim biases learn_bias found by up to ~5 in pitch and roll.
@@ -40,6 +42,10 @@ def variants(a):
     }
 
 
+# Horizontal pushes beyond the calibrated ones (m/s², forward and left: rotor wash off nearby walls, a level-reference error), added to the airframe variants' plants.
+PUSHES = {"": (0.0, 0.0), ", wash forward": (1.0, 0.0), ", wash back": (-1.0, 0.0), ", wash left": (0.0, 0.7)}
+
+
 def spread(values):
     mean = sum(values) / len(values)
     return math.sqrt(sum((v - mean) ** 2 for v in values) / len(values))
@@ -52,8 +58,16 @@ def fly(job):
     if not r["stable"]:
         return 10 + (10 - r["fail_s"])
     late = [e for e in log if e[0] >= 3.0]
+    tag = plant["camera"]["tag"]
+    hold = gains.get("hover_distance", 0.0)
+    ranges = [math.hypot(tag[0] - e[1][0], tag[1] - e[1][1]) - hold for e in late]
+    across = [e[1][1] - late[0][1][1] for e in late]
     # Lost tags count as drift: a run that never sees the tag scores as 1 m.
-    return spread([e[1][0] for e in late]) + spread([e[1][1] for e in late]) + 0.02 * spread([math.degrees(e[2][1] - e[6]) for e in late]) + (1 - r["seen"])
+    return rms(ranges) + rms(across) + 0.02 * spread([math.degrees(e[2][1] - e[6]) for e in late]) + (1 - r["seen"])
+
+
+def rms(values):
+    return math.sqrt(sum(v * v for v in values) / len(values))
 
 
 def main():
@@ -69,14 +83,15 @@ def main():
     import cma
 
     airframe = json.loads((args.airframe or sorted(MODELS.glob("airframe_*.json"))[-1]).read_text())
-    plants = {name: IDENTIFIED | {"airframe": airframe | change} for name, change in variants(airframe).items()}
+    plants = {name + extra: IDENTIFIED_ESC | {"airframe": airframe | change, "disturbances": IDENTIFIED_ESC["disturbances"] + [{"channel": c, "kind": "constant", "value": v} for c, v in zip(("forward", "left"), push) if v]}
+              for name, change in variants(airframe).items() for extra, push in PUSHES.items() if name == "nominal" or not extra}
     base = recording_settings(args.recording.with_suffix(".jsonl"))
     flown = {key: base[key] for key in KEYS}
     # Gains at zero are searched from a small floor so the log scale can move them.
     centre = {key: max(value, 0.05) for key, value in flown.items()}
 
     def gains(x):
-        return {key: centre[key] * args.range ** max(-1.0, min(1.0, v)) for key, v in zip(KEYS, x)}
+        return {key: min(max(centre[key] * args.range ** max(-1.0, min(1.0, v)), LIMITS.get(key, (0, math.inf))[0]), LIMITS.get(key, (0, math.inf))[1]) for key, v in zip(KEYS, x)}
 
     with Pool(args.workers) as pool:
         def evaluate(candidates):
