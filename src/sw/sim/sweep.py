@@ -186,6 +186,15 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         motor = list(airframe.motor)
     ideal_height, nudge, camera_lost, land_at, land_fast = plant.get("ideal_height"), plant.get("nudge"), plant.get("camera_lost"), plant.get("land_at"), plant.get("land_fast")
     gyro_noise, slew_rate = math.radians(plant["gyro_noise"]), math.radians(plant["servo_slew"])
+    # Narrowband gyro vibration (plant["gyro_vibration"]: RMS deg/s per axis at "hz" with "bandwidth" Hz, as the 100 Hz control samples see it): a resonant AR(2) driven by white noise and scaled to that RMS. The rotors shake the pitch gyro without moving the attitude; through the D term it jitters the servos.
+    shake = plant.get("gyro_vibration")
+    if shake:
+        radius, angle = math.exp(-math.pi * shake["bandwidth"] * DT), 2 * math.pi * shake["hz"] * DT
+        a1, a2 = 2 * radius * math.cos(angle), -radius * radius
+        unit = math.sqrt((1 - a2) / ((1 + a2) * ((1 - a2) ** 2 - a1 * a1)))
+        shake_size = [math.radians(value) / unit for value in shake["rms"]]
+    shaking = [[0.0, 0.0] for _ in range(3)]
+    shake_rng = random.Random(seed + 6000)
     places, touched = [], None
     # Landing (plant["land_at"]): when the hover's touchdown flag set and collective reached zero (s after liftoff), the descent speed and largest tilt from level in the 1 s before and after the feet came back.
     landing = {"landed_s": None, "off_s": None, "contact_speed": None, "contact_tilt": 0.0}
@@ -212,6 +221,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
             settings["base_throttle"] = hover_throttle
             configure()
         noise = [rng.gauss(0, gyro_noise) for _ in range(3)]
+        if shake:
+            for axis in range(3):
+                shaking[axis] = [a1 * shaking[axis][0] + a2 * shaking[axis][1] + shake_size[axis] * shake_rng.gauss(0, 1), shaking[axis][0]]
+                noise[axis] += shaking[axis][0]
         gyro_filter = [g + 0.7 * (r + n - g) for g, r, n in zip(gyro_filter, rate, noise)]
         accel_filter = [a + 0.7 * (s + b + accel_rng.gauss(0, ACCEL_NOISE) + (accel_rng.gauss(0, v) if v else 0.0) - a) for a, s, b, v in zip(accel_filter, specific, accel_bias, vibration)]
         attitude = estimator.update(accel_filter, gyro_filter, DT, powered=True)
@@ -422,7 +435,8 @@ IDENTIFIED = FITTED | {"airframe": AIRFRAME, "mass": 0.94, "thrust_k": 1.0, "hei
                        "camera": {"tag": (2.0, 0.1, 0.45), "miss": 0.006, "burst": 6}, "rotor_drag": (0.6, 0.27)}
 # The ESC-recalibrated drone as flown on 2026-10-28 (see AIRFRAME_ESC).
 # Its disturbances are sw/sim/fit_disturbances.py's terms (models/disturbances_2026-10-28.json: a steady -1.09 m/s² push away from the tag, drifting forces and torques), sized so the sim's closed-loop hover statistics match the real ones; the horizontal drag is half the airframe fit's (which was fitted to the drone's own velocity estimate). Flying each hover's settings it matches range error RMS 0.21 against 0.20 m, its fading time 1.8 against 2.0 s, sideways 0.18 against 0.17 m fading in 1.9 against 1.8 s, pitch rate 22.6 against 23.4 deg/s and roll rate 9.0 against 9.7.
-IDENTIFIED_ESC = IDENTIFIED | {"airframe": AIRFRAME_ESC, "rotor_drag": (0.58, 0.34), "gust": 0.0, "roll_gust": 0.0,
+# Its pitch gyro carries the rotors' vibration as the camera hovers logged it: 10 deg/s RMS in a 17-25 Hz band (roll and yaw under 1 deg/s).
+IDENTIFIED_ESC = IDENTIFIED | {"airframe": AIRFRAME_ESC, "rotor_drag": (0.58, 0.34), "gust": 0.0, "roll_gust": 0.0, "gyro_vibration": {"rms": (0.0, 10.0, 0.0), "hz": 21.0, "bandwidth": 8.0},
                                "disturbances": json.loads((Path(__file__).with_name("models") / "disturbances_2026-10-28_calibrated.json").read_text())}
 
 
