@@ -18,7 +18,7 @@
 #define PENDING_MAX 260
 #define WINDOW 4
 #define OUTGOING_MAX 8
-// The board's blue LED: blinks at 1 Hz while the drone was heard in the last 2 s, otherwise stays on.
+// The board's blue LED: blinks at 1 Hz until the drone is heard, then stays on while it was heard in the last 2 s.
 #define LED 2
 #define HEARD_US 2000000
 
@@ -65,7 +65,7 @@ static void led_task(void *argument)
     for (;;) {
         const int64_t now = esp_timer_get_time();
         const bool connected = heard_us && now - heard_us < HEARD_US;
-        gpio_set_level(LED, !connected || now / 500000 % 2 == 0);
+        gpio_set_level(LED, connected || now / 500000 % 2 == 0);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
