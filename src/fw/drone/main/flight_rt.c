@@ -112,6 +112,9 @@ static float battery_v;
 static int hover_mode;
 static HoverState hover;
 static Command flown;
+// The laptop's hold-point nudge for hover (m; toward the tag, left), from the targets.
+#define NUDGE_MAX 1.5f
+static float nudge[2];
 // Self-trim: through a hop, the attitude controller's total roll and pitch command (rad/s²) summed over steady samples (from TRIM_SETTLE s after collective reached integrate_throttle, body rates under TRIM_RATE, no test pattern, not landing: the floor's wash and the touchdown are not the airframe's trim), as sw/learn_bias.py does from the log. At the stop, with at least TRIM_SAMPLES of them, each bias moves auto_trim of the way to the mean, by at most TRIM_STEP; radio.c stores it once disarmed. So a moved battery costs one hop instead of a retune.
 #define TRIM_SETTLE 1.0f
 #define TRIM_RATE (15 / DEG)
@@ -252,8 +255,10 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->height = scaled(hover.height, 1000);
     record->climb = scaled(hover.climb_rate, 1000);
     record->height_target = scaled(hover.target, 1000);
-    record->range_target = scaled(hover.setpoint, 1000);
-    record->arc = scaled(hover.arc * DEG, 100);
+    // The targets as nudged (hover.c): the range to hold and the place on the circle.
+    float range = hover.setpoint - nudge[0];
+    record->range_target = scaled(range, 1000);
+    record->arc = scaled((hover.arc - (range > 0.1f ? nudge[1] / range : 0)) * DEG, 100);
     record->yaw = scaled(hover.yaw * DEG, 100);
 }
 
@@ -374,6 +379,8 @@ static void runtime_task(void *arg) {
                 HoverGains gains = command.hover;
                 if (!command.hover_camera) gains.center = 0;
                 gains.pitch_trim = command.pitch_trim;
+                gains.nudge_forward = nudge[0];
+                gains.nudge_left = nudge[1];
                 HoverOutput out;
                 // Heading rate about vertical from the body rates (positive left).
                 float heading_rate = (state.gyro[1] * sinf(pose.roll) + state.gyro[2] * cosf(pose.roll)) / cosf(pose.pitch);
@@ -501,9 +508,11 @@ bool flight_runtime_idle(void) {
 
 // A target packet from the laptop is the controller heartbeat; the 500 ms watchdog stops the motors when they cease.
 bool flight_runtime_targets(const float *targets) {
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 11; i++) {
         if (!isfinite(targets[i])) return false;
     }
+    // The hold-point nudge (m), at most NUDGE_MAX each way.
+    if (fabsf(targets[9]) > NUDGE_MAX || fabsf(targets[10]) > NUDGE_MAX) return false;
     if (targets[0] < 0 || fabsf(targets[1]) > TARGET_TILT || fabsf(targets[2]) > TARGET_TILT ||
         fabsf(targets[3]) > TARGET_RATE || targets[6] < 0 || targets[7] < 0 ||
         !(targets[8] == HOVER_OFF || targets[8] == HOVER_HOLD || targets[8] == HOVER_LAND || targets[8] == HOVER_LAND_FAST))
@@ -518,6 +527,8 @@ bool flight_runtime_targets(const float *targets) {
         command.target_pitch = targets[2] / DEG;
         command.target_yaw = targets[3] / DEG;
         hover_mode = targets[8];
+        nudge[0] = targets[9];
+        nudge[1] = targets[10];
         if (!targets[6] && !targets[7]) state.latched = false;
         // During maintenance the disarmed outputs stay where they are: zero throttle, servos still.
         if (!state.enabled && !maintenance) {

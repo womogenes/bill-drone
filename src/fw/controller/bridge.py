@@ -27,7 +27,7 @@ import time
 from aiohttp import WSMsgType, web
 import serial
 
-from log_format import HEADER_FORMAT, HEADER_SIZE, STOP_REASONS
+from log_format import HEADER_FORMAT, HEADER_SIZE, RECORD_SIZE, SAMPLE_FORMAT, STOP_REASONS
 from wire import PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 RECORDINGS = Path(__file__).resolve().parents[2] / "sw/recordings"
@@ -233,12 +233,12 @@ class Recorder:
 
 def encode_targets(message):
     """
-    A 'T' target packet (drone/main/flight_rt.c flight_runtime_targets) from the browser's current controls: base throttle, roll, pitch, yaw rate, two servo angles, two throttles and the flight mode.
+    A 'T' target packet (drone/main/flight_rt.c flight_runtime_targets) from the browser's current controls: base throttle, roll, pitch, yaw rate, two servo angles, two throttles, the flight mode and the hover hold-point nudge (m; toward the tag, left).
 
     Mode 0 is manual, 1 hover (the drone holds position, height and heading from the camera), 2 land and 3 land fast. In modes 1-3 the drone computes its own base throttle, roll, pitch and yaw rate and ignores the streamed ones. Clients that send no mode get manual.
     """
     values = [message[key] for key in ("base_throttle", "roll", "pitch", "yaw_rate")]
-    return b"T" + struct.pack("<9f", *values, *message["servo"], *message["throttle"], message.get("mode", 0))
+    return b"T" + struct.pack("<11f", *values, *message["servo"], *message["throttle"], message.get("mode", 0), *message.get("nudge", (0, 0)))
 
 
 class ClientSender:
@@ -438,6 +438,24 @@ class Service:
             print(reason, flush=True)
             self.failed.set()
 
+    def push_hover(self, payload):
+        """
+        The newest flight record's hover state, for the dashboard's tag chart: {"type": "hover", ...} in the hover loop's yaw-turned level frame (m; forward, left, up), with the tag relative to the drone (None without a sighting), the range and arc targets as nudged (None before they are set), and the mode and tracking flags.
+        """
+        _, _, count, size = struct.unpack_from(HEADER_FORMAT, payload)
+        if size != RECORD_SIZE or not count:
+            return
+        fields = struct.unpack_from(SAMPLE_FORMAT, payload, HEADER_SIZE + (count - 1) * size)
+        flags = fields[20]
+        x, y, z, age = fields[22:26]
+        targeted = flags >> 7 & 1
+        self.push(self.dashboard, {
+            "type": "hover", "elapsed_us": fields[0], "mode": flags >> 1 & 3, "tracking": bool(flags >> 6 & 1),
+            "tag": [x / 1000, y / 1000, z / 1000] if age != 65535 else None, "tag_age_ms": age if age != 65535 else None,
+            "velocity": [fields[26] / 1000, fields[27] / 1000], "height": fields[28] / 1000, "height_target": fields[30] / 1000,
+            "range_target": fields[31] / 1000 if targeted else None, "arc_deg": fields[32] / 100 if targeted else None,
+        })
+
     def push(self, ws, data, binary=False):
         sender = self.senders.get(ws)
         if sender is not None:
@@ -541,6 +559,8 @@ class Service:
             else:
                 self.push(self.updater, payload, binary=True)
         else:
+            if channel == 2 and payload[:4] == b"FLG1":
+                self.push_hover(payload)
             # Acknowledge after writing; the recorder flushes to disk once per second.
             key = (session, channel, sequence)
             if key not in self.record_pending and self.queue_record("receive", session, channel, sequence, payload):

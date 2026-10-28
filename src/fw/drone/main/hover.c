@@ -334,7 +334,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         float ux = px / range, uy = py / range;
         float closing = state->velocity[0] * ux + state->velocity[1] * uy;
         float sideways = -state->velocity[0] * uy + state->velocity[1] * ux;
-        float hold = g->kp * (range - state->setpoint), place = g->kside * range * wrap(around - state->arc);
+        // The nudged hold point: nearer the tag by nudge_forward, and nudge_left to the drone's left (seen from the drone, the tag then sits that far further round to the right).
+        float hold = g->kp * (range - (state->setpoint - g->nudge_forward)), place = g->kside * range * wrap(around - (state->arc - g->nudge_left / range));
         float toward = hold - g->kd * (closing + rate), across = place - g->kd * (sideways + arc_rate * range);
         float ax = toward * ux - across * uy;
         float ay = toward * uy + across * ux;
