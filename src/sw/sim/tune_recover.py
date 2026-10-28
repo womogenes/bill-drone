@@ -56,6 +56,7 @@ def cost(result):
 def evaluate(job):
     x, seed, n, task = job
     TASK.update(task)
+    C.SPREAD = task.get("spread", 1.0)
     if task["flip"]:
         from sw.sim import flip as F
         return flip_cost(F.run(decode(x), task["recovery"], n=n, seed=seed))
@@ -70,6 +71,7 @@ def main():
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--popsize", type=int, default=16)
     parser.add_argument("--chunk", type=int, default=128)
+    parser.add_argument("--spread", type=float, default=1.0, help="plant randomization width (recover.SPREAD)")
     parser.add_argument("--start", type=Path)
     parser.add_argument("--flip", action="store_true")
     parser.add_argument("--recovery", type=Path, default=Path(__file__).with_name("models") / "recover_params.json")
@@ -83,7 +85,7 @@ def main():
         start = F.DEFAULTS | C.DEFAULTS | recovery | (json.loads(args.start.read_text()) if args.start else {})
     else:
         start = C.DEFAULTS | (json.loads(args.start.read_text()) if args.start else {})
-    task = dict(TASK)
+    task = dict(TASK) | {"spread": args.spread}
     es = cma.CMAEvolutionStrategy(encode(start), 0.15, {"bounds": [0, 1], "popsize": args.popsize, "maxiter": args.generations, "seed": 1, "verbose": -9})
     began = time.time()
     best = (math.inf, None, 0.0)

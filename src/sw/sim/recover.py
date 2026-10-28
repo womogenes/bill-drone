@@ -1,7 +1,7 @@
 """
 Recovery from a fall in any orientation, in the full-attitude simulation (sw/sim/rigid.py): uv run -m sw.sim.recover [--params params.json] [--n 512] [--seed 0]
 
-The controller sees only what the drone senses: it integrates the gyro into a quaternion and the accelerometer, turned to the world, into a velocity, both from the estimate it had when control was lost (the truth plus a little error); no camera and no height. Once upright, while the specific force is close to 1 g, the accelerometer's direction pulls the estimated up back over level_tau s (as the firmware's attitude filter does), so gyro bias cannot tilt the velocity estimate away. (The firmware hover's rotor-drag velocity, the body-plane specific force over the drag, is no use here: the steady pushes the sim was calibrated with are real forces the accelerometer feels, and the drag model reads the -1.1 m/s² one as nearly 2 m/s; integrating the accelerometer counts them right.) The attitude estimate starts within about 1° of the truth in tilt and 6° in yaw (the firmware's filter is held to gravity while it hovers), so the velocity integral drifts a few tenths of a m/s per second at worst. Once arresting, the horizontal velocity also leaks toward zero over leak_tau s, as the firmware hover's dead reckoning does without the tag (DRIFT_TAU): the integral's error only grows, while a drone that is holding is seldom moving fast. It also knows roughly how high it was (the hover's height, or the height it was dropped from: within HEIGHT_ERROR) and integrates the estimated vertical velocity from there, which tilt errors hardly touch.
+The controller sees only what the drone senses: it integrates the gyro into a quaternion and the accelerometer, turned to the world, into a velocity, both from the estimate it had when control was lost (the truth plus a little error); no camera. Once upright, while the specific force is close to 1 g, the accelerometer's direction pulls the estimated up back over level_tau s (as the firmware's attitude filter does), so gyro bias cannot tilt the velocity estimate away. (The firmware hover's rotor-drag velocity, the body-plane specific force over the drag, is no use here: the steady pushes the sim was calibrated with are real forces the accelerometer feels, and the drag model reads the -1.1 m/s² one as nearly 2 m/s; integrating the accelerometer counts them right.) The attitude estimate starts within about 1° of the truth in tilt and 6° in yaw (the firmware's filter is held to gravity while it hovers), so the velocity integral drifts a few tenths of a m/s per second at worst. Once arresting, the horizontal velocity also leaks toward zero over leak_tau s, as the firmware hover's dead reckoning does without the tag (DRIFT_TAU): the integral's error only grows, while a drone that is holding is seldom moving fast. It also knows roughly how high it was (the hover's height, or the height it was dropped from: within HEIGHT_ERROR) and integrates the estimated vertical velocity from there, which tilt errors hardly touch.
   right    while the thrust axis points more than right_angle from up: aim it up with little collective (inverted, thrust would only push down), rolling with differential thrust and pitching with the motors' common tilt; past roll_over degrees with the error mostly in pitch it rolls the long way round instead (on the strong actuator: a drone pitched θ is one rolled 180° and pitched 180° − θ), leaving the rest of the pitch for once it is the right way up
   arrest   aim the thrust to stop the vertical and horizontal velocity, then descend: k_alt per m of estimated height above flare m faster than descent m/s, at most FAST
   landed   a touchdown (specific force touch_g beyond what the commanded thrust explains, or the descent stalled with thrust low) winds the collective down to nothing over cut_time s while still holding the attitude level, as the firmware's landing does (cutting the motors outright leaves their spinning-down thrusts unbalanced with nothing correcting them, and the legless drone rolls over)
@@ -29,6 +29,8 @@ ATTITUDE_ERROR = (0.017, 0.017, 0.1)
 # The height estimate's error then (m, standard deviation), and the fastest descent the controller asks for (m/s).
 HEIGHT_ERROR = 0.3
 FAST = 3.0
+# How wide randomization's plant variations are, by default (1: what the identification cannot pin down).
+SPREAD = 1.0
 
 
 class Controller:
@@ -142,10 +144,11 @@ def scenarios(n, seed, height=(2.0, 5.0)):
     return position, velocity, quat, omega
 
 
-def randomization(n, seed, spread=1.0):
-    """Per-env plant variations: what the identification cannot pin down, for robustness."""
+def randomization(n, seed, spread=None):
+    """Per-env plant variations: what the identification cannot pin down, for robustness; spread (default SPREAD) widens each range about 1 (a lower end stays above 0.1)."""
+    spread = SPREAD if spread is None else spread
     rng = np.random.default_rng(seed + 99)
-    u = lambda lo, hi: np.exp(rng.uniform(math.log(1 + (lo - 1) * spread), math.log(1 + (hi - 1) * spread), n))
+    u = lambda lo, hi: np.exp(rng.uniform(math.log(max(1 + (lo - 1) * spread, 0.1)), math.log(1 + (hi - 1) * spread), n))
     return {"pitch_tilt": u(0.7, 1.5), "roll_thrust": u(0.8, 1.25), "thrust": u(0.9, 1.1), "motor_delay": u(0.8, 1.4), "servo_delay": u(0.8, 1.4), "inertia": u(0.85, 1.2), "drag": u(0.6, 1.6), "disturbance": u(0.5, 2.0)}
 
 
