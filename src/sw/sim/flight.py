@@ -10,14 +10,17 @@ from array import array
 from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parents[2] / "fw/drone/main/flight_math.c"
+MANY = Path(__file__).with_name("flight_many.c")
 LIBRARY = Path(__file__).with_name("flight_math.so")
-if not LIBRARY.exists() or LIBRARY.stat().st_mtime < SOURCE.stat().st_mtime:
-    subprocess.run(["cc", "-O2", "-fPIC", "-shared", str(SOURCE), "-o", str(LIBRARY), "-lm"], check=True)
+if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime for path in (SOURCE, SOURCE.with_suffix(".h"), MANY)):
+    subprocess.run(["cc", "-O2", "-fPIC", "-shared", "-I", str(SOURCE.parent), str(MANY), "-o", str(LIBRARY), "-lm"], check=True)
 library = ctypes.CDLL(str(LIBRARY))
 library.flight_attitude.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 library.flight_attitude.restype = None
 library.flight_control.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
 library.flight_control.restype = None
+library.flight_control_many.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
+library.flight_control_many.restype = None
 count = ctypes.c_size_t.in_dll(library, "flight_thrust_count").value
 THRUST_BUFFER = array("f", (ctypes.c_float * (2 * count)).in_dll(library, "flight_thrust"))
 # [throttle, thrust_N] rows, as the drone uses them; thrust declines above 1100.
@@ -35,6 +38,14 @@ def control_step(state, command, table, attitude, gyro, dt):
     struct.pack_into("<6f", command, 0, *attitude, *gyro, dt)
     library.flight_control(state.buffer_info()[0], command.buffer_info()[0], table.buffer_info()[0], len(table) // 2)
     return int(state[2]), int(state[3]), state[4], state[5]
+
+
+def control_many(states, commands):
+    """
+    Step every lane's controller in place: states and commands are C-contiguous float32 arrays [lane, ...] laid out as Controller.state and Controller.command, with each command's motion filled in.
+    """
+    assert states.dtype == commands.dtype == "float32" and states.flags.c_contiguous and commands.flags.c_contiguous
+    library.flight_control_many(states.ctypes.data, states.shape[1], commands.ctypes.data, commands.shape[1], THRUST_BUFFER.buffer_info()[0], len(THRUST_BUFFER) // 2, len(states))
 
 
 def interpolate(value, points, input_column=0):

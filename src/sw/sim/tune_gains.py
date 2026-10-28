@@ -1,0 +1,104 @@
+"""
+Robust gain tuning on the identified airframe: uv run --with cma -m sw.sim.tune_gains <recording> [--airframe sw/sim/models/airframe_<day>.json] [--range 8] [--generations 50] [--workers N] [--seed 1] [--out result.json]
+
+CMA-ES over the attitude and camera-hover gains, starting from the recording's settings (which also supply everything not tuned), each gain searched on a log scale from its flown value divided by --range to times it. A candidate flies the camera hover (sweep.run with hover=True) for 10 s on every variant below with three noise seeds, and scores as its worst run: the camera position's spread over the last 7 s plus a share of the pitch error, with a run that loses the tag counting as up to 1 m and a crash as more than any flight.
+The variants are what the identification cannot pin down plus a 6 dB gain margin: the identified sim needs its pitch effectiveness ×1.5–2 before the 2026-10-27 pitch_p 30 / pitch_damping 12 hop (06-42-15) diverges as it did, while the p20/d8 and p30/d8 hops stay up, so tuning against the nominal model alone would go past what flies.
+"""
+
+import argparse
+import json
+import math
+import os
+import time
+from multiprocessing import Pool
+from pathlib import Path
+
+from sw.fit import settings as recording_settings
+from sw.sim.sweep import IDENTIFIED, run
+
+KEYS = ("pitch_p", "pitch_damping", "pitch_i", "roll_p", "roll_damping", "roll_i", "hover_kp", "hover_kd", "hover_kside", "hover_kyaw")
+SEEDS = (0, 1, 2)
+MODELS = Path(__file__).with_name("models")
+
+
+def variants(a):
+    """Airframe changes to be robust to, by name."""
+    return {
+        "nominal": {},
+        "pitch gain ×2": {"pitch_tilt": a["pitch_tilt"] * 2},
+        "roll gain ×2": {"roll_thrust": a["roll_thrust"] * 2},
+        "pitch gain ×0.7": {"pitch_tilt": a["pitch_tilt"] * 0.7, "inertia_ratio": a["inertia_ratio"] * 1.5},
+        "roll gain ×0.7": {"roll_thrust": a["roll_thrust"] * 0.7},
+        "servo +20 ms": {"servo_delay": a["servo_delay"] + 0.02, "right_servo_delay": a["right_servo_delay"] + 0.02},
+        "motors alike": {"right_motor_delay": a["motor_delay"], "right_motor_tau": a["motor_tau"]},
+        "no bands": {"left_band": 0.0, "right_band": 0.0},
+        "push +1 sd": {"roll_push": a["roll_push"] + a.get("roll_push_sd", 2.6), "pitch_push": a["pitch_push"] + a.get("pitch_push_sd", 1.4)},
+    }
+
+
+def spread(values):
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / len(values))
+
+
+def fly(job):
+    gains, plant, seed = job
+    log = []
+    r = run(gains, plant, seconds=10.0, seed=seed, log=log, hover=True)
+    if not r["stable"]:
+        return 10 + (10 - r["fail_s"])
+    late = [e for e in log if e[0] >= 3.0]
+    # Lost tags count as drift: a run that never sees the tag scores as 1 m.
+    return spread([e[1][0] for e in late]) + spread([e[1][1] for e in late]) + 0.02 * spread([math.degrees(e[2][1] - e[6]) for e in late]) + (1 - r["seen"])
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("recording", type=Path, help="a flight whose settings to start from (.bin or .jsonl)")
+    parser.add_argument("--airframe", type=Path, help="default: the newest sw/sim/models/airframe_*.json")
+    parser.add_argument("--range", type=float, default=8.0, help="search each gain from its flown value over this to times this")
+    parser.add_argument("--generations", type=int, default=50)
+    parser.add_argument("--workers", type=int, default=os.cpu_count())
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--out", type=Path)
+    args = parser.parse_args()
+    import cma
+
+    airframe = json.loads((args.airframe or sorted(MODELS.glob("airframe_*.json"))[-1]).read_text())
+    plants = {name: IDENTIFIED | {"airframe": airframe | change} for name, change in variants(airframe).items()}
+    base = recording_settings(args.recording.with_suffix(".jsonl"))
+    flown = {key: base[key] for key in KEYS}
+    # Gains at zero are searched from a small floor so the log scale can move them.
+    centre = {key: max(value, 0.05) for key, value in flown.items()}
+
+    def gains(x):
+        return {key: centre[key] * args.range ** max(-1.0, min(1.0, v)) for key, v in zip(KEYS, x)}
+
+    with Pool(args.workers) as pool:
+        def evaluate(candidates):
+            jobs = [(base | g, plant, seed) for g in candidates for plant in plants.values() for seed in SEEDS]
+            costs = pool.map(fly, jobs, chunksize=2)
+            n = len(plants) * len(SEEDS)
+            return [costs[i * n:(i + 1) * n] for i in range(len(candidates))]
+
+        flown_costs = evaluate([flown])[0]
+        print("flown", {k: round(v, 2) for k, v in flown.items()}, f"cost {max(flown_costs):.3f}", flush=True)
+        for j, name in enumerate(plants):
+            print(f"  {name}: " + ", ".join(f"{c:.2f}" for c in flown_costs[j * len(SEEDS):(j + 1) * len(SEEDS)]), flush=True)
+        es = cma.CMAEvolutionStrategy([0.0] * len(KEYS), 0.25, {"bounds": [-1, 1], "popsize": 14, "maxiter": args.generations, "seed": args.seed, "verbose": -9})
+        start = time.time()
+        while not es.stop():
+            xs = es.ask()
+            es.tell(xs, [max(c) for c in evaluate([gains(x) for x in xs])])
+            print(f"generation {es.countiter} {time.time() - start:.0f} s: best {es.result.fbest:.3f}", {k: round(v, 2) for k, v in gains(es.result.xbest).items()}, flush=True)
+        best = gains(es.result.xbest)
+        best_costs = evaluate([best])[0]
+    print("best", {k: round(v, 2) for k, v in best.items()}, f"cost {max(best_costs):.3f}", flush=True)
+    for j, name in enumerate(plants):
+        print(f"  {name}: " + ", ".join(f"{c:.2f}" for c in best_costs[j * len(SEEDS):(j + 1) * len(SEEDS)]), flush=True)
+    if args.out:
+        args.out.write_text(json.dumps({"best": best, "cost": max(best_costs), "flown": flown}, indent=1) + "\n")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,13 +1,12 @@
 """
-Identify the airframe model (sw/sim/airframe.py) from hover recordings by closed-loop multi-step prediction: uv run --with scipy -m sw.sim.identify_airframe <recordings or globs> [--start params.json] [--freeze key,...] [--workers 16] [--out sw/sim/models/airframe_<day>.json]
+Identify the airframe model (sw/sim/airframe.py) from hover recordings by closed-loop multi-step prediction: uv run --with scipy -m sw.sim.identify_airframe <recordings or globs> [--start params.json] [--freeze key,...] [--folds 5] [--workers N] [--out file]
 
-Each recording's controller is replayed from arming on its logged attitude, gyro, references, collective and battery (it reproduces the logged throttles to rounding and servo commands to 0.04°), and the airframe is run one step ahead along the logged commands for its actuator states and the flight's constant push. From every start (every 10th sample) the firmware controller, with its state at that sample, then flies the airframe for up to 2 s on the logged references alone, and the fit is least squares on the predicted rates at 50 ms to 2 s ahead (over the rates' spread) and on the attitude (over the attitude change's spread at that horizon). Because the controller is in the loop, a disturbance shows only as output error: fitting the plant to logged commands instead (open loop) credits the controller's reactions to the airframe. The Jacobian's columns run in parallel.
+Each recording's controller is replayed from arming on its logged attitude, gyro, references, collective and battery (it reproduces the logged throttles to rounding and servo commands to 0.04°), and the airframe is run one step ahead along the logged commands for its actuator states and the flight's constant push. From every start (every 10th airborne sample) the firmware controller, with its state at that sample, then flies the airframe for up to 2 s on the logged references alone, and the fit is least squares on the predicted rates at 50 ms to 2 s ahead (over the rates' spread) and on the attitude (over the attitude change's spread at that horizon). A start counts only at the horizons that stay airborne and clear of dropped log records, so short hops and flights that diverged count too: they hold most of what there is on the stability margin. Because the controller is in the loop, a disturbance shows only as output error: fitting the plant to logged commands instead (open loop) credits the controller's reactions to the airframe. All lanes' controllers step in one C call (sw/sim/flight_many.c), and the Jacobian's columns run in parallel.
 The per-flight push absorbs any steady torque, so the right motor's static thrust gain is not identifiable from the motion: it is pinned to the airborne thrust split (median left over right table thrust, taking the CoM as centred between the motors, as measured), and only the motors' dead times and lags may differ.
-Then each of 5 groups of flights is predicted by a fit to the others, and the held-out frame-by-frame scores (R² of the rates, attitude error and R² of the attitude change at 10 ms to 1 s) are printed, closed loop and on the logged commands.
+It starts from the newest saved model (sw/sim/models/airframe_*.json), so after a hardware change a few flights refit what changed. Then each of --folds groups of flights is predicted by a fit to the others, and the held-out frame-by-frame scores (R² of the rates, attitude error and R² of the attitude change at 10 ms to 1 s) are printed, closed loop and on the logged commands.
 """
 
 import argparse
-import array
 import json
 import math
 import os
@@ -18,9 +17,8 @@ import numpy as np
 
 from sw.fit import settings as recording_settings
 from sw.flight_log import read_flight
-from sw.identify import paths, window
 from sw.sim import airframe as A
-from sw.sim.flight import MODEL, MODEL_KEYS, MODEL_OFFSET, MODEL_TUNING_KEYS, TUNING_LAYOUT, Controller
+from sw.sim.flight import MODEL, MODEL_KEYS, MODEL_OFFSET, MODEL_TUNING_KEYS, TUNING_LAYOUT, Controller, control_many
 
 DT = A.DT
 DEG = A.DEG
@@ -30,62 +28,72 @@ INDEX = {key: 6 + TUNING_LAYOUT.index(key) for key in TUNING_LAYOUT}
 THRUST_VOLTAGE = MODEL_OFFSET + len(MODEL_KEYS)
 VOLTAGE_TAU = 0.3  # the runtime's battery smoothing for thrust compensation (flight_rt.c)
 VOLTAGE_RANGE = 0.15
+MODELS = Path(__file__).with_name("models")
 
 
-def load(path):
-    """A whole recording, with the indices of its airborne window (identify.window): begin, liftoff and end."""
-    flight = window(path)
-    if not flight:
+def paths(arguments):
+    return sorted(path for argument in arguments for path in (Path(argument).parent.glob(Path(argument).name) if "*" in argument else [Path(argument)]) if path.suffix == ".bin")
+
+
+def load(path, shortest=0.5):
+    """
+    A whole recording at the control rate, with its liftoff (vertical specific force past 1.12 g once collective reaches 600) and the end of its airborne window (an upset past 35°, an impact, motor stop or the recording ending), or None without shortest seconds airborne.
+    """
+    try:
+        data, _ = read_flight(path)
+        setting = recording_settings(path)
+    except Exception:
         return None
-    data, _ = read_flight(path)
-    on = np.flatnonzero(data.base_throttle.values >= 600)[0]
-    lift = on + np.argmax(data.az_g.values[on:] > 1.12) + 3
-    begin = max(0, lift - 50)
+    # Recordings logged at 50 Hz cannot be stepped at the control rate.
+    if np.mean(np.abs(np.diff(data.esp_time_us.values) - 10000) > 3000) > 0.05:
+        return None
+    on = np.flatnonzero(data.base_throttle.values >= 600)
+    if not len(on) or not (data.az_g.values[on[0]:] > 1.12).any():
+        return None
+    lift = on[0] + np.argmax(data.az_g.values[on[0]:] > 1.12) + 3
+    shock = np.sqrt(data.ax_g ** 2 + data.ay_g ** 2 + data.az_g ** 2).values
+    end = next((i for i in range(lift + 3, len(data)) if abs(data.pitch_deg[i]) > 35 or abs(data.roll_deg[i]) > 35 or shock[i] > 2.5 or data.base_throttle[i] == 0), len(data))
+    if (end - lift) * DT < shortest:
+        return None
     record = {column: data[column].values.astype(float) for column in data.columns if data[column].dtype.kind in "fiub"}
-    record.update(name=flight["name"], setting=recording_settings(path), lift=lift, end=begin + len(flight["rate"]))
+    record.update(name=path.name[:19], setting=setting, lift=lift, end=end)
     return record
 
 
 def controller(record):
+    """The flight's firmware controller, configured and reset, as the state and command buffers control_many takes."""
     c = Controller()
     s = dict(record["setting"])
     for key in MODEL_TUNING_KEYS:
         s.setdefault(key, MODEL[key])
     c.configure(s)
     c.reset()
-    c.command[THRUST_VOLTAGE] = 0.0  # applied through the thrust scales below, as the runtime does
+    c.command[THRUST_VOLTAGE] = 0.0  # applied through the thrust scales (Data.thrust_scales), as the runtime does
     c.command[THRUST_VOLTAGE + 1] = s.get("yaw_i", 0.0)
-    return c, s
-
-
-def control(c, s, record, k, attitude, gyro, battery):
-    """One controller step at sample k with the logged references and collective, the runtime's voltage compensation and the given attitude and gyro (rad, rad/s)."""
-    for key, value in (("enabled", 1.0 if record["base_throttle"][k] > 0 else 0.0), ("roll", record["target_roll_deg"][k] * DEG), ("pitch", record["target_pitch_deg"][k] * DEG),
-                       ("yaw_rate", record["target_yaw_deg_s"][k] * DEG), ("base_throttle", record["base_throttle"][k])):
-        c.command[INDEX[key]] = value
-    reference = s.get("thrust_voltage", 0.0)
-    ratio = min(1 + VOLTAGE_RANGE, max(1 - VOLTAGE_RANGE, battery / reference)) if reference > 0 and battery > 0 else 1.0
-    c.command[INDEX["left_thrust_scale"]] = s.get("left_thrust_scale", 1.0) * ratio ** 2
-    c.command[INDEX["right_thrust_scale"]] = s.get("right_thrust_scale", 1.0) * ratio ** 2
-    return c.update(attitude, gyro, DT)
+    return np.array(c.state, np.float32), np.array(c.command, np.float32)
 
 
 class Data:
-    """The recordings as padded arrays [flight, sample, ...], their smoothed battery and every sample's replayed controller state."""
+    """The recordings as padded arrays [flight, sample, ...]: the logged signals, the controller's references and voltage-compensated thrust scales, and every sample's replayed controller state."""
 
     def __init__(self, records):
         self.records = records
         self.size = max(len(r["base_throttle"]) for r in records)
-        trims = [(r["setting"].get("left_trim", 0.0), r["setting"].get("right_trim", 0.0)) for r in records]
-        self.trims = np.array(trims)
+        self.trims = np.array([(r["setting"].get("left_trim", 0.0), r["setting"].get("right_trim", 0.0)) for r in records])
         self.throttle = self.pad(lambda r: np.column_stack([r["left_throttle"], r["right_throttle"]]))
         self.command = self.pad(lambda r: np.column_stack([r["left_servo_deg"] - r["setting"].get("left_trim", 0.0), -(r["right_servo_deg"] - r["setting"].get("right_trim", 0.0))]))
         self.rate = self.pad(lambda r: np.column_stack([r["gx_deg_s"], r["gy_deg_s"], r["gz_deg_s"]]) * DEG)
         self.att = self.pad(lambda r: np.column_stack([r["roll_deg"], r["pitch_deg"]]) * DEG)
         self.vel = self.pad(lambda r: np.nan_to_num(np.column_stack([r["hover_vx_m_s"], r["hover_vy_m_s"]])))
         self.voltage = self.pad(lambda r: np.where(r["battery_v"] > 5, r["battery_v"], self.reference(r)) / self.reference(r))
-        self.battery = self.pad(self.smoothed)
-        self.states = [self.replay(r) for r in records]
+        self.targets = self.pad(lambda r: np.column_stack([r["base_throttle"] > 0, r["target_roll_deg"] * DEG, r["target_pitch_deg"] * DEG, r["target_yaw_deg_s"] * DEG, r["base_throttle"]]))
+        self.scale = self.pad(self.thrust_scales)
+        # Dropped log records up to each sample, to leave out windows that span one.
+        self.gaps = self.pad(lambda r: np.cumsum(np.abs(np.diff(r["esp_time_us"], prepend=r["esp_time_us"][0] - 10000) - 10000) > 3000))
+        buffers = [controller(r) for r in records]
+        self.initial = np.array([b[0] for b in buffers])
+        self.commands = np.array([b[1] for b in buffers])
+        self.states = self.replay()
         self.spread = np.concatenate([self.rate[i, r["lift"]:r["end"]] for i, r in enumerate(records)]).std(0)
         self.angle_spread = {}
 
@@ -102,31 +110,56 @@ class Data:
         return out
 
     @staticmethod
-    def smoothed(record):
-        out = np.zeros(len(record["battery_v"]))
+    def thrust_scales(record):
+        """Each motor's thrust scale as the runtime sets it: the configured scale times (smoothed battery over thrust_voltage)², within ±VOLTAGE_RANGE."""
+        s = record["setting"]
+        smooth = np.zeros(len(record["battery_v"]))
         value = 0.0
         for k, volts in enumerate(record["battery_v"]):
             value = value + (volts - value) * (1 - math.exp(-DT / VOLTAGE_TAU)) if value else volts
-            out[k] = value
+            smooth[k] = value
+        reference = s.get("thrust_voltage", 0.0)
+        ratio = np.clip(smooth / reference, 1 - VOLTAGE_RANGE, 1 + VOLTAGE_RANGE) if reference > 0 else np.ones(len(smooth))
+        ratio = np.where(smooth > 0, ratio, 1.0)
+        return np.column_stack([s.get("left_thrust_scale", 1.0) * ratio ** 2, s.get("right_thrust_scale", 1.0) * ratio ** 2])
+
+    def control(self, states, commands, flights, k, attitude, gyro):
+        """
+        Step the lanes' controllers in place (lane j flying flight flights[j] at its sample k[j]) on the logged references with this attitude and gyro (rad, rad/s). Returns throttles [lane, side] and physical tilt commands [lane, side] (degrees, positive forward).
+        """
+        commands[:, 0:2] = attitude
+        commands[:, 2:5] = gyro
+        commands[:, 5] = DT
+        for j, key in enumerate(("enabled", "roll", "pitch", "yaw_rate", "base_throttle")):
+            commands[:, INDEX[key]] = self.targets[flights, k, j]
+        commands[:, INDEX["left_thrust_scale"]] = self.scale[flights, k, 0]
+        commands[:, INDEX["right_thrust_scale"]] = self.scale[flights, k, 1]
+        control_many(states, commands)
+        throttle = np.trunc(states[:, 2:4]).astype(float)
+        tilt = np.column_stack([np.degrees(states[:, 4]) - self.trims[flights, 0], -(np.degrees(states[:, 5]) - self.trims[flights, 1])])
+        return throttle, tilt
+
+    def replay(self):
+        """The controller's state before every sample [flight, sample, state], replayed on the logged attitude and gyro."""
+        flights = np.arange(len(self.records))
+        states, commands = self.initial.copy(), self.commands.copy()
+        out = np.zeros((len(flights), self.size, states.shape[1]), np.float32)
+        for k in range(self.size):
+            out[:, k] = states
+            self.control(states, commands, flights, np.full(len(flights), k), self.att[:, k], self.rate[:, k])
         return out
 
-    def replay(self, record):
-        """The controller's state before every sample, replayed on the logged attitude and gyro."""
-        c, s = controller(record)
-        battery = self.smoothed(record)
-        states = np.zeros((len(record["base_throttle"]), len(c.state)))
-        for k in range(len(record["base_throttle"])):
-            states[k] = c.state
-            control(c, s, record, k, (record["roll_deg"][k] * DEG, record["pitch_deg"][k] * DEG), (record["gx_deg_s"][k] * DEG, record["gy_deg_s"][k] * DEG, record["gz_deg_s"][k] * DEG), battery[k])
-        return states
-
-    def starts(self, i, horizon, stride):
-        """Starts in flight i whose window back to 200 ms before and up to the horizon after has no dropped log records."""
-        r = self.records[i]
-        s = np.arange(r["lift"] + 5, r["end"] - horizon - 1, stride)
-        dt = np.diff(r["esp_time_us"], prepend=r["esp_time_us"][0] - 10000)
-        count = np.concatenate([[0], np.cumsum(np.abs(dt - 10000) > 3000)])
-        return s[(count[s + horizon + 1] - count[np.maximum(s - 20, 0)]) == 0]
+    def lanes(self, flights, horizons, stride):
+        """
+        Starts every stride samples in the flights' airborne windows as (flight, start) arrays, and which of the horizons each may be scored at [horizon, lane]: those still airborne with no dropped record from 200 ms before the start.
+        """
+        F = np.concatenate([np.full(len(range(self.records[i]["lift"] + 5, self.records[i]["end"] - horizons[0] - 1, stride)), i) for i in flights]).astype(int)
+        S = np.concatenate([np.arange(self.records[i]["lift"] + 5, self.records[i]["end"] - horizons[0] - 1, stride) for i in flights]).astype(int)
+        end = np.array([self.records[i]["end"] for i in F])
+        before = self.gaps[F, np.maximum(S - 20, 0)]
+        valid = np.array([(S + h < end) & (self.gaps[F, np.minimum(S + h + 1, self.size - 1)] == before) for h in horizons])
+        keep = valid[0]
+        return F[keep], S[keep], valid[:, keep]
 
     def spread_of_angle(self, h):
         if h not in self.angle_spread:
@@ -158,39 +191,30 @@ def teacher(p, data, flights):
     return keep, push
 
 
-def predict(p, data, flights, horizon, stride, closed=True):
-    """Free runs from every start: closed loop (the replayed controller flies the airframe on the logged references) or on the logged commands. Returns (flight, start) lanes and the predicted rates and attitudes [step, lane, axis]."""
+def predict(p, data, flights, horizons, stride, closed=True):
+    """
+    Free runs from every start in the flights (a sorted array): closed loop (the replayed controller flies the airframe on the logged references) or on the logged commands. Returns the lanes' flights and starts, which horizons each is valid at [horizon, lane], and the predicted rates and attitudes [step, lane, axis].
+    """
     keep, push = teacher(p, data, flights)
-    lanes = [(j, i, s) for j, i in enumerate(flights) for s in data.starts(i, horizon, stride)]
-    if not lanes:
-        return [], None, None
-    J = np.array([lane[0] for lane in lanes])
-    F = np.array([lane[1] for lane in lanes])
-    S0 = np.array([lane[2] for lane in lanes])
-    state = A.State(len(lanes))
+    F, S0, valid = data.lanes(flights, horizons, stride)
+    J = np.searchsorted(flights, F)
+    state = A.State(len(F))
     for key in keep:
         setattr(state, key, keep[key][J, S0].copy())
     state.rate, state.att, state.vel = data.rate[F, S0].copy(), data.att[F, S0].copy(), data.vel[F, S0].copy()
     throttle, command, voltage = data.throttle[F].copy(), data.command[F].copy(), data.voltage[F]
-    controllers = []
-    if closed:
-        for i, s in zip(F, S0):
-            c, settings = controller(data.records[i])
-            c.state[:] = array.array("f", data.states[i][s])
-            controllers.append((c, settings))
-    rates = np.zeros((horizon, len(lanes), 3))
-    attitudes = np.zeros((horizon, len(lanes), 2))
-    lane = np.arange(len(lanes))
-    for j in range(horizon):
-        k = S0 + j
+    states, commands = data.states[F, S0].copy(), data.commands[F].copy()
+    rates = np.zeros((max(horizons), len(F), 3))
+    attitudes = np.zeros((max(horizons), len(F), 2))
+    lane = np.arange(len(F))
+    for j in range(max(horizons)):
+        k = np.minimum(S0 + j, data.size - 1)
         if closed:
-            out = np.array([control(c, settings, data.records[i], kk, tuple(a), tuple(g), data.battery[i, kk]) for (c, settings), i, kk, a, g in zip(controllers, F, k, state.att, state.rate)])
-            throttle[lane, k] = out[:, :2]
-            command[lane, k] = np.column_stack([np.degrees(out[:, 2]) - data.trims[F, 0], -(np.degrees(out[:, 3]) - data.trims[F, 1])])
+            throttle[lane, k], command[lane, k] = data.control(states, commands, F, k, state.att, state.rate)
         state, _ = A.step(p, state, throttle, command, k, voltage[lane, k], push[J])
         rates[j] = state.rate
         attitudes[j] = state.att
-    return list(zip(F, S0)), rates, attitudes
+    return F, S0, valid, rates, attitudes
 
 
 DATA = None
@@ -205,11 +229,13 @@ def unpack(x):
 
 
 def residuals(x, flights, stride=10, closed=True):
-    lanes, rates, attitudes = predict(unpack(x), DATA, flights, max(HORIZONS), stride, closed)
-    F = np.array([lane[0] for lane in lanes])
-    S0 = np.array([lane[1] for lane in lanes])
-    out = [np.clip((rates[h - 1] - DATA.rate[F, S0 + h]) / DATA.spread, -30, 30).ravel() for h in HORIZONS]
-    out += [np.clip((attitudes[h - 1] - DATA.att[F, S0 + h]) / DATA.spread_of_angle(h), -30, 30).ravel() for h in HORIZONS]
+    F, S0, valid, rates, attitudes = predict(unpack(x), DATA, flights, HORIZONS, stride, closed)
+    out = []
+    for j, h in enumerate(HORIZONS):
+        k = np.minimum(S0 + h, DATA.size - 1)
+        mask = valid[j][:, None]
+        out.append((np.clip((rates[h - 1] - DATA.rate[F, k]) / DATA.spread, -30, 30) * mask).ravel())
+        out.append((np.clip((attitudes[h - 1] - DATA.att[F, k]) / DATA.spread_of_angle(h), -30, 30) * mask).ravel())
     return np.concatenate(out) / math.sqrt(len(HORIZONS))
 
 
@@ -230,6 +256,7 @@ def fit(pool, x0, flights, evaluations):
     low = np.array([A.PARAMS[key][0] for key in FREE])
     high = np.array([A.PARAMS[key][1] for key in FREE])
     x0 = np.clip(x0, low + 1e-9, high - 1e-9)
+    flights = np.array(sorted(flights))
 
     def jacobian(x):
         f0 = residuals(x, flights)
@@ -242,10 +269,13 @@ def fit(pool, x0, flights, evaluations):
 
 
 def score(x, flights, closed):
-    lanes, rates, attitudes = predict(unpack(x), DATA, flights, max(SCORE_HORIZONS), 5, closed)
-    F = np.array([lane[0] for lane in lanes])
-    S0 = np.array([lane[1] for lane in lanes])
-    return {h: (rates[h - 1], DATA.rate[F, S0 + h], attitudes[h - 1] - DATA.att[F, S0], DATA.att[F, S0 + h] - DATA.att[F, S0]) for h in SCORE_HORIZONS}
+    F, S0, valid, rates, attitudes = predict(unpack(x), DATA, np.array(sorted(flights)), SCORE_HORIZONS, 5, closed)
+    out = {}
+    for j, h in enumerate(SCORE_HORIZONS):
+        v = valid[j]
+        f, s = F[v], S0[v]
+        out[h] = (rates[h - 1][v], DATA.rate[f, s + h], attitudes[h - 1][v] - DATA.att[f, s], DATA.att[f, s + h] - DATA.att[f, s])
+    return out
 
 
 def report(parts, label):
@@ -261,18 +291,21 @@ def report(parts, label):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recordings", nargs="+")
-    parser.add_argument("--start", help="parameters to start from (a saved model)")
+    parser.add_argument("--start", help="parameters to start from (default: the newest sw/sim/models/airframe_*.json; 'defaults' for the plant's starting values)")
     parser.add_argument("--freeze", default="roll_lift,band_stiffness", help="parameters held at their start (default: the terms the 2026-10-27 fit did without); right_thrust_gain is always held at the thrust split")
     parser.add_argument("--evaluations", type=int, default=60)
+    parser.add_argument("--folds", type=int, default=5, help="held-out groups of flights to score (0 to skip)")
+    parser.add_argument("--shortest", type=float, default=0.5, help="seconds airborne a flight needs")
     parser.add_argument("--workers", type=int, default=os.cpu_count())
-    parser.add_argument("--out")
+    parser.add_argument("--out", help="default: sw/sim/models/airframe_<newest recording's day>.json")
     args = parser.parse_args()
-    records = [r for r in (load(p) for p in paths(args.recordings)) if r]
-    # Recordings logged at 50 Hz cannot be stepped at the control rate.
-    records = [r for r in records if np.mean(np.abs(np.diff(r["esp_time_us"]) - 10000) > 3000) < 0.05]
+    records = [r for r in (load(p, args.shortest) for p in paths(args.recordings)) if r]
     print(f"{len(records)} flights, {sum(r['end'] - r['lift'] for r in records) * DT:.0f} s airborne", flush=True)
     data = Data(records)
-    start = A.complete(json.loads(Path(args.start).read_text())) if args.start else {key: A.PARAMS[key][2] if key not in A.OPTIONAL else 0.0 for key in A.KEYS}
+    saved = sorted(MODELS.glob("airframe_*.json"))
+    start_path = None if args.start == "defaults" else Path(args.start) if args.start else saved[-1] if saved else None
+    start = A.complete(json.loads(start_path.read_text())) if start_path else {key: A.PARAMS[key][2] if key not in A.OPTIONAL else 0.0 for key in A.KEYS}
+    print(f"starting from {start_path or 'the plant defaults'}", flush=True)
     split = np.median(np.concatenate([A.thrust(r["left_throttle"][r["lift"]:r["end"]]) for r in records])) / np.median(np.concatenate([A.thrust(r["right_throttle"][r["lift"]:r["end"]]) for r in records]))
     start["right_thrust_gain"] = float(split)
     print(f"right motor static thrust gain {split:.3f} (airborne thrust split)", flush=True)
@@ -281,19 +314,23 @@ def main():
     base = {key: start[key] for key in A.KEYS}
     initialise(data, free, base)
     everything = list(range(len(records)))
+    out = Path(args.out) if args.out else MODELS / f"airframe_{max(r['name'] for r in records)[:10]}.json"
     with Pool(args.workers, initializer=initialise, initargs=(data, free, base)) as pool:
         x, cost = fit(pool, np.array([start[key] for key in free]), everything, args.evaluations)
         params = unpack(x)
         _, push = teacher(params, data, everything)
         print(f"fit cost {cost:.1f}: " + ", ".join(f"{key} {value:.4g}" for key, value in params.items()), flush=True)
         print(f"pushes (rad/s²) roll {push[:, 0].mean():+.2f} ± {push[:, 0].std():.2f}, pitch {push[:, 1].mean():+.2f} ± {push[:, 1].std():.2f}, yaw {push[:, 2].mean():+.2f} ± {push[:, 2].std():.2f}", flush=True)
-        saved = {key: round(value, 6) for key, value in params.items()} | {"roll_push": round(push[:, 0].mean(), 4), "pitch_push": round(push[:, 1].mean(), 4), "yaw_push": round(push[:, 2].mean(), 4)}
-        if args.out:
-            Path(args.out).write_text(json.dumps(saved, indent=1) + "\n")
+        result = {key: round(value, 6) for key, value in params.items()} | {f"{axis}_push": round(push[:, j].mean(), 4) for j, axis in enumerate(("roll", "pitch", "yaw"))} | {f"{axis}_push_sd": round(push[:, j].std(), 4) for j, axis in enumerate(("roll", "pitch", "yaw"))}
+        out.write_text(json.dumps(result, indent=1) + "\n")
+        print(f"saved {out}", flush=True)
+        folds = min(args.folds, len(records))
+        if not folds:
+            return
         groups = np.random.default_rng(0).permutation(len(records))
         closed, logged = [], []
-        for g in range(5):
-            test = sorted(groups[g::5])
+        for g in range(folds):
+            test = sorted(groups[g::folds])
             xt, _ = fit(pool, x, [i for i in everything if i not in test], args.evaluations // 3)
             closed.append(score(xt, test, True))
             logged.append(score(xt, test, False))
