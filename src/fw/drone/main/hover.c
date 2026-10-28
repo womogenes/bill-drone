@@ -162,7 +162,7 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
             ahead = GRAVITY * (cp * f[0] + sp * (sr * f[1] + cr * f[2])) - state->drag_bias[0];
             left = GRAVITY * (cr * f[1] - sr * f[2]) - state->drag_bias[1];
         } else {
-            ahead = GRAVITY * tanf(pitch - g->pitch_trim) - state->trim[0];
+            ahead = GRAVITY * tanf(pitch - g->pitch_trim + g->thrust_tilt * state->thrust_tilt) - state->trim[0];
             left = -GRAVITY * tanf(roll) - state->trim[1];
         }
         state->velocity[0] += (ahead * cy - left * sy) * dt;
@@ -175,8 +175,13 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     now[2] = state->yaw;
     now[3] = state->velocity[0];
     now[4] = state->velocity[1];
-    now[5] = dragging ? drag->tilt : 0;
+    now[5] = drag ? drag->tilt : 0;
     state->next = (state->next + 1) % HOVER_HISTORY;
+    // The thrust tilt the servos have reached, beyond pitch_trim's (which flies the body at pitch_trim so a level thrust needs a tilt of -pitch_trim), learned only in the air.
+    if (g->thrust_tilt > 0 && drag && state->height >= AIRBORNE) {
+        float reached = state->history[recorded(state, now_us - SERVO_DELAY_US)][5] + g->pitch_trim;
+        state->thrust_tilt += (reached - state->thrust_tilt) * (1 - expf(-dt / fmaxf(g->thrust_tilt_tau, dt)));
+    }
 
     // Rotor drag: the body's horizontal specific force less the thrust vector's forward part (at the tilt the servos have reached) is -drag times the airspeed. It is noisy (vibration, the pitch loop's servo motion), so it pulls the estimate slowly, and the past with it, as the camera's correction does; a steady disagreement is the integrated acceleration's bias, which it learns (a critically damped second-order filter, settling over a few drag_tau). The camera, when it sees the tag, measures the velocity itself: then the disagreement is the drag model's own offset (servo zero, accelerometer bias, mounting) instead, which it teaches below.
     bool seeing = state->have_pose && now_us - state->seen_us <= LOST_US;
@@ -334,6 +339,6 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     output->tracking = true;
     output->velocity[0] = state->velocity[0] * sy - state->velocity[1] * cy;
     output->velocity[1] = state->velocity[0] * cy + state->velocity[1] * sy;
-    output->pitch = clamp(atanf(forward / GRAVITY), -g->tilt, g->tilt);
+    output->pitch = clamp(atanf(forward / GRAVITY) - g->thrust_tilt * state->thrust_tilt, -g->tilt, g->tilt);
     output->roll = clamp(atanf(-left / GRAVITY), -g->tilt, g->tilt);
 }

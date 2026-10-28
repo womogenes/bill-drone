@@ -32,6 +32,8 @@ typedef struct {
     float drag, drag_tilt, drag_tau;
     // The body-fixed trim that takes over a steady range or place error: its integration time (s) and its limit (m/s²; 1 is about 6 degrees of tilt).
     float trim_tau, trim_max;
+    // Thrust tilt: on a tilt-rotor the motors' tilt moves the drone as the body's pitch does, and a steady tilt (holding the body against a CoM offset) would push it along unseen. thrust_tilt (0 = off, 1 = all of it) counts the servos' steady thrust tilt beyond the one pitch_trim expects, low-passed over thrust_tilt_tau (s), in the velocity dead reckoning and takes it off the pitch the hold asks for, so the thrust points where the hold wants.
+    float thrust_tilt, thrust_tilt_tau;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
     float pitch_trim;
 } HoverGains;
@@ -73,6 +75,8 @@ typedef struct {
     // The drag model's velocity this tick (m/s; body forward, left, after its offset), for the flight log; dragging: it ran this tick (drag on and airborne).
     float drag_velocity[2];
     bool dragging;
+    // The servos' steady thrust tilt beyond the one pitch_trim expects (radians, positive forward), as thrust_tilt counts it.
+    float thrust_tilt;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).
