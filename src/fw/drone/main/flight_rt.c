@@ -30,6 +30,8 @@
 #define TIP_LIMIT 45
 #define SERVO_LIMIT 60
 #define THROTTLE_MAX 1200
+// The ESC pulse for a stopped motor (us), below the 1000 us that calibration teaches as zero: an ESC calibrated at exactly 1000 us can read that, with pulse jitter, as just above its minimum and spin.
+#define ESC_STOP_US 950
 #define PWM_BITS 16
 // Streamed target limits: degrees and degrees per second.
 #define TARGET_TILT 15
@@ -145,6 +147,9 @@ static float limit(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
 }
 
+// The ESC pulse (us) for a throttle: 1000 us plus the throttle, or ESC_STOP_US for a stopped motor.
+static float esc_us(int throttle) { return throttle > 0 ? 1000 + throttle : ESC_STOP_US; }
+
 // Caller holds lock so an emergency stop cannot race a later duty write.
 // Latches a duty update without waiting for the previous transition.
 static void pulse(int index, float us) {
@@ -180,7 +185,7 @@ static void stop_locked(int reason) {
     state.controller = (Controller){0};
     for (int side = 0; side < 2; side++) {
         state.throttle[side] = 0;
-        pulse(side * 2 + 1, 1000);
+        pulse(side * 2 + 1, ESC_STOP_US);
     }
     if (log_active) log_elapsed = esp_timer_get_time() - log_started;
     log_active = false;
@@ -454,7 +459,7 @@ static void runtime_task(void *arg) {
             }
             for (int side = 0; side < 2; side++) {
                 write_servo(side);
-                pulse(side * 2 + 1, 1000 + state.throttle[side]);
+                pulse(side * 2 + 1, esc_us(state.throttle[side]));
             }
         }
         if (servo_test.active) {
@@ -547,7 +552,7 @@ bool flight_runtime_targets(const float *targets) {
                 if (!state.servo_held[side] && !servo_test.active) state.servo[side] = targets[4 + side];
                 write_servo(side);
                 state.throttle[side] = state.latched ? 0 : lroundf(targets[6 + side]);
-                pulse(side * 2 + 1, 1000 + state.throttle[side]);
+                pulse(side * 2 + 1, esc_us(state.throttle[side]));
             }
         }
     }
@@ -853,7 +858,7 @@ void flight_runtime_outputs(void) {
     }
     for (int index = 0; index < 4; index++) {
         int side = index / 2, esc = index % 2;
-        float us = esc ? 1000 : 1500 + state.offsets[side] * 1000 / 90;
+        float us = esc ? ESC_STOP_US : 1500 + state.offsets[side] * 1000 / 90;
         ledc_channel_config_t channel = {.gpio_num = pins[index], .speed_mode = LEDC_HIGH_SPEED_MODE, .channel = index,
                                          .timer_sel = esc, .duty = lroundf(us * ticks[index])};
         ESP_ERROR_CHECK(ledc_channel_config(&channel));
