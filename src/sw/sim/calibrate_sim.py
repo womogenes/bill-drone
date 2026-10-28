@@ -74,9 +74,9 @@ def real(name):
 
 
 def starting():
-    """The point of SPACE that leaves the current plant as it is: unit scales, and its own lag and torque drift correlation times."""
+    """The point of SPACE that leaves the current plant as it is: unit scales, and its own lag and drift correlation times."""
     taus = {t["channel"]: t["tau"] for t in IDENTIFIED_ESC["disturbances"] if t["kind"] == "drift"}
-    current = {"wake_tau": A.complete(IDENTIFIED_ESC["airframe"])["wake_tau"], "pitch_tau": taus["pitch"], "roll_tau": taus["roll"]}
+    current = {"wake_tau": A.complete(IDENTIFIED_ESC["airframe"])["wake_tau"], "pitch_tau": taus["pitch"], "roll_tau": taus["roll"], "side_tau": taus["left"]}
     return np.array([np.clip(current.get(s[0], s[3]), s[1], s[2]) for s in SPACE])
 
 
