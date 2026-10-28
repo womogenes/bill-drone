@@ -116,8 +116,8 @@ def main():
     model_inertia = tuple(R.A.GEOMETRY[key] for key in ("roll_inertia", "pitch_inertia", "yaw_inertia"))
     rigid_up, rigid_peak = rigid_run(args.seconds)
     mj_up, mj_peak = mujoco_run(args.seconds, model_inertia)
-    cad_up, cad_peak = mujoco_run(args.seconds, CAD_INERTIA)
-    rigid_cad_up, rigid_cad_peak = rigid_run(args.seconds, np.array(CAD_INERTIA))
+    cad_up = mujoco_run(args.seconds, CAD_INERTIA)[0]
+    rigid_cad_up = rigid_run(args.seconds, np.array(CAD_INERTIA))[0]
     n = len(rigid_up)
     print(f"{n} touchdowns (vertical {VERTICAL} m/s, horizontal {HORIZONTAL} m/s, tilt {TILT}°, roll/pitch, downhill/uphill), motors off")
     print(f"ends upright: rigid {rigid_up.mean() * 100:.0f}%, MuJoCo {mj_up.mean() * 100:.0f}%; agree on {(rigid_up == mj_up).mean() * 100:.0f}% (rigid upright where MuJoCo tips: {(rigid_up & ~mj_up).sum()}, the reverse: {(~rigid_up & mj_up).sum()})")

@@ -65,7 +65,8 @@ def main():
         out = pool.map(cell_runs, jobs)
     safe = np.zeros((len(PANELS), len(HEIGHTS), len(TILTS)))
     speed, angle = np.zeros_like(safe), np.zeros_like(safe)
-    for (params_, h, tumbling, moving, envs, seed), (s, v, t) in zip(jobs, out):
+    for job, (s, v, t) in zip(jobs, out):
+        h, tumbling, moving = job[1:4]
         p, i = PANELS.index((tumbling, moving)), HEIGHTS.index(h)
         safe[p, i] = s.mean(1)
         speed[p, i] = np.nanmedian(v, 1)
