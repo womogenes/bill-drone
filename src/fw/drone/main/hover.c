@@ -157,6 +157,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         // Continue from the thrust being flown, so taking over a manual flight does not step.
         state->integral = force > 0.5f * weight ? clamp(force / g->mass - GRAVITY, -MAX_INTEGRAL, MAX_INTEGRAL) : 0;
         state->force = force;
+        state->trim[0] = clamp(g->trim_start_x, -g->trim_max, g->trim_max);
+        state->trim[1] = clamp(g->trim_start_y, -g->trim_max, g->trim_max);
         // Asked to land without enough thrust to be flying: it is already down.
         if (mode != HOVER_HOLD && force < 0.5f * weight) state->landed = true;
     }

@@ -115,12 +115,13 @@ static Command flown;
 // The laptop's hold-point nudge for hover (m; toward the tag, left, up), from the targets.
 #define NUDGE_MAX 1.5f
 static float nudge[3];
+// It also carries the camera hold's trim over: at a stop after a hold that flew on the tag, hover_trim_start moves auto_trim of the way to the trim the hold ended with.
 // Self-trim: through a hop, the attitude controller's total roll and pitch command (rad/s²) summed over steady samples (from TRIM_SETTLE s after collective reached integrate_throttle, body rates under TRIM_RATE, no test pattern, not landing: the floor's wash and the touchdown are not the airframe's trim), as sw/learn_bias.py does from the log. At the stop, with at least TRIM_SAMPLES of them, each bias moves auto_trim of the way to the mean, by at most TRIM_STEP; radio.c stores it once disarmed. So a moved battery costs one hop instead of a retune.
 #define TRIM_SETTLE 1.0f
 #define TRIM_RATE (15 / DEG)
 #define TRIM_SAMPLES 100
 #define TRIM_STEP 3.0f
-static struct { float sum[2], bias[2]; int count; bool ready; } trim;
+static struct { float sum[2], bias[2], hover[2]; int count; bool ready, hover_ready; } trim;
 // The identification test pattern (P request, flight_runtime_pattern; kept in RAM only, so a restart clears it): piecewise-constant steps added to up to EXCITE_CHANNELS channels, played while collective is up from `after` seconds past collective first reaching integrate_throttle, `repeat` times (0 = until disarmed).
 // Channels: roll and pitch targets (degrees), yaw-rate target (degrees/s), collective (throttle), left and right servo tilt (degrees, positive forward), left and right motor (throttle). The targets and collective add before the controller, so the log's targets hold them; the servos and motors add after it, and the fit adds them back from the pattern (the recording's events) and the segment logged in Record flags.
 #define EXCITE_CHANNELS 8
@@ -157,6 +158,12 @@ static void write_servo(int side) {
 }
 
 static void stop_locked(int reason) {
+    if (state.enabled && command.auto_trim > 0 && hover.tracking && trim.count >= TRIM_SAMPLES) {
+        float start[2] = {command.hover.trim_start_x, command.hover.trim_start_y};
+        for (int axis = 0; axis < 2; axis++)
+            trim.hover[axis] = limit(start[axis] + command.auto_trim * (hover.trim[axis] - start[axis]), -command.hover.trim_max, command.hover.trim_max);
+        trim.hover_ready = true;
+    }
     if (state.enabled && trim.count >= TRIM_SAMPLES) {
         float old[2] = {command.roll_bias, command.pitch_bias};
         for (int axis = 0; axis < 2; axis++)
@@ -655,6 +662,18 @@ bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias) {
         trim.ready = false;
         *roll_bias = trim.bias[0];
         *pitch_bias = trim.bias[1];
+    }
+    portEXIT_CRITICAL(&lock);
+    return ready;
+}
+
+bool flight_runtime_take_hover_trim(float *x, float *y) {
+    portENTER_CRITICAL(&lock);
+    bool ready = trim.hover_ready && !state.enabled;
+    if (ready) {
+        trim.hover_ready = false;
+        *x = trim.hover[0];
+        *y = trim.hover[1];
     }
     portEXIT_CRITICAL(&lock);
     return ready;

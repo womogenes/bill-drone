@@ -88,6 +88,8 @@ size_t flight_runtime_servo_result(char *text, size_t size);
 // Loads (or with no segments clears) the identification test pattern; NULL and a JSON summary in text, or an error.
 // After a stop, the self-trimmed roll and pitch biases once (flight_rt.c trim); false if there are none.
 bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias);
+// After a stop, the camera hold's carried-over trim once (flight_rt.c trim); false if there is none.
+bool flight_runtime_take_hover_trim(float *x, float *y);
 const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *text, size_t size);
 void flight_runtime_status(Status *status);
 

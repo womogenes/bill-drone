@@ -556,6 +556,11 @@ static void store_settings(void) {
         settings_change(indices, changes, 7, now);
     }
     float trimmed[2];
+    float hover_trim[2];
+    if (flight_runtime_take_hover_trim(&hover_trim[0], &hover_trim[1])) {
+        int indices[] = {SETTING_hover_trim_start_x, SETTING_hover_trim_start_y};
+        if (settings_change(indices, hover_trim, 2, now)) flight_runtime_apply_settings();
+    }
     if (flight_runtime_take_trim(&trimmed[0], &trimmed[1])) {
         int indices[] = {SETTING_roll_bias, SETTING_pitch_bias};
         if (settings_change(indices, trimmed, 2, now)) flight_runtime_apply_settings();
