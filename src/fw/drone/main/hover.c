@@ -33,9 +33,11 @@
 // A landing whose descent has stalled (climb rate under half land_rate for STALL_S) winds thrust down at STALL_RAMP (m/s² per s) whatever the climb-rate loop would do: on the floor it cannot follow a descent, so its integral alone takes seconds to drop thrust to TOUCHDOWN_FRACTION. Still in the air, the drone sinks and the stall clears.
 #define STALL_S 0.3f
 #define STALL_RAMP 3.0f
-// Contact: a landing that tilts past LAND_TILT from level or hits harder than LAND_SHOCK (specific force along vertical, g) stops the motors at once. With no legs the drone touches down on its body, and thrust above the first contact point levers it over (2026-10-28 05:01: nose-down at contact, then over its nose). A slow descent in the air stays well inside both (under 10 degrees, 1.3 g).
-#define LAND_TILT (15.0f * 3.14159265f / 180)
-#define LAND_SHOCK 1.5f
+// Contact: a landing that hits harder than LAND_SHOCK (specific force along vertical, g), or tilts past LAND_TILT from level, stops the motors at once. With no legs the drone touches down on its body, and thrust above the first contact point levers it over (2026-10-28 05:01: 12 degrees nose-down at contact, 1.6 g and over its nose 0.15 s later). Hovering stays under 1.35 g; a tilt alone is no proof of contact (05:05 pitched to 15 degrees in the air at 0.7 m, and a cut there drops the drone), so LAND_TILT is only for a drone already going over.
+#define LAND_TILT (25.0f * 3.14159265f / 180)
+#define LAND_SHOCK 1.45f
+// The descent command ramps in over LAND_EASE (s), so pressing land does not step collective down.
+#define LAND_EASE 0.5f
 // Below this height (m) a hold is still on the ground taking off: the IMU climb rate leaks toward zero, and centring neither tilts nor turns and lets the range target follow the drone. The tag-height target never asks for less than MIN_HEIGHT above the engage point (m).
 #define AIRBORNE 0.05f
 #define MIN_HEIGHT 0.2f
@@ -257,7 +259,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         state->target += clamp(goal - state->target, -g->climb_rate * dt, g->climb_rate * dt);
         command = clamp(g->kz * (state->target - state->height), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
     } else {
-        command = -g->land_rate * (mode == HOVER_LAND_FAST ? 3 : 1);
+        float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? 3 : 1);
+        command = fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
         state->target = state->height;
     }
     state->command = command;
