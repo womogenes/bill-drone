@@ -20,7 +20,7 @@
  "right_band": 1021.682877,
  "band_stiffness": -28.861389,
  "right_gain": 1.019403,
- "roll_thrust": 0.430105,
+ "roll_thrust": 0.430098,
  "roll_gyro": 1.266593,
  "roll_lift": 0.0,
  "roll_damping": -9.058196,
@@ -28,7 +28,7 @@
  "roll_velocity": 5.157048,
  "roll_from_yaw": -3.207078,
  "roll_prop_drag": -0.658277,
- "pitch_tilt": 0.70823,
+ "pitch_tilt": 1.143721,
  "pitch_lift": -0.000436,
  "pitch_damping": -0.758045,
  "pitch_stiffness": -5.814188,
@@ -48,6 +48,6 @@
  "roll_push_sd": 0.963,
  "pitch_push_sd": 0.4736,
  "yaw_push_sd": 0.5394,
- "pitch_wake": -0.213146,
- "wake_tau": 0.742556
+ "pitch_wake": -0.759646,
+ "wake_tau": 1.268315
 }
