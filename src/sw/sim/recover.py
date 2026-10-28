@@ -2,7 +2,7 @@
 Recovery from a fall in any orientation, in the full-attitude simulation (sw/sim/rigid.py): uv run -m sw.sim.recover [--params params.json] [--n 512] [--seed 0]
 
 The controller sees only what the drone senses: it integrates the gyro into a quaternion and the accelerometer, turned to the world, into a velocity, both from the estimate it had when control was lost (the truth plus a little error); no camera and no height. Once upright, while the specific force is close to 1 g, the accelerometer's direction pulls the estimated up back over level_tau s (as the firmware's attitude filter does), so gyro bias cannot tilt the velocity estimate away. (The firmware hover's rotor-drag velocity, the body-plane specific force over the drag, is no use here: the steady pushes the sim was calibrated with are real forces the accelerometer feels, and the drag model reads the -1.1 m/s² one as nearly 2 m/s; integrating the accelerometer counts them right.) The attitude estimate starts within about 1° of the truth in tilt and 6° in yaw (the firmware's filter is held to gravity while it hovers), so the velocity integral drifts a few tenths of a m/s per second at worst. It also knows roughly how high it was (the hover's height, or the height it was dropped from: within HEIGHT_ERROR) and integrates the estimated vertical velocity from there, which tilt errors hardly touch.
-  right    while the thrust axis points more than right_angle from up: aim it up with little collective (inverted, thrust would only push down), rolling with differential thrust and pitching with the motors' common tilt
+  right    while the thrust axis points more than right_angle from up: aim it up with little collective (inverted, thrust would only push down), rolling with differential thrust and pitching with the motors' common tilt; past roll_over degrees with the error mostly in pitch it rolls the long way round instead (on the strong actuator: a drone pitched θ is one rolled 180° and pitched 180° − θ), leaving the rest of the pitch for once it is the right way up
   arrest   aim the thrust to stop the vertical and horizontal velocity, then descend: k_alt per m of estimated height above flare m faster than descent m/s, at most FAST
   landed   a touchdown (specific force touch_g beyond what the commanded thrust explains, or the descent stalled with thrust low) winds the collective down to nothing over cut_time s while still holding the attitude level, as the firmware's landing does (cutting the motors outright leaves their spinning-down thrusts unbalanced with nothing correcting them, and the legless drone rolls over)
 Each tick turns the attitude error into a wanted rotation rate toward the target, no faster than the drone can brake from (sqrt(2 brake angle), at most max_rate, and kp per rad near the target), then into wanted angular accelerations (k_rate per axis) and allocates them to the two thrusts and two tilts with the identified effectiveness (sw/sim/airframe.py), keeping roll authority when a thrust would saturate. The motors take about 0.2 s to follow (dead time and lag), so the tilts that turn thrust into pitch and yaw are worked out from the thrust a motor model says the motors have now, not from what was just asked.
@@ -21,7 +21,7 @@ from sw.sim import rigid as R
 DEFAULTS = {
     "kp": 6.0, "brake": 15.0, "max_rate": 5.0, "k_roll": 8.0, "k_pitch": 12.0, "kd_yaw": 4.0,
     "kv": 3.0, "kh": 1.0, "descent": 0.5, "flip_thrust": 0.35, "right_angle": 45.0, "tilt_max": 15.0,
-    "touch_g": 1.0, "engage": 0.15, "servo_max": 45.0, "level_tau": 1.0, "cut_time": 0.5, "flare": 1.0, "k_alt": 1.0,
+    "touch_g": 1.0, "engage": 0.05, "servo_max": 45.0, "level_tau": 1.0, "cut_time": 0.5, "flare": 1.0, "k_alt": 1.0, "roll_over": 135.0,
 }
 RIGHT, ARREST, LANDED = 0, 1, 2
 # The attitude estimate's error when control is lost (rad, standard deviation of the rotation about each world axis: roll, pitch, yaw).
@@ -87,6 +87,10 @@ class Controller:
         angle = np.arctan2(sin_angle, d_body[:, 2])
         # Exactly inverted: any axis will do; roll is the stronger one.
         axis = np.where(sin_angle[:, None] > 1e-6, axis / np.maximum(sin_angle, 1e-9)[:, None], np.array([1.0, 0, 0]))
+        # Far over and mostly pitched: roll through the body's y-z plane instead (cross(z, d) has roll component -d_y).
+        roll_over = (self.phase == RIGHT) & (d_body[:, 2] < math.cos(math.radians(p["roll_over"]))) & (np.abs(d_body[:, 0]) > np.abs(d_body[:, 1]))
+        angle = np.where(roll_over, np.arctan2(np.abs(d_body[:, 1]), d_body[:, 2]), angle)
+        axis = np.where(roll_over[:, None], np.column_stack([np.where(d_body[:, 1] > 0, -1.0, 1.0), np.zeros(n), np.zeros(n)]), axis)
         omega = obs["gyro"]
         speed = np.minimum.reduce([np.full(n, p["max_rate"]), np.sqrt(2 * p["brake"] * angle), p["kp"] * angle])
         wanted_rate = axis * speed[:, None]
