@@ -149,8 +149,8 @@ def randomization(n, seed, spread=None):
     spread = SPREAD if spread is None else spread
     rng = np.random.default_rng(seed + 99)
     u = lambda lo, hi: np.exp(rng.uniform(math.log(max(1 + (lo - 1) * spread, 0.1)), math.log(1 + (hi - 1) * spread), n))
-    # roll_thrust (on differential_slope, the roll authority) reaches 2.2: the 2026-10-28 refits trade roll authority against motor lag (0.3-0.43 with 10-60 ms lag fits best, 0.93 with 110-120 ms almost as well), so the range covers both.
-    return {"pitch_tilt": u(0.7, 1.5), "roll_thrust": u(0.8, 2.2), "thrust": u(0.9, 1.1), "motor_delay": u(0.8, 1.4), "servo_delay": u(0.8, 1.4), "inertia": u(0.85, 1.2), "drag": u(0.6, 1.6), "disturbance": u(0.5, 2.0)}
+    # roll_thrust (on differential_slope, the roll authority) spans 0.8-5x: hover fits put the slope at 0.25-0.32 of the thrust table with fast motors, the 2026-10-27 fit at 1.33, and a full-differential command is far outside what hover measured, so the range runs from the fit to about the bench table.
+    return {"pitch_tilt": u(0.7, 1.5), "roll_thrust": u(0.8, 5.0), "thrust": u(0.9, 1.1), "motor_delay": u(0.8, 1.4), "servo_delay": u(0.8, 1.4), "inertia": u(0.85, 1.2), "drag": u(0.6, 1.6), "disturbance": u(0.5, 2.0)}
 
 
 def estimate(quat, rng):
