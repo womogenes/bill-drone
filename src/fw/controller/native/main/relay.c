@@ -18,7 +18,7 @@
 #define PENDING_MAX 260
 #define WINDOW 4
 #define OUTGOING_MAX 8
-// The board's blue LED: blinks at 1 Hz until the drone is heard, then stays on while it was heard in the last 2 s.
+// The board's blue LED: blinks at 1 Hz until the link works both ways, then stays on while in the last 2 s the drone was heard and acknowledged a packet from the laptop. The drone's LED goes by the laptop's packets reaching it, so the controller's is not solid while the drone's blinks (only a packet the drone receives but rejects as stale can still differ).
 #define LED 2
 #define HEARD_US 2000000
 
@@ -34,6 +34,7 @@ static QueueHandle_t incoming;
 static QueueHandle_t uart_events;
 static SemaphoreHandle_t window;
 static volatile int64_t heard_us;
+static volatile int64_t delivered_us;
 
 // Matches wire.unpack: size, magic, channel, fragment index and count.
 static bool valid_header(const uint8_t *packet, size_t length)
@@ -44,6 +45,9 @@ static bool valid_header(const uint8_t *packet, size_t length)
 
 static void sent(const esp_now_send_info_t *info, esp_now_send_status_t status)
 {
+    if (status == ESP_NOW_SEND_SUCCESS) {
+        delivered_us = esp_timer_get_time();
+    }
     xSemaphoreGive(window);
 }
 
@@ -64,7 +68,7 @@ static void led_task(void *argument)
     gpio_set_direction(LED, GPIO_MODE_OUTPUT);
     for (;;) {
         const int64_t now = esp_timer_get_time();
-        const bool connected = heard_us && now - heard_us < HEARD_US;
+        const bool connected = heard_us && now - heard_us < HEARD_US && delivered_us && now - delivered_us < HEARD_US;
         gpio_set_level(LED, connected || now / 500000 % 2 == 0);
         vTaskDelay(pdMS_TO_TICKS(50));
     }
