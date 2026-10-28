@@ -8,6 +8,7 @@ The laptop's drone service. It owns the controller's USB port and serves, on 127
 - /ws: the dashboard. The drone's status as JSON readings; the browser streams targets (including the manual/hover/land mode) every 50 ms and sends stop, arm, calibrate, zero and tune requests.
 - /update: raw id-tagged requests for tools/ota_direct.py.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
+- POST /pattern {"after": s, "repeat": n, "segments": [{"ticks": n, "<channel>": value, ...}, ...]}: load the identification test pattern (PATTERN_CHANNELS; drone/main/flight_rt.c excite), or clear it with no segments. It lasts until the drone restarts, and every recording from then on starts with it as a "pattern" event. sw/excite.py builds and sends them.
 
 It records every armed session into src/sw/recordings/<time>_<session>.bin (FLG1 batches) and .jsonl (start, metadata, gap, error, stop and closed events; sw/flight_log.py decodes both).
 """
@@ -108,6 +109,26 @@ def now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+# The test pattern's channels in the drone's order, and their units: roll and pitch targets and servo tilts in degrees (servos positive forward), the yaw-rate target in degrees/s, collective and motors in throttle.
+PATTERN_CHANNELS = ("roll", "pitch", "yaw", "base", "left_servo", "right_servo", "left_motor", "right_motor")
+
+
+def encode_pattern(pattern):
+    """The P request body for a pattern (drone/main/flight_rt.c flight_runtime_pattern), and the pattern as recorded."""
+    segments = pattern.get("segments", [])
+    unknown = {key for segment in segments for key in segment} - {"ticks", *PATTERN_CHANNELS}
+    if unknown:
+        raise ValueError(f"Unknown pattern channels {sorted(unknown)}")
+    used = [i for i, name in enumerate(PATTERN_CHANNELS) if any(segment.get(name) for segment in segments)]
+    mask = sum(1 << i for i in used)
+    body = struct.pack("<fBBH", float(pattern.get("after", 2.0)), int(pattern.get("repeat", 0)), mask, len(segments))
+    for segment in segments:
+        body += struct.pack("<H", int(segment["ticks"])) + b"".join(struct.pack("<h", round(segment.get(PATTERN_CHANNELS[i], 0) * 100)) for i in used)
+    recorded = {"after": float(pattern.get("after", 2.0)), "repeat": int(pattern.get("repeat", 0)),
+                "segments": [{"ticks": int(segment["ticks"]), **{PATTERN_CHANNELS[i]: round(segment.get(PATTERN_CHANNELS[i], 0) * 100) / 100 for i in used}} for segment in segments]}
+    return body, recorded
+
+
 class Recorder:
     """
     One file pair per armed session, kept open through link hiccups until the drone's stop record arrives.
@@ -124,6 +145,8 @@ class Recorder:
         self.last_message = 0
         self.stalled = False
         self.error = None
+        # The test pattern last loaded through this service, written at the start of every recording.
+        self.pattern = None
 
     def status(self):
         return {"file": self.file, "bytes": self.bytes, "writing": self.data is not None, "error": self.error}
@@ -178,6 +201,8 @@ class Recorder:
         self.file, self.bytes, self.session, self.next_sequence, self.error = f"{stem.name}.bin", 0, session, None, None
         # The first line describes the whole recording.
         self.event({**(self.metadata or {}), "type": "start", "session": session, **start})
+        if self.pattern:
+            self.event({"type": "pattern", **self.pattern})
 
     def check(self, recording):
         """
@@ -667,6 +692,17 @@ class Service:
             return web.json_response({"error": str(error)}, status=504)
         return web.json_response({"settings": self.settings})
 
+    async def post_pattern(self, request):
+        try:
+            body, recorded = encode_pattern(await request.json())
+            summary = json.loads(await self.request(b"P", body))
+        except (ValueError, KeyError, TypeError, struct.error, RuntimeError) as error:
+            return web.json_response({"error": str(error)}, status=400)
+        except TimeoutError as error:
+            return web.json_response({"error": str(error)}, status=504)
+        self.recorder.pattern = recorded if recorded["segments"] else None
+        return web.json_response(summary)
+
     async def schema(self, request):
         """
         Every setting as {name, min, max, default, tunable}, collected page by page (drone/main/settings.c).
@@ -703,6 +739,7 @@ async def main(args):
         web.get("/status", service.status),
         web.get("/settings", service.get_settings),
         web.post("/settings", service.post_settings),
+        web.post("/pattern", service.post_pattern),
         web.get("/schema", service.schema),
     ])
     runner = web.AppRunner(app, access_log=None)

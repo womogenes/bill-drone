@@ -33,6 +33,7 @@ Restart with `systemctl --user restart bill-drone-dashboard` and read logs with 
 | GET `/settings` | Current cached settings |
 | GET `/schema` | Native setting names, defaults, ranges and write permissions |
 | POST `/settings` | Change settings with `{"settings": {...}}` |
+| POST `/pattern` | Load the identification test pattern (built by `uv run -m sw.excite`), recorded at the start of every later recording |
 
 The service records armed sessions directly into `src/sw/recordings/`; `--recordings` changes the directory. Each session has a binary recording and a JSONL event file. `src/sw/flight_log.py` reads them.
 

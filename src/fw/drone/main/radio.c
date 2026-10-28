@@ -405,7 +405,7 @@ static void describe(char *text, size_t size, const esp_partition_t *partition) 
              app.app_elf_sha256[6], app.app_elf_sha256[7]);
 }
 
-// Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32). Fills reply after the id and status bytes; returns an error or NULL.
+// Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -427,6 +427,12 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         }
         *size = flight_runtime_servo_result(text, REPLY - 5);
         return *size ? NULL : "Result does not fit the reply";
+    }
+    if (op == 'P') {
+        const char *failure = flight_runtime_pattern(body, length, text, REPLY - 5);
+        if (failure) return failure;
+        *size = strlen(text);
+        return NULL;
     }
     if (op == 'T' || op == 'G' || op == 'Z' || op == 'Q' || op == 'L') {
         // Each of these ends in an NVS write, which is only allowed while disarmed.

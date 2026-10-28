@@ -85,6 +85,8 @@ const char *flight_runtime_zero_servo(int side, float *offset, char *error, size
 // Servo bench test, disarmed with zero throttle: start (amp in degrees, cycles), then read progress and per-side results as JSON.
 const char *flight_runtime_servo_test(float amp, int cycles);
 size_t flight_runtime_servo_result(char *text, size_t size);
+// Loads (or with no segments clears) the identification test pattern; NULL and a JSON summary in text, or an error.
+const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *text, size_t size);
 void flight_runtime_status(Status *status);
 
 // The ESP-NOW link and request service (radio.c).

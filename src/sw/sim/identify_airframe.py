@@ -3,6 +3,7 @@ Identify the airframe model (sw/sim/airframe.py) from hover recordings by closed
 
 Each recording's controller is replayed from arming on its logged attitude, gyro, references, collective and battery (it reproduces the logged throttles to rounding and servo commands to 0.04°), and the airframe is run one step ahead along the logged commands for its actuator states and the flight's constant push. From every start (every 10th airborne sample) the firmware controller, with its state at that sample, then flies the airframe for up to 2 s on the logged references alone, and the fit is least squares on the predicted rates at 50 ms to 2 s ahead (over the rates' spread) and on the attitude (over the attitude change's spread at that horizon). A start counts only at the horizons that stay airborne and clear of dropped log records, so short hops and flights that diverged count too: they hold most of what there is on the stability margin. Because the controller is in the loop, a disturbance shows only as output error: fitting the plant to logged commands instead (open loop) credits the controller's reactions to the airframe. All lanes' controllers step in one C call (sw/sim/flight_many.c), and the Jacobian's columns run in parallel.
 With --ground, the tilt's pitch effectiveness grows near the floor (sw/sim/airframe.py pitch_ground, ground_scale), by the logged hover height (flights without one are left out) or by the time since liftoff.
+Flights with the identification test pattern (sw/excite.py) need nothing special: its target and collective steps are in the logged references, and its servo and motor steps are added back to the replayed controller's outputs from the pattern (the recording's "pattern" event) and the segment logged in each sample's flags.
 The per-flight push absorbs any steady torque, so the right motor's static thrust gain is not identifiable from the motion: it is pinned to the airborne thrust split (median left over right table thrust, taking the CoM as centred between the motors, as measured), and only the motors' dead times and lags may differ.
 It starts from the newest saved model (sw/sim/models/airframe_*.json), so after a hardware change a few flights refit what changed. Then each of --folds groups of flights is predicted by a fit to the others, and the held-out frame-by-frame scores (R² of the rates, attitude error and R² of the attitude change at 10 ms to 1 s) are printed, closed loop and on the logged commands.
 """
@@ -58,7 +59,37 @@ def load(path, shortest=0.5):
         return None
     record = {column: data[column].values.astype(float) for column in data.columns if data[column].dtype.kind in "fiub"}
     record.update(name=path.name[:19], setting=setting, lift=lift, end=end)
-    return record
+    record["excite"] = excitation(record, path)
+    return None if record["excite"] is None else record
+
+
+def excitation(record, path):
+    """
+    The test pattern's servo and motor steps at every sample [sample, (left, right servo tilt in degrees, left, right motor throttle)], zero where it did not play; None when it played without its pattern in the recording's events.
+    """
+    flags = record["flags"].astype(int)
+    out = np.zeros((len(flags), 4))
+    active = flags >> 8 & 1
+    if not active.any():
+        return out
+    pattern = None
+    for line in path.with_suffix(".jsonl").read_text().splitlines():
+        event = json.loads(line)
+        if event.get("type") == "pattern":
+            pattern = event
+    if not pattern or not pattern["segments"]:
+        print(f"{path.name}: test pattern played but is not in the events; left out", flush=True)
+        return None
+    segments = pattern["segments"]
+    values = np.array([[segment.get(key, 0.0) for key in ("left_servo", "right_servo", "left_motor", "right_motor")] for segment in segments])
+    # The flags hold the segment modulo 128; segments play in order and wrap, so take the next one with that remainder.
+    index = 0
+    for k in np.flatnonzero(active):
+        remainder = flags[k] >> 9 & 127
+        while index % 128 != remainder:
+            index = (index + 1) % len(segments)
+        out[k] = values[index]
+    return out
 
 
 def controller(record):
@@ -92,6 +123,7 @@ class Data:
         # Dropped log records up to each sample, to leave out windows that span one.
         # How far each sample is from the floor for the near-ground term: the logged height above the engage point (m) or the time since liftoff (s).
         self.near = None if ground is None else self.pad(lambda r: np.maximum(np.nan_to_num(r["hover_height_m"], nan=10.0), 0.0) if ground == "height" else np.maximum(np.arange(len(r["base_throttle"])) - r["lift"], 0) * DT)
+        self.excite = self.pad(lambda r: r["excite"])
         self.gaps = self.pad(lambda r: np.cumsum(np.abs(np.diff(r["esp_time_us"], prepend=r["esp_time_us"][0] - 10000) - 10000) > 3000))
         buffers = [controller(r) for r in records]
         self.initial = np.array([b[0] for b in buffers])
@@ -140,7 +172,10 @@ class Data:
         control_many(states, commands)
         throttle = np.trunc(states[:, 2:4]).astype(float)
         tilt = np.column_stack([np.degrees(states[:, 4]) - self.trims[flights, 0], -(np.degrees(states[:, 5]) - self.trims[flights, 1])])
-        return throttle, tilt
+        # The test pattern's servo and motor steps, added after the controller as the drone does (a stopped motor stays stopped).
+        excite = self.excite[flights, k]
+        throttle = np.where(throttle > 0, np.clip(throttle + excite[:, 2:], 1, 1200), throttle)
+        return throttle, tilt + excite[:, :2]
 
     def replay(self):
         """The controller's state before every sample [flight, sample, state], replayed on the logged attitude and gyro."""

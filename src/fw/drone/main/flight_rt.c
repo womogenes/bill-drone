@@ -112,6 +112,23 @@ static float battery_v;
 static int hover_mode;
 static HoverState hover;
 static Command flown;
+// The identification test pattern (P request, flight_runtime_pattern; kept in RAM only, so a restart clears it): piecewise-constant steps added to up to EXCITE_CHANNELS channels, played while collective is up from `after` seconds past collective first reaching integrate_throttle, `repeat` times (0 = until disarmed).
+// Channels: roll and pitch targets (degrees), yaw-rate target (degrees/s), collective (throttle), left and right servo tilt (degrees, positive forward), left and right motor (throttle). The targets and collective add before the controller, so the log's targets hold them; the servos and motors add after it, and the fit adds them back from the pattern (the recording's events) and the segment logged in Record flags.
+#define EXCITE_CHANNELS 8
+#define EXCITE_SEGMENTS 224
+static const float excite_limit[EXCITE_CHANNELS] = {10, 10, 60, 150, 8, 8, 150, 150};
+typedef struct {
+    uint16_t ticks;
+    int16_t value[EXCITE_CHANNELS];
+} ExciteSegment;
+static struct {
+    ExciteSegment segment[EXCITE_SEGMENTS];
+    int count, repeat;
+    float after;
+    // Playback: the segment, ticks into it and whole passes so far; this tick's segment and whether it played.
+    int index, tick, played, now;
+    bool active;
+} excite;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
 static float limit(float value, float low, float high) {
@@ -206,9 +223,9 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->target[2] = lroundf(flown.target_yaw * DEG * 100);
     record->base = lroundf(flown.base);
     record->control_us = duration > 65535 ? 65535 : duration;
-    // Bit 0 armed, bits 1-2 the hover mode, bit 3 hover sees the tag, bit 4 a hover landing touched down, bit 5 the drag model ran, bit 6 hover flies on the tag (tracking), bit 7 the range and arc targets are set.
+    // Bit 0 armed, bits 1-2 the hover mode, bit 3 hover sees the tag, bit 4 a hover landing touched down, bit 5 the drag model ran, bit 6 hover flies on the tag (tracking), bit 7 the range and arc targets are set, bit 8 the test pattern played this tick and bits 9-15 its segment (modulo 128).
     record->flags = state.enabled | hover_mode << 1 | (hover.have_pose && (int64_t)now - hover.seen_us <= 250000) << 3 | hover.landed << 4 |
-                    hover.dragging << 5 | hover.tracking << 6 | hover.have_setpoint << 7;
+                    hover.dragging << 5 | hover.tracking << 6 | hover.have_setpoint << 7 | excite.active << 8 | (excite.now & 127) << 9;
     record->voltage = voltage_mv;
     for (int i = 0; i < 3; i++) record->tag[i] = scaled(hover.position[i], 1000);
     int64_t age = ((int64_t)now - hover.capture_us) / 1000;
@@ -359,6 +376,24 @@ static void runtime_task(void *arg) {
                     scaled.velocity_damping = 0;
                 }
             }
+            float add[EXCITE_CHANNELS] = {0};
+            excite.active = excite.count && scaled.base > 0 && state.controller.airborne > excite.after && (!excite.repeat || excite.played < excite.repeat);
+            if (excite.active) {
+                const ExciteSegment *segment = &excite.segment[excite.index];
+                for (int i = 0; i < EXCITE_CHANNELS; i++) add[i] = segment->value[i] / 100.0f;
+                excite.now = excite.index;
+                if (++excite.tick >= segment->ticks) {
+                    excite.tick = 0;
+                    if (++excite.index >= excite.count) {
+                        excite.index = 0;
+                        excite.played++;
+                    }
+                }
+                scaled.target_roll += add[0] / DEG;
+                scaled.target_pitch += add[1] / DEG;
+                scaled.target_yaw += add[2] / DEG;
+                scaled.base = fmaxf(scaled.base + add[3], 0);
+            }
             flown = scaled;
             if (command.thrust_voltage > 0 && battery_v > 0) {
                 float ratio = limit(battery_v / command.thrust_voltage, 1 - VOLTAGE_RANGE, 1 + VOLTAGE_RANGE);
@@ -370,6 +405,13 @@ static void runtime_task(void *arg) {
             state.servo[1] = limit(state.controller.right_angle * DEG, -SERVO_LIMIT, SERVO_LIMIT);
             state.throttle[0] = lroundf(limit(state.controller.left, 0, THROTTLE_MAX));
             state.throttle[1] = lroundf(limit(state.controller.right, 0, THROTTLE_MAX));
+            if (excite.active) {
+                state.servo[0] = limit(state.servo[0] + command.model.left_servo_direction * add[4], -SERVO_LIMIT, SERVO_LIMIT);
+                state.servo[1] = limit(state.servo[1] + command.model.right_servo_direction * add[5], -SERVO_LIMIT, SERVO_LIMIT);
+                // A stopped motor stays stopped.
+                for (int side = 0; side < 2; side++)
+                    if (state.throttle[side]) state.throttle[side] = lroundf(limit(state.throttle[side] + add[6 + side], 1, THROTTLE_MAX));
+            }
             for (int side = 0; side < 2; side++) {
                 write_servo(side);
                 pulse(side * 2 + 1, 1000 + state.throttle[side]);
@@ -497,6 +539,8 @@ const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t
         state.enabled = true;
         state.reason = 0;
         flight_reset(&state.controller, &command);
+        excite.index = excite.tick = excite.played = excite.now = 0;
+        excite.active = false;
         state.heartbeat_us = esp_timer_get_time();
         log_head = log_tail = log_samples = log_dropped = log_elapsed = 0;
         log_session = esp_random() | 1;
@@ -663,6 +707,50 @@ const char *flight_runtime_servo_test(float amp, int cycles) {
     }
     portEXIT_CRITICAL(&lock);
     return idle ? NULL : "Disarm and zero throttle first";
+}
+
+// A test pattern (see excite): float32 after (s), uint8 repeat (0 = until disarmed), uint8 mask of the channels given, uint16 segment count, then per segment uint16 ticks (control samples) and an int16 value (hundredths of the channel's unit) for each channel in mask, all little-endian. A count of 0 clears it. Only while disarmed.
+const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *text, size_t size) {
+    if (length < 8) return "Expected after, repeat, mask and count";
+    float after;
+    uint16_t count;
+    memcpy(&after, body, 4);
+    int repeat = body[4], mask = body[5];
+    memcpy(&count, body + 6, 2);
+    int channels = __builtin_popcount(mask);
+    if (!(after >= 0 && after <= 60)) return "after must be 0-60 s";
+    if (count > EXCITE_SEGMENTS) return "Too many segments";
+    if (length != 8 + (size_t)count * (2 + 2 * channels)) return "Length does not match mask and count";
+    static ExciteSegment staged[EXCITE_SEGMENTS];
+    memset(staged, 0, sizeof(staged));
+    const uint8_t *p = body + 8;
+    float seconds = 0;
+    for (int s = 0; s < count; s++) {
+        memcpy(&staged[s].ticks, p, 2);
+        p += 2;
+        if (!staged[s].ticks) return "Segments need at least one tick";
+        seconds += staged[s].ticks / (float)SAMPLE_HZ;
+        for (int i = 0; i < EXCITE_CHANNELS; i++) {
+            if (!(mask >> i & 1)) continue;
+            memcpy(&staged[s].value[i], p, 2);
+            p += 2;
+            if (fabsf(staged[s].value[i] / 100.0f) > excite_limit[i]) return "A value is past its channel's limit";
+        }
+    }
+    portENTER_CRITICAL(&lock);
+    bool idle = running && !state.enabled && !state.throttle[0] && !state.throttle[1] && !maintenance;
+    if (idle) {
+        memcpy(excite.segment, staged, sizeof(staged));
+        excite.count = count;
+        excite.repeat = repeat;
+        excite.after = after;
+        excite.index = excite.tick = excite.played = excite.now = 0;
+        excite.active = false;
+    }
+    portEXIT_CRITICAL(&lock);
+    if (!idle) return "Disarm and zero throttle first";
+    int n = snprintf(text, size, "{\"segments\":%d,\"seconds\":%.2f,\"repeat\":%d,\"after\":%.2f}", count, seconds, repeat, after);
+    return n > 0 && (size_t)n < size ? NULL : "Reply does not fit";
 }
 
 // The test's progress and, per side, the mean peak pitch and yaw rate deviation after a step (deg/s).
