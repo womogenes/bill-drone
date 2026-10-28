@@ -1,20 +1,30 @@
 {
- "best": {
-  "pitch_p": 40.16925867209984,
-  "pitch_damping": 6.462198519367368,
-  "pitch_i": 44.06870772204652,
-  "roll_p": 105.05072224291177,
-  "roll_damping": 14.17238122291462,
-  "roll_i": 36.73539780718407,
-  "hover_kp": 4.284806190083654,
-  "hover_kd": 1.484468707761126,
+ "note": "Tuned 2026-10-28 on the spectrum-calibrated sim (tune_gains, roll_i capped at 60 from 319). Stage 1 = the push-observer firmware plus stage_1 (hover loop only) on the flown attitude gains; stage 2 = best.",
+ "stage_1": {
+  "hover_kp": 3.4,
+  "hover_kd": 0.808,
   "hover_kside": 5,
-  "hover_kyaw": 3.358697977064677,
+  "hover_kyaw": 4.228,
   "hover_tilt": 15,
-  "hover_trim_tau": 6.462192715634483,
-  "hover_trim_max": 0.729076650714193
+  "hover_trim_tau": 20,
+  "hover_trim_max": 2.351
  },
- "cost": 0.7374566168149352,
+ "best": {
+  "pitch_p": 26.423,
+  "pitch_damping": 4.539,
+  "pitch_i": 41.015,
+  "roll_p": 87.617,
+  "roll_damping": 10.645,
+  "roll_i": 60.0,
+  "hover_kp": 3.4,
+  "hover_kd": 0.808,
+  "hover_kside": 5,
+  "hover_kyaw": 4.228,
+  "hover_tilt": 15,
+  "hover_trim_tau": 20,
+  "hover_trim_max": 2.351
+ },
+ "cost": 0.745,
  "flown": {
   "pitch_p": 28,
   "pitch_damping": 6,
