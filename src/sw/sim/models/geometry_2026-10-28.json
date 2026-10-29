@@ -1,0 +1,14 @@
+{
+ "source": "mass weighed and CoM from the 2026-10-24 hang test (models/NOTES.md); arm, pivot and rotor heights from CAD; inertias about the CoM and the motor assembly's from bicopter.xml's parts with their CAD mesh inertia and assigned masses, without its fitted inertial (airframe.cad_geometry, landing legs on)",
+ "mass": 0.94,
+ "com": [-0.0021, -0.0007, 0.0138],
+ "arm": 0.172,
+ "pivot_z": 0.0372,
+ "rotor_z": 0.094,
+ "roll_inertia": 0.011709,
+ "pitch_inertia": 0.002129,
+ "yaw_inertia": 0.010613,
+ "assembly_mass": 0.08584,
+ "assembly_com": 0.031809,
+ "assembly_inertia": 0.00011399
+}

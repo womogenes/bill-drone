@@ -27,9 +27,17 @@
     <geom name="floor" type="plane" size="3 3 0.1" rgba="0.85 0.85 0.85 1"/>
     <camera name="overview" mode="targetbody" target="drone" pos="0.75 -1.0 1.0" fovy="35"/>
     <body name="drone" pos="0 0 0.6">
+      <!-- Explicit inertial (2026-10-21): the geoms place the parts; mass and inertia are set so the whole vehicle matches the measured
+           CoM (hang test, 17.0 mm above the tube with the old deck, carried over to the bench deck) and the flight-fitted pitch inertia. -->
+      <inertial pos="0.00021 0.00000 0.00463" mass="0.70922" fullinertia="0.0057936 0.0009466 0.0054250 -0.0000001 0.0000278 -0.0000000"/>
       <freejoint/>
       <geom name="tube" type="box" size="0.00525 0.210 0.005" mass="0.025" rgba="0.15 0.15 0.15 1"/>
-      <geom name="deck" class="cad" mesh="deck" mass="0.024"/>
+      <!-- Bench deck (Onshape "Bench deck - lightweight candidate", 2026-10-21): centre bar, two cross bars and two diagonals, about 5 g. -->
+      <geom name="deck_bar" type="box" pos="0 0 0.0068" size="0.014 0.007 0.0015" mass="0.0013" rgba="0.25 0.65 0.35 1" contype="0" conaffinity="0"/>
+      <geom name="deck_front_cross" type="box" pos="0.008 0 0.0073" size="0.003 0.037 0.001" mass="0.001" rgba="0.25 0.65 0.35 1" contype="0" conaffinity="0"/>
+      <geom name="deck_rear_cross" type="box" pos="-0.078 0 0.0073" size="0.003 0.037 0.001" mass="0.001" rgba="0.25 0.65 0.35 1" contype="0" conaffinity="0"/>
+      <geom name="deck_diagonal_left" type="box" pos="-0.043 0.0185 0.0068" euler="0 0 -22.5" size="0.0379 0.002 0.0015" mass="0.0008" rgba="0.25 0.65 0.35 1" contype="0" conaffinity="0"/>
+      <geom name="deck_diagonal_right" type="box" pos="-0.043 -0.0185 0.0068" euler="0 0 22.5" size="0.0379 0.002 0.0015" mass="0.0008" rgba="0.25 0.65 0.35 1" contype="0" conaffinity="0"/>
       <geom name="front_legs" class="cad" mesh="front_legs" mass="0.035"/>
       <geom name="rear_legs" class="cad" mesh="rear_legs" mass="0.035"/>
       <geom name="left_side" class="cad" mesh="side" mass="0.01656"/>

@@ -1,0 +1,155 @@
+"""
+The drone's attitude estimator and flight controller for the host simulation, through ctypes on the firmware's own C math (fw/drone/main/flight_math.c), compiled here on first use. Angles are radians internally; dashboard targets and trims are degrees.
+"""
+
+import ctypes
+import math
+import struct
+import subprocess
+from array import array
+from pathlib import Path
+
+SOURCE = Path(__file__).resolve().parents[2] / "fw/drone/main/flight_math.c"
+MANY = Path(__file__).with_name("flight_many.c")
+LIBRARY = Path(__file__).with_name("flight_math.so")
+if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime for path in (SOURCE, SOURCE.with_suffix(".h"), MANY)):
+    subprocess.run(["cc", "-O2", "-fPIC", "-shared", "-I", str(SOURCE.parent), str(MANY), "-o", str(LIBRARY), "-lm"], check=True)
+library = ctypes.CDLL(str(LIBRARY))
+library.flight_attitude.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+library.flight_attitude.restype = None
+library.flight_control.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+library.flight_control.restype = None
+library.flight_control_many.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
+library.flight_control_many.restype = None
+count = ctypes.c_size_t.in_dll(library, "flight_thrust_count").value
+THRUST_BUFFER = array("f", (ctypes.c_float * (2 * count)).in_dll(library, "flight_thrust"))
+# [throttle, thrust_N] rows, as the drone uses them.
+THRUST_TABLE = [[int(THRUST_BUFFER[2 * index]), THRUST_BUFFER[2 * index + 1]] for index in range(count)]
+PEAK = max(range(len(THRUST_TABLE)), key=lambda index: THRUST_TABLE[index][1])
+# Both ESCs were recalibrated to 1000-2200 us at this time (UTC, as recordings are named); the firmware's table was rescaled for it (commit a44c672). Recordings from before were flown with PRE_RECALIBRATION_TABLE, the earlier ESC range's table, and replay only with it.
+RECALIBRATED = "2026-10-28T06-40"
+PRE_RECALIBRATION_TABLE = [[0, 0.0], [200, 0.0], [250, 0.758689175], [300, 1.140325966], [350, 1.544788528], [400, 1.955279404], [450, 2.353557228], [500, 2.775707658], [550, 3.261558474], [600, 3.673818136], [650, 4.264941843],
+                           [700, 4.898708952], [750, 5.566624474], [800, 6.313341249], [850, 7.172694844], [900, 8.00416899], [950, 8.815765343], [1000, 9.61023936], [1050, 10.438741463], [1100, 11.216827129], [1150, 11.052149476], [1200, 10.992227314]]
+
+
+def thrust_table(recording):
+    """The thrust table a recording (its path or name, starting with its UTC time) was flown with: [throttle, thrust_N] rows."""
+    return PRE_RECALIBRATION_TABLE if Path(recording).name[:16] < RECALIBRATED else THRUST_TABLE
+
+
+def control_many(states, commands, table=THRUST_TABLE):
+    """
+    Step every lane's controller in place: states and commands are C-contiguous float32 arrays [lane, ...] laid out as Controller.state and Controller.command, with each command's motion filled in, all on one thrust table.
+    """
+    assert states.dtype == commands.dtype == "float32" and states.flags.c_contiguous and commands.flags.c_contiguous
+    # The table as the C controller takes it: flat float32 throttle, thrust pairs.
+    buffer = THRUST_BUFFER if table is THRUST_TABLE else array("f", [value for row in table for value in row])
+    library.flight_control_many(states.ctypes.data, states.shape[1], commands.ctypes.data, commands.shape[1], buffer.buffer_info()[0], len(buffer) // 2, len(states))
+
+
+def interpolate(value, points, input_column=0):
+    """Interpolate between table rows; clamp to the endpoint values."""
+    output_column = 1 - input_column
+    if value <= points[0][input_column]:
+        return points[0][output_column]
+
+    for before, after in zip(points, points[1:]):
+        if value <= after[input_column]:
+            fraction = (value - before[input_column]) / (after[input_column] - before[input_column])
+            return before[output_column] + fraction * (after[output_column] - before[output_column])
+
+    return points[-1][output_column]
+
+
+def thrust(throttle):
+    """Convert an ESC command to newtons."""
+    return interpolate(throttle, THRUST_TABLE)
+
+
+def throttle(force):
+    """Convert newtons to an ESC command using the table's rising part, capped at its peak."""
+    return interpolate(force, THRUST_TABLE[:PEAK + 1], input_column=1)
+
+
+# Geometry and inertia of the current 900 g drone, in metres and kg·m².
+MODEL = {
+    "arm": 0.172,
+    "pivot_height": 0.0253692458911615,
+    "com_x": 0.0,  # Fitted to 2026-10-20 liftoff data; CAD gave -0.00202.
+    "roll_inertia": 0.0118483264434811,
+    "pitch_inertia": 0.0023030647846826,
+    "yaw_inertia": 0.0106709253540914,
+    "reaction_torque_ratio": 0.015,
+    "servo_min": math.radians(-60),
+    "servo_max": math.radians(60),
+    # Positive left tilts forward; positive right tilts backward.
+    "left_servo_direction": 1.0,
+    "right_servo_direction": -1.0,
+}
+# This order is the C buffer layout; it must not depend on dictionary iteration.
+MODEL_KEYS = ("arm", "pivot_height", "com_x", "roll_inertia", "pitch_inertia", "yaw_inertia", "reaction_torque_ratio", "servo_min", "servo_max", "left_servo_direction", "right_servo_direction")
+# Model parameters tunable from the dashboard, in SI units.
+MODEL_TUNING_KEYS = ("pivot_height", "com_x", "roll_inertia", "pitch_inertia", "yaw_inertia", "reaction_torque_ratio", "arm")
+
+# Equivalent to retaining 0.99 / 0.9998 of gyro integration every 10 ms.
+GRAVITY_TAU = -0.01 / math.log(0.99)
+POWERED_GRAVITY_TAU = -0.01 / math.log(0.9998)
+ANGULAR_KEYS = ("roll", "pitch", "yaw_rate", "pitch_trim", "left_trim", "right_trim", "servo_compensation", "target_rate", "velocity_damping")
+
+GAIN_KEYS = ("roll_p", "roll_i", "roll_damping", "pitch_p", "pitch_i", "pitch_damping", "yaw_damping", "integral_limit", "pitch_trim", "left_trim", "right_trim")
+COMMAND_KEYS = ("enabled", "roll", "pitch", "yaw_rate", "base_throttle") + GAIN_KEYS
+BIAS_KEYS = ("roll_bias", "pitch_bias", "yaw_bias")
+THRUST_SCALE_KEYS = ("left_thrust_scale", "right_thrust_scale")
+FEEDFORWARD_KEYS = BIAS_KEYS + THRUST_SCALE_KEYS
+# C Command tuning layout after the six motion floats; the model block follows.
+TUNING_LAYOUT = COMMAND_KEYS + FEEDFORWARD_KEYS + ("servo_compensation", "integrate_throttle", "target_rate", "velocity_damping", "velocity_leak")
+MODEL_OFFSET = 6 + len(TUNING_LAYOUT)
+# The runtime-only Command fields after the model block: the battery voltage thrust compensation is relative to, and the yaw-rate integral gain.
+THRUST_VOLTAGE = MODEL_OFFSET + len(MODEL_KEYS)
+YAW_I = THRUST_VOLTAGE + 1
+
+
+class Attitude:
+    def __init__(self, accel=(0.0, 0.0, 1.0)):
+        self.state = array("f", [math.atan2(accel[1], accel[2]), math.atan2(-accel[0], math.sqrt(accel[1] ** 2 + accel[2] ** 2))])
+
+    def update(self, accel, gyro, dt, powered):
+        motion = array("f", list(accel) + list(gyro) + [dt, POWERED_GRAVITY_TAU if powered else GRAVITY_TAU])
+        library.flight_attitude(self.state.buffer_info()[0], motion.buffer_info()[0])
+        return self.state[0], self.state[1]
+
+
+class Controller:
+    def __init__(self, model=MODEL):
+        # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, the takeoff setpoint state, then the upright-takeoff flag.
+        self.state = array("f", [0.0] * 17)
+        # Motion (6 floats), tuning (TUNING_LAYOUT), then model parameters.
+        # Runtime-only Command fields after the model (thrust_voltage at THRUST_VOLTAGE, yaw_i at YAW_I, hover) start at zero: off unless the caller sets them.
+        self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS] + [0.0] * 64)
+        for key in THRUST_SCALE_KEYS:
+            self.command[6 + TUNING_LAYOUT.index(key)] = 1.0
+
+    def reset(self):
+        """
+        Start the roll integrator from the clamped roll bias and the pitch integrator from zero (the pitch bias fades in after liftoff), like the native flight_reset.
+        """
+        limit = self.command[6 + TUNING_LAYOUT.index("integral_limit")]
+        roll = max(-limit, min(limit, self.command[6 + TUNING_LAYOUT.index("roll_bias")]))
+        struct.pack_into("<2f", self.state, 0, roll, 0.0)
+        # No upright takeoff: free flight starts in the air, and a liftoff arms first, where the native flight_reset sets the flag from the resting attitude.
+        self.state[15] = 0.0
+
+    def configure(self, settings):
+        # Setpoints and the enable flag are native-owned on the drone; missing ones are zero.
+        values = [
+            math.radians(settings.get(key, 0.0)) if key in ANGULAR_KEYS else settings.get(key, 0.0)
+            for key in TUNING_LAYOUT
+        ]
+        struct.pack_into("<%df" % len(TUNING_LAYOUT), self.command, 24, *values)
+        for key in MODEL_TUNING_KEYS:
+            self.command[MODEL_OFFSET + MODEL_KEYS.index(key)] = settings[key]
+
+    def update(self, attitude, gyro, dt):
+        struct.pack_into("<6f", self.command, 0, *attitude, *gyro, dt)
+        library.flight_control(self.state.buffer_info()[0], self.command.buffer_info()[0], THRUST_BUFFER.buffer_info()[0], len(THRUST_BUFFER) // 2)
+        return int(self.state[2]), int(self.state[3]), self.state[4], self.state[5]
