@@ -147,6 +147,8 @@ class Recorder:
         self.error = None
         # The test pattern last loaded through this service, written at the start of every recording.
         self.pattern = None
+        # The image the drone runs (its I reply: slot, ELF SHA-256 prefix, reset reason), asked once per drone boot and written into every recording's start record, so each flight says which firmware flew it.
+        self.firmware = None
 
     def status(self):
         return {"file": self.file, "bytes": self.bytes, "writing": self.data is not None, "error": self.error}
@@ -200,7 +202,7 @@ class Recorder:
         self.data, self.events = open(f"{stem}.bin", "xb"), open(f"{stem}.jsonl", "x")
         self.file, self.bytes, self.session, self.next_sequence, self.error = f"{stem.name}.bin", 0, session, None, None
         # The first line describes the whole recording.
-        self.event({**(self.metadata or {}), "type": "start", "session": session, **start})
+        self.event({**(self.metadata or {}), "type": "start", "session": session, "firmware": self.firmware, **start})
         if self.pattern:
             self.event({"type": "pattern", **self.pattern})
 
@@ -324,6 +326,9 @@ class Service:
         self.arm_requests = set()
         self.settings_task = None
         self.settings_retry = 0
+        self.firmware_session = None
+        self.firmware_task = None
+        self.firmware_retry = 0
         self.delivered = {}
         self.stopping = None
         self.stop_reply = None
@@ -426,6 +431,15 @@ class Service:
             self.waiting.pop(identifier, None)
             self.stop_reply = None
 
+    async def refresh_firmware(self, session):
+        try:
+            info = json.loads(await self.request(b"I"))
+            self.recorder.firmware = {key: info.get(key) for key in ("running", "running_sha", "reset")}
+            self.firmware_session = session
+        except (RuntimeError, TimeoutError, ValueError) as error:
+            self.firmware_retry = time.monotonic() + 1
+            print(f"Reading firmware failed: {error}", flush=True)
+
     async def refresh_settings(self, version):
         try:
             self.settings = json.loads(await self.request(b"S"))
@@ -527,6 +541,7 @@ class Service:
                 self.delivered.clear()
                 self.queue_record("close", "Drone restarted")
                 self.settings_version = None
+                self.recorder.firmware = None
             self.session, self.token, self.last_status = session, token, time.monotonic()
             version, self.reading = decode_status(payload, self.settings)
             self.reading["recorder"] = self.recorder.status()
@@ -534,6 +549,10 @@ class Service:
                     and time.monotonic() >= self.settings_retry
                     and (self.settings_task is None or self.settings_task.done())):
                 self.settings_task = asyncio.create_task(self.refresh_settings(version))
+            if (session != self.firmware_session
+                    and time.monotonic() >= self.firmware_retry
+                    and (self.firmware_task is None or self.firmware_task.done())):
+                self.firmware_task = asyncio.create_task(self.refresh_firmware(session))
             self.push(self.dashboard, {"type": "reading", **self.reading})
             return
         if session != self.session or channel not in (2, 3, 6):

@@ -82,9 +82,10 @@ static bool has_reply;
 static TaskHandle_t update_task;
 // The running image awaits confirmation (V) after an update.
 static bool unconfirmed;
-// Updates may switch the link to FAST_RATE (request F; the controller's relay follows the same request) while requests keep coming: with none for FAST_HOLD_US it goes back to long range by itself, so a lost switch-back cannot leave it fast.
+// Updates may switch the link to FAST_RATE (request F; the controller's relay follows the same request) while requests keep coming: with none for FAST_HOLD_US it goes back to its usual rate by itself, so a lost switch-back cannot leave it fast.
 #define FAST_HOLD_US 3000000
-static const esp_now_rate_config_t long_range = {.phymode = WIFI_PHY_MODE_LR, .rate = WIFI_PHY_RATE_LORA_500K};
+// This drone's usual rate is the default 1 Mbps, not long range: its 100 Hz log stream needs the airtime, and at 500 kbps retries on a busy channel filled the log ring (10-30% of samples dropped on 2026-10-29); the controller still sends to it at long range, so the targets keep the margin.
+static const esp_now_rate_config_t usual_rate = {.phymode = WIFI_PHY_MODE_11B, .rate = WIFI_PHY_RATE_1M_L};
 static const esp_now_rate_config_t fast_rate = {.phymode = WIFI_PHY_MODE_11B, .rate = WIFI_PHY_RATE_11M_L};
 static bool fast;
 static int64_t fast_until;
@@ -93,7 +94,7 @@ static tinfl_decompressor inflater;
 static uint8_t inflated[SECTOR];
 
 static void set_rate(bool on) {
-    esp_now_rate_config_t rate = on ? fast_rate : long_range;
+    esp_now_rate_config_t rate = on ? fast_rate : usual_rate;
     if (esp_now_set_peer_rate_config(peer, &rate) == ESP_OK) fast = on;
 }
 
@@ -664,7 +665,7 @@ void radio_start(void) {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(esp_wifi_init(&wifi));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    // Espressif long range as well as 802.11b/g/n: both ends send at the 500 kbps long-range rate, which survives a busy channel 6 better (fw/controller/README.md), and still hear default-rate frames.
+    // Espressif long range as well as 802.11b/g/n: the controller sends at the 500 kbps long-range rate, which survives a busy channel 6 better (fw/controller/README.md), and both ends hear either.
     ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
@@ -673,7 +674,7 @@ void radio_start(void) {
     ESP_ERROR_CHECK(esp_now_register_recv_cb(on_received));
     ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
     ESP_ERROR_CHECK(esp_now_add_peer(&peer_info));
-    esp_now_rate_config_t rate = long_range;
+    esp_now_rate_config_t rate = usual_rate;
     ESP_ERROR_CHECK(esp_now_set_peer_rate_config(peer, &rate));
     const esp_timer_create_args_t timer_args = {.callback = tick, .name = "radio"};
     esp_timer_handle_t timer;
