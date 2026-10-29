@@ -1,0 +1,8 @@
+# Link our code after all other code and data, then pad text and rodata to 4 KiB so the segment sizes, and everything after them, stay fixed.
+[mapping:drone]
+archive: libmain.a
+entries:
+    * (default);
+        text->flash_text ALIGN(4096, post),
+        rodata->flash_rodata ALIGN(4096, post),
+        bss->dram0_bss ALIGN(4, post)

@@ -1,9 +1,11 @@
 // USB-to-ESP-NOW relay. The laptop supplies every controller heartbeat.
 
 #include <string.h>
+#include "driver/gpio.h"
 #include "driver/uart.h"
 #include "esp_now.h"
 #include "esp_rom_crc.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -16,8 +18,11 @@
 #define PENDING_MAX 260
 #define WINDOW 4
 #define OUTGOING_MAX 8
+// The board's blue LED: blinks at 1 Hz until the link works both ways, then stays on while in the last 2 s the drone was heard and acknowledged a packet from the laptop. The drone's LED goes by the laptop's packets reaching it, so the controller's is not solid while the drone's blinks (only a packet the drone receives but rejects as stale can still differ).
+#define LED 2
+#define HEARD_US 2000000
 
-static const uint8_t drone_mac[6] = {0xb0, 0x3f, 0xd3, 0x52, 0x5c, 0x60};
+static const uint8_t drone_mac[6] = {0x20, 0x50, 0x0d, 0x8b, 0x7e, 0x68};
 
 typedef struct {
     uint8_t length;
@@ -28,6 +33,22 @@ static QueueHandle_t outgoing;
 static QueueHandle_t incoming;
 static QueueHandle_t uart_events;
 static SemaphoreHandle_t window;
+static volatile int64_t heard_us;
+static volatile int64_t delivered_us;
+// Updates may switch the link to the fast rate: an update request F (fw/drone/main/radio.c) that this relay forwards also sets its own rate, after the request is sent, so the drone hears it at the old one. Each further update request keeps it fast for FAST_HOLD_US; after that it goes back to long range by itself, as the drone does.
+#define FAST_HOLD_US 3000000
+static const esp_now_rate_config_t long_range = {.phymode = WIFI_PHY_MODE_LR, .rate = WIFI_PHY_RATE_LORA_500K};
+static const esp_now_rate_config_t fast_rate = {.phymode = WIFI_PHY_MODE_11B, .rate = WIFI_PHY_RATE_11M_L};
+static bool fast;
+static int64_t fast_until;
+
+static void set_rate(bool on)
+{
+    esp_now_rate_config_t rate = on ? fast_rate : long_range;
+    if (esp_now_set_peer_rate_config(drone_mac, &rate) == ESP_OK) {
+        fast = on;
+    }
+}
 
 // Matches wire.unpack: size, magic, channel, fragment index and count.
 static bool valid_header(const uint8_t *packet, size_t length)
@@ -38,6 +59,9 @@ static bool valid_header(const uint8_t *packet, size_t length)
 
 static void sent(const esp_now_send_info_t *info, esp_now_send_status_t status)
 {
+    if (status == ESP_NOW_SEND_SUCCESS) {
+        delivered_us = esp_timer_get_time();
+    }
     xSemaphoreGive(window);
 }
 
@@ -46,9 +70,22 @@ static void received(const esp_now_recv_info_t *info, const uint8_t *data, int l
     if (memcmp(info->src_addr, drone_mac, 6) || length > PACKET_MAX) {
         return;
     }
+    heard_us = esp_timer_get_time();
     packet_t packet = {.length = length};
     memcpy(packet.data, data, length);
     xQueueSend(incoming, &packet, 0);
+}
+
+static void led_task(void *argument)
+{
+    gpio_reset_pin(LED);
+    gpio_set_direction(LED, GPIO_MODE_OUTPUT);
+    for (;;) {
+        const int64_t now = esp_timer_get_time();
+        const bool connected = heard_us && now - heard_us < HEARD_US && delivered_us && now - delivered_us < HEARD_US;
+        gpio_set_level(LED, connected || now / 500000 % 2 == 0);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 }
 
 static void radio_task(void *argument)
@@ -57,9 +94,25 @@ static void radio_task(void *argument)
     for (;;) {
         // Hold a send slot before taking a packet so waiting packets stay droppable.
         xSemaphoreTake(window, portMAX_DELAY);
-        xQueueReceive(outgoing, &packet, portMAX_DELAY);
+        if (xQueueReceive(outgoing, &packet, pdMS_TO_TICKS(100)) != pdTRUE) {
+            xSemaphoreGive(window);
+            if (fast && esp_timer_get_time() > fast_until) {
+                set_rate(false);
+            }
+            continue;
+        }
         if (esp_now_send(drone_mac, packet.data, packet.length) != ESP_OK) {
             xSemaphoreGive(window);
+        }
+        // Channel 6 carries requests: id, then op (first fragment only).
+        if (packet.data[3] == 6) {
+            if (fast) {
+                fast_until = esp_timer_get_time() + FAST_HOLD_US;
+            }
+            if (packet.data[16] == 0 && packet.length >= HEADER_SIZE + 6 && packet.data[HEADER_SIZE + 4] == 'F') {
+                set_rate(packet.data[HEADER_SIZE + 5]);
+                fast_until = esp_timer_get_time() + FAST_HOLD_US;
+            }
         }
     }
 }
@@ -194,6 +247,8 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_wifi_init(&config));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    // Long range as well as 802.11b/g/n: the drone's default-rate frames still arrive, and this relay sends to the drone at the 500 kbps long-range rate, several dB more margin against the other networks on channel 6 (the drone receives long range since 2026-10-29).
+    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE));
@@ -203,6 +258,8 @@ void app_main(void)
     esp_now_peer_info_t peer = {.channel = 0, .ifidx = WIFI_IF_STA, .encrypt = false};
     memcpy(peer.peer_addr, drone_mac, 6);
     ESP_ERROR_CHECK(esp_now_add_peer(&peer));
+    esp_now_rate_config_t rate = long_range;
+    ESP_ERROR_CHECK(esp_now_set_peer_rate_config(drone_mac, &rate));
 
     uart_config_t uart = {
         .baud_rate = 921600,
@@ -219,4 +276,5 @@ void app_main(void)
     xTaskCreate(usb_read_task, "usb_read", 4096, NULL, 12, NULL);
     xTaskCreate(usb_write_task, "usb_write", 4096, NULL, 11, NULL);
     xTaskCreate(radio_task, "radio", 4096, NULL, 11, NULL);
+    xTaskCreate(led_task, "led", 2048, NULL, 1, NULL);
 }
