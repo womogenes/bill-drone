@@ -103,11 +103,11 @@
 #endif
 // The descent command ramps in over LAND_EASE (s), so pressing land does not step collective down.
 #define LAND_EASE 0.5f
-// The nudge's speed is smoothed over this long (s): the laptop moves it in small steps every 50 ms.
 // Above this nudge speed (m/s) the hold point counts as moving.
 #ifndef NUDGE_MOVING
 #define NUDGE_MOVING 0.02f
 #endif
+// The nudge's speed is smoothed over this long (s): the laptop moves it in small steps every 50 ms.
 #ifndef NUDGE_TAU
 #define NUDGE_TAU 0.2f
 #endif

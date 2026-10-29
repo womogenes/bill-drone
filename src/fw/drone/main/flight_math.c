@@ -122,7 +122,6 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     }
     const Model *model = &c->model;
     // On the ground the setpoint follows the measured attitude, so a sloped surface is no error. Once collective first reaches integrate_throttle it ramps to the target at target_rate: liftoff levels off instead of stepping.
-    // airborne counts seconds since collective first reached integrate_throttle (0 before).
     if (c->base >= c->integrate_throttle || state->airborne) state->airborne += c->dt;
     if (!state->airborne) {
         state->setpoint_roll = c->roll;

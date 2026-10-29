@@ -43,9 +43,8 @@
 // Battery smoothing for thrust compensation (s), and the furthest the smoothed voltage may sit from thrust_voltage, as a ratio, before it is treated as an ADC fault and clamped.
 #define VOLTAGE_TAU 0.3f
 #define VOLTAGE_RANGE 0.15f
-// Oldest camera sighting hover uses (us), and the highest throttle it may ask for (the thrust table's rising end).
+// Oldest camera sighting hover uses (us).
 #define HOVER_POSE_US 150000
-#define HOVER_THROTTLE 1200
 
 typedef struct __attribute__((packed)) {
     uint32_t elapsed, sequence;
@@ -69,7 +68,7 @@ static const float ticks[4] = {
 };
 
 typedef struct {
-    float accel_scale[3], gyro_scale[3], gravity_tau, powered_tau, tip_limit;
+    float accel_scale[3], gyro_scale[3], gravity_tau, powered_tau;
 } Config;
 
 typedef struct {
@@ -124,8 +123,8 @@ static Command flown;
 // The laptop's hold-point nudge for hover (m; toward the tag, left, up), from the targets.
 #define NUDGE_MAX 1.5f
 static float nudge[3];
-// It also carries the camera hold's trim over: at a stop after a hold that flew on the tag, hover_trim_start moves auto_trim of the way to the trim the hold ended with.
 // Self-trim: through a hop, the attitude controller's total roll and pitch command (rad/s²) summed over steady samples (from TRIM_SETTLE s after collective reached integrate_throttle, body rates under TRIM_RATE, no test pattern, not landing: the floor's wash and the touchdown are not the airframe's trim), as sw/learn_bias.py does from the log. At the stop, with at least TRIM_SAMPLES of them, each bias moves auto_trim of the way to the mean, by at most TRIM_STEP; radio.c stores it once disarmed. So a moved battery costs one hop instead of a retune.
+// It also carries the camera hold's trim over: at a stop after a hold that flew on the tag, hover_trim_start moves auto_trim of the way to the trim the hold ended with.
 #define TRIM_SETTLE 1.0f
 #define TRIM_RATE (15 / DEG)
 #define TRIM_SAMPLES 100
@@ -152,6 +151,16 @@ static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
 static float limit(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
+}
+
+static bool spinning(void) { return state.throttle[0] || state.throttle[1]; }
+
+// Disarmed with both motors stopped.
+static bool quiet(void) { return !state.enabled && !spinning(); }
+
+static void rewind_pattern(void) {
+    excite.index = excite.tick = excite.played = excite.now = 0;
+    excite.active = false;
 }
 
 // The ESC pulse (us) for a throttle: 1000 us plus the throttle, or ESC_STOP_US for a stopped motor.
@@ -305,7 +314,7 @@ static void runtime_task(void *arg) {
             }
             hover_mode = HOVER_LAND;
             if (now - link_land_us > (uint64_t)(LINK_LAND_S * 1e6f)) stop_locked(2);
-        } else if ((state.enabled || state.throttle[0] || state.throttle[1]) && stale) {
+        } else if (!quiet() && stale) {
             stop_locked(2);
         }
 
@@ -373,7 +382,7 @@ static void runtime_task(void *arg) {
         }
         Motion motion = {state.accel[0], state.accel[1], state.accel[2],
                          state.gyro[0], state.gyro[1], state.gyro[2], dt,
-                         state.throttle[0] || state.throttle[1] ? config.powered_tau : config.gravity_tau};
+                         spinning() ? config.powered_tau : config.gravity_tau};
         flight_attitude(&state.attitude, &motion);
         state.online = true;
         state.temperature = raw[3] / 340.0f + 36.53f;
@@ -381,8 +390,7 @@ static void runtime_task(void *arg) {
         previous = now;
         uint64_t started = esp_timer_get_time();
         Attitude pose = relative_attitude(&state);
-        if (state.enabled && (fabsf(pose.roll) > config.tip_limit ||
-                              fabsf(pose.pitch) > config.tip_limit)) stop_locked(4);
+        if (state.enabled && (fabsf(pose.roll) > TIP_LIMIT / DEG || fabsf(pose.pitch) > TIP_LIMIT / DEG)) stop_locked(4);
         // Measured specific force along vertical, in g: the accelerometer onto the IMU attitude's up axis.
         float vertical = -state.accel[0] * sinf(state.attitude.pitch) +
                          cosf(state.attitude.pitch) * (state.accel[1] * sinf(state.attitude.roll) + state.accel[2] * cosf(state.attitude.roll));
@@ -419,7 +427,7 @@ static void runtime_task(void *arg) {
                 hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag, &out);
                 // A finished landing disarms, ending the session like a stop, so the laptop can take off again (H or Enable) instead of being left armed with hover holding thrust at zero.
                 if (hover.landed && out.force <= 0) stop_locked(link_landing ? 8 : 7);
-                scaled.base = out.force > 0 ? fminf(HOVER_THROTTLE, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
+                scaled.base = out.force > 0 ? fminf(THROTTLE_MAX, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
                 scaled.target_roll = out.roll;
                 scaled.target_pitch = out.pitch;
                 scaled.target_yaw = out.yaw_rate;
@@ -481,7 +489,7 @@ static void runtime_task(void *arg) {
             }
         }
         if (servo_test.active) {
-            if (state.enabled || state.throttle[0] || state.throttle[1]) {
+            if (!quiet()) {
                 servo_test.active = false;
             } else {
                 // The gyro's level just before a step, then its largest deviation in the window after.
@@ -500,14 +508,10 @@ static void runtime_task(void *arg) {
                     if (servo_test.index >= servo_test.count) {
                         servo_test.active = false;
                         state.servo[0] = state.servo[1] = 0;
-                        write_servo(0);
-                        write_servo(1);
                     } else {
                         static const float pattern[4] = {1, 0, -1, 0};
                         state.servo[side] = pattern[servo_test.index % 4] * servo_test.amp;
                         state.servo[1 - side] = 0;
-                        write_servo(0);
-                        write_servo(1);
                         for (int axis = 0; axis < 2; axis++) {
                             servo_test.before[axis] = servo_test.recent[axis];
                             servo_test.top[axis] = 0;
@@ -515,12 +519,14 @@ static void runtime_task(void *arg) {
                         servo_test.step_us = now;
                         servo_test.index++;
                     }
+                    write_servo(0);
+                    write_servo(1);
                 }
             }
         }
         if (!state.enabled || !hover_mode) {
             flown = command;
-            hover_rest(&hover, vertical, state.throttle[0] || state.throttle[1], dt);
+            hover_rest(&hover, vertical, spinning(), dt);
         }
         uint32_t duration = esp_timer_get_time() - started;
         if (recording) capture(now, raw, duration);
@@ -532,7 +538,7 @@ static void runtime_task(void *arg) {
 // The update service writes flash only while this holds: flash writes stall this core's code fetches.
 bool flight_runtime_idle(void) {
     portENTER_CRITICAL(&lock);
-    bool idle = !state.enabled && !command.enabled && !state.throttle[0] && !state.throttle[1];
+    bool idle = quiet() && !command.enabled;
     portEXIT_CRITICAL(&lock);
     return idle;
 }
@@ -578,7 +584,6 @@ bool flight_runtime_targets(const float *targets) {
     return active;
 }
 
-// The only way to arm: an explicit request after any stop, with the streamed collective at zero. Arming starts a recording, so it also needs the laptop's recorder and the previous recording fully sent.
 uint32_t flight_runtime_stop_generation(void) {
     portENTER_CRITICAL(&lock);
     uint32_t generation = stop_generation;
@@ -586,14 +591,14 @@ uint32_t flight_runtime_stop_generation(void) {
     return generation;
 }
 
-// Every check, including the stop count from when the request arrived, runs under the lock that stops take, so a stop at any point after the request arrived refuses it.
+// The only way to arm: an explicit request after any stop, with the streamed collective at zero. Arming starts a recording, so it also needs the laptop's recorder and the previous recording fully sent. Every check, including the stop count from when the request arrived, runs under the lock that stops take, so a stop at any point after the request arrived refuses it.
 const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t expected_generation,
                                uint32_t arm_sequence) {
     portENTER_CRITICAL(&lock);
     ArmCheck check = {
         .running = running, .online = state.online, .calibrated = state.calibrated,
         .calibrating = state.calibration_left > 0, .enabled = state.enabled,
-        .throttle = state.throttle[0] || state.throttle[1], .base = command.base != 0, .recorder = recorder,
+        .throttle = spinning(), .base = command.base != 0, .recorder = recorder,
         .log_pending = log_head != log_tail, .calibration_ready = state.calibration_ready,
         .calibration_unsaved = calibration_unsaved, .maintenance = maintenance,
         .expected_generation = expected_generation, .generation = stop_generation,
@@ -607,8 +612,7 @@ const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t
         state.enabled = true;
         state.reason = 0;
         flight_reset(&state.controller, &command);
-        excite.index = excite.tick = excite.played = excite.now = 0;
-        excite.active = false;
+        rewind_pattern();
         state.heartbeat_us = esp_timer_get_time();
         log_head = log_tail = log_samples = log_dropped = log_elapsed = 0;
         log_session = esp_random() | 1;
@@ -678,28 +682,25 @@ const char *flight_runtime_calibrate(void) {
     return active ? NULL : "IMU offline";
 }
 
-bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias) {
+// Hands over a pair a stop left, once, while disarmed.
+static bool take_pair(bool *ready, const float *pair, float *a, float *b) {
     portENTER_CRITICAL(&lock);
-    bool ready = trim.ready && !state.enabled;
-    if (ready) {
-        trim.ready = false;
-        *roll_bias = trim.bias[0];
-        *pitch_bias = trim.bias[1];
+    bool taken = *ready && !state.enabled;
+    if (taken) {
+        *ready = false;
+        *a = pair[0];
+        *b = pair[1];
     }
     portEXIT_CRITICAL(&lock);
-    return ready;
+    return taken;
+}
+
+bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias) {
+    return take_pair(&trim.ready, trim.bias, roll_bias, pitch_bias);
 }
 
 bool flight_runtime_take_hover_trim(float *x, float *y) {
-    portENTER_CRITICAL(&lock);
-    bool ready = trim.hover_ready && !state.enabled;
-    if (ready) {
-        trim.hover_ready = false;
-        *x = trim.hover[0];
-        *y = trim.hover[1];
-    }
-    portEXIT_CRITICAL(&lock);
-    return ready;
+    return take_pair(&trim.hover_ready, trim.hover, x, y);
 }
 
 bool flight_runtime_take_calibration(float *bias, float *pose_zero, float *sensor_frame) {
@@ -718,7 +719,7 @@ bool flight_runtime_take_calibration(float *bias, float *pose_zero, float *senso
 const char *flight_runtime_zero_servo(int side, float *offset, char *error, size_t size) {
     int index = side ? SETTING_servo_offset_right : SETTING_servo_offset_left;
     portENTER_CRITICAL(&lock);
-    bool busy = state.enabled || state.throttle[0] || state.throttle[1];
+    bool busy = !quiet();
     *offset = state.offsets[side] + state.servo[side];
     bool fits = settings_valid(index, *offset);
     if (!busy && fits) {
@@ -735,7 +736,7 @@ const char *flight_runtime_zero_servo(int side, float *offset, char *error, size
 // Holds the outputs at zero for a flash write: succeeds only while disarmed with zero throttle.
 bool flight_runtime_begin_maintenance(void) {
     portENTER_CRITICAL(&lock);
-    bool ok = !state.enabled && !state.throttle[0] && !state.throttle[1];
+    bool ok = quiet();
     if (ok) maintenance = true;
     portEXIT_CRITICAL(&lock);
     return ok;
@@ -789,7 +790,7 @@ void flight_runtime_status(Status *status) {
 const char *flight_runtime_servo_test(float amp, int cycles) {
     if (!(amp > 0 && amp <= 15) || cycles < 1 || cycles > 50) return "Expected amp 0-15 degrees and 1-50 cycles";
     portENTER_CRITICAL(&lock);
-    bool idle = running && !state.enabled && !state.throttle[0] && !state.throttle[1] && !maintenance;
+    bool idle = running && quiet() && !maintenance;
     if (idle) {
         memset(&servo_test, 0, sizeof(servo_test));
         servo_test.amp = amp;
@@ -830,14 +831,13 @@ const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *tex
         }
     }
     portENTER_CRITICAL(&lock);
-    bool idle = running && !state.enabled && !state.throttle[0] && !state.throttle[1] && !maintenance;
+    bool idle = running && quiet() && !maintenance;
     if (idle) {
         memcpy(excite.segment, staged, sizeof(staged));
         excite.count = count;
         excite.repeat = repeat;
         excite.after = after;
-        excite.index = excite.tick = excite.played = excite.now = 0;
-        excite.active = false;
+        rewind_pattern();
     }
     portEXIT_CRITICAL(&lock);
     if (!idle) return "Disarm and zero throttle first";
@@ -910,7 +910,6 @@ void flight_runtime_start(void) {
     // Equivalent to retaining 0.99 / 0.9998 of gyro integration every 10 ms.
     config.gravity_tau = -0.01 / log(0.99);
     config.powered_tau = -0.01 / log(0.9998);
-    config.tip_limit = TIP_LIMIT / DEG;
     float values[SETTINGS];
     settings_copy(values);
     // A calibration is valid only in the sensor frame it was taken in. Arming and the status both read state.calibrated, so a rejected calibration blocks arming.

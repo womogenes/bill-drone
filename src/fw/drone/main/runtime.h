@@ -11,7 +11,7 @@
 #define LOG_BATCH 4
 // MPU6050 DLPF_CFG: 3 is 42 Hz gyro bandwidth with 4.8 ms delay, 2 is 98 Hz with 2.8 ms but aliases vibration above the 50 Hz Nyquist rate.
 #define IMU_DLPF 3
-// MG995 analog servos stay at the standard 50 Hz. ESC refresh is independent; 50 and 400 Hz both use 1000–2200 us pulses.
+// Servo (MG995, analog) and ESC refresh rates, independent of each other; the ESCs take 1000–2200 us pulses at 50 or 400 Hz alike.
 #define SERVO_HZ 100
 #define ESC_HZ 400
 // Raw sensor axes to body X forward, Y left, Z up: body axis i is sensor_to_body[i] times sensor axis sensor_axis[i]. The replacement IMU is turned -90° about body Y, so its X points up and its Z forward.
@@ -85,11 +85,11 @@ const char *flight_runtime_zero_servo(int side, float *offset, char *error, size
 // Servo bench test, disarmed with zero throttle: start (amp in degrees, cycles), then read progress and per-side results as JSON.
 const char *flight_runtime_servo_test(float amp, int cycles);
 size_t flight_runtime_servo_result(char *text, size_t size);
-// Loads (or with no segments clears) the identification test pattern; NULL and a JSON summary in text, or an error.
 // After a stop, the self-trimmed roll and pitch biases once (flight_rt.c trim); false if there are none.
 bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias);
 // After a stop, the camera hold's carried-over trim once (flight_rt.c trim); false if there is none.
 bool flight_runtime_take_hover_trim(float *x, float *y);
+// Loads (or with no segments clears) the identification test pattern; NULL and a JSON summary in text, or an error.
 const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *text, size_t size);
 void flight_runtime_status(Status *status);
 

@@ -1,5 +1,4 @@
 // The drone: settings from NVS, outputs at zero, the radio, control on core 1, then the camera receiver on core 0. This loop reads the load cell and battery every 50 ms and keeps the recording metadata current.
-#include <math.h>
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

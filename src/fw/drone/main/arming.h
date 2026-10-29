@@ -39,8 +39,9 @@ typedef struct {
 
 // Why arming is refused, or NULL.
 static inline const char *arm_refusal(const ArmCheck *check) {
-    if (check->generation != check->expected_generation) return "Stopped after arm request";
-    if (check->barrier.set && !sequence_newer(check->arm_sequence, check->barrier.sequence)) return "Stopped after arm request";
+    if (check->generation != check->expected_generation ||
+        (check->barrier.set && !sequence_newer(check->arm_sequence, check->barrier.sequence)))
+        return "Stopped after arm request";
     if (!check->running || !check->online) return "IMU offline";
     if (!check->calibrated || check->calibrating) return "Calibrate the IMU before arming";
     if (check->calibration_ready || check->calibration_unsaved) return "Calibration not saved yet";
