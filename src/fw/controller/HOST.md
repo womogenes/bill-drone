@@ -16,24 +16,38 @@ pnpm build
 pnpm start
 ```
 
-Open `http://localhost:3000`. To run both in the background instead, from the repository root:
+Open `http://localhost:3000`.
+
+## Background services
+
+To run both in the background instead, start them from the repository root. These are transient units: they last until logout or reboot, and `systemctl --user restart` fails with "Unit … not found" once they are gone, so after a reboot start them again with these two commands rather than restarting them. The dashboard needs a build first only after its code changed (`cd src/sw/dashboard && pnpm build`).
 
 ```sh
 systemd-run --user --unit=bill-drone-controller -p Restart=on-failure --working-directory=$PWD $(which uv) run src/fw/controller/bridge.py --port /dev/ttyUSB0
-(cd src/sw/dashboard && pnpm build) && systemd-run --user --unit=bill-drone-dashboard -p Restart=on-failure -p TimeoutStopSec=5 --working-directory=$PWD/src/sw/dashboard $PWD/src/sw/dashboard/node_modules/.bin/next start
+systemd-run --user --unit=bill-drone-dashboard -p Restart=on-failure -p TimeoutStopSec=5 --working-directory=$PWD/src/sw/dashboard $PWD/src/sw/dashboard/node_modules/.bin/next start
 ```
 
-The dashboard unit runs Next directly: pnpm ignores the stop signal, so a `pnpm start` unit takes systemd's full 90 s timeout to stop. Restart with `systemctl --user restart bill-drone-dashboard` and read logs with `journalctl --user -u bill-drone-controller -f`. These units last until logout or reboot. Rebuild and restart the dashboard after code changes, with the drone disarmed. Development mode's hot reload can close the control connection.
+Check that the drone is heard with `curl -s 127.0.0.1:8765/status`: `"online": true`. If it stays `false` for more than about 10 s with the drone powered and both LEDs blinking, the controller came up stuck (seen after reboots and replugs); reset it through its serial port, which esptool does when it reads the MAC, and start the bridge again:
 
-| Endpoint | Use |
-| --- | --- |
-| WebSocket `/ws` | Dashboard status, targets and commands |
-| WebSocket `/update` | Firmware updates through `tools/ota_direct.py` |
-| GET `/status` | Current connection and sensor state |
-| GET `/settings` | Current cached settings |
-| GET `/schema` | Native setting names, defaults, ranges and write permissions |
-| POST `/settings` | Change settings with `{"settings": {...}}` |
-| POST `/pattern` | Load the identification test pattern (built by `uv run -m sw.excite`), recorded at the start of every later recording |
+```sh
+systemctl --user stop bill-drone-controller
+bash -c 'source ~/esp/esp-idf/export.sh >/dev/null && esptool.py --port /dev/ttyUSB0 read_mac'
+systemctl --user start bill-drone-controller
+```
+
+If the dashboard unit fails with `start-limit-hit`, something else already holds port 3000 (a `pnpm start` left in a terminal): `ss -ltnp | grep :3000` shows it; stop it, then `systemctl --user reset-failed bill-drone-dashboard` and start the unit again.
+
+The dashboard unit runs Next directly: pnpm ignores the stop signal, so a `pnpm start` unit takes systemd's full 90 s timeout to stop. While the units exist, restart them with `systemctl --user restart bill-drone-controller bill-drone-dashboard` and read the bridge's log with `journalctl --user -u bill-drone-controller -f`. Rebuild and restart the dashboard after code changes, with the drone disarmed. Development mode's hot reload can close the control connection.
+
+| Endpoint            | Use                                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| WebSocket `/ws`     | Dashboard status, targets and commands                                                                                |
+| WebSocket `/update` | Firmware updates through `tools/ota_direct.py`                                                                        |
+| GET `/status`       | Current connection and sensor state                                                                                   |
+| GET `/settings`     | Current cached settings                                                                                               |
+| GET `/schema`       | Native setting names, defaults, ranges and write permissions                                                          |
+| POST `/settings`    | Change settings with `{"settings": {...}}`                                                                            |
+| POST `/pattern`     | Load the identification test pattern (built by `uv run -m sw.excite`), recorded at the start of every later recording |
 
 The service records armed sessions directly into `src/sw/recordings/`; `--recordings` changes the directory. Each session has a binary recording and a JSONL event file. `src/sw/flight_log.py` reads them.
 
