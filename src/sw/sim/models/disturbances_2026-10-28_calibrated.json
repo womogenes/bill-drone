@@ -1,0 +1,42 @@
+[
+ {
+  "channel": "roll",
+  "kind": "drift",
+  "sd": 1.185,
+  "tau": 0.081
+ },
+ {
+  "channel": "pitch",
+  "kind": "drift",
+  "sd": 2.343,
+  "tau": 0.05
+ },
+ {
+  "channel": "yaw",
+  "kind": "drift",
+  "sd": 0.474,
+  "tau": 0.22
+ },
+ {
+  "channel": "forward",
+  "kind": "constant",
+  "value": -1.096
+ },
+ {
+  "channel": "forward",
+  "kind": "drift",
+  "sd": 0.055,
+  "tau": 1.37
+ },
+ {
+  "channel": "left",
+  "kind": "constant",
+  "value": -0.134
+ },
+ {
+  "channel": "left",
+  "kind": "drift",
+  "sd": 0.14,
+  "tau": 1.121
+ }
+]
