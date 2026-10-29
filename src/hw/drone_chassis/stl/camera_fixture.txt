@@ -24,7 +24,7 @@ Inspect real component, ribbon and connector clearance; these are not fully mode
 Onshape Part Studio and assembly group regenerate OK.
 No modeled volumetric interference. All 52 geometry/access checks pass.
 STLs verified closed two-manifold meshes; this is not a physical strength test.
-No print launched. See ../ASSEMBLY.md and camera_mount_validation.json.
+No print launched. See ../ASSEMBLY.md.
 Old camera_tab_left/right files are obsolete. Historical combined filenames
 camera_mount_simple.3mf and camera_fixture_with_tabs.3mf contain this revision.
 
