@@ -61,8 +61,8 @@ typedef struct {
     bool engaged, landed, have_pose, have_setpoint, have_normal, found, tracking;
     // Vertical specific force at rest, in g, learned while not engaged.
     float bias;
-    // Height above the engage point (m) and climb rate (m/s), from the IMU and the camera; the height target; the last climb-rate command (m/s); the climb-rate integral (m/s²); the last thrust (N); how long thrust has been low while landing (s).
-    float height, climb_rate, target, command, integral, force, low_time;
+    // Height above the engage point (m) and climb rate (m/s), from the IMU and the camera; the height target; the last climb-rate command (m/s); the climb-rate integral (m/s²); the last thrust (N).
+    float height, climb_rate, target, command, integral, force;
     // Heading integrated from the gyro (positive left, drifting), and the attitude, heading, horizontal velocity and commanded thrust tilt of recent ticks, so a sighting is levelled with the attitude it was captured at and compared with the velocity of its time, and the drag model sees the tilt the servos have reached.
     float yaw;
     int64_t history_us[HOVER_HISTORY];
@@ -81,8 +81,10 @@ typedef struct {
     bool dragging;
     // The servos' steady thrust tilt beyond the one pitch_trim expects (radians, positive forward), as thrust_tilt counts it.
     float thrust_tilt;
-    // How long a landing's descent has stalled (s).
-    float stall_time;
+    // Landing (hover.c, the probe): the thrust the hold flew (N) and the vertical specific force it read (g), both smoothed, and the specific force over the last moments (g); how long the landing has run (s) and the height it started from (m); how long its descent has stalled (s); the vertical speed the accelerometer gained over the last moments (m/s). probing: thrust is being wound down under ceiling (N) to feel for the floor, from the vertical thrust and specific force it began at (N, g), with the vertical thrust the motors have reached (N), the vertical speed the accelerometer has gained since and what the air would have taken (m/s); then the wait before another probe after one found air (s), and the sink it left (m/s, fading).
+    float hold_force, hold_g, recent_g, land_time, land_height, stall_time, impulse;
+    bool probing;
+    float ceiling, probe_start, probe_g, probe_force, probe_velocity, probe_expected, probe_wait, sink;
     // The hold-point nudge last seen and how fast it is moving (m, m/s; toward the tag, left, up), so a moving hold point is flown at its speed instead of lagging it by kd / kp.
     float nudge[3], nudge_rate[3];
     // The horizontal acceleration the tilt does not explain (m/s²; yaw-turned frame: room wash, level-reference error, unmodelled thrust tilt), learned from the camera's velocity corrections; the hold cancels it directly.

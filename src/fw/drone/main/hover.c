@@ -28,17 +28,79 @@
 #define MAX_CLIMB 0.5f
 #define MAX_VERTICAL 3.0f
 #define MAX_INTEGRAL 3.0f
-// Landing: thrust below this fraction of weight while the climb rate stays within TOUCHDOWN_RATE (m/s) for TOUCHDOWN_S means the ground holds the drone (in the air that thrust would show as falling); thrust then falls to zero over LANDED_RAMP (s).
-#define TOUCHDOWN_FRACTION 0.85f
-#define TOUCHDOWN_RATE 0.1f
-#define TOUCHDOWN_S 0.3f
-#define LANDED_RAMP 0.5f
-// A landing whose descent has stalled (climb rate under half land_rate for STALL_S) winds thrust down at STALL_RAMP (m/s² per s) whatever the climb-rate loop would do: on the floor it cannot follow a descent, so its integral alone takes seconds to drop thrust to TOUCHDOWN_FRACTION. Still in the air, the drone sinks and the stall clears.
-#define STALL_S 0.3f
-#define STALL_RAMP 3.0f
+// Landing. Touchdown goes by the accelerometer, not by the height or climb-rate estimate (the tag is about 2 m away, so a few degrees of attitude error moves the camera's height 3.5 cm per degree, and near the floor the estimates read 10-30 cm off either way: 2026-10-29 07:20 "descended" to -0.31 m on the floor at hover thrust, 08:15 fired on a height rule in the air at -0.12 m), nor by hover_mass (06:07 held at 0.88 of hover_mass weight and fired at 0.47 m as the descent began). Its references are the thrust the hold actually flew and the vertical specific force it read meanwhile, both smoothed over HOLD_TAU (s).
+#ifndef HOLD_TAU
+#define HOLD_TAU 1.0f
+#endif
+// A probe winds thrust down from where it is at PROBE_RATE (fraction of the hold's thrust per s), whatever the climb-rate loop asks, and watches the accelerometer: in the air the vertical specific force follows the thrust down (after the motors' dead time and lag, taken as a lag of PROBE_LAG (s), a little long, so the air shows first), on the floor the ground takes the weight and it stays put. It is in the air as soon as the specific force over the last RECENT_TAU (s) is PROBE_FALL (g) under the hold's, or the vertical speed gained since the probe began reaches PROBE_DEPTH (m/s) down; it is on the floor once the thrust lost would have cost the air PROBE_DEPTH of vertical speed while the accelerometer saw under PROBE_SHARE of that: touchdown. The two references guard each other: the speed gained is counted from the specific force at the probe's start, which a descent still speeding up reads low (in the simulator that alone called touchdown at 0.13 m), and the hold's specific force can be a percent or two of g off the floor's, well inside PROBE_FALL.
+#ifndef RECENT_TAU
+#define RECENT_TAU 0.1f
+#endif
+#ifndef PROBE_RATE
+#define PROBE_RATE 1.0f
+#endif
+#ifndef PROBE_LAG
+#define PROBE_LAG 0.15f
+#endif
+#ifndef PROBE_FALL
+#define PROBE_FALL 0.08f
+#endif
+#ifndef PROBE_DEPTH
+#define PROBE_DEPTH 0.2f
+#endif
+#ifndef PROBE_SHARE
+#define PROBE_SHARE 0.5f
+#endif
+// A probe that finds air gives back the thrust it started from and waits PROBE_WAIT (s) before the next. The sink it caused (up to MAX_SINK, m/s) fades from the climb-rate command over SINK_TAU (s) instead of being caught at once, which with a climb-rate estimate that already reads low near the floor carried the simulated drone back up.
+#ifndef PROBE_WAIT
+#define PROBE_WAIT 1.0f
+#endif
+#ifndef SINK_TAU
+#define SINK_TAU 1.0f
+#endif
+#ifndef MAX_SINK
+#define MAX_SINK 0.1f
+#endif
+// A probe starts once the descent command has eased in and the descent has stalled (climb rate under half the descent rate for STALL_S), or the accelerometer shows the descent stopped by something (the speed gained over the last IMPULSE_TAU (s) jumps up by IMPULSE of the descent rate, and by at least IMPULSE_MIN (m/s): slower contacts are not told from the hold's own corrections), or the height estimate is below LOW_HEIGHT (m), or at the latest once the landing has run as long as the descent from its starting height should take, plus LAND_MARGIN of that and LAND_SLACK (s). All of them can be wrong in the air, which a probe only costs a short sink.
+#ifndef STALL_S
+#define STALL_S 0.2f
+#endif
+#ifndef IMPULSE_TAU
+#define IMPULSE_TAU 0.1f
+#endif
+#ifndef IMPULSE
+#define IMPULSE 0.4f
+#endif
+#ifndef IMPULSE_MIN
+#define IMPULSE_MIN 0.08f
+#endif
+#ifndef LOW_HEIGHT
+#define LOW_HEIGHT 0.0f
+#endif
+#ifndef LAND_MARGIN
+#define LAND_MARGIN 0.1f
+#endif
+#ifndef LAND_SLACK
+#define LAND_SLACK 0.3f
+#endif
+// A landing integrates its climb rate from the specific force the hold read rather than the resting one (motors off, they differ by a percent or two of g, and 0.01 g is 0.1 m/s of climb rate per second wherever the camera does not hold it).
+#ifndef LAND_BIAS
+#define LAND_BIAS 1
+#endif
+// After touchdown thrust falls from the hold's to zero over LANDED_RAMP (s) with the attitude targets at the attitude the floor gives (LANDED_ATTITUDE 1) rather than level, and a shock or tilt past the contact limits below still cuts it at once (06:08 pitched over to 42 degrees nose-down as thrust faded over 0.5 s with the servos at their 60 degree limits).
+#ifndef LANDED_ATTITUDE
+#define LANDED_ATTITUDE 1
+#endif
+#ifndef LANDED_RAMP
+#define LANDED_RAMP 0.25f
+#endif
 // Contact: a landing that hits harder than LAND_SHOCK (specific force along vertical, g), or tilts past LAND_TILT from level, stops the motors at once. With no legs the drone touches down on its body, and thrust above the first contact point levers it over (2026-10-28 05:01: 12 degrees nose-down at contact, 1.6 g and over its nose 0.15 s later). Hovering stays under 1.35 g; a tilt alone is no proof of contact (05:05 pitched to 15 degrees in the air at 0.7 m, and a cut there drops the drone), so LAND_TILT is only for a drone already going over.
+#ifndef LAND_TILT
 #define LAND_TILT (25.0f * 3.14159265f / 180)
+#endif
+#ifndef LAND_SHOCK
 #define LAND_SHOCK 1.45f
+#endif
 // The descent command ramps in over LAND_EASE (s), so pressing land does not step collective down.
 #define LAND_EASE 0.5f
 // The nudge's speed is smoothed over this long (s): the laptop moves it in small steps every 50 ms.
@@ -165,13 +227,17 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         // The carried-over trim is the push the last hold cancelled: start the push estimate from it (yaw is zero at engage, so body and yaw-turned axes agree), and the body trim from zero.
         state->push[0] = clamp(-g->trim_start_x, -MAX_PUSH, MAX_PUSH);
         state->push[1] = clamp(-g->trim_start_y, -MAX_PUSH, MAX_PUSH);
+        // The touchdown reference until a hold has flown long enough to give its own: the thrust being flown (or the weight from mass) at the resting specific force.
+        state->hold_force = force > 0.5f * weight ? force : weight;
+        state->hold_g = state->recent_g = state->bias > 0.5f ? state->bias : 1;
         // Asked to land without enough thrust to be flying: it is already down.
         if (mode != HOVER_HOLD && force < 0.5f * weight) state->landed = true;
     }
     if (state->landed) {
         state->dragging = false;
-        state->force = fmaxf(0, state->force - weight / LANDED_RAMP * dt);
-        *output = (HoverOutput){.force = state->force};
+        if (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT || vertical_g > LAND_SHOCK) state->force = 0;
+        state->force = fmaxf(0, state->force - state->hold_force / LANDED_RAMP * dt);
+        *output = (HoverOutput){.roll = LANDED_ATTITUDE ? roll : 0, .pitch = LANDED_ATTITUDE ? pitch : 0, .force = state->force};
         return;
     }
     // Heading from the gyro; horizontal velocity from tilt (g tan(tilt) less the push the trim cancels, once airborne, as on the ground a resting tilt pushes nothing); both recorded with the attitude.
@@ -235,8 +301,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         }
     }
 
-    // IMU: integrate vertical acceleration; without the camera, leak the climb rate.
-    state->climb_rate += (vertical_g - state->bias) * GRAVITY * dt;
+    // IMU: integrate vertical acceleration (LAND_BIAS); without the camera, leak the climb rate.
+    state->climb_rate += (vertical_g - (LAND_BIAS && mode != HOVER_HOLD ? state->hold_g : state->bias)) * GRAVITY * dt;
     if (pose && (!state->have_pose || pose->sequence != state->sequence)) {
         // Reacquiring the tag in the air keeps the targets: they are relative to the tag, so a drift while it was lost is flown back rather than adopted. On the ground they restart from the new sighting.
         if (!seeing) {
@@ -288,14 +354,12 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         state->target = state->height;
     }
     state->command = command;
-    float error = command - state->climb_rate;
+    // Landing: less the sink a probe that found air left (SINK_TAU).
+    float error = command + (mode != HOVER_HOLD ? state->sink : 0) - state->climb_rate;
     state->integral = clamp(state->integral + g->kiz * error * dt, -MAX_INTEGRAL, MAX_INTEGRAL);
-    if (mode != HOVER_HOLD) {
-        state->stall_time = fabsf(state->climb_rate) < 0.5f * g->land_rate ? state->stall_time + dt : 0;
-        if (state->stall_time >= STALL_S) state->integral = fmaxf(state->integral - STALL_RAMP * dt, -MAX_INTEGRAL);
-    }
     float up = clamp(g->kdz * error + state->integral, -MAX_VERTICAL, MAX_VERTICAL);
-    state->force = g->mass * (GRAVITY + up) / fmaxf(0.5f, cosf(roll) * cosf(pitch));
+    float lean = fmaxf(0.5f, cosf(roll) * cosf(pitch));
+    state->force = g->mass * (GRAVITY + up) / lean;
 
     if (mode != HOVER_HOLD && (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT || vertical_g > LAND_SHOCK)) {
         state->landed = true;
@@ -303,12 +367,61 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         *output = (HoverOutput){.force = 0};
         return;
     }
-    // On the ground a descent command winds thrust down, since the climb rate cannot follow.
-    if (mode != HOVER_HOLD) {
-        bool held = state->force < TOUCHDOWN_FRACTION * weight && fabsf(state->climb_rate) < TOUCHDOWN_RATE;
-        state->low_time = held ? state->low_time + dt : 0;
-        if (state->low_time >= TOUCHDOWN_S) state->landed = true;
+    if (mode == HOVER_HOLD) {
+        // The touchdown reference: the thrust the hold flies once off the ground, and the specific force it reads there (its accelerometer bias in flight).
+        if (state->height >= AIRBORNE) {
+            float pull = 1 - expf(-dt / HOLD_TAU);
+            state->hold_force += (state->force - state->hold_force) * pull;
+            state->hold_g += (vertical_g - state->hold_g) * pull;
+        }
+        state->land_time = state->stall_time = state->impulse = state->probe_wait = state->sink = 0;
+        state->probing = false;
+    } else {
+        // The vertical speed the accelerometer gains this tick, against the hold's specific force.
+        float rate = g->land_rate * (mode == HOVER_LAND_FAST ? 3 : 1), gained = (vertical_g - state->hold_g) * GRAVITY * dt;
+        if (state->land_time == 0) state->land_height = state->height;
+        state->land_time += dt;
+        // Only once the descent command has eased in: before that the drone is not meant to be moving yet.
+        state->stall_time = state->land_time > LAND_EASE && fabsf(state->climb_rate) < 0.5f * rate ? state->stall_time + dt : 0;
+        state->impulse = state->impulse * expf(-dt / IMPULSE_TAU) + gained;
+        state->probe_wait = fmaxf(0, state->probe_wait - dt);
+        state->sink *= expf(-dt / SINK_TAU);
+        float due = (LAND_EASE + fmaxf(state->land_height, 0) / fmaxf(rate, 0.01f)) * (1 + LAND_MARGIN) + LAND_SLACK;
+        bool stopped = state->land_time > LAND_EASE && state->impulse > fmaxf(IMPULSE * rate, IMPULSE_MIN);
+        bool low = state->land_time > LAND_EASE && state->height < LOW_HEIGHT;
+        if (!state->probing && state->probe_wait <= 0 && (state->stall_time >= STALL_S || stopped || low || state->land_time >= due)) {
+            state->probing = true;
+            state->ceiling = state->force;
+            state->probe_start = state->probe_force = state->force * lean;
+            state->probe_g = state->recent_g;
+            state->probe_velocity = state->probe_expected = 0;
+        }
+        if (state->probing) {
+            // In the air the specific force would follow the thrust (lagged by the motors) from where the probe began.
+            state->ceiling -= PROBE_RATE * state->hold_force * dt;
+            if (state->force > state->ceiling) {
+                // The climb-rate loop cannot wind up against the probe.
+                state->force = fmaxf(0, state->ceiling);
+                state->integral = fminf(state->integral, state->force * lean / g->mass - GRAVITY);
+            }
+            state->probe_force += (state->force * lean - state->probe_force) * (1 - expf(-dt / PROBE_LAG));
+            state->probe_expected += (state->probe_force - state->probe_start) / state->hold_force * GRAVITY * dt;
+            state->probe_velocity += (vertical_g - state->probe_g) * GRAVITY * dt;
+            bool falling = state->recent_g < state->hold_g - PROBE_FALL || state->probe_velocity <= -PROBE_DEPTH;
+            if (!falling && state->probe_expected <= -PROBE_DEPTH && state->probe_velocity > PROBE_SHARE * state->probe_expected) {
+                state->landed = true;
+            } else if (falling || state->probe_expected <= -PROBE_DEPTH) {
+                // In the air.
+                state->probing = false;
+                state->probe_wait = PROBE_WAIT;
+                state->stall_time = state->impulse = 0;
+                state->sink = clamp(state->probe_velocity, -MAX_SINK, 0);
+                state->force = fmaxf(state->force, state->probe_start / lean);
+                state->integral = clamp(fmaxf(state->integral, state->force * lean / g->mass - GRAVITY), -MAX_INTEGRAL, MAX_INTEGRAL);
+            }
+        }
     }
+    state->recent_g += (vertical_g - state->recent_g) * (1 - expf(-dt / RECENT_TAU));
 
     *output = (HoverOutput){.force = state->force};
     float forward, left;
