@@ -5,6 +5,7 @@ import { memo, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { signed } from '@/lib/format';
 import { Button } from '@/components/ui/button';
+import { AttitudeChart } from '@/components/attitude-chart';
 import { ImuAxisChart } from '@/components/imu-axis-chart';
 import {
   Select,
@@ -55,16 +56,15 @@ const ImuRange = memo(function ImuRange({ seconds }: { seconds: number }) {
 const ImuHeader = memo(function ImuHeader({
   online,
   calibrating,
+  pending,
   onCalibrate,
 }: {
   online: boolean;
   calibrating: boolean;
+  pending: boolean;
   onCalibrate: () => void;
 }) {
-  const [calibrationPending, setCalibrationPending] = useState(false);
-  if (calibrationPending && (!online || calibrating))
-    setCalibrationPending(false);
-  const busy = online && (calibrationPending || calibrating);
+  const busy = online && (pending || calibrating);
   const StatusIcon = online ? Activity : Unplug;
   return (
     <div className="flex items-center gap-4">
@@ -90,10 +90,7 @@ const ImuHeader = memo(function ImuHeader({
           className="cursor-pointer"
           disabled={!online || busy}
           title="Keep the IMU still for two seconds"
-          onClick={() => {
-            setCalibrationPending(true);
-            onCalibrate();
-          }}
+          onClick={onCalibrate}
         >
           Calibrate
         </Button>
@@ -105,15 +102,17 @@ const ImuHeader = memo(function ImuHeader({
 export function ImuPanel({
   reading,
   connected,
-  samples,
+  history,
   time,
   onCalibrate,
+  calibrationPending,
 }: {
   reading: ImuReading | null | undefined;
   connected: boolean;
-  samples: ImuSample[];
+  history: (start: number, end: number) => ImuSample[];
   time: number;
   onCalibrate: () => void;
+  calibrationPending: boolean;
 }) {
   const searchParams = useSearchParams();
   const range = Number(searchParams.get('imuRange'));
@@ -135,6 +134,7 @@ export function ImuPanel({
       <ImuHeader
         online={online}
         calibrating={reading?.calibrating ?? false}
+        pending={calibrationPending}
         onCalibrate={onCalibrate}
       />
       <div className="grid grid-cols-3 gap-4 tabular-nums">
@@ -157,6 +157,7 @@ export function ImuPanel({
           </p>
         </div>
       </div>
+      <AttitudeChart history={history} end={end} />
       <ImuRange seconds={seconds} />
       {(
         [
@@ -183,7 +184,7 @@ export function ImuPanel({
             ))}
           </dl>
           <ImuAxisChart
-            samples={samples}
+            history={history}
             field={key}
             start={end - seconds * 1000}
             end={end}

@@ -41,30 +41,71 @@ export type ControlSettings = {
   yaw_bias: number;
   left_thrust_scale: number;
   right_thrust_scale: number;
+  servo_compensation: number;
+  integrate_throttle: number;
+  target_rate: number;
+  velocity_damping: number;
+  velocity_leak: number;
+  thrust_voltage: number;
+  yaw_i: number;
+  hover_center: number;
+  hover_distance: number;
+  hover_approach: number;
+  hover_ceiling: number;
+  hover_square: number;
+  hover_kside: number;
+  hover_cam_pitch: number;
+  hover_cam_roll: number;
+  hover_drag: number;
+  hover_drag_tilt: number;
+  hover_drag_tau: number;
+  hover_trim_tau: number;
+  hover_trim_max: number;
+  auto_trim: number;
 };
 
+// The drone service's recorder (src/fw/controller/bridge.py).
 export type RecorderStatus = {
-  ready: boolean;
-  address?: string;
-  file?: string;
-  error?: string;
-  bytes?: number;
-  writing?: boolean;
+  file: string | null;
+  error: string | null;
+  bytes: number;
+  writing: boolean;
 };
+
+// Streamed to the drone every 50 ms; each packet is the controller heartbeat. Servos and throttles apply while disarmed.
+export type Targets = {
+  base_throttle: number;
+  roll: number;
+  pitch: number;
+  yaw_rate: number;
+  servo: [number, number];
+  throttle: [number, number];
+  // FLIGHT_MODES index. In hover and landing the drone flies itself from the camera and ignores the setpoints above.
+  mode: number;
+  // Moves the hover hold point (m): [0] toward the tag, [1] to the drone's left, [2] up. Hover and landing only.
+  nudge: [number, number, number];
+};
+
+export const FLIGHT_MODES = ['Manual', 'Hover', 'Landing', 'Landing fast'];
 
 export type Reading = {
   logging?: {
-    connected: boolean;
     active: boolean;
     ready: boolean;
     samples: number;
     dropped: number;
   };
   control?: ControlSettings;
-  control_status?: { reason: string; mapping_confirmed: boolean };
+  control_status?: {
+    reason: string;
+    throttle_latched?: boolean;
+  };
+  recorder?: RecorderStatus;
   imu?: ImuReading | null;
   adc_raw?: number;
   adc_voltage?: number;
+  // Computed in the dashboard from adc_voltage.
+  voltage_ema?: number;
   actuators?: Record<Side, { servo_angle: number; throttle: number }>;
   time: number;
   force: number | null;
@@ -72,6 +113,34 @@ export type Reading = {
   force_sequence?: number;
 };
 
-export type RollSample = { time: number; roll: number; session: number };
+// The drone service's hover push (src/fw/controller/bridge.py push_hover), in the hover loop's yaw-turned level frame (m; forward, left, up).
+export type HoverState = {
+  elapsed_us: number;
+  mode: number;
+  tracking: boolean;
+  // The tag relative to the drone; null without a sighting.
+  tag: [number, number, number] | null;
+  tag_age_ms: number | null;
+  velocity: [number, number];
+  height: number;
+  height_target: number;
+  // The hold as nudged: range_target from the tag, on the line whose heading from drone to tag is arc_deg.
+  range_target: number | null;
+  arc_deg: number | null;
+};
 
-export type ImuSample = ImuReading & { time: number; session: number };
+export type HoverSample = HoverState & { time: number; session: number };
+
+export type ImuSample = ImuReading & {
+  time: number;
+  session: number;
+  // The drone's roll and pitch targets (degrees) while armed.
+  target?: [number, number];
+};
+
+export type VoltageSample = {
+  time: number;
+  session: number;
+  voltage: number;
+  ema: number;
+};

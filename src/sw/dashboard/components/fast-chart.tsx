@@ -5,11 +5,13 @@ import { useEffect, useRef } from 'react';
 export type ChartSeries<T> = {
   label: string;
   color: string;
+  width?: number;
+  dash?: number[];
   value: (point: T) => number | null;
 };
 
 export function FastChart<T>({
-  data,
+  history,
   series,
   time,
   start,
@@ -17,9 +19,11 @@ export function FastChart<T>({
   formatTime,
   formatValue,
   gap,
+  range,
   label,
+  className = 'h-40',
 }: {
-  data: readonly T[];
+  history: (start: number, end: number) => readonly T[];
   series: readonly ChartSeries<T>[];
   time: (point: T) => number;
   start: number;
@@ -27,7 +31,10 @@ export function FastChart<T>({
   formatTime: (time: number, end: number) => string;
   formatValue: (value: number) => string;
   gap?: (previous: T, next: T) => boolean;
+  range?: readonly [number, number];
   label: string;
+  // Sets the chart's height.
+  className?: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -35,7 +42,7 @@ export function FastChart<T>({
   const pointer = useRef<number | null>(null);
 
   const current = useRef({
-    data,
+    history,
     series,
     time,
     start,
@@ -43,6 +50,7 @@ export function FastChart<T>({
     formatTime,
     formatValue,
     gap,
+    range,
   });
   const redraw = useRef<() => void>(() => {});
 
@@ -59,7 +67,7 @@ export function FastChart<T>({
     function draw() {
       frame = 0;
       const {
-        data: visible,
+        history,
         series,
         time,
         start,
@@ -67,7 +75,9 @@ export function FastChart<T>({
         formatTime,
         formatValue,
         gap,
+        range,
       } = current.current;
+      const visible = history(start, end);
       const width = host.clientWidth;
       const height = host.clientHeight;
       const ratio = window.devicePixelRatio || 1;
@@ -91,23 +101,26 @@ export function FastChart<T>({
       context.font = font;
       let low = Infinity;
       let high = -Infinity;
-      for (const point of visible) {
-        for (const line of series) {
-          const value = line.value(point);
-          if (value !== null && Number.isFinite(value)) {
-            low = Math.min(low, value);
-            high = Math.max(high, value);
+      if (range) [low, high] = range;
+      else {
+        for (const point of visible) {
+          for (const line of series) {
+            const value = line.value(point);
+            if (value !== null && Number.isFinite(value)) {
+              low = Math.min(low, value);
+              high = Math.max(high, value);
+            }
           }
         }
+        if (low === Infinity) {
+          low = -1;
+          high = 1;
+        }
+        const padding =
+          (high - low) * 0.08 || Math.max(Math.abs(low) * 0.05, 0.01);
+        low -= padding;
+        high += padding;
       }
-      if (low === Infinity) {
-        low = -1;
-        high = 1;
-      }
-      const padding =
-        (high - low) * 0.08 || Math.max(Math.abs(low) * 0.05, 0.01);
-      low -= padding;
-      high += padding;
       const ticks = Array.from(
         { length: 5 },
         (_, index) => low + ((high - low) * index) / 4
@@ -149,7 +162,8 @@ export function FastChart<T>({
       context.clip();
       series.forEach((line, index) => {
         context.strokeStyle = colors[index + 2];
-        context.lineWidth = 1.5;
+        context.lineWidth = line.width ?? 1.5;
+        context.setLineDash(line.dash ?? []);
         context.beginPath();
         let previous: T | undefined;
         for (const point of visible) {
@@ -165,6 +179,7 @@ export function FastChart<T>({
         }
         context.stroke();
       });
+      context.setLineDash([]);
       tip.hidden = true;
       const position = pointer.current;
       if (
@@ -254,7 +269,7 @@ export function FastChart<T>({
 
   useEffect(() => {
     current.current = {
-      data: data.filter((point) => time(point) >= start && time(point) <= end),
+      history,
       series,
       time,
       start,
@@ -262,12 +277,13 @@ export function FastChart<T>({
       formatTime,
       formatValue,
       gap,
+      range,
     };
     redraw.current();
-  }, [data, series, time, start, end, formatTime, formatValue, gap]);
+  }, [history, series, time, start, end, formatTime, formatValue, gap, range]);
 
   return (
-    <div ref={container} className="relative h-40 w-full">
+    <div ref={container} className={`relative w-full ${className}`}>
       <canvas
         ref={canvas}
         className="block h-full w-full"
