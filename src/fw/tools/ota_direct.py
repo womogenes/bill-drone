@@ -50,8 +50,8 @@ class Drone:
                     reply = self.ws.recv(timeout=max(0.01, answer - time.monotonic()))
             except TimeoutError:
                 continue
-            except (ConnectionClosed, InvalidStatus):
-                # The service refuses or drops clients while the radio link is down, as while the drone restarts.
+            except (ConnectionClosed, InvalidStatus, ConnectionRefusedError):
+                # The service refuses or drops clients while the radio link is down, as while the drone restarts, and is not there at all while it restarts.
                 self.ws = None
                 time.sleep(0.5)
                 continue
@@ -128,8 +128,10 @@ def firmware(drone, path):
 
 def camera(drone, path):
     image = path.read_bytes()
+    # The camera reports the SHA-256 the build appends to the image.
+    expected = image[-32:-24].hex()
     running, target, size, sha = drone.request(b"K", b"I").decode().split()
-    if sha == elf_sha(image):
+    if sha == expected:
         print(f"The camera's {running} already runs this image")
         return
     if len(image) > int(size):
@@ -140,7 +142,7 @@ def camera(drone, path):
     started = time.monotonic()
     for index in range(count):
         digest = hashlib.sha256(local[index]).digest()[:HASH_SIZE]
-        drone.request(b"K", b"W" + struct.pack("<H", index) + digest + local[index], timeout=4)
+        drone.request(b"K", b"W" + struct.pack("<H", index) + digest + local[index], timeout=4, patience=40)
         rate = (index + 1) * SECTOR / 1024 / (time.monotonic() - started)
         print(f"\rWrote {index + 1}/{count} sectors ({rate:.0f} KB/s)", end="", flush=True)
     print()
@@ -153,7 +155,7 @@ def camera(drone, path):
             booted = drone.request(b"K", b"I", patience=3).decode().split()
         except (TimeoutError, RuntimeError):
             continue
-        if booted[0] != target or booted[3] != elf_sha(image):
+        if booted[0] != target or booted[3] != expected:
             raise SystemExit(f"The camera runs {booted[0]} ({booted[3]}), not the new image")
         print(f"The camera runs the new image from {target}")
         return

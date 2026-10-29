@@ -8,7 +8,7 @@
 extern bool cameraReady;
 extern volatile bool cameraStopRequested;
 
-// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. I describes the slots (running label, spare label and size, the running image's ELF SHA-256 prefix); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts. The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
+// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts. The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
 namespace update {
 constexpr size_t sector = 4096, hashBytes = 8, maxBody = 2 + hashBytes + sector;
 constexpr uint32_t abandonUs = 30000000;
@@ -31,9 +31,9 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(nullptr);
     if (op == 'I') {
-        esp_app_desc_t app = {};
-        esp_ota_get_partition_description(running, &app);
-        const uint8_t *s = app.app_elf_sha256;
+        // Not the app description's ELF hash, which these builds do not keep in step with the image.
+        uint8_t s[32] = {};
+        esp_partition_get_sha256(running, s);
         snprintf(text, size, "%s %s %u %02x%02x%02x%02x%02x%02x%02x%02x", running->label, target ? target->label : "none",
                  unsigned(target ? target->size : 0), s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]);
         return nullptr;
