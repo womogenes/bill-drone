@@ -8,7 +8,7 @@ The laptop's drone service. It owns the controller's USB port and serves, on 127
 - /ws: the dashboard. The drone's status as JSON readings; the browser streams targets (including the manual/hover/land mode) every 50 ms and sends stop, arm, calibrate, zero and tune requests.
 - /update: raw id-tagged requests for tools/ota_direct.py.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
-- POST /pattern {"after": s, "repeat": n, "segments": [{"ticks": n, "<channel>": value, ...}, ...]}: load the identification test pattern (PATTERN_CHANNELS; drone/main/flight_rt.c excite), or clear it with no segments. It lasts until the drone restarts, and every recording from then on starts with it as a "pattern" event. sw/excite.py builds and sends them.
+- POST /pattern {"after": s, "repeat": n, "segments": [{"ticks": n, "<channel>": value, ...}, ...]}: load the identification test pattern (log_format.py PATTERN_CHANNELS; drone/main/flight_rt.c excite), or clear it with no segments. It lasts until the drone restarts, and every recording from then on starts with it as a "pattern" event. sw/excite.py builds and sends them.
 
 It records every armed session into src/sw/recordings/<time>_<session>.bin (FLG1 batches) and .jsonl (start, metadata, gap, error, stop and closed events; sw/flight_log.py decodes both).
 """
@@ -27,7 +27,7 @@ import time
 from aiohttp import WSMsgType, web
 import serial
 
-from log_format import HEADER_FORMAT, HEADER_SIZE, RECORD_SIZE, SAMPLE_FORMAT, STOP_REASONS
+from log_format import HEADER_FORMAT, HEADER_SIZE, PATTERN_CHANNELS, RECORD_SIZE, SAMPLE_FORMAT, STOP_REASONS
 from wire import PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 RECORDINGS = Path(__file__).resolve().parents[2] / "sw/recordings"
@@ -50,7 +50,7 @@ def decode_status(payload, settings):
     """
     The dashboard's reading (sw/dashboard/lib/telemetry.ts Reading) from a status message.
     """
-    (magic, time_ms, target_sequence, flags, reason, *values) = struct.unpack_from(STATUS_FORMAT, payload)
+    magic, time_ms, target_sequence, flags, reason, *values = struct.unpack_from(STATUS_FORMAT, payload)
     camera = None
     if len(payload) == STATUS_SIZE + struct.calcsize(CAMERA_FORMAT):
         camera = dict(zip(CAMERA_KEYS, struct.unpack_from(CAMERA_FORMAT, payload, STATUS_SIZE)))
@@ -109,24 +109,22 @@ def now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-# The test pattern's channels in the drone's order, and their units: roll and pitch targets and servo tilts in degrees (servos positive forward), the yaw-rate target in degrees/s, collective and motors in throttle.
-PATTERN_CHANNELS = ("roll", "pitch", "yaw", "base", "left_servo", "right_servo", "left_motor", "right_motor")
-
-
 def encode_pattern(pattern):
     """The P request body for a pattern (drone/main/flight_rt.c flight_runtime_pattern), and the pattern as recorded."""
     segments = pattern.get("segments", [])
     unknown = {key for segment in segments for key in segment} - {"ticks", *PATTERN_CHANNELS}
     if unknown:
         raise ValueError(f"Unknown pattern channels {sorted(unknown)}")
-    used = [i for i, name in enumerate(PATTERN_CHANNELS) if any(segment.get(name) for segment in segments)]
-    mask = sum(1 << i for i in used)
-    body = struct.pack("<fBBH", float(pattern.get("after", 2.0)), int(pattern.get("repeat", 0)), mask, len(segments))
+    used = [name for name in PATTERN_CHANNELS if any(segment.get(name) for segment in segments)]
+    mask = sum(1 << PATTERN_CHANNELS.index(name) for name in used)
+    after, repeat = float(pattern.get("after", 2.0)), int(pattern.get("repeat", 0))
+    body = struct.pack("<fBBH", after, repeat, mask, len(segments))
+    recorded = []
     for segment in segments:
-        body += struct.pack("<H", int(segment["ticks"])) + b"".join(struct.pack("<h", round(segment.get(PATTERN_CHANNELS[i], 0) * 100)) for i in used)
-    recorded = {"after": float(pattern.get("after", 2.0)), "repeat": int(pattern.get("repeat", 0)),
-                "segments": [{"ticks": int(segment["ticks"]), **{PATTERN_CHANNELS[i]: round(segment.get(PATTERN_CHANNELS[i], 0) * 100) / 100 for i in used}} for segment in segments]}
-    return body, recorded
+        ticks, values = int(segment["ticks"]), [round(segment.get(name, 0) * 100) for name in used]
+        body += struct.pack(f"<H{len(used)}h", ticks, *values)
+        recorded.append({"ticks": ticks, **{name: value / 100 for name, value in zip(used, values)}})
+    return body, {"after": after, "repeat": repeat, "segments": recorded}
 
 
 class Recorder:
@@ -206,6 +204,11 @@ class Recorder:
         if self.pattern:
             self.event({"type": "pattern", **self.pattern})
 
+    def sync(self):
+        for file in (self.data, self.events):
+            file.flush()
+            os.fsync(file.fileno())
+
     def check(self, recording):
         """
         Note a stalled stream in the recording; the file stays open for the rest of the session.
@@ -216,20 +219,16 @@ class Recorder:
             self.stalled = True
             self.error = "Flight log stalled"
             self.event({"type": "error", "error": "Flight log stalled for 1 s"})
-        self.data.flush()
-        self.events.flush()
-        os.fsync(self.data.fileno())
-        os.fsync(self.events.fileno())
+        self.sync()
 
     def close(self, reason):
         if self.data is None:
             return
         if reason is not None:
             self.event({"type": "closed", "reason": reason})
-        for file in (self.data, self.events):
-            file.flush()
-            os.fsync(file.fileno())
-            file.close()
+        self.sync()
+        self.data.close()
+        self.events.close()
         self.data = self.events = None
 
 

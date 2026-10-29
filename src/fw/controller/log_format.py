@@ -1,5 +1,5 @@
 """
-Binary flight-log layout from the drone (drone/main/flight_rt.c Record and radio.c), shared by the laptop service and sw/flight_log.py.
+Binary flight-log layout from the drone (drone/main/flight_rt.c Record and radio.c) and the test pattern's channels, shared by the laptop service, sw/flight_log.py and sw/excite.py.
 """
 
 import struct
@@ -19,3 +19,6 @@ STOP_REASONS = (
     "", "Stopped", "Controller heartbeat lost", "IMU read failed",
     "Tilt limit exceeded", "Control sample delayed", "IMU calibration", "Landed", "Landed after link loss",
 )
+
+# The test pattern's channels in the drone's order (drone/main/flight_rt.c excite), and their units: roll and pitch targets and servo tilts in degrees (servos positive forward), the yaw-rate target in degrees/s, collective and motors in throttle.
+PATTERN_CHANNELS = ("roll", "pitch", "yaw", "base", "left_servo", "right_servo", "left_motor", "right_motor")

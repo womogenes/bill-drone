@@ -7,7 +7,7 @@ Identification test patterns for the drone (fw/drone/main/flight_rt.c excite), l
   file     a pattern JSON file as POST /pattern takes it ({"after", "repeat", "segments": [{"ticks", "<channel>": value}]})
   clear    remove the pattern
 
-Channels (fw/controller/bridge.py PATTERN_CHANNELS): --roll, --pitch (target, degrees), --yaw (yaw-rate target, degrees/s), --base (collective, throttle), --left-servo, --right-servo (degrees, positive forward), --left-motor, --right-motor (throttle).
+Channels (fw/controller/log_format.py PATTERN_CHANNELS): --roll, --pitch (target, degrees), --yaw (yaw-rate target, degrees/s), --base (collective, throttle), --left-servo, --right-servo (degrees, positive forward), --left-motor, --right-motor (throttle).
 The pattern starts --after seconds past collective first reaching integrate_throttle and plays --repeat times (0 = until disarmed). It lasts until the drone restarts; disarm first. --dry prints it without sending.
 Patterns are plain lists of segments, so other shapes are a few lines with segments() and send() from Python.
 """
@@ -20,7 +20,8 @@ import sys
 import urllib.request
 from pathlib import Path
 
-CHANNELS = ("roll", "pitch", "yaw", "base", "left_servo", "right_servo", "left_motor", "right_motor")
+from fw.controller.log_format import PATTERN_CHANNELS
+
 SAMPLE_HZ = 100
 URL = "http://127.0.0.1:8765/pattern"
 
@@ -45,7 +46,7 @@ def prbs(amplitudes, hold, seconds, seed):
 
 def doublet(amplitudes, width, rest):
     ticks = max(1, round(width * SAMPLE_HZ))
-    out = segments([{key: a for key, a in amplitudes.items()}, {key: -a for key, a in amplitudes.items()}], ticks)
+    out = segments([amplitudes, {key: -a for key, a in amplitudes.items()}], ticks)
     return out + ([{"ticks": round(rest * SAMPLE_HZ)}] if rest > 0 else [])
 
 
@@ -70,7 +71,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("kind", choices=("prbs", "doublet", "chirp", "file", "clear"))
     parser.add_argument("path", nargs="?", type=Path, help="the pattern file, for file")
-    for name in CHANNELS:
+    for name in PATTERN_CHANNELS:
         parser.add_argument("--" + name.replace("_", "-"), type=float, default=0.0)
     parser.add_argument("--after", type=float, default=2.0)
     parser.add_argument("--repeat", type=int, default=0)
@@ -84,7 +85,7 @@ def main():
     parser.add_argument("--dry", action="store_true")
     parser.add_argument("--url", default=URL)
     args = parser.parse_args()
-    amplitudes = {name: getattr(args, name) for name in CHANNELS if getattr(args, name)}
+    amplitudes = {name: getattr(args, name) for name in PATTERN_CHANNELS if getattr(args, name)}
     if args.kind in ("prbs", "doublet", "chirp") and not amplitudes:
         parser.error("give at least one channel amplitude")
     if args.kind == "file":
