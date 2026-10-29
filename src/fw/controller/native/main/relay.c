@@ -35,6 +35,20 @@ static QueueHandle_t uart_events;
 static SemaphoreHandle_t window;
 static volatile int64_t heard_us;
 static volatile int64_t delivered_us;
+// Updates may switch the link to the fast rate: an update request F (fw/drone/main/radio.c) that this relay forwards also sets its own rate, after the request is sent, so the drone hears it at the old one. Each further update request keeps it fast for FAST_HOLD_US; after that it goes back to long range by itself, as the drone does.
+#define FAST_HOLD_US 3000000
+static const esp_now_rate_config_t long_range = {.phymode = WIFI_PHY_MODE_LR, .rate = WIFI_PHY_RATE_LORA_500K};
+static const esp_now_rate_config_t fast_rate = {.phymode = WIFI_PHY_MODE_11B, .rate = WIFI_PHY_RATE_11M_L};
+static bool fast;
+static int64_t fast_until;
+
+static void set_rate(bool on)
+{
+    esp_now_rate_config_t rate = on ? fast_rate : long_range;
+    if (esp_now_set_peer_rate_config(drone_mac, &rate) == ESP_OK) {
+        fast = on;
+    }
+}
 
 // Matches wire.unpack: size, magic, channel, fragment index and count.
 static bool valid_header(const uint8_t *packet, size_t length)
@@ -80,9 +94,25 @@ static void radio_task(void *argument)
     for (;;) {
         // Hold a send slot before taking a packet so waiting packets stay droppable.
         xSemaphoreTake(window, portMAX_DELAY);
-        xQueueReceive(outgoing, &packet, portMAX_DELAY);
+        if (xQueueReceive(outgoing, &packet, pdMS_TO_TICKS(100)) != pdTRUE) {
+            xSemaphoreGive(window);
+            if (fast && esp_timer_get_time() > fast_until) {
+                set_rate(false);
+            }
+            continue;
+        }
         if (esp_now_send(drone_mac, packet.data, packet.length) != ESP_OK) {
             xSemaphoreGive(window);
+        }
+        // Channel 6 carries requests: id, then op (first fragment only).
+        if (packet.data[3] == 6) {
+            if (fast) {
+                fast_until = esp_timer_get_time() + FAST_HOLD_US;
+            }
+            if (packet.data[16] == 0 && packet.length >= HEADER_SIZE + 6 && packet.data[HEADER_SIZE + 4] == 'F') {
+                set_rate(packet.data[HEADER_SIZE + 5]);
+                fast_until = esp_timer_get_time() + FAST_HOLD_US;
+            }
         }
     }
 }
@@ -228,7 +258,7 @@ void app_main(void)
     esp_now_peer_info_t peer = {.channel = 0, .ifidx = WIFI_IF_STA, .encrypt = false};
     memcpy(peer.peer_addr, drone_mac, 6);
     ESP_ERROR_CHECK(esp_now_add_peer(&peer));
-    esp_now_rate_config_t rate = {.phymode = WIFI_PHY_MODE_LR, .rate = WIFI_PHY_RATE_LORA_500K};
+    esp_now_rate_config_t rate = long_range;
     ESP_ERROR_CHECK(esp_now_set_peer_rate_config(drone_mac, &rate));
 
     uart_config_t uart = {

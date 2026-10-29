@@ -5,7 +5,7 @@
 """
 Update the drone's application over the direct ESP-NOW link through the laptop service.
 
-firmware: diff the new image against the images this laptop last installed in each OTA slot; send only changed sectors, have the drone copy sectors the running image already has, then boot and confirm it.
+firmware: diff the new image against the images this laptop last installed in each OTA slot; send only changed sectors (deflate-compressed when that is smaller, over the fast rate while writing), have the drone copy sectors the running image already has, then boot and confirm it.
 confirm: keep the running image after a manual check.
 camera: write a new ESP32-CAM image to the camera's spare slot through the drone (which forwards each request over its wired link, fw/esp32cam/src/update.h), boot it and check that it runs. The whole image is sent; the camera checks each sector's hash and reads it back, and checks the whole image before selecting it.
 """
@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import struct
 import time
+import zlib
 
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.sync.client import connect
@@ -162,15 +163,49 @@ def camera(drone, path):
     raise SystemExit("The camera did not answer after booting")
 
 
+def fast(drone, on):
+    """Switch the link to the fast rate for writing (or back to long range); False when the drone's firmware predates it."""
+    try:
+        drone.request(b"F", bytes([on]), patience=5)
+        return True
+    except RuntimeError:
+        return False
+
+
+def compressed(sector):
+    """The sector as raw deflate, or None when that saves nothing."""
+    packer = zlib.compressobj(9, zlib.DEFLATED, -15)
+    data = packer.compress(sector) + packer.flush()
+    return data if len(data) < SECTOR - 64 else None
+
+
 def write(drone, local, indices, copies):
+    started = time.monotonic()
+    # Firmware without the fast rate or compressed writes answers F or Y as unknown: then sectors go plain.
+    hurried = fast(drone, 1)
+    plain = not hurried
+    sent = 0
     for done, index in enumerate(indices, 1):
         digest = hashlib.sha256(local[index]).digest()[:HASH_SIZE]
+        packed = None if plain or index in copies else compressed(local[index])
         if index in copies:
             drone.request(b"C", struct.pack("<H", index) + digest)
         else:
-            drone.request(b"W", struct.pack("<H", index) + digest + local[index])
-        print(f"\rWrote {done}/{len(indices)} sectors", end="", flush=True)
+            if packed:
+                try:
+                    drone.request(b"Y", struct.pack("<H", index) + digest + packed)
+                    sent += len(packed)
+                except RuntimeError as error:
+                    if "Unknown" not in str(error):
+                        raise
+                    plain, packed = True, None
+            if not packed:
+                drone.request(b"W", struct.pack("<H", index) + digest + local[index])
+                sent += SECTOR
+        print(f"\rWrote {done}/{len(indices)} sectors ({sent / 1024 / (time.monotonic() - started):.0f} KB/s sent)", end="", flush=True)
     print()
+    if hurried:
+        fast(drone, 0)
 
 
 def main():

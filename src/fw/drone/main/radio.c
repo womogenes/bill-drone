@@ -10,6 +10,7 @@
 #include "esp_event.h"
 #include "esp_now.h"
 #include "esp_ota_ops.h"
+#include "miniz.h"
 #include "esp_partition.h"
 #include "esp_random.h"
 #include "esp_system.h"
@@ -81,6 +82,20 @@ static bool has_reply;
 static TaskHandle_t update_task;
 // The running image awaits confirmation (V) after an update.
 static bool unconfirmed;
+// Updates may switch the link to FAST_RATE (request F; the controller's relay follows the same request) while requests keep coming: with none for FAST_HOLD_US it goes back to long range by itself, so a lost switch-back cannot leave it fast.
+#define FAST_HOLD_US 3000000
+static const esp_now_rate_config_t long_range = {.phymode = WIFI_PHY_MODE_LR, .rate = WIFI_PHY_RATE_LORA_500K};
+static const esp_now_rate_config_t fast_rate = {.phymode = WIFI_PHY_MODE_11B, .rate = WIFI_PHY_RATE_11M_L};
+static bool fast;
+static int64_t fast_until;
+// Compressed sector writes (request Y): raw deflate, expanded by the ROM's inflater into a sector.
+static tinfl_decompressor inflater;
+static uint8_t inflated[SECTOR];
+
+static void set_rate(bool on) {
+    esp_now_rate_config_t rate = on ? fast_rate : long_range;
+    if (esp_now_set_peer_rate_config(peer, &rate) == ESP_OK) fast = on;
+}
 
 static uint32_t now_ms(void) {
     return esp_timer_get_time() / 1000;
@@ -406,7 +421,7 @@ static void describe(char *text, size_t size, const esp_partition_t *partition) 
              app.app_elf_sha256[6], app.app_elf_sha256[7]);
 }
 
-// Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), K a camera firmware update request (its op, then its body; camera_update). Fills reply after the id and status bytes; returns an error or NULL.
+// Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -523,6 +538,21 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         if (!hash_matches(body + 2 + HASH, body + 2)) return "Sector arrived corrupted";
         return write_sector(target, body[0] | body[1] << 8, body + 2 + HASH);
     }
+    if (op == 'Y') {
+        if (length < 2 + HASH + 1) return "Malformed compressed sector";
+        size_t in = length - 2 - HASH, out = SECTOR;
+        tinfl_init(&inflater);
+        tinfl_status status = tinfl_decompress(&inflater, body + 2 + HASH, &in, inflated, inflated, &out, TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+        if (status != TINFL_STATUS_DONE || out != SECTOR) return "Compressed sector did not expand to a sector";
+        if (!hash_matches(inflated, body + 2)) return "Sector arrived corrupted";
+        return write_sector(target, body[0] | body[1] << 8, inflated);
+    }
+    if (op == 'F') {
+        if (length != 1) return "Expected 1 or 0";
+        set_rate(body[0]);
+        fast_until = esp_timer_get_time() + FAST_HOLD_US;
+        return NULL;
+    }
     if (op == 'C') {
         if (length != 2 + HASH) return "Malformed sector copy";
         uint32_t sector = body[0] | body[1] << 8;
@@ -584,6 +614,7 @@ static void update_loop(void *arg) {
     while (true) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
         if (unconfirmed && esp_timer_get_time() > CONFIRM_US && flight_runtime_idle()) esp_restart();
+        if (fast && esp_timer_get_time() > fast_until) set_rate(false);
         store_settings();
         portENTER_CRITICAL(&lock);
         int state = request_state;
@@ -599,6 +630,7 @@ static void update_loop(void *arg) {
                 state = REPLIED;
             } else {
                 size_t size = 0;
+                if (fast) fast_until = esp_timer_get_time() + FAST_HOLD_US;
                 const char *error = handle(op, request + 5, request_length - 5, &size);
                 memcpy(reply, request, 4);
                 reply[4] = error != NULL;
@@ -641,7 +673,7 @@ void radio_start(void) {
     ESP_ERROR_CHECK(esp_now_register_recv_cb(on_received));
     ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
     ESP_ERROR_CHECK(esp_now_add_peer(&peer_info));
-    esp_now_rate_config_t rate = {.phymode = WIFI_PHY_MODE_LR, .rate = WIFI_PHY_RATE_LORA_500K};
+    esp_now_rate_config_t rate = long_range;
     ESP_ERROR_CHECK(esp_now_set_peer_rate_config(peer, &rate));
     const esp_timer_create_args_t timer_args = {.callback = tick, .name = "radio"};
     esp_timer_handle_t timer;
