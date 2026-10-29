@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import struct
 import time
+import urllib.request
 import zlib
 
 from websockets.exceptions import ConnectionClosed, InvalidStatus
@@ -69,6 +70,19 @@ class Drone:
                 self.ws.recv(timeout=30)
         except ConnectionClosed:
             self.ws = None
+
+
+def readings(url):
+    """
+    New status readings with IMU data from the laptop service's /status, polled every 20 ms.
+    """
+    last = None
+    while True:
+        reading = json.load(urllib.request.urlopen(url))["reading"]
+        if reading["time"] != last and reading["imu"]:
+            last = reading["time"]
+            yield reading
+        time.sleep(0.02)
 
 
 def elf_sha(image):
@@ -164,7 +178,7 @@ def camera(drone, path):
 
 
 def fast(drone, on):
-    """Switch the link to the fast rate for writing (or back to long range); False when the drone's firmware predates it."""
+    """Switch the link to the fast rate for writing (or back to the usual rate); False when the drone's firmware predates it."""
     try:
         drone.request(b"F", bytes([on]), patience=5)
         return True

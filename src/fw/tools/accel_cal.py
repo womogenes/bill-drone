@@ -8,26 +8,15 @@ Calibrate the accelerometer: rest the disarmed drone still (propped, not hand-he
 
 import argparse
 import json
-import time
 import urllib.request
 
 import numpy as np
 from scipy.optimize import least_squares
 
-from ota_direct import Drone
+from ota_direct import Drone, readings
 
 WINDOW = 30  # Status samples (1.5 s at 20 Hz) that must be still to count as a pose.
 SEPARATION = np.radians(30)
-
-
-def readings(url):
-    last = None
-    while True:
-        reading = json.load(urllib.request.urlopen(url))["reading"]
-        if reading["time"] != last and reading["imu"]:
-            last = reading["time"]
-            yield reading
-        time.sleep(0.02)
 
 
 def collect(url, poses, settings):

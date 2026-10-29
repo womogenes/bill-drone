@@ -7,28 +7,21 @@ Set the level reference: rest the disarmed drone still on a flat spot, then turn
 """
 
 import argparse
-import json
-import time
-import urllib.request
 
 import numpy as np
 
-from ota_direct import Drone
+from ota_direct import Drone, readings
 
 WINDOW = 40  # Status samples (2 s at 20 Hz) that must be still.
 
 
 def still_accel(url):
-    last, window = None, []
-    while True:
-        reading = json.load(urllib.request.urlopen(url))["reading"]
-        if reading["time"] != last and reading["imu"]:
-            last = reading["time"]
-            window = (window + [reading["imu"]["accel"] + reading["imu"]["gyro"]])[-WINDOW:]
-            samples = np.array(window)
-            if len(window) == WINDOW and samples[:, :3].std(0).max() <= 0.005 and samples[:, 3:].std(0).max() <= 0.2:
-                return samples[:, :3].mean(0)
-        time.sleep(0.02)
+    window = []
+    for reading in readings(url):
+        window = (window + [reading["imu"]["accel"] + reading["imu"]["gyro"]])[-WINDOW:]
+        samples = np.array(window)
+        if len(window) == WINDOW and samples[:, :3].std(0).max() <= 0.005 and samples[:, 3:].std(0).max() <= 0.2:
+            return samples[:, :3].mean(0)
 
 
 def attitude(accel):
