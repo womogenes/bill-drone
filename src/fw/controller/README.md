@@ -1,6 +1,6 @@
 # USB radio controller
 
-The controller ESP32 runs the ESP-IDF relay in `native/`. It forwards packets between USB serial at 921600 baud and the drone over ESP-NOW on Wi-Fi channel 6. The laptop supplies commands and heartbeat freshness.
+The controller ESP32 runs the ESP-IDF relay in `native/`. It forwards packets between USB serial at 921600 baud and the drone over ESP-NOW on Wi-Fi channel 6. Both ends send at Espressif's 500 kbps long-range rate (`WIFI_PHY_MODE_LR`) and still receive default-rate frames, so a relay or drone on firmware from before 2026-10-29 can still hear the other; long range gave fewer retries and lower latency on a channel shared with a building's Wi-Fi (median request round trip 41 to 30 ms, 95th percentile 158 to 82 ms). The laptop supplies commands and heartbeat freshness.
 
 ## Build and install
 

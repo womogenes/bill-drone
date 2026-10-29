@@ -217,6 +217,8 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_wifi_init(&config));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    // Long range as well as 802.11b/g/n: the drone's default-rate frames still arrive, and this relay sends to the drone at the 500 kbps long-range rate, several dB more margin against the other networks on channel 6 (the drone receives long range since 2026-10-29).
+    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE));
@@ -226,6 +228,8 @@ void app_main(void)
     esp_now_peer_info_t peer = {.channel = 0, .ifidx = WIFI_IF_STA, .encrypt = false};
     memcpy(peer.peer_addr, drone_mac, 6);
     ESP_ERROR_CHECK(esp_now_add_peer(&peer));
+    esp_now_rate_config_t rate = {.phymode = WIFI_PHY_MODE_LR, .rate = WIFI_PHY_RATE_LORA_500K};
+    ESP_ERROR_CHECK(esp_now_set_peer_rate_config(drone_mac, &rate));
 
     uart_config_t uart = {
         .baud_rate = 921600,

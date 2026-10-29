@@ -632,6 +632,8 @@ void radio_start(void) {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(esp_wifi_init(&wifi));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    // Espressif long range as well as 802.11b/g/n: both ends send at the 500 kbps long-range rate, which survives a busy channel 6 better (fw/controller/README.md), and still hear default-rate frames.
+    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE));
@@ -639,6 +641,8 @@ void radio_start(void) {
     ESP_ERROR_CHECK(esp_now_register_recv_cb(on_received));
     ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
     ESP_ERROR_CHECK(esp_now_add_peer(&peer_info));
+    esp_now_rate_config_t rate = {.phymode = WIFI_PHY_MODE_LR, .rate = WIFI_PHY_RATE_LORA_500K};
+    ESP_ERROR_CHECK(esp_now_set_peer_rate_config(peer, &rate));
     const esp_timer_create_args_t timer_args = {.callback = tick, .name = "radio"};
     esp_timer_handle_t timer;
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer));
