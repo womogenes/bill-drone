@@ -24,6 +24,10 @@
 #define MPU 0x68
 // Motor watchdog: the laptop's targets must keep arriving.
 #define HEARTBEAT_MS 500
+// A camera hover that loses the laptop lands itself instead of stopping the motors in the air (2026-10-29 07:28 dropped from 0.4 m): the hover needs nothing from the laptop. The watchdog still stops a manual flight, a hover not yet off the ground, and a link-loss landing that has not touched down within LINK_LAND_S (s).
+#define LINK_LAND_S 15.0f
+// ... and only once the hover's height estimate has it this far off the ground (m).
+#define LINK_LAND_HEIGHT 0.05f
 // Tolerate one missed control tick; a second consecutive miss stops the motors.
 #define MAX_SAMPLE_MS (2500 / SAMPLE_HZ)
 // Degrees.
@@ -112,6 +116,9 @@ static struct {
 static float battery_v;
 // The streamed hover mode (hover.h), the hover loop, and the command actually flown this tick (hover replaces base and targets), which the recording logs.
 static int hover_mode;
+// The link-loss landing (LINK_LAND_S) under way since link_land_us; the laptop's targets cannot end it, a stop can.
+static bool link_landing;
+static uint64_t link_land_us;
 static HoverState hover;
 static Command flown;
 // The laptop's hold-point nudge for hover (m; toward the tag, left, up), from the targets.
@@ -182,6 +189,7 @@ static void stop_locked(int reason) {
     state.enabled = false;
     state.latched = true;
     state.reason = reason;
+    link_landing = false;
     state.controller = (Controller){0};
     for (int side = 0; side < 2; side++) {
         state.throttle[side] = 0;
@@ -288,8 +296,18 @@ static void runtime_task(void *arg) {
         portENTER_CRITICAL(&lock);
         bool recording = log_active;
         // now was read before the lock, so a target accepted on the network core in between leaves heartbeat_us just after it; signed, that is a fresh heartbeat rather than an unsigned wrap to a huge age.
-        if ((state.enabled || state.throttle[0] || state.throttle[1]) &&
-            (int64_t)(now - state.heartbeat_us) > HEARTBEAT_MS * 1000LL) stop_locked(2);
+        bool stale = (int64_t)(now - state.heartbeat_us) > HEARTBEAT_MS * 1000LL;
+        if (state.enabled && (link_landing || (stale && hover_mode != HOVER_OFF && hover.engaged && !hover.landed &&
+                                               hover.height >= LINK_LAND_HEIGHT && state.controller.airborne > 0))) {
+            if (!link_landing) {
+                link_landing = true;
+                link_land_us = now;
+            }
+            hover_mode = HOVER_LAND;
+            if (now - link_land_us > (uint64_t)(LINK_LAND_S * 1e6f)) stop_locked(2);
+        } else if ((state.enabled || state.throttle[0] || state.throttle[1]) && stale) {
+            stop_locked(2);
+        }
 
         if (result != ESP_OK) {
             state.online = false;
@@ -400,7 +418,7 @@ static void runtime_task(void *arg) {
                 HoverDrag drag = drag_inputs(&state, &command);
                 hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag, &out);
                 // A finished landing disarms, ending the session like a stop, so the laptop can take off again (H or Enable) instead of being left armed with hover holding thrust at zero.
-                if (hover.landed && out.force <= 0) stop_locked(7);
+                if (hover.landed && out.force <= 0) stop_locked(link_landing ? 8 : 7);
                 scaled.base = out.force > 0 ? fminf(HOVER_THROTTLE, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
                 scaled.target_roll = out.roll;
                 scaled.target_pitch = out.pitch;

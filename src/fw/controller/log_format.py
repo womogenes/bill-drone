@@ -17,5 +17,5 @@ MAX_BATCH = 8  # Records per FLG1 batch at most (radio.c LOG_MAX: 5 since the 80
 
 STOP_REASONS = (
     "", "Stopped", "Controller heartbeat lost", "IMU read failed",
-    "Tilt limit exceeded", "Control sample delayed", "IMU calibration", "Landed",
+    "Tilt limit exceeded", "Control sample delayed", "IMU calibration", "Landed", "Landed after link loss",
 )
