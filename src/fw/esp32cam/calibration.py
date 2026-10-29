@@ -97,7 +97,6 @@ def calibrate(request):
         + ", ".join(f"{v:.9f}f" for v in camera["distortion"])
         + "};",
         r"float tagSizeM = [^;]+;": f"float tagSizeM = {size_mm / 1000:.9f}f;",
-        r"int tagId = [^;]+;": f"int tagId = {tag_id};",
     }
     for pattern, replacement in declarations.items():
         text, count = re.subn(pattern, replacement, text)
