@@ -18,13 +18,9 @@ from pathlib import Path
 import numpy as np
 
 from sw.sim import airframe as A
+from sw.sim.airframe import DT, G, SUB, TABLE
 from sw.sim.disturbance import CHANNELS
-from sw.sim.flight import THRUST_TABLE
 
-G = 9.81
-DT = 0.01
-SUB = 4
-TABLE = np.array(THRUST_TABLE, float)
 THROTTLE_MAX = 1200
 SERVO_LIMIT = math.radians(60)
 # Hull contact points in the body frame (m): the belly's four corners (the drone flies without its landing legs: sw/sim/sweep.py BODY_FEET), the motor pods at the arm tips, and the top of the deck.
@@ -47,7 +43,7 @@ SOURCE = Path(__file__).with_name("rigid_step.c")
 LIBRARY = Path(__file__).with_name("rigid_step.so")
 # The scalar parameters in rigid_step.c's Params order (airframe parameters, then the geometry's constants as airframe.resolve gives them, then the thrust trim, then this sim's constants, then HULL).
 C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_k", "link_c", "left_play", "right_play", "left_band", "right_band", "band_k", "right_gain", "prop_torque", "prop_momentum", "inflow_damping", "edgewise_damping", "wash", "pitch_wake", "wake_tau", "roll_pendulum", "pitch_pendulum", "roll_from_yaw", "yaw_from_roll", "vx_pitch", "vx_drag", "vy_roll", "vy_drag", "tilt_push", "motor_start")
-C_GEOMETRY = ("Ixx", "Iyy", "Izz", "arm", "cx", "cy", "tilt_arm", "hr", "hx", "hy", "mass", "J")
+C_GEOMETRY = ("Ixx", "Iyy", "Izz", "arm", "cx", "cy", "tilt_arm", "hr", "hx", "hy", "J")
 loaded = None
 
 
@@ -72,10 +68,6 @@ def load_plant(airframe="airframe_2026-10-28.json", disturbances="disturbances_2
     """The default plant: the identified airframe at its geometry, its calibrated disturbances and drag (sw/sim/sweep.py IDENTIFIED_ESC)."""
     params = json.loads((MODELS / airframe).read_text())
     return {"airframe": params, "geometry": A.geometry_of(params), "disturbances": json.loads((MODELS / disturbances).read_text()) if disturbances else [], "rotor_drag": (0.58, 0.34)}
-
-
-def thrust(throttle):
-    return np.interp(throttle, TABLE[:, 0], TABLE[:, 1])
 
 
 def throttle_for(force):
@@ -172,7 +164,6 @@ class Sim:
         s = lambda key: np.asarray(scale.get(key, ones), float)
         self.inertia = np.stack([g["roll_inertia"] * ones, g["pitch_inertia"] * ones, g["yaw_inertia"] * ones], -1) * s("inertia")[:, None]
         self.p = A.complete(a) | {"tilt_gain": s("pitch_tilt"), "differential_slope": a["differential_slope"] * s("roll_thrust")}
-        self.p["right_thrust_gain"] = a["right_thrust_gain"]
         level, mean = A.hover_trim(a, g)
         self.trim = (level * ones, np.tile(mean, (n, 1)))
         self.resolved = A.resolve(self.p, g)
@@ -222,11 +213,10 @@ class Sim:
         p, st = self.p, self.state
         for name in ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel", "wake", "spin"):
             setattr(st, name, np.ascontiguousarray(getattr(st, name), float))
-        for name in ("throttles", "commands", "pos", "vel", "quat", "omega", "accel", "contact", "contact_now", "tilt_gain", "differential_slope", "inertia", "inertia_scale", "rotor_drag", "push"):
-            if name in ("tilt_gain", "differential_slope"):
-                p[name] = np.ascontiguousarray(np.broadcast_to(p[name], (self.n,)), float)
-            else:
-                setattr(self, name, np.ascontiguousarray(getattr(self, name), float))
+        for name in ("throttles", "commands", "pos", "vel", "quat", "omega", "accel", "contact", "contact_now", "inertia", "inertia_scale", "rotor_drag", "push"):
+            setattr(self, name, np.ascontiguousarray(getattr(self, name), float))
+        for name in ("tilt_gain", "differential_slope"):
+            p[name] = np.ascontiguousarray(np.broadcast_to(p[name], (self.n,)), float)
         self.touched = np.ascontiguousarray(self.touched, bool)
         level, mean = A.hover_trim(self.a, self.geometry)
         scalars = [p[key] for key in C_AIRFRAME] + [self.resolved[key] for key in C_GEOMETRY] + [level, mean[0], mean[1]] + [self.mass, THROTTLE_MAX, SERVO_LIMIT, GROUND_K, GROUND_C, FRICTION, AIR_DRAG, self.tilt_share]
@@ -241,15 +231,6 @@ class Sim:
             + [address(a) for a in (self.throttles, self.commands, self.pos, self.vel, self.quat, self.omega, st.rate, st.att, st.vel, st.motor, st.horn, st.hvel, st.tilt, st.tvel, st.wake, st.spin, self.accel, self.contact, self.contact_now, self.touched)]
         )
         self.c_bound = (self.pos, self.vel, self.quat, self.omega, self.state.motor, self.state.tilt, self.touched)
-
-    def delayed(self, buffer, delay):
-        x = (self.history - 1) - delay / DT
-        low = np.clip(np.floor(x).astype(int), 0, self.history - 1)
-        high = np.clip(low + 1, 0, self.history - 1)
-        f = np.clip(x - low, 0, 1)
-        lane = np.arange(self.n)[:, None]
-        side = np.array([[0, 1]])
-        return buffer[lane, low, side] * (1 - f) + buffer[lane, high, side] * f
 
     def step(self, throttle, tilt_command):
         """Advance one control tick (DT) with these commands; returns the observation."""
@@ -282,7 +263,7 @@ class Sim:
         alpha_model = alpha_model / self.inertia_scale[:, None]
         wash = np.clip((self.state.motor[:, 0] + self.state.motor[:, 1]) / (self.mass * G), 0, 1)
         force_disturbance, torque_disturbance = force_disturbance * wash[:, None], torque_disturbance * wash[:, None]
-        tilt = self.state.tilt * np.array([1.0, self.p["right_gain"]]) * math.pi / 180
+        tilt = self.tilt
         left, right = self.state.motor[:, 0], self.state.motor[:, 1]
         sl, sr, cl, cr = np.sin(tilt[:, 0]), np.sin(tilt[:, 1]), np.cos(tilt[:, 0]), np.cos(tilt[:, 1])
         h = DT / SUB

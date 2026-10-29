@@ -17,7 +17,6 @@ STATE = ("pos", "vel", "quat", "omega", "accel", "contact", "contact_now", "touc
 ACTUATORS = ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel", "spin")
 # The airframe the plant uses (default rigid.load_plant's).
 AIRFRAME = None
-FIELDS = ("pos", "vel", "quat", "omega", "accel", "contact", "contact_now", "motor", "horn", "hvel", "tilt", "tvel", "rate", "att", "vel_body", "gyro", "sensed_accel")
 
 
 def start(n, seed, disturbances, backend, height=(-0.05, 0.8)):
@@ -29,15 +28,15 @@ def start(n, seed, disturbances, backend, height=(-0.05, 0.8)):
     position = np.column_stack([rng.normal(0, 1, (n, 2)), rng.uniform(*height, n)])
     velocity = rng.normal(0, 2, (n, 3))
     omega = rng.normal(0, 6, (n, 3))
-    motor = rng.uniform(0, 5, (n, 2)) * (rng.random((n, 1)) < 0.8)
     # A fifth start stopped, so the random throttles also start motors from standstill (motor_start).
+    motor = rng.uniform(0, 5, (n, 2)) * (rng.random((n, 1)) < 0.8)
     tilt = rng.uniform(-0.8, 0.8, (n, 2))
-    obs = sim.reset(position, velocity, R.random_quat(rng, n), omega, motor=motor, tilt=tilt)
+    sim.reset(position, velocity, R.random_quat(rng, n), omega, motor=motor, tilt=tilt)
     # Actuators mid-motion rather than steady.
     sim.state.hvel[:] = rng.normal(0, 100, (n, 2))
     sim.state.tvel[:] = rng.normal(0, 100, (n, 2))
     sim.state.horn[:] += rng.normal(0, 5, (n, 2))
-    return sim, obs
+    return sim
 
 
 def snapshot(sim, obs):
@@ -49,7 +48,7 @@ def snapshot(sim, obs):
 
 def difference(a, b):
     """The largest difference of each field relative to that field's size (at least 1)."""
-    return {key: float(np.max(np.abs(a[key] - b[key])) / max(1.0, float(np.max(np.abs(b[key]))))) for key in FIELDS}
+    return {key: float(np.max(np.abs(a[key] - b[key])) / max(1.0, float(np.max(np.abs(b[key]))))) for key in a}
 
 
 def resync(target, source):
@@ -62,7 +61,7 @@ def resync(target, source):
 
 def parity(n=256, ticks=300, seed=0, disturbances=True, synced=True, free=None, height=(-0.05, 0.8)):
     """The largest relative difference over the run; synced resynchronises before every tick after the first free ticks."""
-    sims = [start(n, seed, disturbances, backend, height)[0] for backend in ("numpy", "c")]
+    sims = [start(n, seed, disturbances, backend, height) for backend in ("numpy", "c")]
     rng = np.random.default_rng(seed + 2)
     worst, windows = {}, []
     free = ticks if free is None else free
@@ -90,7 +89,7 @@ def parity(n=256, ticks=300, seed=0, disturbances=True, synced=True, free=None, 
 
 
 def bench(n, backend, seconds=1.0):
-    sim = start(n, 0, True, backend)[0]
+    sim = start(n, 0, True, backend)
     throttle, tilt = np.full((n, 2), 600.0), np.zeros((n, 2))
     sim.step(throttle, tilt)
     count, began = 0, time.perf_counter()

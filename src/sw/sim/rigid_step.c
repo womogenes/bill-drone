@@ -6,7 +6,7 @@
 #define DT 0.01
 #define SUB 4
 #define G 9.81
-#define DEG (3.14159265358979323846 / 180)
+#define DEG (M_PI / 180)
 #define POINTS 12
 // The running time (s) of a motor that has long been spinning (airframe.py RUNNING).
 #define RUNNING 10.0
@@ -21,7 +21,7 @@ typedef struct {
     double prop_torque, prop_momentum, inflow_damping, edgewise_damping, wash, pitch_wake, wake_tau;
     double roll_pendulum, pitch_pendulum, roll_from_yaw, yaw_from_roll;
     double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start;
-    double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, geometry_mass, J;
+    double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, J;
     double level, mean_left, mean_right;
     double mass, throttle_max, servo_limit, ground_k, ground_c, friction, air_drag, tilt_share;
     double hull[POINTS][3];
@@ -121,13 +121,12 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         memmove(command_buffer, command_buffer + 2, 2 * (history - 1) * sizeof(double));
         for (int s = 0; s < 2; s++) {
             throttle_buffer[2 * (history - 1) + s] = clip(throttle[2 * e + s], 0, p->throttle_max);
-            command_buffer[2 * (history - 1) + s] = clip(tilt_command[2 * e + s], -p->servo_limit, p->servo_limit) * (180.0 / 3.14159265358979323846);
+            command_buffer[2 * (history - 1) + s] = clip(tilt_command[2 * e + s], -p->servo_limit, p->servo_limit) * (180.0 / M_PI);
         }
         // The airframe's inputs from the body's rates, tilt and speed now.
         double r0[3][3];
         rotation(q, r0);
         double *up = r0[2];
-        double rate0[3] = {w[0], w[1], w[2]};
         // Clipped to the measured range and faded out toward 90° of tilt (rigid.py ATTITUDE_RANGE).
         double fade = clip((M_PI / 2 - acos(clip(up[2], -1, 1))) / (M_PI / 2 - 0.6), 0, 1);
         double att0[2] = {clip(atan2(up[1], up[2]), -0.6, 0.6) * fade, clip(atan2(-up[0], hypot(up[1], up[2])), -0.6, 0.6) * fade};
@@ -138,14 +137,13 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         // The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down (rigid.py).
         double flying = contact_now[e] == 0 ? clip((st_motor[0] + st_motor[1]) / (p->mass * G), 0, 1) : 0.0;
         // airframe.py step.
-        double table_thrust[2], departure[2], target[2], goal[2], tl[2], c[2], sn[2];
-        double running[2];
+        double table_thrust[2], departure[2], target[2], goal[2], tl[2], c[2], sn[2], running[2];
         for (int s = 0; s < 2; s++) {
             double commanded = delayed(throttle_buffer, history, s, motor_delay[s]);
             // A motor started from standstill makes no thrust for motor_start (airframe.py).
             spin[2 * e + s] = commanded > 0 ? fmin(spin[2 * e + s] + DT, RUNNING) : 0.0;
             running[s] = spin[2 * e + s] > p->motor_start ? 1.0 : 0.0;
-            table_thrust[s] = interp(commanded, table, count) * 1.0 * thrust_gain[s];
+            table_thrust[s] = interp(commanded, table, count) * thrust_gain[s];
             departure[s] = table_thrust[s] - mean[s];
         }
         // airframe.py actual_thrust: the level times the mean, the common departure and differential_slope of the differential one.
@@ -163,27 +161,27 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         double roll_torque = (a - cy) * left * c[0] - (a + cy) * right * c[1]
             - p->prop_torque * (left * sn[0] - right * sn[1])
             + p->prop_momentum * (root[0] * st_tvel[0] - root[1] * st_tvel[1]) * DEG
-            - p->inflow_damping * a * a * total * rate0[0]
+            - p->inflow_damping * a * a * total * w[0]
             - flying * p->roll_pendulum * total * att0[0]
-            + flying * p->hy * p->vy_drag * p->geometry_mass * vel0[1]
-            + p->roll_from_yaw * rate0[2];
+            + flying * p->hy * p->vy_drag * p->mass * vel0[1]
+            + p->roll_from_yaw * w[2];
         double roll = roll_torque / p->Ixx + push[3 * e] * flying;
         double tilted = left * sn[0] + right * sn[1];
         wake[e] = tilted + (wake[e] - tilted) * wake_keep;
         double arm_tilt = p->tilt_arm * tilt_gain[e];
-        double pitch_torque = arm_tilt * 1.0 * tilted
+        double pitch_torque = arm_tilt * tilted
             + p->pitch_wake * arm_tilt * wake[e]
             + p->cx * (left * c[0] + right * c[1])
-            - p->edgewise_damping * p->hr * p->hr * total * rate0[1]
+            - p->edgewise_damping * p->hr * p->hr * total * w[1]
             - flying * p->pitch_pendulum * total * att0[1]
-            - flying * p->hx * p->vx_drag * p->geometry_mass * vel0[0];
+            - flying * p->hx * p->vx_drag * p->mass * vel0[0];
         double pitch_other = pitch_torque / p->Iyy + push[3 * e + 1] * flying;
         double yaw_torque = (1 - p->wash) * ((a + cy) * right * sn[1] - (a - cy) * left * sn[0])
             + p->prop_torque * (right * c[1] - left * c[0])
-            - p->edgewise_damping * a * a * total * rate0[2]
-            + p->yaw_from_roll * rate0[0];
+            - p->edgewise_damping * a * a * total * w[2]
+            + p->yaw_from_roll * w[0];
         double yaw = yaw_torque / p->Izz + push[3 * e + 2] * flying;
-        double pq = rate0[1], pitch = att0[1], pitch_sum = 0.0;
+        double pq = w[1], pitch = att0[1], pitch_sum = 0.0;
         for (int sub = 0; sub < SUB; sub++) {
             double link[2];
             for (int s = 0; s < 2; s++) {
@@ -203,27 +201,25 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
             pitch_sum += body;
         }
         double alpha_model[3] = {roll, pitch_sum / SUB, yaw};
-        st_rate[0] = rate0[0] + roll * DT, st_rate[1] = pq, st_rate[2] = rate0[2] + yaw * DT;
+        st_rate[0] = w[0] + roll * DT, st_rate[1] = pq, st_rate[2] = w[2] + yaw * DT;
         st_att[0] = att0[0] + st_rate[0] * DT, st_att[1] = pitch;
         double mean_tilt = (st_tilt[0] * gain[0] + st_tilt[1] * gain[1]) / 2 * DEG;
         st_vel[0] = vel0[0] + (p->vx_pitch * (att0[1] + p->tilt_push * mean_tilt) - p->vx_drag * vel0[0]) * DT;
         st_vel[1] = vel0[1] + (p->vy_roll * att0[0] - p->vy_drag * vel0[1]) * DT;
-        // The rigid body.
-        // The disturbances come with the rotors' wash: scaled by the thrust over the weight.
+        // The rigid body. The disturbances come with the rotors' wash: scaled by the thrust over the weight.
         double wash = clip((left + right) / (p->mass * G), 0, 1);
-        double alpha[3], moment[3], pushed[3], drag_scale[2] = {rotor_drag[2 * e], rotor_drag[2 * e + 1]};
+        const double *moment = inertia + 3 * e, *drag_scale = rotor_drag + 2 * e;
+        double alpha[3], pushed[3];
         for (int i = 0; i < 3; i++) {
             pushed[i] = force_disturbance[i] * wash;
             alpha[i] = alpha_model[i] / inertia_scale[e] + torque_disturbance[i] * wash;
-            moment[i] = inertia[3 * e + i];
         }
-        double sl, sr, cl, cr;
-        {
-            double left_tilt = st_tilt[0] * 1.0 * 3.14159265358979323846 / 180, right_tilt = st_tilt[1] * p->right_gain * 3.14159265358979323846 / 180;
-            sl = sin(left_tilt), sr = sin(right_tilt), cl = cos(left_tilt), cr = cos(right_tilt);
+        for (int s = 0; s < 2; s++) {
+            double angle = st_tilt[s] * gain[s] * M_PI / 180;
+            sn[s] = sin(angle), c[s] = cos(angle);
         }
         // The tilted thrust's horizontal force moves the drone by tilt_share of it (rigid.py).
-        double thrust_body[3] = {(left * sl + right * sr) * p->tilt_share, 0.0, left * cl + right * cr};
+        double thrust_body[3] = {(left * sn[0] + right * sn[1]) * p->tilt_share, 0.0, left * c[0] + right * c[1]};
         double peak = 0.0;
         unsigned char touch = touched[e];
         for (int sub = 0; sub < SUB; sub++) {
@@ -263,15 +259,15 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
             // Thrust, drag and gravity.
             double v_body[3], force_body[3], force_world[3], accel_world[3], speed = norm3(v);
             apply_transpose(r, v, v_body);
-            force_body[0] = thrust_body[0] + -(drag_scale[0] * v_body[0] * p->mass);
-            force_body[1] = thrust_body[1] + -(drag_scale[1] * v_body[1] * p->mass);
-            force_body[2] = thrust_body[2] + -0.0;
+            force_body[0] = thrust_body[0] - drag_scale[0] * v_body[0] * p->mass;
+            force_body[1] = thrust_body[1] - drag_scale[1] * v_body[1] * p->mass;
+            force_body[2] = thrust_body[2];
             apply(r, force_body, force_world);
             for (int i = 0; i < 3; i++) {
                 force_world[i] = force_world[i] - p->air_drag * speed * v[i] + contact_force[i];
                 accel_world[i] = force_world[i] / p->mass + pushed[i] - (i == 2 ? G : 0.0);
             }
-            double specific[3] = {accel_world[0] + 0.0, accel_world[1] + 0.0, accel_world[2] + G};
+            double specific[3] = {accel_world[0], accel_world[1], accel_world[2] + G};
             apply_transpose(r, specific, accel + 3 * e);
             for (int i = 0; i < 3; i++) v[i] = v[i] + accel_world[i] * h;
             for (int i = 0; i < 3; i++) ps[i] = ps[i] + v[i] * h;

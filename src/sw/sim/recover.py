@@ -36,10 +36,6 @@ SPREAD = 1.0
 class Controller:
     def __init__(self, sim, params):
         self.sim, self.p = sim, DEFAULTS | (params or {})
-        n = sim.n
-        self.phase = np.zeros(n, int)
-        self.low_time = np.zeros(n)
-        self.landed_at = np.full(n, np.inf)
 
     def reset(self, quat_estimate, velocity_estimate, height_estimate):
         self.q = np.array(quat_estimate, float)
@@ -52,8 +48,8 @@ class Controller:
         self.tau = (a["motor_tau"] + a["right_motor_tau"]) / 2
         self.asked = np.zeros((self.sim.n, self.delay + 1, 2))
         self.thrust = np.zeros((self.sim.n, 2))
-        self.phase[:] = RIGHT
-        self.low_time[:] = 0
+        self.phase = np.full(self.sim.n, RIGHT)
+        self.low_time = np.zeros(self.sim.n)
         # Wanted descent speed per env (negative climbs), and an optional manoeuvre that takes over the wanted angular accelerations and collective (sw/sim/flip.py).
         self.descent = np.full(self.sim.n, self.p["descent"])
         self.override = None
@@ -109,7 +105,7 @@ class Controller:
         self.phase = np.where((self.phase == RIGHT) & (upright > math.cos(math.radians(p["right_angle"]))), ARREST, self.phase)
         # Allocation: roll by differential thrust, pitch by common tilt, yaw by differential tilt.
         diff = alpha[:, 0] / sim.k_roll
-        tmax = R.thrust(R.THROTTLE_MAX)
+        tmax = R.A.thrust(R.THROTTLE_MAX)
         total = np.clip(collective, np.abs(diff), 2 * tmax - np.abs(diff))
         left, right = (total + diff) / 2, (total - diff) / 2
         # The thrust the motors have now, by the motor model.

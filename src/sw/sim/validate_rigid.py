@@ -28,6 +28,12 @@ def quat_from(att):
     return R.quat_multiply(qy, qx)
 
 
+def attitude(quat):
+    """Roll and pitch [lane, 2] (rad) of quaternions [lane, 4], as rigid.py feeds the airframe model."""
+    up = R.rotation(quat)[:, 2, :]
+    return np.column_stack([np.arctan2(up[:, 1], up[:, 2]), np.arctan2(-up[:, 0], np.hypot(up[:, 1], up[:, 2]))])
+
+
 def rigid_predict(p, saved, data, flights, horizons, stride):
     """identify_airframe.predict's closed-loop free runs, flown on rigid.Sim (with the saved model's other entries) instead of the airframe model, at each flight's own thrust trim as the model is."""
     keep, push, trim = N.teacher(p, data, flights)
@@ -51,13 +57,10 @@ def rigid_predict(p, saved, data, flights, horizons, stride):
     attitudes = np.zeros((max(horizons), n, 2))
     for j in range(max(horizons)):
         k = np.minimum(S0 + j, data.size - 1)
-        up = R.rotation(sim.quat)[:, 2, :]
-        now = np.column_stack([np.arctan2(up[:, 1], up[:, 2]), np.arctan2(-up[:, 0], np.hypot(up[:, 1], up[:, 2]))])
-        throttle, tilt = data.control(states, commands, F, k, now, sim.omega)
+        throttle, tilt = data.control(states, commands, F, k, attitude(sim.quat), sim.omega)
         sim.step(throttle, np.radians(tilt))
-        up = R.rotation(sim.quat)[:, 2, :]
         rates[j] = sim.omega
-        attitudes[j] = np.column_stack([np.arctan2(up[:, 1], up[:, 2]), np.arctan2(-up[:, 0], np.hypot(up[:, 1], up[:, 2]))])
+        attitudes[j] = attitude(sim.quat)
     return F, S0, valid, rates, attitudes
 
 
