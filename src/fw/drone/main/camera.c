@@ -1,5 +1,4 @@
 // TAG3 pose and flow packets from the ESP32-CAM over UART (fw/esp32cam/README.md). The camera raises SYNC as it queues each packet and sends it at 2 Mbaud; the rising edge's time minus the packet's age is the capture time on this clock, whatever the UART and task latency. The byte stream is searched for the magic and checked by CRC, so the camera's boot messages on the same wire (at 115200) are skipped.
-#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +9,6 @@
 #include "driver/gpio.h"
 #include "driver/pulse_cnt.h"
 #include "driver/uart.h"
-#include "esp_attr.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "camera.h"
@@ -28,9 +26,8 @@ static QueueHandle_t events;
 static pcnt_unit_handle_t rx_counter;
 static volatile uint32_t edges, edge_us;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
-static CameraPose latest, latest_candidate;
-static CameraFlow latest_flow;
-static bool have_pose, have_candidate, have_flow;
+static CameraPose latest;
+static bool have_pose;
 static CameraStats stats = {.frame_us = -1};
 // The update request waiting for the camera's answer (camera_update), and that answer.
 static SemaphoreHandle_t answered;
@@ -50,17 +47,9 @@ static void accept(const CameraPacket *packet, bool synced, uint32_t since_edge_
     static bool have_sequence;
     bool repeat = have_sequence && packet->sequence == last_sequence;
     uint32_t age = packet->age_us + since_edge_us;
-    CameraPose pose = {.sequence = packet->sequence, .capture_us = now - age, .tag_id = packet->tag_id, .valid = packet->valid,
-                       .margin = packet->margin, .reprojection_px = packet->reprojection_px,
-                       .alt_reprojection_px = packet->alt_reprojection_px};
-    memcpy(pose.position_m, packet->position, sizeof(pose.position_m));
+    CameraPose pose = {.sequence = packet->sequence, .capture_us = now - age, .valid = packet->valid};
     memcpy(pose.rotation, packet->rotation, sizeof(pose.rotation));
     memcpy(pose.tag_position_m, packet->tag_position, sizeof(pose.tag_position_m));
-    memcpy(pose.alt_position_m, packet->alt_position, sizeof(pose.alt_position_m));
-    memcpy(pose.alt_rotation, packet->alt_rotation, sizeof(pose.alt_rotation));
-    CameraFlow flow = {.sequence = packet->sequence, .capture_us = now - age + packet->flow_offset_us,
-                       .interval_us = packet->flow_interval_us, .shift_px = {packet->flow[0], packet->flow[1]},
-                       .residual_px = packet->flow_residual_px, .inliers = packet->flow_inliers};
     portENTER_CRITICAL(&lock);
     if (!synced) {
         stats.unsynced++;
@@ -74,15 +63,13 @@ static void accept(const CameraPacket *packet, bool synced, uint32_t since_edge_
         stats.capture_us = now - age;
         stats.valid = packet->valid;
         stats.trusted = packet->trusted;
-        have_pose = packet->valid && packet->trusted && age <= MAX_AGE_US;
-        stats.stale += packet->valid && !have_pose;
-        stats.poses += have_pose;
+        // poses counts frames whose tilt the camera decided as well.
+        bool fresh = age <= MAX_AGE_US, decided = packet->valid && packet->trusted && fresh;
+        stats.stale += packet->valid && !decided;
+        stats.poses += decided;
+        stats.flows += packet->flow_interval_us && fresh;
+        have_pose = packet->trusted && fresh;
         if (have_pose) latest = pose;
-        have_candidate = packet->trusted && age <= MAX_AGE_US;
-        if (have_candidate) latest_candidate = pose;
-        have_flow = packet->flow_interval_us && age <= MAX_AGE_US;
-        stats.flows += have_flow;
-        if (have_flow) latest_flow = flow;
     }
     portEXIT_CRITICAL(&lock);
     // A restarted camera counts from zero again, so only an exact repeat is refused.
@@ -182,29 +169,11 @@ void camera_start(void) {
     ESP_ERROR_CHECK(gpio_isr_handler_add(SYNC, sync_edge, NULL));
 }
 
-bool camera_pose(CameraPose *pose, uint32_t max_age_us) {
+bool camera_candidates(CameraPose *pose, uint32_t max_age_us) {
     int64_t now = esp_timer_get_time();
     portENTER_CRITICAL(&lock);
     bool fresh = have_pose && now - latest.capture_us <= max_age_us;
     if (fresh) *pose = latest;
-    portEXIT_CRITICAL(&lock);
-    return fresh;
-}
-
-bool camera_candidates(CameraPose *pose, uint32_t max_age_us) {
-    int64_t now = esp_timer_get_time();
-    portENTER_CRITICAL(&lock);
-    bool fresh = have_candidate && now - latest_candidate.capture_us <= max_age_us;
-    if (fresh) *pose = latest_candidate;
-    portEXIT_CRITICAL(&lock);
-    return fresh;
-}
-
-bool camera_flow(CameraFlow *flow, uint32_t max_age_us) {
-    int64_t now = esp_timer_get_time();
-    portENTER_CRITICAL(&lock);
-    bool fresh = have_flow && now - latest_flow.capture_us <= max_age_us;
-    if (fresh) *flow = latest_flow;
     portEXIT_CRITICAL(&lock);
     return fresh;
 }
