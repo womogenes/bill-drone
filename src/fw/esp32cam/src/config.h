@@ -2,7 +2,6 @@
 
 namespace config {
 // Measure the black square's outer edge, excluding the white margin.
-int tagId = 0; // This library includes tag16h5 IDs 0..29.
 float tagSizeM = 0.151350000f;
 
 // Calibrate at 320x240 with hmirror=0 and vflip=1, in the sensor mode below. Zero means unset.

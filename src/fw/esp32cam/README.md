@@ -7,7 +7,7 @@ One firmware handles onboard tag16h5 pose estimation, UART delivery to the drone
 | Signal | ESP32-CAM | Main ESP32 | Direction |
 |---|---:|---:|---|
 | CAM TX → main RX | GPIO1 (U0TXD) | GPIO34 | CAM → main |
-| main TX → CAM RX | GPIO3 (U0RXD) | GPIO27 | Main → CAM (wired, unused for now) |
+| main TX → CAM RX | GPIO3 (U0RXD) | GPIO27 | Main → CAM (firmware updates) |
 | SYNC | GPIO13 | GPIO13 | CAM → main |
 | microSD CLK, CMD, D0 | GPIO14, 15, 2 | | on the camera board (1-bit SD mode) |
 | VCC | 5V pin | 6 V | |
@@ -26,7 +26,7 @@ uvx --from platformio==6.1.18 --with intelhex pio run -d fw/esp32cam -t upload -
 
 For serial flashing, ground camera GPIO0 and reset, with the microSD card removed (its pull-up on GPIO2 blocks the ROM's download mode) and the drone link unplugged from GPIO1/3 (the programmer uses the same pins); release GPIO0 and reset afterwards. USB numbers move and the two adapters share a USB serial number, so identify the board first: the CAM has MAC `58:2A:BD:79:2B:9C`. After the first wired flash, check that the board boots with a card inserted: on some ESP32-CAM boards a card pulls GPIO12 high, which selects 1.8 V flash and stops the boot (the permanent fix is `espefuse.py set_flash_voltage 3.3V`).
 
-Later updates go over Wi-Fi to `bill-esp32cam.local` (add `--upload-port <camera-ip>` without mDNS). The flash holds two 1.25 MiB OTA slots. An update pauses processing and reboots the CAM, so update while the flight controller is disarmed.
+Later updates need no cable. `make camera-deploy` (from `src/fw`) builds and sends the image through the laptop service, the drone's radio and its wire to the camera's RX: the drone forwards each request (`K`, `fw/drone/main/radio.c`) and the camera (`src/update.h`) writes 4 KB sectors to its spare OTA slot, checking each one's hash and reading it back, then selects the slot (which checks the whole image) and restarts; about a minute, with the drone disarmed and running firmware that has the `K` request. The camera stops at the first sector and restarts on its own if the update is abandoned for 30 s. Over Wi-Fi, `make camera-wifi` finds the camera on any network the laptop is on (`bill-esp32cam.local`, else a scan of each local subnet) and uploads to it. The flash holds two 1.25 MiB OTA slots. An update pauses processing and reboots the CAM, so update while the flight controller is disarmed.
 
 ```sh
 uvx --from platformio==6.1.18 --with intelhex pio run -d fw/esp32cam -e ota -t upload
@@ -36,7 +36,7 @@ There is no serial console after boot: UART0 is the link, ESP-IDF log output goe
 
 ## Link and SYNC
 
-UART0 at 2 Mbaud, 8N1: one 164-byte packet per frame (TAG3, below), 0.8 ms on the wire. Each packet is written once to the UART driver's transmit buffer, so the detector never waits for the wire; if the previous packet were still unsent the new one is dropped without a pulse and counted in `/status` `link_dropped`. SYNC goes high for at least 20 µs at the instant the camera reads its clock for the packet's `ageUs`, just before queuing it, so `ageUs` is capture-to-pulse: the drone dates the capture as its rising-edge time minus `ageUs`, independent of UART buffering and its own task latency. The drone matches a packet to the newest unused edge within 10 ms before the packet completed. The camera's RX is reserved for future messages such as gyro rates; for now received bytes are only counted (`link_rx_bytes`). `/status` also reports `link_sent`.
+UART0 at 2 Mbaud, 8N1: one 164-byte packet per frame (TAG3, below), 0.8 ms on the wire. Each packet is written once to the UART driver's transmit buffer, so the detector never waits for the wire; if the previous packet were still unsent the new one is dropped without a pulse and counted in `/status` `link_dropped`. SYNC goes high for at least 20 µs at the instant the camera reads its clock for the packet's `ageUs`, just before queuing it, so `ageUs` is capture-to-pulse: the drone dates the capture as its rising-edge time minus `ageUs`, independent of UART buffering and its own task latency. The drone matches a packet to the newest unused edge within 10 ms before the packet completed. The camera's RX carries firmware updates from the drone (below); `link_rx_bytes` counts what arrives. `/status` also reports `link_sent`.
 
 ## Black box
 
@@ -48,7 +48,7 @@ After landing, `uv run fw/esp32cam/blackbox.py --fetch` (from `src/`) downloads 
 
 ## Dashboard calibration and preview
 
-Open **Camera** (`/camera`) in the dashboard and connect. Enter the printed **tag16h5 ID (0–29)** and **outer black-square width in millimetres**, excluding the white margin. Capture **25–40 sharp views of the same flat tag**, varying both tilt axes, distance, and position across the image while keeping all corners visible. Press Space or click Capture view; Space is ignored while typing in inputs. A single tag has only four corners, so varied views are especially important.
+Open **Camera** (`/camera`) in the dashboard and connect. Enter the printed **tag16h5 ID (0–29)** and **outer black-square width in millimetres**, excluding the white margin. The ID only selects the calibration views; in use the camera tracks any tag16h5 ID, staying on the one it found while it stays in view, and reports it (`tag_id` in `/status` and the packet). Capture **25–40 sharp views of the same flat tag**, varying both tilt axes, distance, and position across the image while keeping all corners visible. Press Space or click Capture view; Space is ignored while typing in inputs. A single tag has only four corners, so varied views are especially important.
 
 **Calibrate and save** runs `calibration.py` with `src/.venv/bin/python`, fits the lens, writes `src/config.h`, and sends the calibration to the CAM's `/config` endpoint. The CAM applies it immediately and stores it in NVS, where it takes precedence over the compiled defaults; no reflashing is needed. A failed camera connection leaves the local fit saved, but the dashboard reports failure until it is applied to the board.
 

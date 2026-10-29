@@ -16,8 +16,9 @@ struct TagFinder {
     apriltag_family_t *family = nullptr;
     // Where the detector's allocations go: called before a run in a window (which may use internal RAM) or on the whole frame (which must not starve Wi-Fi of it), and with workspaceDefault after; null on the host.
     void (*workspace)(Workspace where) = nullptr;
-    // The tag's corners when last seen, at seenUs (frame start); tracking is false after a miss.
+    // The tag's corners when last seen, at seenUs (frame start); tracking is false after a miss. Any tag16h5 ID is taken; id is the one last found (-1 before any).
     bool tracking = false;
+    int id = -1;
     float corners[4][2] = {};
     uint32_t seenUs = 0;
     // The corners' velocity in pixels per frame period, over the interval before seenUs, which ended lag frame periods after the velocity's moment; known when measured over a recent interval (else zero), and fresh when that interval was about one frame. Their acceleration is measured between two fresh velocities, else zero.
@@ -88,18 +89,26 @@ struct TagFinder {
         zarray_t *tags = apriltag_detector_detect(detector, &image);
         if (workspace)
             workspace(workspaceDefault);
+        // The tag last found when it is among the acceptable detections, else the clearest; refused when its ID shows up twice.
         apriltag_detection_t *target = nullptr;
-        int matches = 0;
         for (int i = 0; i < zarray_size(tags); ++i) {
             apriltag_detection_t *tag;
             zarray_get(tags, i, &tag);
-            if (tag->id == config::tagId) {
-                ++matches;
+            if (tag->hamming > maxHamming || tag->decision_margin < minMargin)
+                continue;
+            if (!target || (tag->id == id) > (target->id == id) ||
+                ((tag->id == id) == (target->id == id) && tag->decision_margin > target->decision_margin))
                 target = tag;
-            }
         }
-        const bool found = matches == 1 && target->hamming <= maxHamming && target->decision_margin >= minMargin;
+        int matches = 0;
+        for (int i = 0; target && i < zarray_size(tags); ++i) {
+            apriltag_detection_t *tag;
+            zarray_get(tags, i, &tag);
+            matches += tag->id == target->id;
+        }
+        const bool found = matches == 1;
         if (found) {
+            id = target->id;
             for (int i = 0; i < 4; ++i) {
                 out[i][0] = target->p[i][0] + searched.x - 0.5f;
                 out[i][1] = target->p[i][1] + searched.y - 0.5f;
@@ -169,7 +178,7 @@ struct TagFinder {
         }
         measuredImage = image;
         ++work.measures;
-        const uint32_t code = uint32_t(family->codes[config::tagId]);
+        const uint32_t code = uint32_t(family->codes[id]);
         float aligned[4][2];
         memcpy(aligned, out, sizeof(aligned));
         alignment = alignTag(image, aligned, family, code, radius, image.pixels == frame ? work.alignFrame : work.align);

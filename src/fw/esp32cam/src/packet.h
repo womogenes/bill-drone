@@ -39,3 +39,23 @@ inline uint16_t crc16(const uint8_t *data, size_t length) {
     return crc;
 }
 
+
+// Firmware updates through the drone (update.h): the drone sends a request, header then body then a CRC-16 over both, and the camera answers each with one reply.
+struct __attribute__((packed)) UpdateRequest {
+    char magic[4];          // CUP1
+    uint32_t id = 0;        // echoed in the reply
+    uint8_t op = 0;
+    uint8_t reserved = 0;
+    uint16_t length = 0;    // of the body that follows
+};
+static_assert(sizeof(UpdateRequest) == 12, "Update request header changed");
+
+struct __attribute__((packed)) UpdateReply {
+    char magic[4] = {'C', 'U', 'R', '1'};
+    uint32_t id = 0;
+    uint8_t status = 0;     // 0 done, 1 failed
+    uint8_t length = 0;     // of text
+    char text[52] = {};     // the answer, or why it failed
+    uint16_t checksum = 0;
+};
+static_assert(sizeof(UpdateReply) == 64, "Update reply changed");

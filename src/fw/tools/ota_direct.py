@@ -7,6 +7,7 @@ Update the drone's application over the direct ESP-NOW link through the laptop s
 
 firmware: diff the new image against the images this laptop last installed in each OTA slot; send only changed sectors, have the drone copy sectors the running image already has, then boot and confirm it.
 confirm: keep the running image after a manual check.
+camera: write a new ESP32-CAM image to the camera's spare slot through the drone (which forwards each request over its wired link, fw/esp32cam/src/update.h), boot it and check that it runs. The whole image is sent; the camera checks each sector's hash and reads it back, and checks the whole image before selecting it.
 """
 
 import argparse
@@ -125,6 +126,40 @@ def firmware(drone, path):
     print(f"Confirmed {info['target']}")
 
 
+def camera(drone, path):
+    image = path.read_bytes()
+    running, target, size, sha = drone.request(b"K", b"I").decode().split()
+    if sha == elf_sha(image):
+        print(f"The camera's {running} already runs this image")
+        return
+    if len(image) > int(size):
+        raise SystemExit(f"Image of {len(image)} bytes does not fit the camera's {target} ({size} bytes)")
+    count = (len(image) + SECTOR - 1) // SECTOR
+    local = sectors(image, count)
+    print(f"camera {running} -> {target}: {count} sectors", flush=True)
+    started = time.monotonic()
+    for index in range(count):
+        digest = hashlib.sha256(local[index]).digest()[:HASH_SIZE]
+        drone.request(b"K", b"W" + struct.pack("<H", index) + digest + local[index], timeout=4)
+        rate = (index + 1) * SECTOR / 1024 / (time.monotonic() - started)
+        print(f"\rWrote {index + 1}/{count} sectors ({rate:.0f} KB/s)", end="", flush=True)
+    print()
+    drone.request(b"K", b"B", timeout=10)
+    print(f"Booting the camera's {target}", flush=True)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        time.sleep(1)
+        try:
+            booted = drone.request(b"K", b"I", patience=3).decode().split()
+        except (TimeoutError, RuntimeError):
+            continue
+        if booted[0] != target or booted[3] != elf_sha(image):
+            raise SystemExit(f"The camera runs {booted[0]} ({booted[3]}), not the new image")
+        print(f"The camera runs the new image from {target}")
+        return
+    raise SystemExit("The camera did not answer after booting")
+
+
 def write(drone, local, indices, copies):
     for done, index in enumerate(indices, 1):
         digest = hashlib.sha256(local[index]).digest()[:HASH_SIZE]
@@ -143,12 +178,16 @@ def main():
     image = commands.add_parser("firmware")
     image.add_argument("image", type=Path)
     commands.add_parser("confirm", help="Keep the running OTA image after a manual check")
+    camera_image = commands.add_parser("camera", help="Update the ESP32-CAM through the drone")
+    camera_image.add_argument("image", type=Path)
     args = parser.parse_args()
 
     started = time.monotonic()
     drone = Drone(args.bridge)
     if args.command == "firmware":
         firmware(drone, args.image)
+    elif args.command == "camera":
+        camera(drone, args.image)
     else:
         drone.request(b"V")
     print(f"Done in {time.monotonic() - started:.1f}s")

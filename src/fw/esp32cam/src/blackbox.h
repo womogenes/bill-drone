@@ -18,7 +18,7 @@ struct __attribute__((packed)) FileHeader {
     uint32_t startUs = 0;         // CAM clock when the file was opened
     float fx = 0, fy = 0, cx = 0, cy = 0, distortion[5] = {}; // the calibration in use
     float tagSizeM = 0;
-    uint32_t tagId = 0;
+    uint32_t tagId = 0;           // the tag last found when the file was opened, 0xFFFFFFFF before any
     char build[24] = {};          // __DATE__ " " __TIME__ of the firmware
 };
 static_assert(sizeof(FileHeader) == 104, "Black box header changed");

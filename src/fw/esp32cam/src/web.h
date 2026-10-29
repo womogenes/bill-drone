@@ -60,6 +60,7 @@ int logToRing(const char *format, va_list args) {
     return length;
 }
 extern bool cameraReady, cameraStalled;
+extern TagFinder finder;
 extern UBaseType_t driverPriority;
 
 bool calibrated() { return config::fx > 0 && config::fy > 0 && config::tagSizeM > 0; }
@@ -68,6 +69,7 @@ bool applyCalibration(const String &body) {
     cJSON *json = cJSON_Parse(body.c_str());
     if (!json)
         return false;
+    // tag_id is the tag the calibration was taken with; the finder takes any tag16h5 ID.
     const char *names[] = {"fx", "fy", "cx", "cy", "tag_size_mm", "tag_id"};
     float values[6];
     bool valid = true;
@@ -92,7 +94,6 @@ bool applyCalibration(const String &body) {
         config::cx = values[2];
         config::cy = values[3];
         config::tagSizeM = values[4] / 1000;
-        config::tagId = int(values[5]);
         memcpy(config::distortion, distortion, sizeof(distortion));
     }
     cJSON_Delete(json);
@@ -281,7 +282,7 @@ void startPreview() {
             "\"flow_px\":[%.3f,%.3f],\"flow_inliers\":%u,\"flow_residual_px\":%.3f,\"short_frames\":%u,\"stalls\":%u,\"recoveries\":%u,"
             "\"last_crumbs\":[%u,%u,%u],\"gain\":%.2f,\"exposure_lines\":%d,\"frame_lines\":%d,\"driver_priority\":[%u,%u],"
             "\"link_sent\":%u,\"link_dropped\":%u,\"link_rx_bytes\":%u,",
-            cameraStalled ? "stalled" : cameraReady ? "running" : "stopped", calibrated() ? "true" : "false", config::tagId, config::tagSizeM * 1000,
+            cameraStalled ? "stalled" : cameraReady ? "running" : "stopped", calibrated() ? "true" : "false", finder.id, config::tagSizeM * 1000,
             unsigned(captureCount), unsigned(poseCount), unsigned(trackedCount), unsigned(detectedCount),
             unsigned(previewCount), unsigned(detectUs),
             unsigned(frameUs), unsigned(lastPose.ageUs), unsigned(readoutAgeUs), valid ? "true" : "false", lastPose.position[0],

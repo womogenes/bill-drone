@@ -153,8 +153,44 @@ static void test_sync(void) {
     printf("sync: ok\n");
 }
 
+static CameraUpdateReply make_reply(uint32_t id, const char *text) {
+    CameraUpdateReply reply = {.magic = {'C', 'U', 'R', '1'}, .id = id, .length = (uint8_t)strlen(text)};
+    memcpy(reply.text, text, reply.length);
+    reply.checksum = camera_crc16((const uint8_t *)&reply, offsetof(CameraUpdateReply, checksum));
+    return reply;
+}
+
+static void test_replies(void) {
+    // Replies between pose packets, one damaged and one split across reads, in a stream that starts with a false "CU".
+    stream_length = 0;
+    put("CUCU", 4);
+    put_packet(1);
+    CameraUpdateReply first = make_reply(7, "ota_0 ota_1 1310720 0123456789abcdef"), damaged = make_reply(8, "bad"), second = make_reply(9, "");
+    put(&first, sizeof(first));
+    damaged.text[0] ^= 1;
+    put(&damaged, sizeof(damaged));
+    put_packet(2);
+    put(&second, sizeof(second));
+    CameraReplyParser parser = {0};
+    uint32_t ids[4];
+    size_t found = 0;
+    for (size_t at = 0; at < stream_length; at += 37) {
+        const uint8_t *data = stream + at;
+        size_t length = stream_length - at < 37 ? stream_length - at : 37;
+        CameraUpdateReply reply;
+        while (camera_reply_parse(&parser, &data, &length, &reply)) {
+            assert(found < 4);
+            if (reply.id == 7) assert(!memcmp(&reply, &first, sizeof(reply)));
+            ids[found++] = reply.id;
+        }
+    }
+    assert(found == 2 && ids[0] == 7 && ids[1] == 9);
+    printf("replies: ok\n");
+}
+
 int main(void) {
     test_stream();
     test_sync();
+    test_replies();
     return 0;
 }

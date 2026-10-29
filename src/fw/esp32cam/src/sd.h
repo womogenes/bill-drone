@@ -148,7 +148,7 @@ void writerLoop(void *) {
             header.cy = config::cy;
             memcpy(header.distortion, config::distortion, sizeof(header.distortion));
             header.tagSizeM = config::tagSizeM;
-            header.tagId = config::tagId;
+            header.tagId = uint32_t(finder.id);
             strncpy(header.build, __DATE__ " " __TIME__, sizeof(header.build) - 1);
             memcpy(staging, &header, sizeof(header));
             fill = sizeof(header);

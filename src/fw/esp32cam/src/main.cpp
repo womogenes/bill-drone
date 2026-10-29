@@ -12,6 +12,7 @@
 #include "tag.h"
 #include "flow.h"
 #include "ota.h"
+#include "update.h"
 
 #include "web.h"
 #include "record.h"
@@ -32,9 +33,9 @@ int exposureLines;
 RTC_NOINIT_ATTR uint32_t crumbs[3];
 uint32_t lastCrumbs[3];
 
-// The drone link on UART0. The receive side (GPIO3) is for the drone's future messages; for now its bytes are only counted. The transmit buffer holds a few packets; publish() never queues behind an unsent one.
+// The drone link on UART0. The receive side (GPIO3) carries firmware updates from the drone (update.h); its buffer holds a whole sector's request. The transmit buffer holds a few packets; publish() never queues behind an unsent one.
 constexpr uart_port_t linkPort = UART_NUM_0;
-constexpr int linkTxBytes = 1024, linkRxBytes = 256;
+constexpr int linkTxBytes = 1024, linkRxBytes = 6144;
 portMUX_TYPE syncLock = portMUX_INITIALIZER_UNLOCKED;
 volatile uint32_t linkSent = 0, linkDropped = 0, linkReceived = 0;
 
@@ -76,10 +77,15 @@ void serviceTask(void *) {
 #endif
         serviceOta();
         web.handleClient();
-        uint8_t received[64];
-        const int n = uart_read_bytes(linkPort, received, sizeof(received), 0);
-        if (n > 0)
+#ifndef DEBUG_CONSOLE
+        uint8_t received[512];
+        int n;
+        while ((n = uart_read_bytes(linkPort, received, sizeof(received), 0)) > 0) {
             linkReceived = linkReceived + n;
+            update::receive(linkPort, received, n);
+        }
+        update::poll();
+#endif
         delay(2);
     }
 }
@@ -310,7 +316,6 @@ void loop() {
     ++captureCount;
     PosePacket packet;
     packet.sequence = sequence++;
-    packet.tagId = config::tagId;
     // Readout of this frame's centre row on the CAM clock; once a tag is found, of the tag's centre row instead.
     const uint32_t frameCentreUs = frameStart(frame) + uint32_t(config::outH / 2 * config::rowUs);
     packet.captureUs = frameCentreUs;
@@ -341,6 +346,8 @@ void loop() {
         kind = finder.find(frame->buf, frame->width, frame->height, frameStart(frame), corners, margin);
         trackedCount += kind == tagTracked;
         detectedCount += kind == tagDetected;
+        if (kind)
+            packet.tagId = uint16_t(finder.id);
     }
     crumbs[0] = 6;
     const uint32_t flowWaitStart = uint32_t(esp_timer_get_time());

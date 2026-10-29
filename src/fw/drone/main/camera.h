@@ -2,6 +2,7 @@
 #define CAMERA_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 // One AprilTag pose from the ESP32-CAM (fw/esp32cam/README.md): point_tag = rotation * point_camera + position_m.
@@ -50,7 +51,7 @@ typedef struct {
     uint8_t valid, trusted;
 } CameraStats;
 
-// UART2 at 2 Mbaud, 8N1: RX on GPIO34 from the camera's TX (GPIO1), TX on GPIO27 to its RX (GPIO3, unused so far); SYNC from the camera's GPIO13 on GPIO13 with a pull-down; a receiver task on core 0 at priority 4, below the control task on core 1. Call from a core-0 task (app_main) so the UART and GPIO interrupts are on core 0 too.
+// UART2 at 2 Mbaud, 8N1: RX on GPIO34 from the camera's TX (GPIO1), TX on GPIO27 to its RX (GPIO3, camera firmware updates); SYNC from the camera's GPIO13 on GPIO13 with a pull-down; a receiver task on core 0 at priority 4, below the control task on core 1. Call from a core-0 task (app_main) so the UART and GPIO interrupts are on core 0 too.
 void camera_start(void);
 // Copies the newest frame's pose if that frame saw the tag, the camera decided its tilt (valid 1 or 2), and the pose is at most max_age_us old now.
 bool camera_pose(CameraPose *pose, uint32_t max_age_us);
@@ -59,5 +60,9 @@ bool camera_candidates(CameraPose *pose, uint32_t max_age_us);
 // Copies the newest frame's flow if it has one and it is at most max_age_us old now.
 bool camera_flow(CameraFlow *flow, uint32_t max_age_us);
 void camera_stats(CameraStats *stats);
+// The largest body of a camera update request: a sector write (index, hash prefix, 4 KB).
+#define CAMERA_UPDATE_BODY (2 + 8 + 4096)
+// Sends one camera firmware update request (fw/esp32cam/src/update.h: op I, W, B or X and its body) and waits up to timeout_ms for the answer. Returns an error, or NULL with the answer's text in text (NUL-terminated). Call from one task at a time.
+const char *camera_update(uint8_t op, const uint8_t *body, size_t length, uint32_t timeout_ms, char *text, size_t size);
 
 #endif

@@ -406,7 +406,7 @@ static void describe(char *text, size_t size, const esp_partition_t *partition) 
              app.app_elf_sha256[6], app.app_elf_sha256[7]);
 }
 
-// Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32). Fills reply after the id and status bytes; returns an error or NULL.
+// Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), K a camera firmware update request (its op, then its body; camera_update). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -477,6 +477,15 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         }
         flight_runtime_apply_settings();
         *size = settings_json(text, REPLY - 5);
+        return NULL;
+    }
+    if (op == 'K') {
+        if (!length) return "Expected a camera request";
+        if (!flight_runtime_idle()) return "Disable control and zero throttle before updating the camera";
+        // Selecting the new image reads all of it to check its hash.
+        const char *failure = camera_update(body[0], body + 1, length - 1, body[0] == 'B' ? 5000 : 2000, text, REPLY - 5);
+        if (failure) return failure;
+        *size = strlen(text);
         return NULL;
     }
     if (op == 'A') {

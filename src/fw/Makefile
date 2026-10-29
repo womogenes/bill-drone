@@ -3,7 +3,7 @@
 IDF_PATH ?= $(HOME)/esp/esp-idf
 IDF = bash -c 'source $(IDF_PATH)/export.sh >/dev/null && "$$@"' idf
 
-.PHONY: build deploy usb accel level camera-test
+.PHONY: build deploy usb accel level camera-test camera-wifi camera-deploy
 build:
 	$(IDF) idf.py -C drone build
 
@@ -15,6 +15,15 @@ deploy: build
 usb: build
 	$(if $(PORT),,$(error Set PORT to the drone's serial device))
 	$(IDF) esptool.py --chip esp32 --port $(PORT) --baud 460800 write_flash 0xd000 drone/build/ota_data_initial.bin 0x10000 drone/build/drone.bin
+
+# The camera through the drone's radio link and its wire to the camera: no Wi-Fi needed, the drone disarmed and running firmware with camera updates.
+camera-deploy:
+	uvx --from platformio==6.1.18 --with intelhex pio run -d esp32cam
+	uv run tools/ota_direct.py camera esp32cam/.pio/build/esp32cam/firmware.bin
+
+# The camera over Wi-Fi: finds it on any network this laptop is on, then builds and uploads.
+camera-wifi:
+	uv run tools/camera_wifi_ota.py
 
 # Accelerometer calibration: hold the disarmed drone still in about ten orientations.
 accel:

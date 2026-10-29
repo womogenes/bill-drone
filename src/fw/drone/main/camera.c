@@ -1,14 +1,17 @@
 // TAG3 pose and flow packets from the ESP32-CAM over UART (fw/esp32cam/README.md). The camera raises SYNC as it queues each packet and sends it at 2 Mbaud; the rising edge's time minus the packet's age is the capture time on this clock, whatever the UART and task latency. The byte stream is searched for the magic and checked by CRC, so the camera's boot messages on the same wire (at 115200) are skipped.
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "driver/pulse_cnt.h"
 #include "driver/uart.h"
 #include "esp_attr.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "camera.h"
 #include "camera_link.h"
@@ -29,6 +32,10 @@ static CameraPose latest, latest_candidate;
 static CameraFlow latest_flow;
 static bool have_pose, have_candidate, have_flow;
 static CameraStats stats = {.frame_us = -1};
+// The update request waiting for the camera's answer (camera_update), and that answer.
+static SemaphoreHandle_t answered;
+static uint32_t awaited;
+static CameraUpdateReply answer;
 
 // The edge time is the low 32 bits of esp_timer, compared by unsigned difference. This ISR runs from flash, so during a flash write (only while disarmed) the edge is stamped late and the age reads low.
 static void sync_edge(void *arg) {
@@ -85,6 +92,7 @@ static void accept(const CameraPacket *packet, bool synced, uint32_t since_edge_
 
 static void receive_task(void *arg) {
     static CameraParser parser;
+    static CameraReplyParser replies;
     static uint8_t bytes[256];
     uint32_t used_edges = 0;
     while (true) {
@@ -109,6 +117,20 @@ static void receive_task(void *arg) {
             buffered -= n;
             const uint8_t *data = bytes;
             size_t length = n;
+            // Update replies share the wire with the packets; each parser skips the other's bytes.
+            const uint8_t *reply_data = bytes;
+            size_t reply_length = n;
+            CameraUpdateReply reply;
+            while (camera_reply_parse(&replies, &reply_data, &reply_length, &reply)) {
+                portENTER_CRITICAL(&lock);
+                bool wanted = awaited && reply.id == awaited;
+                if (wanted) {
+                    answer = reply;
+                    awaited = 0;
+                }
+                portEXIT_CRITICAL(&lock);
+                if (wanted) xSemaphoreGive(answered);
+            }
             CameraPacket packet;
             while (true) {
                 uint32_t skipped = parser.skipped, corrupt = parser.corrupt;
@@ -132,7 +154,9 @@ static void receive_task(void *arg) {
 void camera_start(void) {
     uart_config_t link = {.baud_rate = BAUD, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE,
                           .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT};
-    // A 2 KB receive buffer is a dozen packets; the transmit side (GPIO27, to the camera) is unused for now.
+    // A 2 KB receive buffer is a dozen packets; the transmit side (GPIO27, to the camera) carries update requests, written straight to the FIFO by the caller.
+    answered = xSemaphoreCreateBinary();
+    if (!answered) abort();
     ESP_ERROR_CHECK(uart_driver_install(PORT, 2048, 0, 16, &events, 0));
     ESP_ERROR_CHECK(uart_param_config(PORT, &link));
     // The driver empties the 128-byte hardware FIFO when it holds 120 bytes, which at 2 Mbaud leaves 8 bytes (40 us) for the interrupt to run before bytes are lost; the camera's packets overflowed it on 10-40% of frames (2026-10-26). At 32 bytes the interrupt has 96 bytes (480 us) of slack, for a few more interrupts per packet.
@@ -193,4 +217,38 @@ void camera_stats(CameraStats *stats_out) {
     int rx_edges = 0;
     pcnt_unit_get_count(rx_counter, &rx_edges);
     stats_out->rx_edges = rx_edges;
+}
+
+const char *camera_update(uint8_t op, const uint8_t *body, size_t length, uint32_t timeout_ms, char *text, size_t size) {
+    static uint8_t frame[sizeof(CameraUpdateRequest) + CAMERA_UPDATE_BODY + 2];
+    static uint32_t next_id;
+    static char failure[64];
+    if (length > CAMERA_UPDATE_BODY) return "Camera request too long";
+    if (!next_id) next_id = esp_random() | 1;
+    CameraUpdateRequest header = {.magic = {'C', 'U', 'P', '1'}, .id = next_id++, .op = op, .length = length};
+    if (!header.id) header.id = next_id++;
+    memcpy(frame, &header, sizeof(header));
+    memcpy(frame + sizeof(header), body, length);
+    size_t total = sizeof(header) + length;
+    uint16_t crc = camera_crc16(frame, total);
+    frame[total++] = crc & 0xff;
+    frame[total++] = crc >> 8;
+    xSemaphoreTake(answered, 0);
+    portENTER_CRITICAL(&lock);
+    awaited = header.id;
+    portEXIT_CRITICAL(&lock);
+    uart_write_bytes(PORT, frame, total);
+    bool done = xSemaphoreTake(answered, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+    portENTER_CRITICAL(&lock);
+    awaited = 0;
+    CameraUpdateReply reply = answer;
+    portEXIT_CRITICAL(&lock);
+    if (!done) return "The camera did not answer";
+    size_t shown = reply.length < sizeof(reply.text) ? reply.length : sizeof(reply.text);
+    if (reply.status) {
+        snprintf(failure, sizeof(failure), "Camera: %.*s", (int)shown, reply.text);
+        return failure;
+    }
+    snprintf(text, size, "%.*s", (int)shown, reply.text);
+    return NULL;
 }

@@ -95,4 +95,50 @@ static inline bool camera_sync(uint32_t now_us, uint32_t edges, uint32_t edge_us
     return true;
 }
 
+// Camera firmware updates through this link (fw/esp32cam/src/update.h): a request is this header, the body and a CRC-16 over both; the camera answers each with one CameraUpdateReply.
+typedef struct __attribute__((packed)) {
+    char magic[4];
+    uint32_t id;
+    uint8_t op, reserved;
+    uint16_t length;
+} CameraUpdateRequest;
+_Static_assert(sizeof(CameraUpdateRequest) == 12, "CUP1 layout");
+
+typedef struct __attribute__((packed)) {
+    char magic[4];
+    uint32_t id;
+    uint8_t status, length;
+    char text[52];
+    uint16_t checksum;
+} CameraUpdateReply;
+_Static_assert(sizeof(CameraUpdateReply) == 64, "CUR1 layout");
+
+typedef struct {
+    uint8_t bytes[sizeof(CameraUpdateReply)];
+    size_t have;
+} CameraReplyParser;
+
+// Consumes input byte by byte until a reply with the magic and a matching CRC is complete: copies it to reply and returns true, leaving the rest of the input for the next call.
+static inline bool camera_reply_parse(CameraReplyParser *parser, const uint8_t **data, size_t *length, CameraUpdateReply *reply) {
+    while (*length) {
+        uint8_t b = **data;
+        (*data)++;
+        (*length)--;
+        if (parser->have < 4) {
+            if (b == (uint8_t)"CUR1"[parser->have]) parser->bytes[parser->have++] = b;
+            else parser->have = b == 'C' ? (parser->bytes[0] = b, 1) : 0;
+            continue;
+        }
+        parser->bytes[parser->have++] = b;
+        if (parser->have < sizeof(CameraUpdateReply)) continue;
+        parser->have = 0;
+        if (camera_crc16(parser->bytes, offsetof(CameraUpdateReply, checksum)) ==
+            (uint16_t)(parser->bytes[sizeof(CameraUpdateReply) - 2] | parser->bytes[sizeof(CameraUpdateReply) - 1] << 8)) {
+            memcpy(reply, parser->bytes, sizeof(CameraUpdateReply));
+            return true;
+        }
+    }
+    return false;
+}
+
 #endif
