@@ -9,17 +9,15 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.fit_actuator import paths, servo, window
+from sw.fit_actuator import DEG, DT, paths, servo, window
 from sw.flight_log import read_flight
 
-DEG = np.pi / 180
 G = 9.81
-DT = 0.01
 # Servo command to physical tilt (sw/sim/sweep.py FITTED): dead time in samples, lag (s), slew (°/s).
 SERVO = (7, 0.01, 340)
 
 
-def load(path, servo_model=SERVO):
+def load(path):
     """
     One airborne span: calibrated specific force (g, body forward/left/up), the thrust vector's forward part per unit of its upward part, attitude, body rates and the camera-sighting flag.
     """
@@ -37,7 +35,7 @@ def load(path, servo_model=SERVO):
     fy = force[:, 1] * np.cos(zero_roll) - force[:, 2] * np.sin(zero_roll)
     fz = force[:, 1] * np.sin(zero_roll) + force[:, 2] * np.cos(zero_roll)
     force = np.column_stack([force[:, 0] * np.cos(zero_pitch) + fz * np.sin(zero_pitch), fy, -force[:, 0] * np.sin(zero_pitch) + fz * np.cos(zero_pitch)])
-    delay, tau, slew = servo_model
+    delay, tau, slew = SERVO
     tilt = np.column_stack([servo(flight["command"][:, side], delay, tau, slew, 0.0) for side in range(2)]) * DEG
     thrust = flight["thrust"]
     vector = (thrust * np.sin(tilt)).sum(1) / np.maximum((thrust * np.cos(tilt)).sum(1), 1e-3)
@@ -69,8 +67,6 @@ def dead_reckon(flight, low, high):
 
 
 def smooth(values, samples):
-    if samples <= 1:
-        return values
     kernel = np.ones(samples) / samples
     return np.apply_along_axis(lambda column: np.convolve(column, kernel, mode="same"), 0, values)
 
@@ -82,17 +78,13 @@ def detrend(block):
     return block - basis @ coefficients
 
 
-def windows(flight, length, step, margin=20):
-    low, high = flight["lift"] + margin, flight["end"] - 5
-    return [(start, start + length) for start in range(low, high - length + 1, step)]
-
-
-def blocks(flight, length=200, step=100, samples=20, trim=15):
+def blocks(flight, length, step, samples, trim):
     """
     Per window, detrended and smoothed alike: forward and left specific force (m/s²), dead-reckoned velocity forward and left, the thrust vector's forward specific force, pitch and roll angular acceleration.
     """
     out = []
-    for low, high in windows(flight, length, step):
+    for low in range(flight["lift"] + 20, flight["end"] - 5 - length + 1, step):
+        high = low + length
         velocity = dead_reckon(flight, low, high)
         force = G * flight["force"][low:high]
         vector = force[:, 2] * flight["vector"][low:high]
@@ -130,17 +122,17 @@ def steady(flight):
     return force[:, 0].mean(), (force[:, 2] * flight["vector"][span]).mean(), flight["pitch"][span].mean() / DEG, np.degrees(np.arctan(flight["vector"][span])).mean()
 
 
-def drag_velocity(flight, k, offset, gain=1.0):
+def drag_velocity(flight, k, offset):
     """
     The drag-model velocity (m/s; forward, left in body axes) every sample: forward specific force less the thrust vector's part and the steady offset (g).
     """
     force = flight["force"]
-    return np.column_stack([-G * (force[:, 0] - gain * force[:, 2] * flight["vector"] - offset) / k, -G * force[:, 1] / k])
+    return np.column_stack([-G * (force[:, 0] - force[:, 2] * flight["vector"] - offset) / k, -G * force[:, 1] / k])
 
 
-def camera_velocity(path, flight, cam_pitch, smoothing=0.3):
+def camera_velocity(path, flight, cam_pitch):
     """
-    Ground truth from the camera's black box (fw/esp32cam/blackbox.py --fetch): each trusted sighting's tag centre (camera frame) levelled by the logged attitude at its capture, differenced into the drone's velocity in body heading axes and smoothed over smoothing seconds. The CAM clock is matched to the drone's by the shift (±5 s) that best lines the sightings up with the log's tag-seen flag. Returns (sample index, forward, left) rows.
+    Ground truth from the camera's black box (fw/esp32cam/blackbox.py --fetch): each trusted sighting's tag centre (camera frame) levelled by the logged attitude at its capture, differenced into the drone's velocity in body heading axes and smoothed over 0.3 s. The CAM clock is matched to the drone's by the shift (±5 s) that best lines the sightings up with the log's tag-seen flag. Returns (sample index, forward, left) rows.
     """
     import sys
 
@@ -172,7 +164,7 @@ def camera_velocity(path, flight, cam_pitch, smoothing=0.3):
     turn = heading[index]
     world = np.column_stack([np.cos(turn) * level[:, 0] - np.sin(turn) * level[:, 1], np.sin(turn) * level[:, 0] + np.cos(turn) * level[:, 1]])
     rows = []
-    span = smoothing * 1e6
+    span = 0.3e6
     for i, t in enumerate(capture):
         near = np.flatnonzero(np.abs(capture - t) <= span / 2)
         if len(near) < 4:

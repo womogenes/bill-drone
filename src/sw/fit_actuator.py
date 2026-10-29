@@ -10,11 +10,10 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.fit import acceleration, settings
+from sw.fit import DEG, acceleration, settings
 from sw.flight_log import read_flight
 from sw.sim.flight import thrust_table
 
-DEG = np.pi / 180
 DT = 0.01
 # Pitch-rate change over this many samples is the second score: less noisy than a differentiated gyro.
 HORIZON = 10

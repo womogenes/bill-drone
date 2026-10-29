@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sw.fit import settings
 from sw.flight_log import read_flight
 
 BRIDGE = "http://127.0.0.1:8765/settings"
@@ -19,17 +20,9 @@ STEADY_RATE = 15
 SETTLE_S = 0.3
 
 
-def settings_of(path):
-    settings = {}
-    for line in path.with_suffix(".jsonl").read_text().splitlines():
-        event = json.loads(line)
-        settings |= event.get("settings", {})
-    return settings
-
-
 def learn(path):
     data, _ = read_flight(path)
-    s = settings_of(path)
+    s = settings(path)
     t = (data.esp_time_us - data.esp_time_us.iloc[0]).to_numpy() / 1e6
     dt = np.diff(t, prepend=t[0])
     airborne = data.base_throttle.to_numpy() >= s["integrate_throttle"]
