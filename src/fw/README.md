@@ -1,6 +1,6 @@
 # Firmware
 
-The gist behind this is that the MCU executes Python instead of machine instructions so we can iterate on firmware much faster.
+The ESP32 runs one ESP-IDF C application in `drone/`: control loop, IMU, radio link, settings, recording, load cell and battery ADC.
 
 [note to agents: do not modify this file. if you want to modify, ask user]
 
@@ -16,6 +16,7 @@ The gist behind this is that the MCU executes Python instead of machine instruct
 **Sensors**
 
 - ADC: GPIO35 (6th from top left)
+- Load cell (HX711): DT GPIO32, SCK GPIO33
 - IMU:
   - SDA: GPIO19
   - SCL: GPIO22
@@ -29,79 +30,22 @@ The gist behind this is that the MCU executes Python instead of machine instruct
 - MISO: GPIO34 (GPIO12 on CAM)
 - CS: GPIO23 (GPIO15 on CAM)
 - READY: GPIO4 (GPIO2 on CAM)
+- VCC: 6V
+- GND: GND
 
-## Protocol
+## Updates
 
-## MicroPython
-
-To install MicroPython:
-
-```sh
-# Run this from src/
-uv tool install mpremote
-mpremote --help
-
-# Install micropython
-# Assumes /dev/ttyUSB0 is the ESP32's port
-uvx --from esptool esptool chip-id
-uvx --from esptool esptool --port /dev/ttyUSB0 erase-flash
-
-# Download firmware (v1.29, from Aug 2026)
-wget -P bin/ https://micropython.org/resources/firmware/ESP32_GENERIC-20260824-v1.29.0.bin
-uvx --from esptool esptool --port /dev/ttyUSB0 --baud 460800 write-flash 0x1000 bin/ESP32_GENERIC-20260824-v1.29.0.bin
-
-# Install deps
-# lib/ should be copied manually per below
-mpremote mip install requests
-
-# Connect:
-uvx mpremote repl
-```
-
-## Dependencies
-
-Microdot is a small web framework. We take it from
-https://github.com/miguelgrinberg/microdot/tree/7742db9ff9f49635de3387145fafe56bf2377a97/src/microdot
-and store its original sources in `src/lib/microdot/`. The firmware's `lib/microdot/` contains precompiled `.mpy` files for HTTP and WebSocket support.
-Compiling the sources on the ESP32 exhausts its native networking heap (`OSError: -203`), so compile them on the laptop instead.
-
-To rebuild with the MicroPython 1.29 compiler, run from `src/`:
-
-```sh
-for file in lib/microdot/*.py; do
-    uvx --from mpy-cross==1.29.0.post2 mpy-cross "$file" -o "lib/microdot/$(basename "${file%.py}").mpy"
-done
-```
-
-When replacing an existing source installation, remove these once; `.py` files
-take precedence over `.mpy` files (already done on our ESP32):
-
-```sh
-mpremote fs rm :/lib/microdot/__init__.py :/lib/microdot/microdot.py :/lib/microdot/websocket.py :/lib/microdot/helpers.py
-```
-
-If the board has the old standalone `/lib/microdot.py`, remove it once:
-
-```sh
-mpremote fs rm :/lib/microdot.py
-```
-
-## Code structure
+Run the [laptop service](controller/HOST.md), then build and update through the controller radio:
 
 ```sh
 cd src/fw
-
-# Update libs (one-time)
-mpremote fs cp -r lib : + reset repl
-
-# Upload stuff + reset
-mpremote fs cp -r config.py main.py drivers : + reset repl
+make deploy
 ```
 
-This copies `main.py` and `drivers/` to `:` (remote) and resets the processor.
-
-To run without resetting, run
+Over USB, stop any program using the drone's serial port and select that port explicitly:
 
 ```sh
-mpremote resume mount . run test.py repl
+make usb PORT=/dev/ttyUSB1
 ```
+
+USB device names can change; identify the drone before flashing. Updates preserve NVS, which holds tuning, servo offsets and IMU calibration. Skip backups and whole-image verification. See the [repository README](../../README.md) for the protocol and build details.
