@@ -1,7 +1,7 @@
 """
-Calibrate the hover sim to the real camera hovers' closed-loop behaviour: uv run --with scipy --with cma -m sw.sim.calibrate_sim [--generations 30] [--workers 90]
+Calibrate the hover sim to the real camera hovers' closed-loop behaviour: uv run --with scipy --with cma -m sw.sim.calibrate_sim [--generations 30] [--workers 90] [--hovers name,...] [--flights glob,...] [--airframe models/airframe_<day>.json] [--disturbances models/disturbances_<day>.json] [--hold name,...] [--rotor-drag forward,left] [--report]
 
-identify_airframe fits the airframe to short-horizon prediction, which the attitude controller's feedback dominates: it pins the plant above about 2 Hz but barely constrains its low-frequency gain, while fit_disturbances only sizes the torque residual's drift. Flown in closed loop, the sim then wobbles at the wrong frequency (0.7 Hz in pitch against the real 0.9-1 Hz). This CMA-ES search sets what both leave loose so that the sim flying each camera hover's settings (sweep.run with hover=True) matches the hover's statistics: the pitch and roll attitude spectra in three bands (0.3-0.8, 0.8-1.5, 1.5-3 Hz) and their rates below 5 Hz, the range error and sideways RMS (from the hover's own position estimate on both sides) and how fast they fade. Searched: scales on the tilt's pitch torque (through wash_z, so its lagged share pitch_wake scales with it), on the lagged share and its lag, on the roll authority (differential_slope), on the attitude terms (roll_pendulum, pitch_pendulum), and on the calibrated disturbances (roll and pitch torque drift size and correlation time, forward force drift size, sideways force drift size and correlation time). The prediction error on the logs (identify_airframe's closed-loop free runs at 250 ms, 500 ms and 1 s, all flights) is kept within reach by a penalty on its growth. Writes the scaled airframe and disturbances next to the sources (--out-airframe, --out-disturbances).
+identify_airframe fits the airframe to short-horizon prediction, which the attitude controller's feedback dominates: it pins the plant above about 2 Hz but barely constrains its low-frequency gain, while fit_disturbances only sizes the torque residual's drift. Flown in closed loop, the sim then wobbles at the wrong frequency (0.7 Hz in pitch against the real 0.9-1 Hz). This CMA-ES search sets what both leave loose so that the sim flying each camera hover's settings (sweep.run with hover=True) matches the hover's statistics: the pitch and roll attitude spectra in three bands (0.3-0.8, 0.8-1.5, 1.5-3 Hz) and their rates below 5 Hz, the range error and sideways RMS (from the hover's own position estimate on both sides) and how fast they fade. Searched: scales on the tilt's pitch torque (through wash_z, so its lagged share pitch_wake scales with it), on the lagged share and its lag, on the roll authority (differential_slope), on the attitude terms (roll_pendulum, pitch_pendulum), on the sideways speed's roll moment (drag_z_y's height above the CoM: the prediction fit leaves it loose, but it damps the hover loop's sideways swing), and on the calibrated disturbances (roll and pitch torque drift size and correlation time, forward force drift size, sideways force drift size and correlation time). The prediction error on the logs (identify_airframe's closed-loop free runs at 250 ms, 500 ms and 1 s, all flights) is kept within reach by a penalty on its growth. Writes the scaled airframe and disturbances next to the sources (--out-airframe, --out-disturbances). Sim runs whose IMU height hold lets the drone down onto the floor (sweep.run's "touched") are left out of the statistics, as no real camera hover did that. --report prints each hover's real and simulated statistics for the starting plant and stops, for scoring held-out hovers. --hold keeps the named scales at their start (from 2026-10-29b the roll authority and pendulums, which the PRBS flights measure), and --rotor-drag sets the plant's rotor drag (from 2026-10-29b the camera's measurement).
 """
 
 import argparse
@@ -23,16 +23,18 @@ from sw.sim.sweep import IDENTIFIED_ESC, run
 
 MODELS = Path(__file__).with_name("models")
 RECORDINGS = Path(__file__).parents[1] / "recordings"
-# The camera hovers (tracking the tag for 45 s) and every hover after the ESC recalibration (for the prediction penalty).
-HOVERS = ("2026-10-28T06-59-38-797Z_3919631855", "2026-10-28T07-00-59-352Z_1068518903")
-FLIGHTS = ("2026-10-28T06-54-20-503Z_1581871433", "2026-10-28T06-55-20-397Z_757306949") + HOVERS
+# The camera hovers matched (2026-10-29, after the CoM change: 36-67 s each; 05-56-43, 06-00-33 and 06-13-21 were held out) and the flights for the prediction penalty (those, the short 05-54-54 hover and the PRBS flight 06-17-44). The 2026-10-28 calibration used the morning's 06-59-38 and 07-00-59 hovers and the four hovers after the ESC recalibration.
+HOVERS = ("2026-10-29T05-55-35-441Z_1522028275", "2026-10-29T05-58-40-313Z_2406333111", "2026-10-29T06-04-21-326Z_1382946699")
+FLIGHTS = ("2026-10-29T05-54-54-978Z_2331147759", "2026-10-29T06-17-44-121Z_969844149") + HOVERS
+# The plant the scales apply to (--airframe, --disturbances replace its airframe and disturbances).
+BASE = IDENTIFIED_ESC
 FS = 100.0
 SETTLE, LANDING = 4.0, 4.0
 BANDS = ((0.3, 0.8), (0.8, 1.5), (1.5, 3.0))
 SEEDS = 6
 # Searched: name, low, high, start (log-scaled; the lag and correlation times start at the current plant's, see starting).
 SPACE = (("pitch_gain", 0.6, 1.8, 1.0), ("wake_gain", 0.3, 3.0, 1.0), ("wake_tau", 0.2, 2.0, 1.0), ("roll_gain", 0.6, 2.5, 1.0), ("roll_pendulum_gain", 0.2, 3.0, 1.0), ("pitch_pendulum_gain", 0.2, 3.0, 1.0),
-         ("pitch_drift", 0.3, 3.0, 1.0), ("roll_drift", 0.3, 3.0, 1.0), ("pitch_tau", 0.05, 1.5, 0.1), ("roll_tau", 0.05, 1.5, 0.1), ("force_drift", 0.3, 3.0, 1.0), ("side_drift", 0.3, 5.0, 1.0), ("side_tau", 0.2, 10.0, 0.47))
+         ("pitch_drift", 0.3, 3.0, 1.0), ("roll_drift", 0.3, 3.0, 1.0), ("pitch_tau", 0.05, 1.5, 0.1), ("roll_tau", 0.05, 1.5, 0.1), ("force_drift", 0.3, 3.0, 1.0), ("side_drift", 0.3, 5.0, 1.0), ("side_tau", 0.2, 10.0, 0.47), ("side_moment_gain", 0.2, 4.0, 1.0))
 HORIZONS = (25, 50, 100)
 PENALTY = 4.0
 
@@ -75,24 +77,26 @@ def real(name):
 
 def starting():
     """The point of SPACE that leaves the current plant as it is: unit scales, and its own lag and drift correlation times."""
-    taus = {t["channel"]: t["tau"] for t in IDENTIFIED_ESC["disturbances"] if t["kind"] == "drift"}
-    current = {"wake_tau": A.complete(IDENTIFIED_ESC["airframe"])["wake_tau"], "pitch_tau": taus["pitch"], "roll_tau": taus["roll"], "side_tau": taus["left"]}
+    taus = {t["channel"]: t["tau"] for t in BASE["disturbances"] if t["kind"] == "drift"}
+    current = {"wake_tau": A.complete(BASE["airframe"])["wake_tau"], "pitch_tau": taus["pitch"], "roll_tau": taus["roll"], "side_tau": taus["left"]}
     return np.array([np.clip(current.get(s[0], s[3]), s[1], s[2]) for s in SPACE])
 
 
 def plant(x):
     """The sim plant for a point of SPACE."""
     v = dict(zip([s[0] for s in SPACE], x))
-    airframe = IDENTIFIED_ESC["airframe"]
+    airframe = BASE["airframe"]
     geometry = A.geometry_of(airframe)
     p = A.complete(airframe)
     # The tilt's pitch torque arm is dz - wash (wash_z - CoM height): scaling it moves wash_z.
     cz = geometry["com"][2]
     arm = A.resolve(p, geometry)["tilt_arm"] * v["pitch_gain"]
     airframe = airframe | {"wash_z": cz + (geometry["pivot_z"] - cz - arm) / p["wash"], "pitch_wake": p["pitch_wake"] * v["wake_gain"], "wake_tau": v["wake_tau"], "differential_slope": p["differential_slope"] * v["roll_gain"],
-                           "roll_pendulum": p["roll_pendulum"] * v["roll_pendulum_gain"], "pitch_pendulum": p["pitch_pendulum"] * v["pitch_pendulum_gain"]}
+                           "roll_pendulum": p["roll_pendulum"] * v["roll_pendulum_gain"], "pitch_pendulum": p["pitch_pendulum"] * v["pitch_pendulum_gain"],
+                           # The sideways speed's roll moment: its effective height above the CoM, scaled.
+                           "drag_z_y": cz + (p["drag_z_y"] - cz) * v["side_moment_gain"]}
     terms = []
-    for t in IDENTIFIED_ESC["disturbances"]:
+    for t in BASE["disturbances"]:
         t = dict(t)
         if t["kind"] == "drift":
             if t["channel"] in ("pitch", "roll"):
@@ -104,7 +108,7 @@ def plant(x):
                 t["sd"] *= v["side_drift"]
                 t["tau"] = v["side_tau"]
         terms.append(t)
-    return IDENTIFIED_ESC | {"airframe": airframe, "disturbances": terms}
+    return BASE | {"airframe": airframe, "disturbances": terms}
 
 
 def fly(job):
@@ -114,7 +118,7 @@ def fly(job):
     log = []
     p = plant(x)
     result = run(s, p, seconds=seconds, seed=seed, log=log, hover=True)
-    if not result["stable"]:
+    if not result["stable"] or result.get("touched") is not None:
         return None
     t = np.array([e[0] for e in log]) - result["liftoff_s"]
     keep = t > SETTLE
@@ -178,20 +182,51 @@ def main():
     parser.add_argument("--seconds", type=float, default=60.0)
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--start", default="", help="name=value,... to start the search from")
-    parser.add_argument("--out-airframe", type=Path, default=MODELS / "airframe_2026-10-28.json")
-    parser.add_argument("--out-disturbances", type=Path, default=MODELS / "disturbances_2026-10-28_calibrated.json")
+    parser.add_argument("--hovers", help="camera hovers to match, recording names without .bin (default: HOVERS)")
+    parser.add_argument("--flights", help="recording names or globs for the prediction penalty (default: FLIGHTS)")
+    parser.add_argument("--airframe", type=Path, help="the airframe to scale (default: sweep.IDENTIFIED_ESC's)")
+    parser.add_argument("--disturbances", type=Path, help="the disturbances to scale (default: sweep.IDENTIFIED_ESC's)")
+    parser.add_argument("--report", action="store_true", help="print each hover's real and simulated statistics at the start and stop")
+    parser.add_argument("--hold", default="", help="SPACE names held at their start instead of searched (e.g. roll_gain, when the roll authority is measured)")
+    parser.add_argument("--rotor-drag", help="forward,left rotor drag (1/s) for the plant (default: sweep.IDENTIFIED_ESC's)")
+    parser.add_argument("--out-airframe", type=Path, default=MODELS / "airframe_2026-10-29_calibrated.json")
+    parser.add_argument("--out-disturbances", type=Path, default=MODELS / "disturbances_2026-10-29_calibrated.json")
     args = parser.parse_args()
+    global HOVERS, FLIGHTS, BASE
+    if args.hovers:
+        HOVERS = tuple(args.hovers.split(","))
+    if args.flights:
+        FLIGHTS = tuple(path.stem for path in N.paths([str(RECORDINGS / item) if "/" not in item else item for item in args.flights.split(",")]))
+    if args.airframe:
+        BASE = BASE | {"airframe": json.loads(args.airframe.read_text())}
+    if args.disturbances:
+        BASE = BASE | {"disturbances": json.loads(args.disturbances.read_text())}
+    if args.rotor_drag:
+        BASE = BASE | {"rotor_drag": tuple(float(v) for v in args.rotor_drag.split(","))}
     import cma
     target = [real(name) for name in HOVERS]
     names = ["pitch 0.3-0.8", "0.8-1.5", "1.5-3", "rate", "roll 0.3-0.8", "0.8-1.5", "1.5-3", "rate", "range", "side", "range fade", "side fade"]
     print("real   " + "  ".join(f"{n} {v:.2f}" for n, v in zip(names, np.mean(target, 0))), flush=True)
     given = dict((k, float(v)) for k, v in (item.split("=") for item in args.start.split(",") if item))
     start = np.array([given.get(s[0], v) for s, v in zip(SPACE, starting())])
-    low, high = np.array([s[1] for s in SPACE]), np.array([s[2] for s in SPACE])
-    to_x = lambda u: np.exp(np.log(low) + (np.log(high) - np.log(low)) * np.clip(u, 0, 1))
-    to_u = lambda x: (np.log(x) - np.log(low)) / (np.log(high) - np.log(low))
+    # The searched dimensions (the rest stay at the start), log-scaled to the unit cube.
+    held = [name for name in args.hold.split(",") if name]
+    searched = np.array([s[0] not in held for s in SPACE])
+    low, high = np.array([s[1] for s in SPACE])[searched], np.array([s[2] for s in SPACE])[searched]
+    to_x = lambda u: np.where(searched, 0.0, start) + np.where(searched, 1.0, 0.0) * np.insert(np.exp(np.log(low) + (np.log(high) - np.log(low)) * np.clip(u, 0, 1)), np.flatnonzero(~searched) - np.arange(np.count_nonzero(~searched)), 0.0)
+    to_u = lambda x: (np.log(x[searched]) - np.log(low)) / (np.log(high) - np.log(low))
     with Pool(args.workers) as pool:
         base_error = prediction(starting())
+        if args.report:
+            flown = pool.map(fly, [(start, name, seed, args.seconds) for name in HOVERS for seed in range(SEEDS)])
+            for k, (name, real_stats) in enumerate(zip(HOVERS, target)):
+                runs = [r for r in flown[k * SEEDS:(k + 1) * SEEDS] if r is not None]
+                print(f"{name[:19]} real " + "  ".join(f"{v:.2f}" for v in real_stats), flush=True)
+                if runs:
+                    sim_stats = np.median(runs, 0)
+                    print(f"{name[:19]} sim  " + "  ".join(f"{v:.2f}" for v in sim_stats) + f"  ({len(runs)} of {SEEDS} runs; mismatch {np.sqrt(np.mean(np.log(sim_stats / real_stats) ** 2)):.3f})", flush=True)
+            print("prediction error roll/pitch (°) " + "  ".join(f"{h * 10} ms {e[0]:.2f}/{e[1]:.2f}" for h, e in zip(HORIZONS, base_error)), flush=True)
+            return
         costs, details = evaluate(pool, [start], target, base_error, args.seconds)
         print(f"start: cost {costs[0]:.3f}, mismatch {details[0][0]:.3f} | " + "  ".join(f"{n} {v:.2f}" for n, v in zip(names, details[0][3])), flush=True)
         best = (costs[0], start, details[0])
@@ -209,7 +244,7 @@ def main():
     print("best   " + "  ".join(f"{n} {v:.2f}" for n, v in zip(names, stats)), flush=True)
     print("prediction error roll/pitch (°) " + "  ".join(f"{h * 10} ms {e[0]:.2f}/{e[1]:.2f} (was {b[0]:.2f}/{b[1]:.2f})" for h, e, b in zip(HORIZONS, errors, base_error)), flush=True)
     calibrated = plant(x)
-    args.out_airframe.write_text(json.dumps({key: round(value, 6) if isinstance(value, float) else value for key, value in calibrated["airframe"].items()} | {"calibrated": {s[0]: round(float(v), 4) for s, v in zip(SPACE, x)}}, indent=1) + "\n")
+    args.out_airframe.write_text(json.dumps({key: round(value, 6) if isinstance(value, float) else value for key, value in calibrated["airframe"].items() if key != "folds"} | {"calibrated": {s[0]: round(float(v), 4) for s, v in zip(SPACE, x)}} | ({"rotor_drag": list(BASE["rotor_drag"])} if args.rotor_drag else {}), indent=1) + "\n")
     args.out_disturbances.write_text(json.dumps([{key: round(value, 3) if isinstance(value, float) else value for key, value in t.items()} for t in calibrated["disturbances"]], indent=1) + "\n")
     print(f"saved {args.out_airframe} and {args.out_disturbances}: " + ", ".join(f"{s[0]} {v:.3g}" for s, v in zip(SPACE, x)), flush=True)
 

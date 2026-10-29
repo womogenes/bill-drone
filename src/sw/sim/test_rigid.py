@@ -1,5 +1,5 @@
 """
-Parity of sw/sim/rigid.py's C backend (sw/sim/rigid_step.c) with the numpy reference, and their speed: uv run python -m sw.sim.test_rigid [--ticks 300] [--bench]
+Parity of sw/sim/rigid.py's C backend (sw/sim/rigid_step.c) with the numpy reference, and their speed: uv run python -m sw.sim.test_rigid [--ticks 300] [--airframe models/airframe_<day>.json] [--bench]
 
 Both backends start from identical random states (any orientation, fast rates and speeds, heights from below the floor to well above it, actuators mid-motion), take the same random commands and randomized plant scales, with the disturbances off and on (the same random stream), and must agree to TOLERANCE relative to each quantity's size. The two differ only by rounding (summation order, libm against numpy's sin and cos), but the ground contact is chaotic (stiff friction, thresholds), so those 1e-16 differences grow to O(1) within about 100 ticks of tumbling on the floor. So the test checks: the whole run with the C sim resynchronised to the numpy state before every tick (every tick's map, over all states visited), a free run of FREE ticks from the start, and a free run of the whole length well above the floor.
 """
@@ -14,19 +14,23 @@ from sw.sim import rigid as R
 TOLERANCE = 1e-9
 FREE = 20
 STATE = ("pos", "vel", "quat", "omega", "accel", "contact", "contact_now", "touched", "throttles", "commands")
-ACTUATORS = ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel")
+ACTUATORS = ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel", "spin")
+# The airframe the plant uses (default rigid.load_plant's).
+AIRFRAME = None
 FIELDS = ("pos", "vel", "quat", "omega", "accel", "contact", "contact_now", "motor", "horn", "hvel", "tilt", "tvel", "rate", "att", "vel_body", "gyro", "sensed_accel")
 
 
 def start(n, seed, disturbances, backend, height=(-0.05, 0.8)):
     rng = np.random.default_rng(seed)
     scale = {key: rng.uniform(0.7, 1.3, n) for key in ("pitch_tilt", "roll_thrust", "inertia", "drag", "disturbance")}
-    plant = R.load_plant() if disturbances else R.load_plant(disturbances=None)
+    chosen = {"airframe": AIRFRAME} if AIRFRAME else {}
+    plant = R.load_plant(**chosen) if disturbances else R.load_plant(**chosen, disturbances=None)
     sim = R.Sim(n, plant=plant, seed=seed + 1, scale=scale, backend=backend)
     position = np.column_stack([rng.normal(0, 1, (n, 2)), rng.uniform(*height, n)])
     velocity = rng.normal(0, 2, (n, 3))
     omega = rng.normal(0, 6, (n, 3))
     motor = rng.uniform(0, 5, (n, 2)) * (rng.random((n, 1)) < 0.8)
+    # A fifth start stopped, so the random throttles also start motors from standstill (motor_start).
     tilt = rng.uniform(-0.8, 0.8, (n, 2))
     obs = sim.reset(position, velocity, R.random_quat(rng, n), omega, motor=motor, tilt=tilt)
     # Actuators mid-motion rather than steady.
@@ -102,7 +106,10 @@ def main():
     parser.add_argument("--ticks", type=int, default=300)
     parser.add_argument("--n", type=int, default=256)
     parser.add_argument("--bench", action="store_true", help="also measure env-steps per second")
+    parser.add_argument("--airframe", help="an airframe file in sw/sim/models (default: rigid.load_plant's)")
     args = parser.parse_args()
+    global AIRFRAME
+    AIRFRAME = args.airframe and args.airframe.split("/")[-1]
     for disturbances in (False, True):
         for case in ({"free": FREE}, {"free": FREE, "synced": False, "ticks": FREE}, {"synced": False, "height": (40.0, 60.0)}):
             case = {"ticks": args.ticks} | case

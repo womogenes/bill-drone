@@ -94,10 +94,11 @@ def sighting(camera, position, angles, cam_pitch, rng, cam_roll=0.0):
 
 def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     """
-    Simulate one flight. A log list receives (time, position, roll/pitch/yaw, estimated roll/pitch, servo tilts, motor thrusts, pitch target, tag seen, and with hover the hover's own tag-relative position estimate, arc and range setpoint as the drone logs them) every control step.
+    Simulate one flight. A log list receives (time, position, roll/pitch/yaw, estimated roll/pitch, servo tilts, motor thrusts, pitch target, tag seen, with hover the hover's own tag-relative position estimate, arc and range setpoint as the drone logs them, the roll target, and the test pattern's part of it) every control step.
     With hover and plant["land_at"], the hover loop is switched to its landing (HOVER_LAND, or HOVER_LAND_FAST with plant["land_fast"]) that many seconds after liftoff, as the dashboard's L does; the result then also holds when it came down and how.
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py, at the geometry they name), sw/sim/airframe.py supplies the motors, servos and angular accelerations and the body's inertia instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
+    With hover and plant["excite"] (a test pattern as a recording's "pattern" event, sw/excite.py: {"after", "repeat", "segments"}), its roll and pitch steps add to the hover's attitude targets from "after" seconds past collective first reaching integrate_throttle, "repeat" times (0 = until the end), as flight_rt.c excite does; its other channels are ignored.
     IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "vibration" (g RMS, white; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white and periodic (sw/sim/disturbance.py).
     """
     rng = random.Random(seed)
@@ -187,6 +188,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         inertia = [airframe.geometry[key] for key in ("roll_inertia", "pitch_inertia", "yaw_inertia")]
         airframe.reset(0 if liftoff else hover_throttle)
         motor = list(airframe.motor)
+        # Models with tilt_push carry the share of the tilted thrust's horizontal force that moves the drone (the rest its slipstream cancels on the airframe); older ones move it with all of it.
+        tilt_share = airframe.p["tilt_push"] if "tilt_push" in plant["airframe"] else 1.0
+    else:
+        tilt_share = 1.0
     ideal_height, nudge, camera_lost, land_at, land_fast = plant.get("ideal_height"), plant.get("nudge"), plant.get("camera_lost"), plant.get("land_at"), plant.get("land_fast")
     gyro_noise, slew_rate = math.radians(plant["gyro_noise"]), math.radians(plant["servo_slew"])
     # Narrowband gyro vibration (plant["gyro_vibration"]: RMS deg/s per axis at "hz" with "bandwidth" Hz, as the 100 Hz control samples see it): a resonant AR(2) driven by white noise and scaled to that RMS. The rotors shake the pitch gyro without moving the attitude; through the D term it jitters the servos.
@@ -212,6 +217,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         # Frames waiting out their latency (ready time, capture time, sighting or None), the newest delivered one, and the next capture time.
         frames, newest, capture, sequence, missing_frames = deque(), None, 0.0, 0, 0
         seen, ranges = [], []
+    # The test pattern's roll and pitch per control tick, and the step collective first reached integrate_throttle.
+    excite = plant.get("excite") if hover else None
+    pattern = [(segment.get("roll", 0.0), segment.get("pitch", 0.0)) for segment in excite["segments"] for _ in range(segment["ticks"])] if excite else []
+    integrating, excited = None, 0.0
     for step in range(int(seconds / DT)):
         now = step * DT
         if armed and step == armed and not hover:
@@ -278,6 +287,15 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag)
                 settings["base_throttle"] = min(HOVER_THROTTLE, throttle(out.force / 2 / math.cos(trim))) if out.force > 0 else 0
                 settings["roll"], settings["pitch"], settings["yaw_rate"] = math.degrees(out.roll), math.degrees(out.pitch), math.degrees(out.yaw_rate)
+                excited = 0.0
+                if pattern:
+                    if integrating is None and settings["base_throttle"] >= settings["integrate_throttle"]:
+                        integrating = step
+                    tick = -1 if integrating is None else step - integrating - round(excite["after"] / DT)
+                    if 0 <= tick and (not excite.get("repeat", 1) or tick < len(pattern) * excite["repeat"]):
+                        excited = pattern[tick % len(pattern)][0]
+                        settings["roll"] += excited
+                        settings["pitch"] += pattern[tick % len(pattern)][1]
                 configure()
                 if out.tracking:
                     controller.state[13], controller.state[14] = out.velocity[0], out.velocity[1]
@@ -324,7 +342,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     elif servo[side] - horn > slack[side]:
                         servo[side] = horn + slack[side]
             vertical = [motor[s] * math.cos(servo[s]) for s in range(2)]
-            forward = [motor[s] * math.sin(servo[s]) for s in range(2)]
+            forward = [motor[s] * math.sin(servo[s]) * tilt_share for s in range(2)]
             if airframe:
                 # The airframe's accelerations already hold the thrust torques; the random and constant extras still add.
                 torque = [accel[0] * inertia[0] + ((roll_disturbance + roll_gust + extra_torque[0]) * inertia[0] if airborne else 0.0), accel[1] * inertia[1] + (gust + disturbance + extra_torque[1] if airborne else 0.0) * inertia[1], accel[2] * inertia[2] + (extra_torque[2] * inertia[2] if airborne else 0.0)]
@@ -370,7 +388,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 angles[2] + (q * math.sin(roll) + r * math.cos(roll)) / math.cos(pitch) * h,
             ]
         if log is not None:
-            log.append((now, list(position), list(angles), list(attitude), list(servo), list(motor), math.radians(settings["pitch"]), visible, (list(outer.state.position), outer.state.arc, outer.state.setpoint) if hover else None))
+            log.append((now, list(position), list(angles), list(attitude), list(servo), list(motor), math.radians(settings["pitch"]), visible, (list(outer.state.position), outer.state.arc, outer.state.setpoint) if hover else None, math.radians(settings["roll"]), math.radians(excited)))
         roll, pitch = angles[0], angles[1]
         angle = max(abs(roll), abs(pitch - trim))
         worst = max(worst, angle)
@@ -436,11 +454,27 @@ AIRFRAME = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-27
 AIRFRAME_ESC = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-28.json").read_text())
 IDENTIFIED = FITTED | {"airframe": AIRFRAME, "mass": 0.94, "thrust_k": 1.0, "height": 1.0, "disturbance": 0.0, "angle_moment": 0.0, "velocity_moment": 0.0, "gust": 0.49, "gust_tau": 0.5, "roll_gust": 0.89,
                        "camera": {"tag": (2.0, 0.1, 0.45), "miss": 0.006, "burst": 6}, "rotor_drag": (0.6, 0.27)}
-# The ESC-recalibrated drone as flown on 2026-10-28 (see AIRFRAME_ESC).
+# The ESC-recalibrated drone as flown on 2026-10-28 (see AIRFRAME_ESC); IDENTIFIED_ESC below is the current one.
 # Its disturbances are sw/sim/fit_disturbances.py's terms (models/disturbances_2026-10-28.json: a steady -1.09 m/s² push away from the tag, drifting forces and torques), sized so the sim's closed-loop hover statistics match the real ones; the horizontal drag is half the airframe fit's (which was fitted to the drone's own velocity estimate). Flying each hover's settings it matches range error RMS 0.21 against 0.20 m, its fading time 1.8 against 2.0 s, sideways 0.18 against 0.17 m fading in 1.9 against 1.8 s, pitch rate 22.6 against 23.4 deg/s and roll rate 9.0 against 9.7.
 # Its pitch gyro carries the rotors' vibration as the camera hovers logged it: 10 deg/s RMS in a 17-25 Hz band (roll and yaw under 1 deg/s).
-IDENTIFIED_ESC = IDENTIFIED | {"airframe": AIRFRAME_ESC, "rotor_drag": (0.58, 0.34), "gust": 0.0, "roll_gust": 0.0, "gyro_vibration": {"rms": (0.0, 10.0, 0.0), "hz": 21.0, "bandwidth": 8.0},
-                               "disturbances": json.loads((Path(__file__).with_name("models") / "disturbances_2026-10-28_calibrated.json").read_text())}
+IDENTIFIED_ESC_1028 = IDENTIFIED | {"airframe": AIRFRAME_ESC, "rotor_drag": (0.58, 0.34), "gust": 0.0, "roll_gust": 0.0, "gyro_vibration": {"rms": (0.0, 10.0, 0.0), "hz": 21.0, "bandwidth": 8.0},
+                                    "disturbances": json.loads((Path(__file__).with_name("models") / "disturbances_2026-10-28_calibrated.json").read_text())}
+# IDENTIFIED_ESC_1029, the drone as flown on the night of 2026-10-29 (05:53-06:18 UTC, after a CoM change; see models/NOTES.md): the roll terms refit on those hovers and the ±3° PRBS flight 06-17-44 (models/airframe_2026-10-29.json; pitch, servos and slipstream as on 2026-10-28), the 2026-10-28 disturbances with smaller drifts (roll ×0.35, pitch ×0.5, sideways ×0.7) and sideways rotor drag 0.2/s instead of 0.34, which together match tonight's camera hovers' statistics and the PRBS flight's growing 0.4 Hz sideways swing. Tonight's right motor may have been slipping (two thrust losses after 06:25), so its roll authority may be degraded. It gets hover_kd backwards (at 2.0 it sways where the real drone was calm): do not tune hover_kd on it.
+AIRFRAME_ESC_1029 = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-29.json").read_text())
+IDENTIFIED_ESC_1029 = IDENTIFIED_ESC_1028 | {"airframe": AIRFRAME_ESC_1029, "rotor_drag": (0.58, 0.2), "disturbances": json.loads((Path(__file__).with_name("models") / "disturbances_2026-10-29_calibrated.json").read_text())}
+# The current plant, 2026-10-29b (see models/NOTES.md): the airframe refit on every 9-inch flight after the CoM change (05:53-07:43, runaways cut, the ESC swap at 06:45 followed) with the roll actuator pinned by the PRBS flights (table authority, about 11 ms dead time and 50 ms lag) and no roll attitude spring, an ESC start-up time from standstill and the servo tilt's measured forward push; the sideways speed's roll moment (loose in the fit) at the 2026-10-29 fit's value, and the 2026-10-29 disturbances and rotor drag (recalibrating them to the hovers' statistics traded that moment against the roll drift and broke the PRBS and hover_kd checks). It flies hover_kd the right way round (calm at 2.0, the 0.4 Hz swing at 0.81 that the ±3° PRBS grows). Its liftoff kick peaks too late at pitch_bias 3.9 (0.4-0.6 s against 0.2 s).
+AIRFRAME_ESC_1029B = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-29b.json").read_text())
+# Rooms: what of the plant belongs to where the drone flies, not to the airframe: the drifting disturbances (sw/sim/disturbance.py, calibrated to that room's camera hovers), the rotor drag as calibrated there (it stands partly for the room's flow: on 2026-10-29 the camera measures almost no drag) and the camera's tag. The hover height comes with each flight's settings and the steady push with each flight (the push observer learns it). The 2026-10-28 hovers (06:54-07:01, about 0.8 m up) and the 2026-10-29 ones (about 0.45 m) were flown in different rooms.
+ROOMS = {"2026-10-28": {"disturbances": IDENTIFIED_ESC_1028["disturbances"], "rotor_drag": (0.58, 0.34), "camera": IDENTIFIED["camera"]},
+         "2026-10-29": {"disturbances": IDENTIFIED_ESC_1029["disturbances"], "rotor_drag": (0.58, 0.2), "camera": IDENTIFIED["camera"]}}
+
+
+def in_room(airframe, room):
+    """The hover-sim plant for an airframe (parameters as saved by identify_airframe) flown in one of ROOMS."""
+    return IDENTIFIED_ESC_1028 | {"airframe": airframe} | ROOMS[room]
+
+
+IDENTIFIED_ESC = in_room(AIRFRAME_ESC_1029B, "2026-10-29")
 
 
 if __name__ == "__main__":

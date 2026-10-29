@@ -1,0 +1,18 @@
+{
+ "source": "geometry_2026-10-28.json with APC 10x4.5MR props (15.0 g) for the 9x4.5MR (11.1 g): their mass at the rotor plane and inertia (rod of the diameter, averaged over the spin), 2026-10-29 08:15",
+ "mass": 0.94794,
+ "com": [
+  -0.0021,
+  -0.0007,
+  0.014472
+ ],
+ "arm": 0.172,
+ "pivot_z": 0.0372,
+ "rotor_z": 0.094,
+ "roll_inertia": 0.012028,
+ "pitch_inertia": 0.002213,
+ "yaw_inertia": 0.01088,
+ "assembly_mass": 0.089809,
+ "assembly_com": 0.032913,
+ "assembly_inertia": 0.00014311
+}

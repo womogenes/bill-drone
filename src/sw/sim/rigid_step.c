@@ -8,6 +8,8 @@
 #define G 9.81
 #define DEG (3.14159265358979323846 / 180)
 #define POINTS 12
+// The running time (s) of a motor that has long been spinning (airframe.py RUNNING).
+#define RUNNING 10.0
 // Below this slip speed (m/s) friction is viscous, so the contact stays stable at the substep (rigid.py SLIP).
 #define SLIP 0.15
 
@@ -18,10 +20,10 @@ typedef struct {
     double link_k, link_c, left_play, right_play, left_band, right_band, band_k, right_gain;
     double prop_torque, prop_momentum, inflow_damping, edgewise_damping, wash, pitch_wake, wake_tau;
     double roll_pendulum, pitch_pendulum, roll_from_yaw, yaw_from_roll;
-    double vx_pitch, vx_drag, vy_roll, vy_drag;
+    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start;
     double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, geometry_mass, J;
     double level, mean_left, mean_right;
-    double mass, throttle_max, servo_limit, ground_k, ground_c, friction, air_drag;
+    double mass, throttle_max, servo_limit, ground_k, ground_c, friction, air_drag, tilt_share;
     double hull[POINTS][3];
 } Params;
 
@@ -90,12 +92,12 @@ static void cross(const double *a, const double *b, double *out) {
 
 static double norm3(const double *v) { return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
 
-// One control tick for n envs. Per env: tilt_gain (on the tilt's pitch torque), differential_slope, inertia_scale [n]; inertia, push [n, 3]; rotor_drag [n, 2]; throttle, tilt_command [n, 2] this tick's commands; disturbance [n, 6] forces then torques. Updated in place: throttles, commands [n, history, 2]; pos, vel, omega, accel [n, 3]; quat [n, 4]; the airframe state rate [n, 3], att, body_vel, motor, horn, hvel, tilt, tvel [n, 2], wake [n]; contact, contact_now [n]; touched [n] (bytes).
+// One control tick for n envs. Per env: tilt_gain (on the tilt's pitch torque), differential_slope, inertia_scale [n]; inertia, push [n, 3]; rotor_drag [n, 2]; throttle, tilt_command [n, 2] this tick's commands; disturbance [n, 6] forces then torques. Updated in place: throttles, commands [n, history, 2]; pos, vel, omega, accel [n, 3]; quat [n, 4]; the airframe state rate [n, 3], att, body_vel, motor, horn, hvel, tilt, tvel, spin [n, 2], wake [n]; contact, contact_now [n]; touched [n] (bytes).
 void rigid_step(size_t n, size_t history, const Params *p, const double *table, size_t count,
                 const double *tilt_gain, const double *differential_slope, const double *inertia, const double *inertia_scale, const double *rotor_drag, const double *push,
                 const double *throttle, const double *tilt_command, const double *disturbance,
                 double *throttles, double *commands, double *pos, double *vel, double *quat, double *omega,
-                double *rate, double *att, double *body_vel, double *motor, double *horn, double *hvel, double *tilt, double *tvel, double *wake,
+                double *rate, double *att, double *body_vel, double *motor, double *horn, double *hvel, double *tilt, double *tvel, double *wake, double *spin,
                 double *accel, double *contact, double *contact_now, unsigned char *touched) {
     const double gain[2] = {1.0, p->right_gain};
     const double motor_delay[2] = {p->motor_delay, p->right_motor_delay}, servo_delay[2] = {p->servo_delay, p->right_servo_delay};
@@ -137,14 +139,19 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         double flying = contact_now[e] == 0 ? clip((st_motor[0] + st_motor[1]) / (p->mass * G), 0, 1) : 0.0;
         // airframe.py step.
         double table_thrust[2], departure[2], target[2], goal[2], tl[2], c[2], sn[2];
+        double running[2];
         for (int s = 0; s < 2; s++) {
-            table_thrust[s] = interp(delayed(throttle_buffer, history, s, motor_delay[s]), table, count) * 1.0 * thrust_gain[s];
+            double commanded = delayed(throttle_buffer, history, s, motor_delay[s]);
+            // A motor started from standstill makes no thrust for motor_start (airframe.py).
+            spin[2 * e + s] = commanded > 0 ? fmin(spin[2 * e + s] + DT, RUNNING) : 0.0;
+            running[s] = spin[2 * e + s] > p->motor_start ? 1.0 : 0.0;
+            table_thrust[s] = interp(commanded, table, count) * 1.0 * thrust_gain[s];
             departure[s] = table_thrust[s] - mean[s];
         }
         // airframe.py actual_thrust: the level times the mean, the common departure and differential_slope of the differential one.
         double common = (departure[0] + departure[1]) / 2, differential = (departure[0] - departure[1]) / 2 * differential_slope[e];
-        target[0] = p->level * (mean[0] + (common + differential));
-        target[1] = p->level * (mean[1] + (common - differential));
+        target[0] = p->level * (mean[0] + (common + differential)) * running[0];
+        target[1] = p->level * (mean[1] + (common - differential)) * running[1];
         for (int s = 0; s < 2; s++) {
             st_motor[s] = target[s] + (st_motor[s] - target[s]) * motor_keep[s];
             goal[s] = delayed(command_buffer, history, s, servo_delay[s]);
@@ -199,7 +206,7 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         st_rate[0] = rate0[0] + roll * DT, st_rate[1] = pq, st_rate[2] = rate0[2] + yaw * DT;
         st_att[0] = att0[0] + st_rate[0] * DT, st_att[1] = pitch;
         double mean_tilt = (st_tilt[0] * gain[0] + st_tilt[1] * gain[1]) / 2 * DEG;
-        st_vel[0] = vel0[0] + (p->vx_pitch * (att0[1] + (1 - p->wash) * mean_tilt) - p->vx_drag * vel0[0]) * DT;
+        st_vel[0] = vel0[0] + (p->vx_pitch * (att0[1] + p->tilt_push * mean_tilt) - p->vx_drag * vel0[0]) * DT;
         st_vel[1] = vel0[1] + (p->vy_roll * att0[0] - p->vy_drag * vel0[1]) * DT;
         // The rigid body.
         // The disturbances come with the rotors' wash: scaled by the thrust over the weight.
@@ -215,7 +222,8 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
             double left_tilt = st_tilt[0] * 1.0 * 3.14159265358979323846 / 180, right_tilt = st_tilt[1] * p->right_gain * 3.14159265358979323846 / 180;
             sl = sin(left_tilt), sr = sin(right_tilt), cl = cos(left_tilt), cr = cos(right_tilt);
         }
-        double thrust_body[3] = {left * sl + right * sr, 0.0, left * cl + right * cr};
+        // The tilted thrust's horizontal force moves the drone by tilt_share of it (rigid.py).
+        double thrust_body[3] = {(left * sl + right * sr) * p->tilt_share, 0.0, left * cl + right * cr};
         double peak = 0.0;
         unsigned char touch = touched[e];
         for (int sub = 0; sub < SUB; sub++) {

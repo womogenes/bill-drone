@@ -2,7 +2,7 @@
 A vectorized full-attitude simulation of the bicopter for recovery control and policy training: many drones at once (numpy, [env, ...] arrays), any orientation (quaternions), any rates, with the identified actuators and the calibrated disturbances.
 
 Frames: world x forward, y left, z up; body x forward, y left, z up through the rotors' shafts at zero tilt. Quaternions are (w, x, y, z), body to world.
-Actuators and torques are the identified airframe model itself (sw/sim/airframe.py step, the post-ESC-recalibration fit at its geometry by default), so near hover this sim predicts exactly as well as the identification: motors with dead time and lag on the thrust table (at the fit's typical thrust level and hover thrusts, airframe.hover_trim), servos with dead time, a second-order loop, slew, link and play, the rubber bands, the slipstream, damping, attitude and speed terms and steady pushes. Mass and inertia are the geometry's. Its attitude terms are fed the roll and pitch of the body's tilt, clipped to ±0.6 rad (beyond which they were never measured) and faded to nothing as the tilt goes on to 90° (ATTITUDE_RANGE), and its speed terms the body-plane speed clipped to SPEED_RANGE with the same fade: held at the clip at any attitude, and fed a fall's speed, the hover's restoring stiffness and speed moments would right an inverted drone by themselves. This sim adds what that model leaves out: rotation in any orientation (quaternions, with the full ω × Iω coupling), translation (the thrust vector, gravity, the calibrated rotor drag and quadratic air drag), ground contact, and sw/sim/disturbance.py terms, which come from the rotors' wash and the flight model's error, so both the force and the torque terms are scaled by the motors' total thrust over the weight (clipped to 0-1) and fade out on a landed drone. Motors cannot reverse, and servos stop at ±60°.
+Actuators and torques are the identified airframe model itself (sw/sim/airframe.py step, the post-ESC-recalibration fit at its geometry by default), so near hover this sim predicts exactly as well as the identification: motors with dead time and lag on the thrust table (at the fit's typical thrust level and hover thrusts, airframe.hover_trim), servos with dead time, a second-order loop, slew, link and play, the rubber bands, the slipstream, damping, attitude and speed terms and steady pushes, and for models that carry them the ESCs' start-up time from standstill (motor_start) and the servo tilt's forward push (tilt_push, which also sets how much of the tilted thrust's horizontal force moves the drone). Mass and inertia are the geometry's. Its attitude terms are fed the roll and pitch of the body's tilt, clipped to ±0.6 rad (beyond which they were never measured) and faded to nothing as the tilt goes on to 90° (ATTITUDE_RANGE), and its speed terms the body-plane speed clipped to SPEED_RANGE with the same fade: held at the clip at any attitude, and fed a fall's speed, the hover's restoring stiffness and speed moments would right an inverted drone by themselves. This sim adds what that model leaves out: rotation in any orientation (quaternions, with the full ω × Iω coupling), translation (the thrust vector, gravity, the calibrated rotor drag and quadratic air drag), ground contact, and sw/sim/disturbance.py terms, which come from the rotors' wash and the flight model's error, so both the force and the torque terms are scaled by the motors' total thrust over the weight (clipped to 0-1) and fade out on a landed drone. Motors cannot reverse, and servos stop at ±60°.
 Ground: penalty contact (spring, damper, Coulomb friction) at points on the body's hull (the belly the drone rests on, the motor pods and the top), so a landing on any side is simulated. Impact is the largest contact force.
 Sensors: a gyro with bias and noise and an accelerometer with noise, as specific force in the body frame.
 Backends: the per-tick physics runs in C (sw/sim/rigid_step.c, compiled on first use) by default; backend="numpy" is the reference it is tested against (sw/sim/test_rigid.py). The C backend updates the state arrays in place.
@@ -46,7 +46,7 @@ MODELS = Path(__file__).with_name("models")
 SOURCE = Path(__file__).with_name("rigid_step.c")
 LIBRARY = Path(__file__).with_name("rigid_step.so")
 # The scalar parameters in rigid_step.c's Params order (airframe parameters, then the geometry's constants as airframe.resolve gives them, then the thrust trim, then this sim's constants, then HULL).
-C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_k", "link_c", "left_play", "right_play", "left_band", "right_band", "band_k", "right_gain", "prop_torque", "prop_momentum", "inflow_damping", "edgewise_damping", "wash", "pitch_wake", "wake_tau", "roll_pendulum", "pitch_pendulum", "roll_from_yaw", "yaw_from_roll", "vx_pitch", "vx_drag", "vy_roll", "vy_drag")
+C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_k", "link_c", "left_play", "right_play", "left_band", "right_band", "band_k", "right_gain", "prop_torque", "prop_momentum", "inflow_damping", "edgewise_damping", "wash", "pitch_wake", "wake_tau", "roll_pendulum", "pitch_pendulum", "roll_from_yaw", "yaw_from_roll", "vx_pitch", "vx_drag", "vy_roll", "vy_drag", "tilt_push", "motor_start")
 C_GEOMETRY = ("Ixx", "Iyy", "Izz", "arm", "cx", "cy", "tilt_arm", "hr", "hx", "hy", "mass", "J")
 loaded = None
 
@@ -62,9 +62,9 @@ def library():
             os.replace(partial, LIBRARY)
         loaded = ctypes.CDLL(str(LIBRARY))
         loaded.rigid_param_count.restype = ctypes.c_size_t
-        loaded.rigid_step.argtypes = [ctypes.c_size_t, ctypes.c_size_t] + [ctypes.c_void_p] * 2 + [ctypes.c_size_t] + [ctypes.c_void_p] * 28
+        loaded.rigid_step.argtypes = [ctypes.c_size_t, ctypes.c_size_t] + [ctypes.c_void_p] * 2 + [ctypes.c_size_t] + [ctypes.c_void_p] * 29
         loaded.rigid_step.restype = None
-        assert loaded.rigid_param_count() == len(C_AIRFRAME) + len(C_GEOMETRY) + 3 + 7 + HULL.size
+        assert loaded.rigid_param_count() == len(C_AIRFRAME) + len(C_GEOMETRY) + 3 + 8 + HULL.size
     return loaded
 
 
@@ -185,6 +185,8 @@ class Sim:
         self.k_yaw = (1 - self.p["wash"]) * c["arm"] / c["Izz"] * ones
         self.thrust_gain = np.stack([ones, a["right_thrust_gain"] * ones], -1)
         self.rotor_drag = np.array(plant.get("rotor_drag", (0.58, 0.34))) * s("drag")[:, None]
+        # The share of the tilted thrust's horizontal force that moves the drone: tilt_push for models that carry it, all of it for older ones (sw/sim/sweep.py does the same).
+        self.tilt_share = self.p["tilt_push"] if "tilt_push" in a else 1.0
         self.disturbances = Disturbances(plant.get("disturbances"), n, self.rng, s("disturbance"))
         self.history = 40  # control ticks of command history (0.4 s) for the dead times
         # The gyro's bias left after the firmware's at-rest calibration (rad/s): about 0.03°/s measured at rest after a 2026-10-28 flight; four times that, for drift in flight.
@@ -197,6 +199,8 @@ class Sim:
         self.quat, self.omega = np.array(quat, float), np.array(omega, float)
         self.state = A.State(n)
         self.state.motor[:] = 0.0 if motor is None else np.array(motor, float)
+        # Motors that start spinning start their running time (motor_start) from standstill.
+        self.state.spin[:] = np.where(self.state.motor > 0, A.RUNNING, 0.0)
         tilt_deg = np.zeros((n, 2)) if tilt is None else np.degrees(np.array(tilt, float))
         self.state.horn[:] = self.state.tilt[:] = tilt_deg
         # The lagged tilted thrust (pitch_wake) starts steady at the starting thrust and tilt.
@@ -216,7 +220,7 @@ class Sim:
     def bind(self):
         """The C backend's arguments: the parameters and pointers to every (contiguous, float64) array it reads or updates in place."""
         p, st = self.p, self.state
-        for name in ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel", "wake"):
+        for name in ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel", "wake", "spin"):
             setattr(st, name, np.ascontiguousarray(getattr(st, name), float))
         for name in ("throttles", "commands", "pos", "vel", "quat", "omega", "accel", "contact", "contact_now", "tilt_gain", "differential_slope", "inertia", "inertia_scale", "rotor_drag", "push"):
             if name in ("tilt_gain", "differential_slope"):
@@ -225,7 +229,7 @@ class Sim:
                 setattr(self, name, np.ascontiguousarray(getattr(self, name), float))
         self.touched = np.ascontiguousarray(self.touched, bool)
         level, mean = A.hover_trim(self.a, self.geometry)
-        scalars = [p[key] for key in C_AIRFRAME] + [self.resolved[key] for key in C_GEOMETRY] + [level, mean[0], mean[1]] + [self.mass, THROTTLE_MAX, SERVO_LIMIT, GROUND_K, GROUND_C, FRICTION, AIR_DRAG]
+        scalars = [p[key] for key in C_AIRFRAME] + [self.resolved[key] for key in C_GEOMETRY] + [level, mean[0], mean[1]] + [self.mass, THROTTLE_MAX, SERVO_LIMIT, GROUND_K, GROUND_C, FRICTION, AIR_DRAG, self.tilt_share]
         self.c_params = np.concatenate([np.array(scalars, float), HULL.ravel()])
         self.c_table = np.ascontiguousarray(TABLE)
         self.c_disturbance = np.zeros((self.n, 6))
@@ -234,7 +238,7 @@ class Sim:
         self.c_args = (
             [self.n, self.history, address(self.c_params), address(self.c_table), len(self.c_table)]
             + [address(a) for a in (p["tilt_gain"], p["differential_slope"], self.inertia, self.inertia_scale, self.rotor_drag, self.push, self.c_throttle, self.c_tilt, self.c_disturbance)]
-            + [address(a) for a in (self.throttles, self.commands, self.pos, self.vel, self.quat, self.omega, st.rate, st.att, st.vel, st.motor, st.horn, st.hvel, st.tilt, st.tvel, st.wake, self.accel, self.contact, self.contact_now, self.touched)]
+            + [address(a) for a in (self.throttles, self.commands, self.pos, self.vel, self.quat, self.omega, st.rate, st.att, st.vel, st.motor, st.horn, st.hvel, st.tilt, st.tvel, st.wake, st.spin, self.accel, self.contact, self.contact_now, self.touched)]
         )
         self.c_bound = (self.pos, self.vel, self.quat, self.omega, self.state.motor, self.state.tilt, self.touched)
 
@@ -303,7 +307,7 @@ class Sim:
             peak = np.maximum(peak, np.linalg.norm(contact_world, axis=-1).sum(1))
             self.touched |= touching.any(1)
             # Thrust, drag and gravity.
-            thrust_body = np.stack([left * sl + right * sr, np.zeros(self.n), left * cl + right * cr], -1)
+            thrust_body = np.stack([(left * sl + right * sr) * self.tilt_share, np.zeros(self.n), left * cl + right * cr], -1)
             v_body = np.einsum("nji,nj->ni", R, self.vel)
             drag_body = -np.concatenate([self.rotor_drag * v_body[:, :2] * self.mass, np.zeros((self.n, 1))], -1)
             force_world = np.einsum("nij,nj->ni", R, thrust_body + drag_body) - AIR_DRAG * np.linalg.norm(self.vel, axis=-1, keepdims=True) * self.vel + contact_force
