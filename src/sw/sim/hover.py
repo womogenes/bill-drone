@@ -13,12 +13,6 @@ HEADER = SOURCE.with_suffix(".h")
 # Compile-time overrides of hover.c's constants for experiments, e.g. HOVER_DEFINES="LOST_EASE_S=0.3f"; each set gets its own library.
 DEFINES = os.environ.get("HOVER_DEFINES", "").split()
 LIBRARY = Path(__file__).with_name("libhover" + "".join("-" + define.replace("=", "_") for define in DEFINES) + ".so")
-if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(SOURCE.stat().st_mtime, HEADER.stat().st_mtime):
-    scratch = LIBRARY.with_suffix(".%d.tmp" % os.getpid())
-    subprocess.run(["cc", "-O2", "-fPIC", "-shared", *("-D" + define for define in DEFINES), str(SOURCE), "-o", str(scratch), "-lm"], check=True)
-    scratch.replace(LIBRARY)
-library = ctypes.CDLL(str(LIBRARY))
-
 HISTORY = 24
 HOLD, LAND, LAND_FAST = 1, 2, 3
 GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim")
@@ -57,11 +51,27 @@ class Output(ctypes.Structure):
     _fields_ = [("roll", ctypes.c_float), ("pitch", ctypes.c_float), ("yaw_rate", ctypes.c_float), ("force", ctypes.c_float), ("tracking", ctypes.c_bool), ("velocity", ctypes.c_float * 2)]
 
 
-library.hover_rest.argtypes = [ctypes.POINTER(State), ctypes.c_float, ctypes.c_bool, ctypes.c_float]
-library.hover_rest.restype = None
-library.hover_update.argtypes = [ctypes.POINTER(State), ctypes.POINTER(Gains), ctypes.c_int, ctypes.POINTER(Pose), ctypes.c_int64, ctypes.c_float,
-                                 ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.POINTER(Drag), ctypes.POINTER(Output)]
-library.hover_update.restype = None
+def build(source, library, defines):
+    """Compile source into library with these -D defines, under a temporary name moved into place so parallel workers never load a half-written one."""
+    scratch = library.with_suffix(".%d.tmp" % os.getpid())
+    subprocess.run(["cc", "-O2", "-fPIC", "-shared", *("-D" + define for define in defines), str(source), "-o", str(scratch), "-lm"], check=True)
+    scratch.replace(library)
+
+
+def load(library, state):
+    """The compiled hover.c at library, its functions declared for the state structure (State, or another copy's layout)."""
+    library = ctypes.CDLL(str(library))
+    library.hover_rest.argtypes = [ctypes.POINTER(state), ctypes.c_float, ctypes.c_bool, ctypes.c_float]
+    library.hover_rest.restype = None
+    library.hover_update.argtypes = [ctypes.POINTER(state), ctypes.POINTER(Gains), ctypes.c_int, ctypes.POINTER(Pose), ctypes.c_int64, ctypes.c_float,
+                                     ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.POINTER(Drag), ctypes.POINTER(Output)]
+    library.hover_update.restype = None
+    return library
+
+
+if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(SOURCE.stat().st_mtime, HEADER.stat().st_mtime):
+    build(SOURCE, LIBRARY, DEFINES)
+library = load(LIBRARY, State)
 
 
 def gains(settings):

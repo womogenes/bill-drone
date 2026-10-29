@@ -270,7 +270,7 @@ def thrust_split(records):
 def trims(p, data, flights):
     """Each flight's thrust trim (airframe.trim_for over its airborne window): levels [flight] and mean table thrusts [flight, side]."""
     gains = A.motor_terms(p | {"swapped": data.swapped}, len(data.records))[2]
-    pairs = [A.trim_for(p, A.table_thrust(p, data.throttle[i, r["lift"]:r["end"]], data.voltage[i, r["lift"]:r["end"]], data.table, gains[i]), GEOM) for i, r in ((i, data.records[i]) for i in flights)]
+    pairs = [A.trim_for(A.table_thrust(p, data.throttle[i, r["lift"]:r["end"]], data.voltage[i, r["lift"]:r["end"]], data.table, gains[i]), GEOM) for i, r in ((i, data.records[i]) for i in flights)]
     return np.array([level for level, _ in pairs]), np.array([mean for _, mean in pairs])
 
 
@@ -396,9 +396,8 @@ def residuals(x, flights, stride=10, closed=True):
     pulled = [key for key in FREE if key in PRIOR]
     if not PRIOR_WEIGHT or not pulled:
         return data
-    values = unpack(x)
     weight = PRIOR_WEIGHT * math.sqrt(np.count_nonzero(data) / len(pulled))
-    return np.concatenate([data, [weight * (values[key] - PRIOR[key][0]) / PRIOR[key][1] for key in pulled]])
+    return np.concatenate([data, [weight * (p[key] - PRIOR[key][0]) / PRIOR[key][1] for key in pulled]])
 
 
 def initialise(data, free, base, prior=None, weight=0.0, geometry=None, instrument=0.0):

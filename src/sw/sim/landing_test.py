@@ -13,7 +13,6 @@ import math
 import os
 import random
 import re
-import subprocess
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -28,7 +27,6 @@ MOTOR_LAG = 0.1
 
 class Done(Exception):
     """Raised from the hover tick once the landing has finished, to end the flight early (the floor contacts make the rest slow to simulate)."""
-
 
 
 # The camera's field of view (sweep.CAMERA's, degrees), but reaching 20 degrees above its axis: the drone saw the tag on the floor at 0.5-0.65 m above it from 2 m (2026-10-29 07:20 and 07:42), which the simulated camera's 12.4 degrees would lose, leaving its height to the IMU alone, which the drone did not do.
@@ -70,14 +68,9 @@ def install(source, defines):
         tag = hashlib.sha1((source.read_text() + source.with_suffix(".h").read_text() + " ".join(defines)).encode()).hexdigest()[:12]
         library = source.with_name("libhover-test-" + tag + ".so")
         if not library.exists():
-            scratch = library.with_suffix(".%d.tmp" % os.getpid())
-            subprocess.run(["cc", "-O2", "-fPIC", "-shared", *("-D" + define for define in defines), str(source), "-o", str(scratch), "-lm"], check=True)
-            scratch.replace(library)
-        hover.library = ctypes.CDLL(str(library))
+            hover.build(source, library, defines)
         hover.State = state_class(source.with_suffix(".h"))
-        hover.library.hover_rest.argtypes = [ctypes.POINTER(hover.State), ctypes.c_float, ctypes.c_bool, ctypes.c_float]
-        hover.library.hover_update.argtypes = [ctypes.POINTER(hover.State), ctypes.POINTER(hover.Gains), ctypes.c_int, ctypes.POINTER(hover.Pose), ctypes.c_int64, ctypes.c_float,
-                                               ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.POINTER(hover.Drag), ctypes.POINTER(hover.Output)]
+        hover.library = hover.load(library, hover.State)
     elif defines:
         raise SystemExit("--defines needs --source (or set HOVER_DEFINES)")
     # The unwrapped class, so flying several cases in one process does not stack the wrappers.

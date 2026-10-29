@@ -108,7 +108,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     wind_rng = random.Random(seed + 4000)
     settings = MODEL | {"roll": 0, "pitch": 0, "yaw_rate": 0, "pitch_trim": 0, "left_trim": 0, "right_trim": 0,
                                "roll_bias": 0, "pitch_bias": 0, "yaw_bias": 0, "left_thrust_scale": 1, "right_thrust_scale": 1,
-                               "reaction_torque_ratio": 0.015, "servo_compensation": 0.75, "integrate_throttle": 580, "target_rate": 360, "velocity_damping": 8, "velocity_leak": 3} | gains
+                               "servo_compensation": 0.75, "integrate_throttle": 580, "target_rate": 360, "velocity_damping": 8, "velocity_leak": 3} | gains
     mass = plant.get("mass", MASS)
     weight = mass * 9.81
     k = plant["thrust_k"]
@@ -439,6 +439,11 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     return result
 
 
+def model(name):
+    """A saved model file from sw/sim/models (an airframe's parameters or a list of disturbances)."""
+    return json.loads((Path(__file__).with_name("models") / name).read_text())
+
+
 # Plant as measured (2026-10-21): pivot 20 mm above the CoM, pitch inertia 0.00161 kg m^2, thrust 1.09x the table at ~16 V.
 NOMINAL = {"thrust_k": 1.09, "height": 0.0234 / MODEL["pivot_height"], "roll_inertia": 1.0, "pitch_inertia": 0.00161 / MODEL["pitch_inertia"], "yaw_inertia": 1.0, "motor_delay": 0.02, "motor_tau": 0.05,
            "servo_delay": 0.04, "servo_tau": 0.06, "backlash": 0.5, "deadband": 0.45, "servo_slew": 600, "imbalance": 0.06, "com_x": 0.002, "gyro_noise": 2.0}
@@ -449,21 +454,18 @@ FITTED = {"thrust_k": 1.03, "mass": 0.86, "height": 1.42 * 0.03 / MODEL["pivot_h
           "deadband": 0.1, "servo_slew": 340, "imbalance": 0.03, "com_x": 0.0, "disturbance": -10.6, "angle_moment": -3.9, "velocity_moment": -4.0,
           "gust": 5.0, "gust_tau": 0.7, "gyro_noise": 2.0, "camera": {"tag": (2.3, 0.0, 0.3)}, "rotor_drag": 0.5, "vibration": (0.1, 0.1, 0.05)}
 # Identified from the 34 hover flights of 2026-10-27 (both rubber bands on, the ESCs' earlier range: fly it with flight.PRE_RECALIBRATION_TABLE in mind) by closed-loop multi-step prediction with the firmware controller in the loop (sw/sim/identify_airframe.py, parameters in models/airframe_2026-10-27.json, refit 2026-10-28 in the geometry-explicit form). Held out by flight it predicts roll to 1.3° and pitch to 3.7° a second ahead (yaw rate R² 0.55) from the logged references alone. Rotor drag is from the camera velocity over 0.25-1 s against thrust through the logged attitude and modelled tilts (gain within 10 % of 1). The random disturbance is what of the one-step residual lies below 2 Hz (the rest, mostly 10-50 Hz in pitch, does not move the attitude): 0.89 rad/s² RMS in roll and 0.49 in pitch at 0.5 s.
-AIRFRAME = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-27.json").read_text())
+AIRFRAME = model("airframe_2026-10-27.json")
 # Refit 2026-10-28 on the four hovers after both ESCs were recalibrated (06:54-07:01 UTC, 170 s, the rescaled thrust table), at models/geometry_2026-10-28.json, and calibrated to the camera hovers' spectra (sw/sim/calibrate_sim.py); roll authority is poorly pinned by hover (see models/NOTES.md).
-AIRFRAME_ESC = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-28.json").read_text())
+AIRFRAME_ESC = model("airframe_2026-10-28.json")
 IDENTIFIED = FITTED | {"airframe": AIRFRAME, "mass": 0.94, "thrust_k": 1.0, "height": 1.0, "disturbance": 0.0, "angle_moment": 0.0, "velocity_moment": 0.0, "gust": 0.49, "gust_tau": 0.5, "roll_gust": 0.89,
                        "camera": {"tag": (2.0, 0.1, 0.45), "miss": 0.006, "burst": 6}, "rotor_drag": (0.6, 0.27)}
 # The ESC-recalibrated drone as flown on 2026-10-28 (see AIRFRAME_ESC); IDENTIFIED_ESC below is the current one.
 # Its disturbances are sw/sim/fit_disturbances.py's terms (models/disturbances_2026-10-28.json: a steady -1.09 m/s² push away from the tag, drifting forces and torques), sized so the sim's closed-loop hover statistics match the real ones; the horizontal drag is half the airframe fit's (which was fitted to the drone's own velocity estimate). Flying each hover's settings it matches range error RMS 0.21 against 0.20 m, its fading time 1.8 against 2.0 s, sideways 0.18 against 0.17 m fading in 1.9 against 1.8 s, pitch rate 22.6 against 23.4 deg/s and roll rate 9.0 against 9.7.
 # Its pitch gyro carries the rotors' vibration as the camera hovers logged it: 10 deg/s RMS in a 17-25 Hz band (roll and yaw under 1 deg/s).
 IDENTIFIED_ESC_1028 = IDENTIFIED | {"airframe": AIRFRAME_ESC, "rotor_drag": (0.58, 0.34), "gust": 0.0, "roll_gust": 0.0, "gyro_vibration": {"rms": (0.0, 10.0, 0.0), "hz": 21.0, "bandwidth": 8.0},
-                                    "disturbances": json.loads((Path(__file__).with_name("models") / "disturbances_2026-10-28_calibrated.json").read_text())}
+                                    "disturbances": model("disturbances_2026-10-28_calibrated.json")}
 # IDENTIFIED_ESC_1029, the drone as flown on the night of 2026-10-29 (05:53-06:18 UTC, after a CoM change; see models/NOTES.md): the roll terms refit on those hovers and the ±3° PRBS flight 06-17-44 (models/airframe_2026-10-29.json; pitch, servos and slipstream as on 2026-10-28), the 2026-10-28 disturbances with smaller drifts (roll ×0.35, pitch ×0.5, sideways ×0.7) and sideways rotor drag 0.2/s instead of 0.34, which together match tonight's camera hovers' statistics and the PRBS flight's growing 0.4 Hz sideways swing. Tonight's right motor may have been slipping (two thrust losses after 06:25), so its roll authority may be degraded. It gets hover_kd backwards (at 2.0 it sways where the real drone was calm): do not tune hover_kd on it.
-AIRFRAME_ESC_1029 = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-29.json").read_text())
-IDENTIFIED_ESC_1029 = IDENTIFIED_ESC_1028 | {"airframe": AIRFRAME_ESC_1029, "rotor_drag": (0.58, 0.2), "disturbances": json.loads((Path(__file__).with_name("models") / "disturbances_2026-10-29_calibrated.json").read_text())}
-# The current plant, 2026-10-29b (see models/NOTES.md): the airframe refit on every 9-inch flight after the CoM change (05:53-07:43, runaways cut, the ESC swap at 06:45 followed) with the roll actuator pinned by the PRBS flights (table authority, about 11 ms dead time and 50 ms lag) and no roll attitude spring, an ESC start-up time from standstill and the servo tilt's measured forward push; the sideways speed's roll moment (loose in the fit) at the 2026-10-29 fit's value, and the 2026-10-29 disturbances and rotor drag (recalibrating them to the hovers' statistics traded that moment against the roll drift and broke the PRBS and hover_kd checks). It flies hover_kd the right way round (calm at 2.0, the 0.4 Hz swing at 0.81 that the ±3° PRBS grows). Its liftoff kick peaks too late at pitch_bias 3.9 (0.4-0.6 s against 0.2 s).
-AIRFRAME_ESC_1029B = json.loads((Path(__file__).with_name("models") / "airframe_2026-10-29b.json").read_text())
+IDENTIFIED_ESC_1029 = IDENTIFIED_ESC_1028 | {"airframe": model("airframe_2026-10-29.json"), "rotor_drag": (0.58, 0.2), "disturbances": model("disturbances_2026-10-29_calibrated.json")}
 # Rooms: what of the plant belongs to where the drone flies, not to the airframe: the drifting disturbances (sw/sim/disturbance.py, calibrated to that room's camera hovers), the rotor drag as calibrated there (it stands partly for the room's flow: on 2026-10-29 the camera measures almost no drag) and the camera's tag. The hover height comes with each flight's settings and the steady push with each flight (the push observer learns it). The 2026-10-28 hovers (06:54-07:01, about 0.8 m up) and the 2026-10-29 ones (about 0.45 m) were flown in different rooms.
 ROOMS = {"2026-10-28": {"disturbances": IDENTIFIED_ESC_1028["disturbances"], "rotor_drag": (0.58, 0.34), "camera": IDENTIFIED["camera"]},
          "2026-10-29": {"disturbances": IDENTIFIED_ESC_1029["disturbances"], "rotor_drag": (0.58, 0.2), "camera": IDENTIFIED["camera"]}}
@@ -474,7 +476,8 @@ def in_room(airframe, room):
     return IDENTIFIED_ESC_1028 | {"airframe": airframe} | ROOMS[room]
 
 
-IDENTIFIED_ESC = in_room(AIRFRAME_ESC_1029B, "2026-10-29")
+# The current plant, 2026-10-29b (see models/NOTES.md): the airframe refit on every 9-inch flight after the CoM change (05:53-07:43, runaways cut, the ESC swap at 06:45 followed) with the roll actuator pinned by the PRBS flights (table authority, about 11 ms dead time and 50 ms lag) and no roll attitude spring, an ESC start-up time from standstill and the servo tilt's measured forward push; the sideways speed's roll moment (loose in the fit) at the 2026-10-29 fit's value, and the 2026-10-29 disturbances and rotor drag (recalibrating them to the hovers' statistics traded that moment against the roll drift and broke the PRBS and hover_kd checks). It flies hover_kd the right way round (calm at 2.0, the 0.4 Hz swing at 0.81 that the ±3° PRBS grows). Its liftoff kick peaks too late at pitch_bias 3.9 (0.4-0.6 s against 0.2 s).
+IDENTIFIED_ESC = in_room(model("airframe_2026-10-29b.json"), "2026-10-29")
 
 
 if __name__ == "__main__":

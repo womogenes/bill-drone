@@ -37,36 +37,18 @@ def thrust_table(recording):
     return PRE_RECALIBRATION_TABLE if Path(recording).name[:16] < RECALIBRATED else THRUST_TABLE
 
 
-def table_buffer(table):
-    """A thrust table as the C controller takes it (flat float32 throttle, thrust pairs)."""
-    return THRUST_BUFFER if table is THRUST_TABLE else array("f", [value for row in table for value in row])
-
-
-def attitude_step(state, accel, gyro, dt, tau):
-    motion = array("f", list(accel) + list(gyro) + [dt, tau])
-    library.flight_attitude(state.buffer_info()[0], motion.buffer_info()[0])
-    return state[0], state[1]
-
-
-def control_step(state, command, table, attitude, gyro, dt):
-    struct.pack_into("<6f", command, 0, *attitude, *gyro, dt)
-    library.flight_control(state.buffer_info()[0], command.buffer_info()[0], table.buffer_info()[0], len(table) // 2)
-    return int(state[2]), int(state[3]), state[4], state[5]
-
-
 def control_many(states, commands, table=THRUST_TABLE):
     """
     Step every lane's controller in place: states and commands are C-contiguous float32 arrays [lane, ...] laid out as Controller.state and Controller.command, with each command's motion filled in, all on one thrust table.
     """
     assert states.dtype == commands.dtype == "float32" and states.flags.c_contiguous and commands.flags.c_contiguous
-    buffer = table_buffer(table)
+    # The table as the C controller takes it: flat float32 throttle, thrust pairs.
+    buffer = THRUST_BUFFER if table is THRUST_TABLE else array("f", [value for row in table for value in row])
     library.flight_control_many(states.ctypes.data, states.shape[1], commands.ctypes.data, commands.shape[1], buffer.buffer_info()[0], len(buffer) // 2, len(states))
 
 
 def interpolate(value, points, input_column=0):
-    """
-    Interpolate between table rows; clamp to the endpoint values.
-    """
+    """Interpolate between table rows; clamp to the endpoint values."""
     output_column = 1 - input_column
     if value <= points[0][input_column]:
         return points[0][output_column]
@@ -79,19 +61,14 @@ def interpolate(value, points, input_column=0):
     return points[-1][output_column]
 
 
-def thrust(throttle, table=THRUST_TABLE):
-    """
-    Convert an ESC command to newtons.
-    """
-    return interpolate(throttle, table)
+def thrust(throttle):
+    """Convert an ESC command to newtons."""
+    return interpolate(throttle, THRUST_TABLE)
 
 
-def throttle(force, table=THRUST_TABLE):
-    """
-    Convert newtons to an ESC command using the table's rising part, capped at its peak.
-    """
-    peak = PEAK if table is THRUST_TABLE else max(range(len(table)), key=lambda index: table[index][1])
-    return interpolate(force, table[:peak + 1], input_column=1)
+def throttle(force):
+    """Convert newtons to an ESC command using the table's rising part, capped at its peak."""
+    return interpolate(force, THRUST_TABLE[:PEAK + 1], input_column=1)
 
 
 # Geometry and inertia of the current 900 g drone, in metres and kg·m².
@@ -110,26 +87,16 @@ MODEL = {
     "right_servo_direction": -1.0,
 }
 # This order is the C buffer layout; it must not depend on dictionary iteration.
-MODEL_KEYS = (
-    "arm", "pivot_height", "com_x",
-    "roll_inertia", "pitch_inertia", "yaw_inertia", "reaction_torque_ratio",
-    "servo_min", "servo_max", "left_servo_direction", "right_servo_direction",
-)
+MODEL_KEYS = ("arm", "pivot_height", "com_x", "roll_inertia", "pitch_inertia", "yaw_inertia", "reaction_torque_ratio", "servo_min", "servo_max", "left_servo_direction", "right_servo_direction")
 # Model parameters tunable from the dashboard, in SI units.
-MODEL_TUNING_KEYS = (
-    "pivot_height", "com_x", "roll_inertia", "pitch_inertia", "yaw_inertia",
-    "reaction_torque_ratio", "arm",
-)
+MODEL_TUNING_KEYS = ("pivot_height", "com_x", "roll_inertia", "pitch_inertia", "yaw_inertia", "reaction_torque_ratio", "arm")
 
 # Equivalent to retaining 0.99 / 0.9998 of gyro integration every 10 ms.
 GRAVITY_TAU = -0.01 / math.log(0.99)
 POWERED_GRAVITY_TAU = -0.01 / math.log(0.9998)
 ANGULAR_KEYS = ("roll", "pitch", "yaw_rate", "pitch_trim", "left_trim", "right_trim", "servo_compensation", "target_rate", "velocity_damping")
 
-GAIN_KEYS = (
-    "roll_p", "roll_i", "roll_damping", "pitch_p", "pitch_i", "pitch_damping",
-    "yaw_damping", "integral_limit", "pitch_trim", "left_trim", "right_trim",
-)
+GAIN_KEYS = ("roll_p", "roll_i", "roll_damping", "pitch_p", "pitch_i", "pitch_damping", "yaw_damping", "integral_limit", "pitch_trim", "left_trim", "right_trim")
 COMMAND_KEYS = ("enabled", "roll", "pitch", "yaw_rate", "base_throttle") + GAIN_KEYS
 BIAS_KEYS = ("roll_bias", "pitch_bias", "yaw_bias")
 THRUST_SCALE_KEYS = ("left_thrust_scale", "right_thrust_scale")
@@ -143,25 +110,13 @@ YAW_I = THRUST_VOLTAGE + 1
 
 
 class Attitude:
-    def __init__(
-        self,
-        accel=(0.0, 0.0, 1.0),
-        gravity_tau=GRAVITY_TAU,
-        powered_tau=POWERED_GRAVITY_TAU,
-    ):
-        self.gravity_tau = gravity_tau
-        self.powered_tau = powered_tau
-        self.state = array(
-            "f",
-            [
-                math.atan2(accel[1], accel[2]),
-                math.atan2(-accel[0], math.sqrt(accel[1] ** 2 + accel[2] ** 2)),
-            ],
-        )
+    def __init__(self, accel=(0.0, 0.0, 1.0)):
+        self.state = array("f", [math.atan2(accel[1], accel[2]), math.atan2(-accel[0], math.sqrt(accel[1] ** 2 + accel[2] ** 2))])
 
     def update(self, accel, gyro, dt, powered):
-        tau = self.powered_tau if powered else self.gravity_tau
-        return attitude_step(self.state, accel, gyro, dt, tau)
+        motion = array("f", list(accel) + list(gyro) + [dt, POWERED_GRAVITY_TAU if powered else GRAVITY_TAU])
+        library.flight_attitude(self.state.buffer_info()[0], motion.buffer_info()[0])
+        return self.state[0], self.state[1]
 
 
 class Controller:
@@ -195,4 +150,6 @@ class Controller:
             self.command[MODEL_OFFSET + MODEL_KEYS.index(key)] = settings[key]
 
     def update(self, attitude, gyro, dt):
-        return control_step(self.state, self.command, THRUST_BUFFER, attitude, gyro, dt)
+        struct.pack_into("<6f", self.command, 0, *attitude, *gyro, dt)
+        library.flight_control(self.state.buffer_info()[0], self.command.buffer_info()[0], THRUST_BUFFER.buffer_info()[0], len(THRUST_BUFFER) // 2)
+        return int(self.state[2]), int(self.state[3]), self.state[4], self.state[5]

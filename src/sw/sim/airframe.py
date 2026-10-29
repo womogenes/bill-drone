@@ -46,8 +46,6 @@ PARAMS = {
 KEYS = list(PARAMS)
 # Terms a parameter set may leave out (they then stay off).
 OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start")
-# Terms models saved before them did not have, filled in from their other terms so that those models behave as they did.
-LEGACY = {"tilt_push": lambda params: 1 - params["wash"]}
 # The running time (s) of a motor that has long been spinning.
 RUNNING = 10.0
 # The ESCs were swapped between the motors at this time (UTC, as recordings are named): the ESC on the right before it, whose terms are the "right" motor terms, drives the left motor after it.
@@ -158,7 +156,7 @@ def table_thrust(p, throttle, voltage, table=TABLE, gain=None):
     return thrust(throttle, table) * np.asarray(voltage, float)[..., None] ** p["voltage_power"] * (np.array([1.0, p["right_thrust_gain"]]) if gain is None else gain)
 
 
-def trim_for(p, table_thrusts, geometry=GEOMETRY):
+def trim_for(table_thrusts, geometry=GEOMETRY):
     """A flight's thrust trim from its airborne table thrusts [sample, side]: the level that makes their median carry the weight, and each side's median."""
     level = geometry["mass"] * G / np.median(table_thrusts.sum(-1))
     return level, np.median(table_thrusts, 0)
@@ -296,11 +294,11 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
 
 
 def complete(params):
-    """A full parameter set from a saved one: missing optional terms off, legacy terms as the model had them (LEGACY), anything else missing at its starting value."""
-    out = {key: params.get(key, 0.0 if key in OPTIONAL else PARAMS[key][2]) for key in KEYS if key not in LEGACY or key in params}
-    for key, rule in LEGACY.items():
-        out.setdefault(key, rule(out))
-    return {key: out[key] for key in KEYS}
+    """A full parameter set from a saved one: missing optional terms off, tilt_push in models saved before it at 1 - wash (as they flew), anything else missing at its starting value."""
+    out = {key: params.get(key, 0.0 if key in OPTIONAL else PARAMS[key][2]) for key in KEYS}
+    if "tilt_push" not in params:
+        out["tilt_push"] = 1 - out["wash"]
+    return out
 
 
 def geometry_of(params):
