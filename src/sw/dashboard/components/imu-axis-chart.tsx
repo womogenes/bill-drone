@@ -1,7 +1,7 @@
 'use client';
 
 import { memo } from 'react';
-import { signed } from '@/lib/format';
+import { relativeTime, signed } from '@/lib/format';
 import { FastChart, type ChartSeries } from '@/components/fast-chart';
 import type { ImuSample } from '@/lib/telemetry';
 
@@ -29,19 +29,14 @@ const formats = [0, 1, 2, 3].map(
   (digits) => (value: number) => signed(value, digits)
 );
 
-function relativeTime(time: number, end: number) {
-  const seconds = Math.max(0, Math.round((end - time) / 1000));
-  return `T-${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
-}
-
 export const ImuAxisChart = memo(function ImuAxisChart({
-  samples,
+  history,
   field,
   start,
   end,
   digits,
 }: {
-  samples: ImuSample[];
+  history: (start: number, end: number) => ImuSample[];
   field: 'accel' | 'gyro';
   start: number;
   end: number;
@@ -49,7 +44,7 @@ export const ImuAxisChart = memo(function ImuAxisChart({
 }) {
   return (
     <FastChart
-      data={samples}
+      history={history}
       series={series[field]}
       time={time}
       start={start}

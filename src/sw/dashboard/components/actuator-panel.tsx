@@ -2,7 +2,7 @@
 
 import { THROTTLE_MAX } from '@/lib/telemetry';
 
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useState } from 'react';
 import { Plug, RotateCcw, Square, Unplug } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -38,31 +38,16 @@ export const ActuatorPanel = memo(function ActuatorPanel({
   const ResetIcon = isServo ? RotateCcw : Square;
   const [draft, setDraft] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
-  const lastSent = useRef(-Infinity);
-  const pending = useRef<number | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => () => clearTimeout(timer.current), []);
 
   // Keep the released position visible until the ESP acknowledges it.
   if (!dragging && draft !== null && (angle === draft || !connected)) {
     setDraft(null);
   }
 
-  function sendLatest() {
-    clearTimeout(timer.current);
-    timer.current = undefined;
-    if (pending.current === null) return;
-    onChange(kind, side, pending.current);
-    pending.current = null;
-    lastSent.current = performance.now();
-  }
-
   function commit(value: number) {
     setDraft(value);
     setDragging(false);
-    pending.current = value;
-    sendLatest();
+    onChange(kind, side, value);
   }
   const disabled = !connected || angle === undefined;
   const StatusIcon = disabled ? Unplug : Plug;
@@ -91,9 +76,8 @@ export const ActuatorPanel = memo(function ActuatorPanel({
               aria-label={`Set ${title} zero`}
               disabled={disabled || locked || zeroDisabled || dragging}
               onClick={() => {
-                sendLatest();
                 onZero(side);
-                setDraft(0);
+                setDraft(null);
               }}
             >
               Set zero
@@ -132,16 +116,9 @@ export const ActuatorPanel = memo(function ActuatorPanel({
             const next = Array.isArray(value) ? value[0] : value;
             setDraft(next);
             setDragging(true);
-            pending.current = next;
-            const delay = 50 - (performance.now() - lastSent.current);
-            if (delay <= 0) sendLatest();
-            else if (timer.current === undefined) {
-              timer.current = setTimeout(sendLatest, delay);
-            }
+            onChange(kind, side, next);
           }}
-          onValueCommitted={(value) => {
-            commit(Array.isArray(value) ? value[0] : value);
-          }}
+          onValueCommitted={() => setDragging(false)}
         />
         <div className="flex justify-between text-sm text-muted-foreground tabular-nums">
           <span>

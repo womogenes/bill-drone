@@ -1,9 +1,29 @@
+import type { HoverState, Side, Targets } from './telemetry';
+
+// Requests the drone service (src/fw/controller/bridge.py) forwards; stop repeats until the drone confirms it.
+export type DroneRequest =
+  | { type: 'stop' | 'arm' | 'calibrate' }
+  | { type: 'zero'; side: 'left' | 'right' }
+  | { type: 'tune'; settings: Record<string, number> };
+
+export type ServiceMessage =
+  | ({ type: 'reading' } & Record<string, unknown>)
+  | ({ type: 'hover' } & HoverState)
+  | {
+      type: 'result';
+      request: Exclude<DroneRequest['type'], 'zero'>;
+      error: string | null;
+    }
+  | { type: 'result'; request: 'zero'; side: Side; error: string | null };
+
 export type EspWorkerMessage =
   | { type: 'open' | 'close' | 'error' }
-  | { type: 'packet'; packet: ArrayBuffer };
+  | { type: 'message'; message: ServiceMessage };
 
 export type EspWorkerCommand =
-  { type: 'connect'; url: string } | { type: 'send'; packet: ArrayBuffer };
+  | { type: 'connect'; url: string; targets: Targets }
+  | { type: 'targets'; targets: Targets }
+  | { type: 'send'; message: DroneRequest };
 
 export class EspConnection {
   connected = false;
@@ -11,8 +31,9 @@ export class EspConnection {
 
   constructor(
     address: string,
+    targets: Targets,
     onOpen: () => void,
-    onPacket: (packet: ArrayBuffer) => void,
+    onMessage: (message: ServiceMessage) => void,
     onClose: () => void
   ) {
     this.worker = new Worker(
@@ -22,8 +43,8 @@ export class EspConnection {
       if (data.type === 'open') {
         this.connected = true;
         onOpen();
-      } else if (data.type === 'packet') {
-        onPacket(data.packet);
+      } else if (data.type === 'message') {
+        onMessage(data.message);
       } else {
         this.close();
         onClose();
@@ -33,12 +54,26 @@ export class EspConnection {
       this.close();
       onClose();
     };
-    this.worker.postMessage({ type: 'connect', url: `ws://${address}/ws` });
+    this.worker.postMessage({
+      type: 'connect',
+      url: `ws://${address}/ws`,
+      targets,
+    } satisfies EspWorkerCommand);
   }
 
-  send(packet: ArrayBuffer) {
+  targets(targets: Targets) {
+    this.worker.postMessage({
+      type: 'targets',
+      targets,
+    } satisfies EspWorkerCommand);
+  }
+
+  send(message: DroneRequest) {
     if (this.connected) {
-      this.worker.postMessage({ type: 'send', packet }, [packet]);
+      this.worker.postMessage({
+        type: 'send',
+        message,
+      } satisfies EspWorkerCommand);
     }
   }
 
