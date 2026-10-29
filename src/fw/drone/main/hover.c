@@ -32,6 +32,10 @@
 #define TOUCHDOWN_FRACTION 0.85f
 #define TOUCHDOWN_RATE 0.1f
 #define TOUCHDOWN_S 0.3f
+// A landing whose height estimate stays more than BELOW_GROUND (m) under the engage point for TOUCHDOWN_S is down as well: near the floor the camera loses the tag, and the dead-reckoned climb rate can settle just past TOUCHDOWN_RATE, so the estimate sinks through the floor while full hover thrust holds the drone on it (2026-10-29 07:20, 5.7 s, height -0.31 m). This assumes it lands where it took off; one taking off from a raised spot and landing lower would ramp down this far under the takeoff point.
+#ifndef BELOW_GROUND
+#define BELOW_GROUND 0.08f
+#endif
 #define LANDED_RAMP 0.5f
 // A landing whose descent has stalled (climb rate under half land_rate for STALL_S) winds thrust down at STALL_RAMP (m/s² per s) whatever the climb-rate loop would do: on the floor it cannot follow a descent, so its integral alone takes seconds to drop thrust to TOUCHDOWN_FRACTION. Still in the air, the drone sinks and the stall clears.
 #define STALL_S 0.3f
@@ -305,7 +309,7 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     }
     // On the ground a descent command winds thrust down, since the climb rate cannot follow.
     if (mode != HOVER_HOLD) {
-        bool held = state->force < TOUCHDOWN_FRACTION * weight && fabsf(state->climb_rate) < TOUCHDOWN_RATE;
+        bool held = (state->force < TOUCHDOWN_FRACTION * weight && fabsf(state->climb_rate) < TOUCHDOWN_RATE) || state->height < -BELOW_GROUND;
         state->low_time = held ? state->low_time + dt : 0;
         if (state->low_time >= TOUCHDOWN_S) state->landed = true;
     }
