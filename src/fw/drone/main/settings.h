@@ -30,9 +30,6 @@ enum {
 // Schema entries per D reply page: about 60 bytes each, well inside the request reply.
 #define SCHEMA_PAGE 12
 
-int settings_index(const char *name, size_t length);
-void settings_decode(const uint8_t *data, size_t size);
-size_t settings_encode(uint8_t *data, size_t size);
 void settings_copy(float *values);
 float settings_get(int index);
 // False, changing nothing, if any value is outside its table range.

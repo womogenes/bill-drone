@@ -64,7 +64,6 @@ bool settings_valid(int index, float value) {
     return isfinite(value) && value >= minimum[index] && value <= maximum[index];
 }
 
-// NULL if value fits the table entry, otherwise why not; error is scratch space.
 const char *settings_validate(int index, float value, char *error, size_t size) {
     if (settings_valid(index, value)) return NULL;
     snprintf(error, size, "%s would be %g, outside %g..%g", names[index], value, minimum[index], maximum[index]);
@@ -78,7 +77,7 @@ bool settings_calibration_fits(const float *bias, const float *pose_zero) {
            settings_valid(SETTING_pose_zero_pitch, pose_zero[1]);
 }
 
-int settings_index(const char *name, size_t length) {
+static int settings_index(const char *name, size_t length) {
     for (int i = 0; i < SETTINGS; i++) {
         if (strlen(names[i]) == length && !memcmp(names[i], name, length)) return i;
     }
@@ -86,7 +85,7 @@ int settings_index(const char *name, size_t length) {
 }
 
 // Applies a parsed blob; anything missing, unknown, out of range or truncated keeps its default, and a calibration that is not complete and in range is not calibrated.
-void settings_decode(const uint8_t *data, size_t size) {
+static void settings_decode(const uint8_t *data, size_t size) {
     float loaded[SETTINGS];
     bool present[SETTINGS] = {false};
     memcpy(loaded, defaults, sizeof(loaded));
@@ -116,7 +115,7 @@ void settings_decode(const uint8_t *data, size_t size) {
     UNLOCK();
 }
 
-size_t settings_encode(uint8_t *data, size_t size) {
+static size_t settings_encode(uint8_t *data, size_t size) {
     float copy[SETTINGS];
     LOCK();
     memcpy(copy, values, sizeof(copy));
@@ -178,7 +177,6 @@ bool settings_calibration_unsaved(void) {
     return value;
 }
 
-// The stored calibration, only if it is complete and was taken in sensor_frame; otherwise the IMU is uncalibrated.
 bool settings_calibration(float sensor_frame, float *bias, float *pose_zero) {
     float copy[SETTINGS];
     settings_copy(copy);
@@ -199,18 +197,13 @@ void settings_apply(Command *command, const float *source) {
 #undef STATE
 }
 
-static int number(char *text, size_t size, float value) {
-    return snprintf(text, size, "%.9g", value);
-}
-
 // {"name":value,...} for every entry, in table order; the S reply and the T reply.
 size_t settings_json(char *text, size_t size) {
     float copy[SETTINGS];
     settings_copy(copy);
     size_t at = 0;
     for (int i = 0; i < SETTINGS && at < size; i++) {
-        at += snprintf(text + at, size - at, "%s\"%s\":", i ? "," : "{", names[i]);
-        if (at < size) at += number(text + at, size - at, copy[i]);
+        at += snprintf(text + at, size - at, "%s\"%s\":%.9g", i ? "," : "{", names[i], copy[i]);
     }
     if (at < size) at += snprintf(text + at, size - at, "}");
     return at < size ? at : 0;
@@ -221,13 +214,8 @@ size_t settings_schema(char *text, size_t size, int page) {
     int first = page * SCHEMA_PAGE;
     size_t at = snprintf(text, size, "{\"total\":%d,\"first\":%d,\"settings\":[", SETTINGS, first);
     for (int i = first; i < SETTINGS && i < first + SCHEMA_PAGE && at < size; i++) {
-        at += snprintf(text + at, size - at, "%s[\"%s\",", i > first ? "," : "", names[i]);
-        if (at < size) at += number(text + at, size - at, minimum[i]);
-        if (at < size) at += snprintf(text + at, size - at, ",");
-        if (at < size) at += number(text + at, size - at, maximum[i]);
-        if (at < size) at += snprintf(text + at, size - at, ",");
-        if (at < size) at += number(text + at, size - at, defaults[i]);
-        if (at < size) at += snprintf(text + at, size - at, ",%s]", tunable[i] ? "true" : "false");
+        at += snprintf(text + at, size - at, "%s[\"%s\",%.9g,%.9g,%.9g,%s]", i > first ? "," : "", names[i], minimum[i],
+                       maximum[i], defaults[i], tunable[i] ? "true" : "false");
     }
     if (at < size) at += snprintf(text + at, size - at, "]}");
     return at < size ? at : 0;
@@ -238,7 +226,7 @@ static const char *skip(const char *at, const char *end) {
     return at;
 }
 
-// Parses a flat JSON object of numbers and applies all of it or none of it. Returns an error or NULL.
+// A flat JSON object of numbers, applied all or none.
 const char *settings_tune(const char *json, size_t length, int64_t now, char *error, size_t size) {
     int indices[SETTINGS];
     float changes[SETTINGS];

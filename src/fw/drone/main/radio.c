@@ -1,8 +1,6 @@
 // Direct ESP-NOW link: status messages, streamed targets, stop, and the request service for updates and transactions. Framing: src/fw/controller/wire.py.
-//
-// Channels: 0 status (drone, every 50 ms), 1 targets (laptop, newest wins; each one is the controller heartbeat),
-// 2/3 binary/JSON flight log (one message in flight, resent until acknowledged), 4 recorder subscription,
-// 5 log acknowledgement, 6 requests and replies (id-tagged, fragmented).
+// Channels: 0 status (drone, every 50 ms), 1 targets (laptop, newest wins; each one is the controller heartbeat), 2/3 binary/JSON flight log (one message in flight, resent until acknowledged), 4 recorder subscription, 5 log acknowledgement, 6 requests and replies (id-tagged, fragmented).
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -18,7 +16,6 @@
 #include "esp_wifi.h"
 #include "mbedtls/sha256.h"
 #include "runtime.h"
-#include "settings.h"
 #include "arming.h"
 #include "camera.h"
 
@@ -36,7 +33,7 @@ static const uint8_t peer[ESP_NOW_ETH_ALEN] = {0x04, 0xb2, 0x47, 0x54, 0x80, 0x4
 #define REPLY ((REPLY_FRAGMENTS > 8 ? REPLY_FRAGMENTS : 8) * PAYLOAD)
 #define SECTOR 4096
 #define HASH 8
-// Target floats: base, roll, pitch, yaw rate, two servos, two throttles, then the hover mode (hover.h), which older senders leave out.
+// Target floats: base, roll, pitch, yaw rate, two servos, two throttles, the hover mode (hover.h), then the hold-point nudge (forward, left, up); older senders leave out the tail.
 #define TARGETS 12
 // An image that is still unconfirmed this long after boot restarts, so the bootloader rolls back to the previous one.
 #define CONFIRM_US 90000000
@@ -337,19 +334,10 @@ static void stream_log(int64_t now) {
 static void camera_status(Status *status, int64_t now) {
     CameraStats camera;
     camera_stats(&camera);
-    status->camera_packets = camera.packets;
-    status->camera_frames = camera.frames;
-    status->camera_poses = camera.poses;
-    status->camera_flows = camera.flows;
-    status->camera_corrupt = camera.corrupt;
-    status->camera_repeats = camera.repeats;
-    status->camera_stale = camera.stale;
-    status->camera_unsynced = camera.unsynced;
-    status->camera_skipped_bytes = camera.skipped_bytes;
-    status->camera_overflows = camera.overflows;
-    status->camera_line_errors = camera.line_errors;
-    status->camera_sync_edges = camera.sync_edges;
-    status->camera_rx_edges = camera.rx_edges;
+    // The thirteen counters, packets to rx_edges, are in the same order in both.
+    _Static_assert(offsetof(CameraStats, rx_edges) == 12 * sizeof(uint32_t), "CameraStats counters");
+    _Static_assert(offsetof(Status, camera_rx_edges) - offsetof(Status, camera_packets) == 12 * sizeof(uint32_t), "Status camera counters");
+    memcpy((uint8_t *)status + offsetof(Status, camera_packets), &camera.packets, 13 * sizeof(uint32_t));
     status->camera_sequence = camera.sequence;
     status->camera_age_ms = camera.frame_us < 0 ? UINT32_MAX : (now - camera.capture_us) / 1000;
     status->camera_valid = camera.valid;
@@ -422,12 +410,24 @@ static void describe(char *text, size_t size, const esp_partition_t *partition) 
              app.app_elf_sha256[6], app.app_elf_sha256[7]);
 }
 
+// Scratch space for request error messages.
+static char error[96];
+
+// Changes all of the values, or none and says why.
+static const char *change_settings(const int *indices, const float *values, int count, int64_t now) {
+    for (int i = 0; i < count; i++) {
+        const char *failure = settings_validate(indices[i], values[i], error, sizeof(error));
+        if (failure) return failure;
+    }
+    settings_change(indices, values, count, now);
+    return NULL;
+}
+
 // Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
     char *text = (char *)reply + 5;
-    static char error[96];
     if (op == 'S' || op == 'D') {
         *size = op == 'S' ? settings_json(text, REPLY - 5) : settings_schema(text, REPLY - 5, length ? body[0] : 0);
         return *size ? NULL : "Settings do not fit the reply";
@@ -455,42 +455,33 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         // Each of these ends in an NVS write, which is only allowed while disarmed.
         if (!flight_runtime_idle()) return "Disarm and zero throttle first";
         int64_t now = esp_timer_get_time();
+        const char *failure = NULL;
         if (op == 'T') {
-            const char *failure = settings_tune((const char *)body, length, now, error, sizeof(error));
-            if (failure) return failure;
+            failure = settings_tune((const char *)body, length, now, error, sizeof(error));
         } else if (op == 'G') {
-            const char *failure = flight_runtime_calibrate();
-            if (failure) return failure;
+            failure = flight_runtime_calibrate();
         } else if (op == 'L') {
             if (length != 8) return "Expected two float32 values";
             // A new zero pose makes the old pitch trim meaningless.
             int indices[] = {SETTING_pose_zero_roll, SETTING_pose_zero_pitch, SETTING_pitch_trim};
             float values[3] = {0};
             memcpy(values, body, 8);
-            for (int i = 0; i < 2; i++) {
-                const char *failure = settings_validate(indices[i], values[i], error, sizeof(error));
-                if (failure) return failure;
-            }
-            settings_change(indices, values, 3, now);
+            failure = change_settings(indices, values, 3, now);
         } else if (op == 'Q') {
             if (length != 24) return "Expected six float32 values";
             int indices[6];
             float values[6];
             memcpy(values, body, sizeof(values));
-            for (int i = 0; i < 6; i++) {
-                indices[i] = (i < 3 ? SETTING_accel_offset_x : SETTING_accel_gain_x) + i % 3;
-                const char *failure = settings_validate(indices[i], values[i], error, sizeof(error));
-                if (failure) return failure;
-            }
-            settings_change(indices, values, 6, now);
+            for (int i = 0; i < 6; i++) indices[i] = (i < 3 ? SETTING_accel_offset_x : SETTING_accel_gain_x) + i % 3;
+            failure = change_settings(indices, values, 6, now);
         } else {
             if (length != 1 || body[0] > 1) return "Expected side 0 or 1";
             float offset;
-            const char *failure = flight_runtime_zero_servo(body[0], &offset, error, sizeof(error));
-            if (failure) return failure;
             int index = body[0] ? SETTING_servo_offset_right : SETTING_servo_offset_left;
-            settings_change(&index, &offset, 1, now);
+            failure = flight_runtime_zero_servo(body[0], &offset, error, sizeof(error));
+            if (!failure) settings_change(&index, &offset, 1, now);
         }
+        if (failure) return failure;
         flight_runtime_apply_settings();
         *size = settings_json(text, REPLY - 5);
         return NULL;
@@ -595,8 +586,7 @@ static void store_settings(void) {
         float changes[] = {bias[0], bias[1], bias[2], pose_zero[0], pose_zero[1], sensor_frame, 1};
         settings_change(indices, changes, 7, now);
     }
-    float trimmed[2];
-    float hover_trim[2];
+    float trimmed[2], hover_trim[2];
     if (flight_runtime_take_hover_trim(&hover_trim[0], &hover_trim[1])) {
         int indices[] = {SETTING_hover_trim_start_x, SETTING_hover_trim_start_y};
         if (settings_change(indices, hover_trim, 2, now)) flight_runtime_apply_settings();
