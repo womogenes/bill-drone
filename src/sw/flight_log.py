@@ -63,99 +63,32 @@ def read_flight(path):
                 truncated = True
                 break
             magic, session, count, size = struct.unpack(HEADER_FORMAT, header)
-            if (
-                magic != b"FLG1"
-                or session != metadata["session"]
-                or size not in FORMATS
-                or not 1 <= count <= MAX_BATCH
-            ):
+            if magic != b"FLG1" or session != metadata["session"] or size not in FORMATS or not 1 <= count <= MAX_BATCH:
                 raise ValueError("Invalid flight-log packet")
             payload = file.read(count * size)
             for offset in range(0, len(payload) - size + 1, size):
                 fields = struct.unpack_from(FORMATS[size], payload, offset)
-                (
-                    stamp,
-                    seq,
-                    ax,
-                    ay,
-                    az,
-                    temperature,
-                    gx,
-                    gy,
-                    gz,
-                    roll,
-                    pitch,
-                    left,
-                    right,
-                    left_servo,
-                    right_servo,
-                    target_roll,
-                    target_pitch,
-                    target_yaw,
-                    base,
-                    control_us,
-                    flags,
-                    voltage_mv,
-                ) = fields[:22]
-                accel = [
-                    value * sign / 16384 for value, sign in zip((ax, ay, az), signs)
-                ]
-                gyro = [
-                    value * sign / 131 - zero
-                    for value, sign, zero in zip((gx, gy, gz), signs, bias)
-                ]
-                rows.append(
-                    [
-                        session,
-                        seq,
-                        stamp,
-                        *accel,
-                        *gyro,
-                        temperature / 340 + 36.53,
-                        roll / 100,
-                        pitch / 100,
-                        left,
-                        right,
-                        left_servo / 100,
-                        right_servo / 100,
-                        target_roll / 100,
-                        target_pitch / 100,
-                        target_yaw / 100,
-                        base,
-                        control_us,
-                        flags,
-                        voltage_mv / 1000,
-                        *hover_values(flags, fields[22:]),
-                    ]
-                )
+                stamp, seq, ax, ay, az, temperature, gx, gy, gz, roll, pitch = fields[:11]
+                left, right, left_servo, right_servo, target_roll, target_pitch, target_yaw, base, control_us, flags, voltage_mv = fields[11:22]
+                rows.append([
+                    session, seq, stamp,
+                    *(value * sign / 16384 for value, sign in zip((ax, ay, az), signs)),
+                    *(value * sign / 131 - zero for value, sign, zero in zip((gx, gy, gz), signs, bias)),
+                    temperature / 340 + 36.53,
+                    *(value / 100 for value in (roll, pitch)),
+                    left, right,
+                    *(value / 100 for value in (left_servo, right_servo, target_roll, target_pitch, target_yaw)),
+                    base, control_us, flags, voltage_mv / 1000,
+                    *hover_values(flags, fields[22:]),
+                ])
             if len(payload) != count * size:
                 truncated = True
                 break
 
     columns = [
-        "session",
-        "sequence",
-        "esp_time_us",
-        "ax_g",
-        "ay_g",
-        "az_g",
-        "gx_deg_s",
-        "gy_deg_s",
-        "gz_deg_s",
-        "temperature_c",
-        "roll_deg",
-        "pitch_deg",
-        "left_throttle",
-        "right_throttle",
-        "left_servo_deg",
-        "right_servo_deg",
-        "target_roll_deg",
-        "target_pitch_deg",
-        "target_yaw_deg_s",
-        "base_throttle",
-        "control_us",
-        "flags",
-        "battery_v",
+        "session", "sequence", "esp_time_us", "ax_g", "ay_g", "az_g", "gx_deg_s", "gy_deg_s", "gz_deg_s", "temperature_c",
+        "roll_deg", "pitch_deg", "left_throttle", "right_throttle", "left_servo_deg", "right_servo_deg",
+        "target_roll_deg", "target_pitch_deg", "target_yaw_deg_s", "base_throttle", "control_us", "flags", "battery_v",
         *HOVER_COLUMNS,
     ]
     data = pd.DataFrame(rows, columns=columns).drop_duplicates(["session", "sequence"])
@@ -170,9 +103,7 @@ def main():
     output = args.file.with_suffix(".csv")
     data.to_csv(output, index=False)
     gaps = int(data.sequence.diff().sub(1).clip(lower=0).sum())
-    print(
-        f"Saved {output}: {len(data)} samples, {gaps} missing between samples, truncated tail: {truncated}"
-    )
+    print(f"Saved {output}: {len(data)} samples, {gaps} missing between samples, truncated tail: {truncated}")
 
 
 if __name__ == "__main__":
