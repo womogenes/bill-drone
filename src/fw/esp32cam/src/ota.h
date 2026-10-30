@@ -1,6 +1,7 @@
 #pragma once
 #include <WiFi.h>
 #include <ArduinoOTA.h>
+#include "esp_wifi.h"
 #include "esp_camera.h"
 extern bool cameraReady;
 extern volatile bool cameraStopRequested;
@@ -12,25 +13,44 @@ struct WifiNetwork {
 #else
 #include "wifi.example.h"
 #endif
-// The access point's channel, clear of the drone's ESP-NOW link on channel 6.
-constexpr int apChannel = 11;
-constexpr uint32_t apAfterMs = 30000;
+// Away from every known network the station joins nothing and parks on radioChannel, clear of the drone's ESP-NOW link on channel 6, ready for FPV's raw frames (fpv.h). The access point (apSsid) starts there only when asked (the drone's K A request, update.h), for Wi-Fi updates, until the camera restarts: switching between the two reallocated the Wi-Fi driver's internal RAM, and JPEG capture then lacked its 32 KB block of DMA memory (2026-10-30, 12 bytes short), and with the access point up no raw frame went out.
+constexpr int radioChannel = 11;
+constexpr uint32_t parkAfterMs = 30000;
 const WifiNetwork *wifiChosen = nullptr;
-bool apStarted = false;
+bool apStarted = false, parked = false;
 
 inline bool wifiConfigured() { return wifiNetworks[0].ssid[0] || apSsid[0]; }
 
-// The network joined or the access point, its address, and the camera's state, as the drone's K S request reports them (update.h).
+// The network joined, the access point or the parked station, its address, and the camera's state, as the drone's K S request reports them (update.h).
 inline void wifiState(char *text, size_t size) {
-    snprintf(text, size, "%s %s %s", apStarted ? "ap" : WiFi.status() == WL_CONNECTED ? "joined" : wifiChosen ? "joining" : "off",
-             apStarted ? apSsid : wifiChosen ? wifiChosen->ssid : "-", (apStarted ? WiFi.softAPIP() : WiFi.localIP()).toString().c_str());
+    uint8_t channel = 0;
+    wifi_second_chan_t second;
+    esp_wifi_get_channel(&channel, &second);
+    snprintf(text, size, "%s %s %s ch%u", apStarted ? "ap" : parked ? "radio" : WiFi.status() == WL_CONNECTED ? "joined" : wifiChosen ? "joining" : "off",
+             apStarted ? apSsid : wifiChosen ? wifiChosen->ssid : "-", (apStarted ? WiFi.softAPIP() : WiFi.localIP()).toString().c_str(), unsigned(channel));
 }
 
-// Without a known network the camera is its own access point until it restarts: retrying networks would move its radio off the access point's channel.
+inline void park() {
+    wifiChosen = nullptr;
+    WiFi.setAutoReconnect(false);
+    WiFi.mode(WIFI_STA);
+    // The driver refuses a channel while the station is still connecting ("sta is connecting"), and the camera then sent on its network's channel.
+    esp_wifi_disconnect();
+    for (int tries = 0; tries < 50 && esp_wifi_set_channel(radioChannel, WIFI_SECOND_CHAN_NONE) != ESP_OK; ++tries) {
+        esp_wifi_disconnect();
+        delay(20);
+    }
+    apStarted = false;
+    parked = true;
+}
+
 inline void startAp() {
+    if (!apSsid[0] || apStarted)
+        return;
     WiFi.mode(WIFI_AP);
-    apStarted = WiFi.softAP(apSsid, apPassword[0] ? apPassword : nullptr, apChannel);
+    apStarted = WiFi.softAP(apSsid, apPassword[0] ? apPassword : nullptr, radioChannel);
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    parked = !apStarted;
 }
 
 inline void startWifi() {
@@ -50,11 +70,10 @@ inline void startWifi() {
             if (WiFi.SSID(i) == network.ssid)
                 wifiChosen = &network;
     WiFi.scanDelete();
-    if (wifiChosen) {
+    if (wifiChosen)
         WiFi.begin(wifiChosen->ssid, wifiChosen->password);
-    } else if (apSsid[0]) {
-        startAp();
-    }
+    else
+        park();
     ArduinoOTA.setHostname("bill-esp32cam");
     // No OTA password, as requested. Wi-Fi credentials are separate.
     ArduinoOTA.setTimeout(10000);
@@ -72,9 +91,9 @@ inline void serviceOta() {
     static bool joined = false;
     if (!wifiChosen && !apStarted) return;
     joined |= WiFi.status() == WL_CONNECTED;
-    // A network in range that never lets the camera join (a changed password) falls back to the access point too.
-    if (!joined && !apStarted && apSsid[0] && millis() > apAfterMs) {
-        startAp();
+    // A network in range that never lets the camera join (a changed password) parks the station too.
+    if (!joined && wifiChosen && millis() > parkAfterMs) {
+        park();
         return;
     }
     if (!apStarted && WiFi.status() != WL_CONNECTED) {

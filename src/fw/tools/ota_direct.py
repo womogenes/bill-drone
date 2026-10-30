@@ -7,6 +7,7 @@ Update the drone's application over the direct ESP-NOW link through the laptop s
 
 firmware: diff the new image against the images this laptop last installed in each OTA slot; send only changed sectors (deflate-compressed when that is smaller, over the fast rate while writing), have the drone copy sectors the running image already has, then boot and confirm it.
 confirm: keep the running image after a manual check.
+camera-ap: start the camera's access point (fw/esp32cam/src/ota.h) until it restarts.
 camera: write a new ESP32-CAM image to the camera's spare slot through the drone (which forwards each request over its wired link, fw/esp32cam/src/update.h), boot it and check that it runs. The whole image is sent; the camera checks each sector's hash and reads it back, and checks the whole image before selecting it.
 """
 
@@ -235,6 +236,7 @@ def main():
     commands.add_parser("confirm", help="Keep the running OTA image after a manual check")
     camera_image = commands.add_parser("camera", help="Update the ESP32-CAM through the drone")
     camera_image.add_argument("image", type=Path)
+    commands.add_parser("camera-ap", help="Start the camera's access point until it restarts, for Wi-Fi updates away from known networks")
     args = parser.parse_args()
 
     started = time.monotonic()
@@ -243,6 +245,9 @@ def main():
         firmware(drone, args.image)
     elif args.command == "camera":
         camera(drone, args.image)
+    elif args.command == "camera-ap":
+        drone.request(b"K", b"A")
+        print("The camera's access point is up until it restarts; join it and run make camera-wifi")
     else:
         drone.request(b"V")
     print(f"Done in {time.monotonic() - started:.1f}s")

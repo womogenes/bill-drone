@@ -5,26 +5,38 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 const HOST_KEY = 'camera-host';
+const MODE_KEY = 'camera-mode';
+type Mode = 'tag' | 'fpv';
 
-// Rendered in the browser only (the page loads it without server rendering), so the saved address is there from the start. The camera's own JPEG video over its Wi-Fi, through /api/camera. While it plays the camera stops tracking the tag, so camera hover has no sightings; it resumes tracking 3 s after the video closes.
+function saved(key: string) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function save(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
+
+// Rendered in the browser only (the page loads it without server rendering), so the saved choices are there from the start. Always streams: the tracking preview (the flow's 80x60 reduction, tracking undisturbed, over the camera's network) or FPV, the camera's own 480x320 video over the radio to the FPV receiver or over its network, during which it does not track the tag, so camera hover has no sightings; it resumes tracking 3 s after FPV ends.
 export function FpvPanel() {
   // Empty: the address the camera reports through the drone.
-  const [host, setHost] = useState(() => {
-    try {
-      return localStorage.getItem(HOST_KEY) ?? '';
-    } catch {
-      return '';
-    }
-  });
-  const where = host ? `&host=${encodeURIComponent(host)}` : '';
-  const [on, setOn] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  const [status, setStatus] = useState<{ mode: string; fps: number } | null>(
-    null
+  const [host, setHost] = useState(() => saved(HOST_KEY) ?? '');
+  const [mode, setMode] = useState<Mode>(() =>
+    saved(MODE_KEY) === 'fpv' ? 'fpv' : 'tag'
   );
+  const [attempt, setAttempt] = useState(0);
+  const [status, setStatus] = useState<{
+    state: string;
+    fps?: number;
+  } | null>(null);
+  const where = host ? `&host=${encodeURIComponent(host)}` : '';
 
   useEffect(() => {
-    if (!on) return;
     const controller = new AbortController();
     let previous: { count: number; time: number } | undefined;
     const timer = setInterval(async () => {
@@ -35,12 +47,17 @@ export function FpvPanel() {
         const value = await response.json();
         if (!response.ok) throw new Error(value.error);
         const time = performance.now();
-        const fps = previous
-          ? ((value.preview_count - previous.count) * 1000) /
-            (time - previous.time)
-          : 0;
-        previous = { count: value.preview_count, time };
-        setStatus({ mode: value.camera, fps: Math.max(0, fps) });
+        // FPV frames the dashboard received; the camera's own state otherwise.
+        const fps =
+          previous && value.received >= previous.count
+            ? ((value.received - previous.count) * 1000) /
+              (time - previous.time)
+            : undefined;
+        previous =
+          value.received === undefined
+            ? undefined
+            : { count: value.received, time };
+        setStatus({ state: value.camera, fps });
       } catch {
         if (!controller.signal.aborted) setStatus(null);
       }
@@ -48,60 +65,65 @@ export function FpvPanel() {
     return () => {
       controller.abort();
       clearInterval(timer);
-      setStatus(null);
     };
-  }, [on, where]);
+  }, [where]);
 
   return (
     <section
-      aria-labelledby="fpv-heading"
+      aria-labelledby="camera-heading"
       className="w-full max-w-md space-y-2 px-4 py-3"
     >
       <div className="flex items-center gap-2">
-        <h2 id="fpv-heading" className="font-semibold">
-          FPV
+        <h2 id="camera-heading" className="font-semibold">
+          Camera
         </h2>
-        <span className="text-sm text-muted-foreground tabular-nums">
-          {on &&
-            (status
-              ? `${status.mode} · ${Math.round(status.fps)} fps`
-              : 'connecting')}
+        <span
+          className={`text-sm tabular-nums ${status ? 'text-muted-foreground' : 'text-red-700'}`}
+        >
+          {status
+            ? status.fps === undefined
+              ? status.state
+              : `${status.state} · ${Math.round(status.fps)} fps`
+            : 'Offline'}
         </span>
         <Input
           aria-label="Camera address"
-          className="ml-auto h-8 w-36"
+          className="ml-auto h-8 w-28"
           placeholder="auto"
           value={host}
-          disabled={on}
           onChange={(event) => {
             setHost(event.target.value);
-            try {
-              localStorage.setItem(HOST_KEY, event.target.value);
-            } catch {}
+            save(HOST_KEY, event.target.value);
           }}
         />
-        <Button
-          size="sm"
-          variant={on ? 'default' : 'outline'}
-          aria-pressed={on}
-          onClick={() => setOn(!on)}
-        >
-          {on ? 'On' : 'Off'}
-        </Button>
+        <div className="flex gap-1" role="group" aria-label="Camera mode">
+          {(['tag', 'fpv'] as const).map((choice) => (
+            <Button
+              key={choice}
+              size="sm"
+              variant={mode === choice ? 'default' : 'outline'}
+              aria-pressed={mode === choice}
+              onClick={() => {
+                setMode(choice);
+                save(MODE_KEY, choice);
+              }}
+            >
+              {choice === 'tag' ? 'Tag' : 'FPV'}
+            </Button>
+          ))}
+        </div>
       </div>
-      {on && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          key={attempt}
-          src={`/api/camera?fpv=1${where}&attempt=${attempt}`}
-          alt="Live camera video"
-          className="aspect-[3/2] w-full bg-black object-contain"
-          onError={() => setTimeout(() => setAttempt((n) => n + 1), 1000)}
-        />
-      )}
-      {on && (
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        key={`${mode}-${where}-${attempt}`}
+        src={`/api/camera?${mode === 'fpv' ? 'fpv=1' : 'preview=1'}${where}&attempt=${attempt}`}
+        alt={mode === 'fpv' ? 'Live camera video' : 'Tracking preview'}
+        className="aspect-[3/2] w-full bg-black object-contain"
+        onError={() => setTimeout(() => setAttempt((n) => n + 1), 1000)}
+      />
+      {mode === 'fpv' && (
         <p className="text-sm text-muted-foreground">
-          Tag tracking is off while the video plays.
+          Tag tracking off: camera hover has no sightings.
         </p>
       )}
     </section>

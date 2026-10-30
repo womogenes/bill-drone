@@ -458,7 +458,6 @@ export default function Page() {
       </header>
       <main className="grid min-h-[calc(100dvh-4rem)] divide-y divide-border lg:h-[calc(100dvh-4rem)] lg:grid-cols-[repeat(3,minmax(0,28rem))] lg:divide-x lg:divide-y-0 lg:overflow-hidden">
         <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
-          <FpvPanel />
           <Suspense>
             <ImuPanel
               reading={reading?.imu}
@@ -507,6 +506,7 @@ export default function Page() {
           )}
         </div>
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
+          <FpvPanel />
           <p
             className={`px-4 pt-4 tabular-nums ${recorder?.error || (reading?.logging?.dropped ?? 0) > 0 ? 'text-red-700' : 'text-muted-foreground'}`}
           >

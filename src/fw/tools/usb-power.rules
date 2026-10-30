@@ -1,2 +1,0 @@
-# Lets the uucp group (serial-port users) switch USB port power, for usb_power_cycle.sh. Install once: sudo install -m644 tools/usb-power.rules /etc/udev/rules.d/90-usb-power.rules && sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=usb --action=bind
-ACTION=="add|bind", SUBSYSTEM=="usb", DRIVER=="hub", RUN+="/bin/sh -c 'chgrp uucp /sys%p/*-port*/disable; chmod g+w /sys%p/*-port*/disable'"

@@ -7,10 +7,17 @@
 #include "packet.h"
 extern bool cameraReady, cameraStalled;
 extern volatile bool fpvActive;
+extern volatile uint32_t fpvRadioMs;
+namespace fpv {
+extern esp_err_t rawError;
+extern uint32_t rawSent;
+}
+extern char logRing[2048];
+extern size_t logHead;
 extern esp_err_t startError;
 extern volatile bool cameraStopRequested;
 
-// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. S reports the Wi-Fi network, address and camera state; I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts. The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
+// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. S reports the Wi-Fi network, address and camera state; V asks for FPV over raw 802.11 (fpv.h) for another few seconds; L reads the log 50 characters at a time; A starts the access point (ota.h) until the camera restarts; I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts. The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
 namespace update {
 constexpr size_t sector = 4096, hashBytes = 8, maxBody = 2 + hashBytes + sector;
 constexpr uint32_t abandonUs = 30000000;
@@ -43,7 +50,23 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
     if (op == 'S') {
         wifiState(text, size);
         const size_t used = strlen(text);
-        snprintf(text + used, size - used, " %s 0x%x", cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", unsigned(startError));
+        snprintf(text + used, size - used, " %s 0x%x 0x%x %u", cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", unsigned(startError), unsigned(fpv::rawError), unsigned(fpv::rawSent));
+        return nullptr;
+    }
+    if (op == 'L') {
+        // 50 characters of the log ring (web.h /log), the page counted back from the end by the body's byte.
+        const size_t end = logHead - min(logHead, size_t(length ? body[0] : 0) * 50), start = end - min(end, size_t(50));
+        for (size_t i = start; i < end; ++i)
+            text[i - start] = logRing[i % sizeof(logRing)] >= ' ' ? logRing[i % sizeof(logRing)] : '|';
+        text[end - start] = 0;
+        return nullptr;
+    }
+    if (op == 'A') {
+        startAp();
+        return nullptr;
+    }
+    if (op == 'V') {
+        fpvRadioMs = millis();
         return nullptr;
     }
     if (op == 'X') {

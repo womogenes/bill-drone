@@ -129,9 +129,9 @@ void flowLoop(void *) {
 }
 
 // Starts the camera: the driver, then mirror and flip, and on the OV3660 the PLL and window of config.h. The driver's raw-QVGA clock (20 MHz SYSCLK, 11 fps) becomes its small-frame one, 40 MHz SYSCLK with the same 10 MHz PCLK; a faster line rate panicked within minutes. FPV takes the driver's JPEG mode as it comes.
-bool startCamera() {
-    cameraConfig.pixel_format = fpvActive ? PIXFORMAT_JPEG : PIXFORMAT_GRAYSCALE;
-    cameraConfig.frame_size = fpvActive ? config::fpvFrameSize : FRAMESIZE_QVGA;
+bool startCamera(bool jpeg) {
+    cameraConfig.pixel_format = jpeg ? PIXFORMAT_JPEG : PIXFORMAT_GRAYSCALE;
+    cameraConfig.frame_size = jpeg ? config::fpvFrameSize : FRAMESIZE_QVGA;
     cameraConfig.jpeg_quality = fpvQuality;
     startError = esp_camera_init(&cameraConfig);
     if (startError != ESP_OK)
@@ -139,7 +139,7 @@ bool startCamera() {
     sensor_t *sensor = esp_camera_sensor_get();
     const bool configured =
         sensor->set_hmirror(sensor, 0) == 0 && sensor->set_vflip(sensor, 1) == 0 &&
-        (fpvActive || sensor->id.PID != OV3660_PID ||
+        (jpeg || sensor->id.PID != OV3660_PID ||
          (sensor->set_pll(sensor, 0, 8, 1, 0, 0, 0, 1, 8) == 0 &&
           sensor->set_res_raw(sensor, (2048 - config::windowW) / 2, (1536 - config::windowH) / 2,
                               (2048 + config::windowW) / 2 + 31, (1536 + config::windowH) / 2 + 11, 8, 2, config::hts,
@@ -153,7 +153,7 @@ bool startCamera() {
         driverPriority = uxTaskPriorityGet(driver);
         vTaskPrioritySet(driver, configMAX_PRIORITIES - 1);
     }
-    if (fpvActive)
+    if (jpeg)
         return true;
     // Exposure is ours (adjustExposure), gain stays automatic up to its 64x ceiling.
     exposureLines = config::exposureLines;
@@ -251,7 +251,7 @@ void setup() {
     xTaskCreatePinnedToCore(flowLoop, "flow", 4096, nullptr, 2, &flowTask, 0);
     // A camera that does not start is tried again from the loop; Wi-Fi, the web server and the drone link run regardless.
     lastStartMs = millis();
-    cameraReady = startCamera();
+    cameraReady = startCamera(false);
     cameraStalled = !cameraReady;
     xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
 }
@@ -302,10 +302,13 @@ void restartCamera() {
             pinMode(cameraConfig.pin_pwdn, OUTPUT);
             digitalWrite(cameraConfig.pin_pwdn, HIGH);
             delay(1000);
+            // A JPEG start that the sensor refused (ESP_FAIL, its settings not taken) kept failing until a grayscale start had set it up again (2026-10-30), so one goes first.
+            if (fpvActive && startCamera(false))
+                esp_camera_deinit();
         } else if (attempt) {
             delay(200);
         }
-        cameraReady = startCamera();
+        cameraReady = startCamera(fpvActive);
     }
     cameraStalled = !cameraReady;
     finder.tracking = false;
@@ -321,6 +324,10 @@ void loop() {
     const bool retry = !cameraReady && millis() - lastStartMs >= 1000;
     if (!cameraStopRequested && (retry || (cameraReady && fpv::wanted() != fpvActive))) {
         fpvActive = fpv::wanted();
+        esp_camera_deinit();
+        cameraReady = false;
+        if (fpv::shareRadio())
+            delay(300);
         restartCamera();
         recoveries += retry && cameraReady;
         return;
