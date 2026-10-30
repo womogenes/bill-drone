@@ -20,6 +20,8 @@ extern volatile bool cameraStopRequested;
 
 // Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. S reports the Wi-Fi network, address and camera state; V asks for FPV over raw 802.11 (fpv.h) for another few seconds; L reads the log 50 characters at a time; A starts the access point (ota.h) until the camera restarts; I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts. The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
 namespace update {
+// Requests answered, and ones that failed their checksum or length, for K S.
+uint32_t goodRequests = 0, badRequests = 0;
 constexpr size_t sector = 4096, hashBytes = 8, maxBody = 2 + hashBytes + sector;
 constexpr uint32_t abandonUs = 30000000;
 
@@ -51,7 +53,7 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
     if (op == 'S') {
         wifiState(text, size);
         const size_t used = strlen(text);
-        snprintf(text + used, size - used, " %s 0x%x %u %d/%d", cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", unsigned(startError), unsigned(fpv::rawSent), fpv::frameLines, fpv::nativeLines);
+        snprintf(text + used, size - used, " %s 0x%x %u %u/%u", cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", unsigned(startError), unsigned(fpv::rawSent), unsigned(goodRequests), unsigned(badRequests));
         return nullptr;
     }
     if (op == 'L') {
@@ -143,6 +145,7 @@ void receive(uart_port_t port, const uint8_t *bytes, size_t n) {
         UpdateRequest header;
         memcpy(&header, frame, sizeof(header));
         if (header.length > maxBody) {
+            ++badRequests;
             have = 0;
             continue;
         }
@@ -151,8 +154,11 @@ void receive(uart_port_t port, const uint8_t *bytes, size_t n) {
             continue;
         have = 0;
         const uint16_t sent = frame[total - 2] | frame[total - 1] << 8;
-        if (crc16(frame, total - 2) != sent)
+        if (crc16(frame, total - 2) != sent) {
+            ++badRequests;
             continue;
+        }
+        ++goodRequests;
         lastUs = uint32_t(esp_timer_get_time());
         char text[sizeof(UpdateReply::text) + 1] = {};
         const char *failure = handle(header.op, frame + sizeof(UpdateRequest), header.length, text, sizeof(text));

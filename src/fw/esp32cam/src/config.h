@@ -48,8 +48,6 @@ constexpr float fpvRadioBytesPerSecond = 90000, fpvFramePeriodS = 0.0312f;
 constexpr int fpvRadioCopies = 2;
 constexpr int fpvQualityRange[2] = {10, 63};
 constexpr uint32_t fpvLingerMs = 3000;
-// Over the radio the keepalive (the drone's K V) goes unanswered for about 2 s at times while the video runs, so FPV outlasts two missed ones.
-constexpr uint32_t fpvRadioLingerMs = 6000;
 // While tracking, detector allocations below this size go to internal RAM.
 constexpr size_t trackInternalBytes = 32768;
 // While tracking, quads are found at the decimation (1 to 3) that keeps the tag's shortest side near this.

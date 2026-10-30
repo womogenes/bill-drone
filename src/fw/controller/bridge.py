@@ -6,7 +6,7 @@
 The laptop's drone service. It owns the controller's USB port and serves, on 127.0.0.1 only:
 
 - /ws: the dashboard. The drone's status as JSON readings; the browser streams targets (including the manual/hover/land mode) every 50 ms and sends stop, arm, calibrate, zero and tune requests.
-- /update: raw id-tagged requests for tools/ota_direct.py.
+- /update: raw id-tagged requests (tools/ota_direct.py, the dashboard's camera requests), from any number of clients at once; each reply goes to the client that sent its id.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
 - POST /pattern {"after": s, "repeat": n, "segments": [{"ticks": n, "<channel>": value, ...}, ...]}: load the identification test pattern (log_format.py PATTERN_CHANNELS; drone/main/flight_rt.c excite), or clear it with no segments. It lasts until the drone restarts, and every recording from then on starts with it as a "pattern" event. sw/excite.py builds and sends them.
 
@@ -315,7 +315,9 @@ class Service:
         self.fragments = {}
         self.waiting = {}
         self.dashboard = None
-        self.updater = None
+        # Update clients (tools/ota_direct.py, the dashboard's camera requests), any number at once; each drone reply goes to the client that sent its id.
+        self.updaters = set()
+        self.update_owner = {}
         self.recorder = Recorder(recordings)
         self.record_queue = asyncio.Queue(maxsize=64)
         self.record_pending = set()
@@ -519,7 +521,7 @@ class Service:
             # Stop is intentionally retried after reconnect; ordinary requests are bound to this link.
             if not reply.done() and reply is not self.stop_reply:
                 reply.set_exception(RuntimeError(reason))
-        for client in (self.dashboard, self.updater):
+        for client in (self.dashboard, *self.updaters):
             if client is not None:
                 asyncio.create_task(client.close(code=1012, message=reason.encode()))
 
@@ -576,7 +578,7 @@ class Service:
                 if not reply.done():
                     reply.set_result(payload[4:])
             else:
-                self.push(self.updater, payload, binary=True)
+                self.push(self.update_owner.get(payload[:4]), payload, binary=True)
         else:
             if channel == 2 and payload[:4] == b"FLG1":
                 self.push_hover(payload)
@@ -619,7 +621,7 @@ class Service:
         ticks = 0
         while True:
             await asyncio.sleep(0.05)
-            if self.session and time.monotonic() - self.last_status > 0.5 and (self.dashboard or self.updater):
+            if self.session and time.monotonic() - self.last_status > 0.5 and (self.dashboard or self.updaters):
                 self.disconnect("Direct radio link timed out; waiting for drone")
                 self.last_status = 0
             ticks += 1
@@ -628,15 +630,17 @@ class Service:
                 self.send(4, b"\x01")
                 self.queue_record("check", bool(self.reading and self.reading["logging"]["active"]))
 
-    async def connect(self, request, slot):
-        if getattr(self, slot) is not None or not self.fresh() or self.failed.is_set():
+    async def connect(self, request, slot=None):
+        if (slot and getattr(self, slot) is not None) or not self.fresh() or self.failed.is_set():
             raise web.HTTPServiceUnavailable(text="Drone link unavailable or endpoint in use")
         ws = web.WebSocketResponse(max_msg_size=8192, compress=False)
-        setattr(self, slot, ws)
+        if slot:
+            setattr(self, slot, ws)
         try:
             await ws.prepare(request)
         except BaseException:
-            setattr(self, slot, None)
+            if slot:
+                setattr(self, slot, None)
             raise
         self.senders[ws] = ClientSender(ws)
         self.transactions[ws] = set()
@@ -703,14 +707,17 @@ class Service:
         self.push(ws, result)
 
     async def update_socket(self, request):
-        ws = await self.connect(request, "updater")
+        ws = await self.connect(request)
+        self.updaters.add(ws)
         try:
             async for message in ws:
                 if message.type != WSMsgType.BINARY or not 0 < len(message.data) <= 32 * PAYLOAD_SIZE:
                     break
+                self.update_owner[message.data[:4]] = ws
                 await self.send_message(6, message.data)
         finally:
-            self.updater = None
+            self.updaters.discard(ws)
+            self.update_owner = {key: owner for key, owner in self.update_owner.items() if owner is not ws}
             self.transactions.pop(ws)
             await self.senders.pop(ws).close()
         return ws

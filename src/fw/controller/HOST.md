@@ -42,7 +42,7 @@ The dashboard unit runs Next directly: pnpm ignores the stop signal, so a `pnpm 
 | Endpoint            | Use                                                                                                                   |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | WebSocket `/ws`     | Dashboard status, targets and commands                                                                                |
-| WebSocket `/update` | Firmware updates through `tools/ota_direct.py`                                                                        |
+| WebSocket `/update` | Firmware updates through `tools/ota_direct.py` and the dashboard's camera requests, any number of clients at once           |
 | GET `/status`       | Current connection and sensor state                                                                                   |
 | GET `/settings`     | Current cached settings                                                                                               |
 | GET `/schema`       | Native setting names, defaults, ranges and write permissions                                                          |

@@ -71,9 +71,9 @@ inline void poll() {
     }
 }
 
-inline bool recent(uint32_t ms, uint32_t linger) { return ms && millis() - ms < linger; }
-inline bool udpWanted() { return recent(fpvSeenMs, config::fpvLingerMs); }
-inline bool radioWanted() { return recent(fpvRadioMs, config::fpvRadioLingerMs); }
+inline bool recent(uint32_t ms) { return ms && millis() - ms < config::fpvLingerMs; }
+inline bool udpWanted() { return recent(fpvSeenMs); }
+inline bool radioWanted() { return recent(fpvRadioMs); }
 inline bool wanted() { return udpWanted() || radioWanted(); }
 
 // From the loop, before the camera restarts for FPV: an access point asked for (ota.h) gives way to the parked station while the drone asks for FPV over the radio, since with it up no raw frame went out. It stays down: switching back and forth left JPEG capture without its DMA memory. A joined network stays joined, and the video goes out on its channel; on one sharing the drone's channel 6 that took the drone's status stream from 19.9 to 17.3 messages/s and stalled the video for 2.9 s at a time (2026-10-30), and leaving and rejoining it for the video was unreliable, so a camera meant for FPV over the radio lists no networks. True when it switched.
