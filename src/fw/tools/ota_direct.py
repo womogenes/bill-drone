@@ -58,6 +58,10 @@ class Drone:
                 time.sleep(0.5)
                 continue
             if reply[4] != 0:
+                # The drone waits 2 s for the camera, which may be busy (hashing its image while streaming video); a new id asks again rather than replaying that answer.
+                if reply[5:] == b"The camera did not answer":
+                    identifier = os.urandom(4)
+                    continue
                 raise RuntimeError(f"Drone rejected {op.decode()}: {reply[5:].decode()}")
             return reply[5:]
         raise TimeoutError(f"No reply to {op.decode()} within {patience} s")

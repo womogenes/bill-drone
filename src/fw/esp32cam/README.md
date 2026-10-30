@@ -1,6 +1,6 @@
 # ESP32-CAM AprilTag pose
 
-One firmware handles onboard tag16h5 pose estimation, UART delivery to the drone, a microSD black box, Wi-Fi preview, lens calibration, and passwordless OTA. It targets the AI Thinker ESP32-CAM with a driver-detected sensor (OV3660 on this board), 4 MB flash, and PSRAM. The drone's receiver is `fw/drone/main/camera.c`.
+One firmware handles onboard tag16h5 pose estimation, UART delivery to the drone, a microSD black box, Wi-Fi preview, FPV video, lens calibration, and passwordless OTA. It targets the AI Thinker ESP32-CAM with a driver-detected sensor (OV3660 on this board), 4 MB flash, and PSRAM. The drone's receiver is `fw/drone/main/camera.c`.
 
 ## Wiring
 
@@ -17,7 +17,7 @@ Signals are 3.3 V; share ground through the power wiring. Leave camera GPIO12 un
 
 ## Flash and update
 
-Copy `src/wifi.example.h` to git-ignored `src/wifi.h` and set network credentials. OTA has no password. From `src/`, build and flash the camera's programmer port the first time:
+Copy `src/wifi.example.h` to git-ignored `src/wifi.h` and list the networks it may join. At boot the camera scans once and joins the first listed network in range; with none in range, or if it has not joined within 30 s, it starts its own access point (`apSsid` and `apPassword` in `wifi.h`, channel 11, clear of the drone's ESP-NOW channel 6, at 192.168.4.1) until it restarts, so away from known networks join the laptop to that. The drone's `K S` request returns the camera's network, address and state (`joined miso 192.168.86.248 running 0x0`); the dashboard finds the camera that way. OTA has no password. From `src/`, build and flash the camera's programmer port the first time:
 
 ```sh
 uvx --from platformio==6.1.18 --with intelhex pio run -d fw/esp32cam
@@ -56,6 +56,12 @@ The fit uses focal lengths, principal point, and two radial distortion coefficie
 
 Preview is MJPEG on camera port 81 (`/stream`), proxied through the dashboard, at up to 15 fps. Each part carries its frame's tag in an `X-Tag` header (`none`, or `valid`/`tracked`, the four corners in 320×240 pixels and the camera position in metres), and the dashboard draws that outline over the frame, green when the pose is valid and amber when not. The default preview is the flow task's 80×60 reduction of the frame, already in internal RAM: a core-0 task copies its 4.8 KB and the low-priority HTTP task encodes it and writes the whole part in one send, so the preview never holds a frame buffer or reads PSRAM and the detector keeps the sensor's 29.4 fps. Copying even 160×120 preview pixels out of the PSRAM frame lost the next frame about half the time. `/stream?full=1` (the dashboard's full-resolution toggle, needed to capture calibration views) hands over the frame buffer itself for a 320×240 copy, which holds it about 26 ms and adds a few milliseconds to some frames' processing (p95 8 → 13 ms) at about 5 fps. Without a viewer nothing is copied or encoded.
 
+## FPV
+
+The dashboard's FPV panel (main page, independent of Enable) shows the camera's own JPEG video while flight controls stay live. While it plays the camera does not track the tag, so camera hover has no sightings; tracking resumes 3 s after the panel turns off or loses the camera. The video goes over UDP (`src/fpv.h`): the dashboard server (`sw/dashboard/app/api/camera/route.ts`) sends `FPVW` to camera port 5601 every 500 ms, and the camera's core-1 loop, idle without tracking, sends each 480×320 frame to it in 1400-byte datagrams with a 16-byte header, then steps the JPEG quality to hold frames near 5 KB. The server reassembles complete frames and serves them as MJPEG. Measured on 2026-10-30 in a dark room on a network sharing the drone's channel: 32.0 fps for 2 minutes with no frame lost, frames leaving 32 ms after capture start (one readout), gaps p99 55 ms. Over TCP the same stream averaged 20 fps and froze for 2.6 s on one lost segment; VGA comes off the sensor every 36 ms against 31 ms for 480×320, and a 24 MHz XCLK lost frames. Settings and measurements are in `config.h`.
+
+A camera that fails to start (in either mode) is retried every second, the sensor held in power-down for a second between tries. If it still does not answer its probe (`/log`: `Camera probe failed`, seen on USB power alone when Wi-Fi joined a network), it needs its power removed: with the drone on USB and no battery, `src/fw/tools/usb_power_cycle.sh /dev/ttyUSBn` switches the drone's laptop port off for 5 s (install `src/fw/tools/usb-power.rules` once).
+
 ## Pipeline and timing
 
 The OV3660 reads the central 1536×1152 of its 2048×1536 array, binned and scaled 2.4× to 320×240 Y8, at 29.4 fps: 576 of 591 lines at 57.5 µs each (40 MHz SYSCLK, 10 MHz PCLK), so a frame takes 33 ms to read out. Against the full field this gives 4/3 the angular resolution over 36°×27°. A faster line rate (the JPEG-mode 50 MHz clock, 46 µs lines) stalled the driver's DMA copy and panicked within minutes, so 57.5 µs is the floor at 320 pixels wide; 100 fps would need 160×120 (settings in `config.h`). Core 1 runs capture, the tag search, pose and the UART packet; core 0 runs the image flow, Wi-Fi, OTA, the HTTP endpoints, the preview, the black-box writer and the driver's DMA copy.
@@ -92,7 +98,7 @@ Trusted is 1 when the corners were measured by the edge tracker with the rolling
 
 ## Code layout
 
-`main.cpp` owns capture, the camera driver, exposure and the UART link; `tag.h` finding the tag in a frame and its pose inputs; `track.h` the alignment and edge tracker; `flow.h` the image flow; `pose.h` geometry; `record.h` the per-frame records; `blackbox.h` and `sd.h` the black box; `web.h` preview, `/status` and calibration persistence; `ota.h` Wi-Fi/OTA. `build.py` builds the detector and `main.cpp` at -O2, gives the detector float math and one task per stage instead of ten, and moves its cold files to flash so Wi-Fi and camera interrupt code still fit in IRAM. Vendor code is pinned and unchanged. Bench-test calibrated accuracy and main-controller loop timing before using vision for pose hold.
+`main.cpp` owns capture, the camera driver, exposure and the UART link; `tag.h` finding the tag in a frame and its pose inputs; `track.h` the alignment and edge tracker; `flow.h` the image flow; `pose.h` geometry; `record.h` the per-frame records; `blackbox.h` and `sd.h` the black box; `web.h` preview, `/status` and calibration persistence; `fpv.h` FPV video; `ota.h` Wi-Fi/OTA. `build.py` builds the detector and `main.cpp` at -O2, gives the detector float math and one task per stage instead of ten, and moves its cold files to flash so Wi-Fi and camera interrupt code still fit in IRAM. Vendor code is pinned and unchanged. Bench-test calibrated accuracy and main-controller loop timing before using vision for pose hold.
 
 ## Simulator
 

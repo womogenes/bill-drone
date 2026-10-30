@@ -9,6 +9,7 @@
 #include "config.h"
 #include "packet.h"
 #include "health.h"
+#include "fpv.h"
 
 WebServer web(80);
 Preferences settings;
@@ -282,7 +283,7 @@ void startPreview() {
             "\"flow_px\":[%.3f,%.3f],\"flow_inliers\":%u,\"flow_residual_px\":%.3f,\"short_frames\":%u,\"stalls\":%u,\"recoveries\":%u,"
             "\"last_crumbs\":[%u,%u,%u],\"gain\":%.2f,\"exposure_lines\":%d,\"frame_lines\":%d,\"driver_priority\":[%u,%u],"
             "\"link_sent\":%u,\"link_dropped\":%u,\"link_rx_bytes\":%u,",
-            cameraStalled ? "stalled" : cameraReady ? "running" : "stopped", calibrated() ? "true" : "false", finder.id, config::tagSizeM * 1000,
+            cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", calibrated() ? "true" : "false", finder.id, config::tagSizeM * 1000,
             unsigned(captureCount), unsigned(poseCount), unsigned(trackedCount), unsigned(detectedCount),
             unsigned(previewCount), unsigned(detectUs),
             unsigned(frameUs), unsigned(lastPose.ageUs), unsigned(readoutAgeUs), valid ? "true" : "false", lastPose.position[0],

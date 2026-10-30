@@ -10,6 +10,7 @@ import {
   useState,
 } from 'react';
 import { LoaderCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 
 import { ControlPanel } from '@/components/control-panel';
@@ -29,6 +30,11 @@ import type {
   Targets,
   VoltageSample,
 } from '@/lib/telemetry';
+
+const FpvPanel = dynamic(
+  () => import('@/components/fpv-panel').then((module) => module.FpvPanel),
+  { ssr: false }
+);
 
 // The drone service (src/fw/controller/bridge.py) owns the controller USB link on this laptop.
 const SERVICE = '127.0.0.1:8765';
@@ -452,6 +458,7 @@ export default function Page() {
       </header>
       <main className="grid min-h-[calc(100dvh-4rem)] divide-y divide-border lg:h-[calc(100dvh-4rem)] lg:grid-cols-[repeat(3,minmax(0,28rem))] lg:divide-x lg:divide-y-0 lg:overflow-hidden">
         <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
+          <FpvPanel />
           <Suspense>
             <ImuPanel
               reading={reading?.imu}

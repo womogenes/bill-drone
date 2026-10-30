@@ -1,4 +1,5 @@
 #pragma once
+#include "sensor.h"
 
 namespace config {
 // Measure the black square's outer edge, excluding the white margin.
@@ -38,6 +39,11 @@ constexpr unsigned maxFrameAgeUs = 2 * framePeriodUs;
 // Exposure in lines of 57.5 us: 174 is 10 ms, a third of the frame. It grows by a quarter while the gain is above raiseExposureGain and shrinks back while the gain is below lowerExposureGain. Measured on 2026-10-21 with the tag at 1.7 m, 10 ms needed 26.6x gain and raised the position jitter from 4.4/3.2/1.8 mm (33 ms) to 8.6/5.9/3.3 mm.
 constexpr int exposureLines = 174;
 constexpr float raiseExposureGain = 56, lowerExposureGain = 24;
+// FPV (fpv.h): the sensor's own JPEG at automatic exposure, no tag tracking. Measured on 2026-10-30 (OV3660, 20 MHz XCLK): 480x320 comes off the sensor every 31.2 ms, VGA and QVGA every 36 ms; a 24 MHz XCLK reads out faster but the driver then loses frames with Wi-Fi busy on the same core. The JPEG quality (fpvQualityRange, lower is finer) holds each frame near fpvTargetBytes, four datagrams, whatever the light: that bounds the video's airtime on a channel the drone's radio may share (it took the drone's status stream from 20.0 to 19.3 messages/s on its channel), and a frame loses one datagram less often. Over a 2-minute soak the dashboard received 32.0 fps with no frame lost, gaps p99 55 ms, max 211 ms. It switches back to tracking fpvLingerMs after the last keepalive, so a Wi-Fi dropout resumes without restarting the camera twice.
+constexpr framesize_t fpvFrameSize = FRAMESIZE_HVGA;
+constexpr size_t fpvTargetBytes = 5000;
+constexpr int fpvQualityRange[2] = {10, 40};
+constexpr uint32_t fpvLingerMs = 3000;
 // While tracking, detector allocations below this size go to internal RAM.
 constexpr size_t trackInternalBytes = 32768;
 // While tracking, quads are found at the decimation (1 to 3) that keeps the tag's shortest side near this.

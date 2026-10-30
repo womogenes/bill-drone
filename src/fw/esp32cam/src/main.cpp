@@ -27,6 +27,8 @@ bool cameraStalled = false;
 uint32_t lastCaptureUs = 0;
 
 camera_config_t cameraConfig = {};
+uint32_t lastStartMs = 0;
+esp_err_t startError = ESP_OK;
 uint32_t stalls = 0, recoveries = 0;
 int exposureLines;
 // What each core was doing, kept across a panic restart: /status shows the values from before the last reset.
@@ -76,6 +78,7 @@ void serviceTask(void *) {
         }
 #endif
         serviceOta();
+        fpv::poll();
         web.handleClient();
 #ifndef DEBUG_CONSOLE
         uint8_t received[512];
@@ -125,14 +128,18 @@ void flowLoop(void *) {
     }
 }
 
-// Starts the camera: the driver, then mirror and flip, and on the OV3660 the PLL and window of config.h. The driver's raw-QVGA clock (20 MHz SYSCLK, 11 fps) becomes its small-frame one, 40 MHz SYSCLK with the same 10 MHz PCLK; a faster line rate panicked within minutes.
+// Starts the camera: the driver, then mirror and flip, and on the OV3660 the PLL and window of config.h. The driver's raw-QVGA clock (20 MHz SYSCLK, 11 fps) becomes its small-frame one, 40 MHz SYSCLK with the same 10 MHz PCLK; a faster line rate panicked within minutes. FPV takes the driver's JPEG mode as it comes.
 bool startCamera() {
-    if (esp_camera_init(&cameraConfig) != ESP_OK)
+    cameraConfig.pixel_format = fpvActive ? PIXFORMAT_JPEG : PIXFORMAT_GRAYSCALE;
+    cameraConfig.frame_size = fpvActive ? config::fpvFrameSize : FRAMESIZE_QVGA;
+    cameraConfig.jpeg_quality = fpvQuality;
+    startError = esp_camera_init(&cameraConfig);
+    if (startError != ESP_OK)
         return false;
     sensor_t *sensor = esp_camera_sensor_get();
     const bool configured =
         sensor->set_hmirror(sensor, 0) == 0 && sensor->set_vflip(sensor, 1) == 0 &&
-        (sensor->id.PID != OV3660_PID ||
+        (fpvActive || sensor->id.PID != OV3660_PID ||
          (sensor->set_pll(sensor, 0, 8, 1, 0, 0, 0, 1, 8) == 0 &&
           sensor->set_res_raw(sensor, (2048 - config::windowW) / 2, (1536 - config::windowH) / 2,
                               (2048 + config::windowW) / 2 + 31, (1536 + config::windowH) / 2 + 11, 8, 2, config::hts,
@@ -146,6 +153,8 @@ bool startCamera() {
         driverPriority = uxTaskPriorityGet(driver);
         vTaskPrioritySet(driver, configMAX_PRIORITIES - 1);
     }
+    if (fpvActive)
+        return true;
     // Exposure is ours (adjustExposure), gain stays automatic up to its 64x ceiling.
     exposureLines = config::exposureLines;
     return sensor->set_exposure_ctrl(sensor, 0) == 0 && sensor->set_aec_value(sensor, exposureLines) == 0 &&
@@ -190,6 +199,8 @@ void setup() {
     health::countBoot();
     health::watchWifi();
     startWifi();
+    if (wifiConfigured())
+        fpv::start();
     assert(psramFound());
     heap_caps_malloc_extmem_enable(4096);
     // Mounting holds the sync line high (the card's DAT3) and leaves it low.
@@ -217,18 +228,11 @@ void setup() {
     camera.xclk_freq_hz = 20000000;
     camera.ledc_timer = LEDC_TIMER_0;
     camera.ledc_channel = LEDC_CHANNEL_0;
-    // Raw Y8: no JPEG decode on the detector and no compression artefacts on tag edges.
-    camera.pixel_format = PIXFORMAT_GRAYSCALE;
-    camera.frame_size = FRAMESIZE_QVGA;
+    // Tracking takes raw Y8 (startCamera): no JPEG decode on the detector and no compression artefacts on tag edges.
     // One for the detector, one for the driver; only the full-resolution preview holds a frame, for its copy.
     camera.fb_count = 2;
     camera.fb_location = CAMERA_FB_IN_PSRAM;
     camera.grab_mode = CAMERA_GRAB_LATEST;
-    if (!startCamera()) {
-        blackbox::start();
-        xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
-        return;
-    }
 
     apriltag_detector_t *detector = finder.detector = apriltag_detector_create();
     finder.family = tag16h5_create();
@@ -245,7 +249,10 @@ void setup() {
     flowDone = xSemaphoreCreateBinary();
     assert(flowDone);
     xTaskCreatePinnedToCore(flowLoop, "flow", 4096, nullptr, 2, &flowTask, 0);
-    cameraReady = true;
+    // A camera that does not start is tried again from the loop; Wi-Fi, the web server and the drone link run regardless.
+    lastStartMs = millis();
+    cameraReady = startCamera();
+    cameraStalled = !cameraReady;
     xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
 }
 
@@ -284,13 +291,50 @@ void publish(PosePacket &packet) {
     GPIO.out_w1tc = 1u << config::syncPin;
 }
 
+// Restarts the camera in the mode wanted (fpvActive).
+void restartCamera() {
+    esp_camera_deinit();
+    cameraReady = false;
+    lastStartMs = millis();
+    for (int attempt = 0; attempt < 3 && !cameraReady; ++attempt) {
+        // After a failed start the sensor is held in power-down (GPIO32) for a second before the next try. A sensor that stopped answering its probe on 2026-10-30 recovered only from a power cycle; whether power-down clears that state is untested.
+        if (startError != ESP_OK) {
+            pinMode(cameraConfig.pin_pwdn, OUTPUT);
+            digitalWrite(cameraConfig.pin_pwdn, HIGH);
+            delay(1000);
+        } else if (attempt) {
+            delay(200);
+        }
+        cameraReady = startCamera();
+    }
+    cameraStalled = !cameraReady;
+    finder.tracking = false;
+    flow::primed = false;
+}
+
 void loop() {
     if (cameraStopRequested && cameraReady) {
         esp_camera_deinit();
         cameraReady = false;
     }
+    // A camera that failed to start (in either mode) is tried again every second.
+    const bool retry = !cameraReady && millis() - lastStartMs >= 1000;
+    if (!cameraStopRequested && (retry || (cameraReady && fpv::wanted() != fpvActive))) {
+        fpvActive = fpv::wanted();
+        restartCamera();
+        recoveries += retry && cameraReady;
+        return;
+    }
     if (!cameraReady) {
         delay(100);
+        return;
+    }
+    if (fpvActive) {
+        if (!fpv::send()) {
+            ++stalls;
+            restartCamera();
+            recoveries += cameraReady;
+        }
         return;
     }
     crumbs[0] = 1;
@@ -299,16 +343,8 @@ void loop() {
     if (!frame) {
         ++stalls;
         crumbs[2] = stalls;
-        esp_camera_deinit();
-        cameraReady = false;
-        for (int attempt = 0; attempt < 3 && !cameraReady; ++attempt) {
-            delay(200);
-            cameraReady = startCamera();
-        }
-        cameraStalled = !cameraReady;
+        restartCamera();
         recoveries += cameraReady;
-        finder.tracking = false;
-        flow::primed = false;
         return;
     }
     crumbs[0] = 2;

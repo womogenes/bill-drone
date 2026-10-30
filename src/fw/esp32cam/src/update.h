@@ -5,10 +5,12 @@
 #include "esp_partition.h"
 #include "mbedtls/sha256.h"
 #include "packet.h"
-extern bool cameraReady;
+extern bool cameraReady, cameraStalled;
+extern volatile bool fpvActive;
+extern esp_err_t startError;
 extern volatile bool cameraStopRequested;
 
-// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts. The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
+// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. S reports the Wi-Fi network, address and camera state; I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts. The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
 namespace update {
 constexpr size_t sector = 4096, hashBytes = 8, maxBody = 2 + hashBytes + sector;
 constexpr uint32_t abandonUs = 30000000;
@@ -36,6 +38,12 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
         esp_partition_get_sha256(running, s);
         snprintf(text, size, "%s %s %u %02x%02x%02x%02x%02x%02x%02x%02x", running->label, target ? target->label : "none",
                  unsigned(target ? target->size : 0), s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]);
+        return nullptr;
+    }
+    if (op == 'S') {
+        wifiState(text, size);
+        const size_t used = strlen(text);
+        snprintf(text + used, size - used, " %s 0x%x", cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", unsigned(startError));
         return nullptr;
     }
     if (op == 'X') {

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import dgram from 'node:dgram';
 import { resolve } from 'node:path';
 
 export const runtime = 'nodejs';
@@ -98,16 +99,66 @@ async function runHub(hub: Hub, url: URL) {
   }
 }
 
-function joinHub(host: string, full: boolean, signal: AbortSignal) {
-  const url = cameraUrl(host, full ? '/stream?full=1' : '/stream');
-  const key = url.href;
+// FPV arrives over UDP (fw/esp32cam/src/fpv.h): a keepalive to the camera's port every 500 ms keeps it sending, each frame in datagrams with a 16-byte header (FPV1, frame number, index and count, capture and send times). A frame still missing a datagram when a newer one starts is dropped.
+async function runFpv(hub: Hub) {
+  const socket = dgram.createSocket('udp4');
+  const keepalive = () => socket.send('FPVW', 5601, hub.host);
+  let current = -1;
+  let parts: Buffer[] = [];
+  let got = 0;
+  socket.on('message', (message) => {
+    if (message.length < 16 || message.toString('latin1', 0, 4) !== 'FPV1')
+      return;
+    const frame = message.readUInt16LE(4);
+    const index = message[6];
+    const count = message[7];
+    if (frame !== current) {
+      // A late datagram of an older frame.
+      if (current >= 0 && ((frame - current) & 0xffff) > 0x8000) return;
+      current = frame;
+      parts = new Array(count);
+      got = 0;
+    }
+    if (index >= parts.length || parts[index]) return;
+    parts[index] = message.subarray(16);
+    if (++got < parts.length) return;
+    const jpeg = Buffer.concat(parts);
+    const part = new Uint8Array(
+      Buffer.concat([
+        Buffer.from(
+          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(8)} ${message.readUInt32LE(12)}\r\n\r\n`
+        ),
+        jpeg,
+        Buffer.from('\r\n'),
+      ])
+    );
+    for (const viewer of hub.viewers)
+      if ((viewer.desiredSize ?? 1) > 0)
+        try {
+          viewer.enqueue(part);
+        } catch {}
+  });
+  socket.on('error', () => {});
+  socket.bind(() => keepalive());
+  const timer = setInterval(keepalive, 500);
+  await new Promise((done) =>
+    hub.closed.signal.addEventListener('abort', done)
+  );
+  clearInterval(timer);
+  socket.close();
+}
+
+function joinHub(host: string, path: string, signal: AbortSignal) {
+  const fpv = path === '/fpv';
+  const url = cameraUrl(host, fpv ? '/' : path);
+  const key = fpv ? `fpv://${host}` : url.href;
   for (const other of hubs.values())
     if (other.host === host && other.key !== key) closeHub(other);
   let hub = hubs.get(key);
   if (!hub) {
     hub = { key, host, viewers: new Set(), closed: new AbortController() };
     hubs.set(key, hub);
-    void runHub(hub, url);
+    void (fpv ? runFpv(hub) : runHub(hub, url));
   }
   const joined = hub;
   clearTimeout(joined.idle);
@@ -128,13 +179,56 @@ function joinHub(host: string, full: boolean, signal: AbortSignal) {
   });
 }
 
+// The camera reports its own address through the drone's wire to it: the bridge's update socket forwards request K S ("joined miso 192.168.86.248 running 0x0", or "ap bill-fpv 192.168.4.1 ..."). Kept for 10 s.
+let found: { host: string; time: number } | undefined;
+
+function reportedHost(): Promise<string> {
+  if (found && Date.now() - found.time < 10_000)
+    return Promise.resolve(found.host);
+  return new Promise((done, fail) => {
+    const socket = new WebSocket('ws://127.0.0.1:8765/update');
+    socket.binaryType = 'arraybuffer';
+    const id = crypto.getRandomValues(new Uint8Array(4));
+    const timer = setTimeout(() => {
+      socket.close();
+      fail(new Error('The drone did not report the camera address.'));
+    }, 3000);
+    socket.onopen = () => socket.send(new Uint8Array([...id, 75, 83]));
+    socket.onerror = () => {};
+    socket.onmessage = (event) => {
+      const reply = new Uint8Array(event.data as ArrayBuffer);
+      if (!id.every((byte, i) => reply[i] === byte)) return;
+      clearTimeout(timer);
+      socket.close();
+      const [mode, , host] = new TextDecoder()
+        .decode(reply.subarray(5))
+        .split(' ');
+      if (reply[4] !== 0 || (mode !== 'joined' && mode !== 'ap')) {
+        fail(new Error('The camera is not on Wi-Fi yet.'));
+        return;
+      }
+      found = { host, time: Date.now() };
+      done(host);
+    };
+  });
+}
+
 export async function GET(request: Request) {
   const query = new URL(request.url).searchParams;
-  const host = query.get('host') || '192.168.86.28';
+  let host = query.get('host') || 'the camera';
   try {
+    if (!query.get('host')) host = await reportedHost();
     if (query.get('mode') !== 'status')
       return new Response(
-        joinHub(host, query.get('full') === '1', request.signal),
+        joinHub(
+          host,
+          query.get('fpv') === '1'
+            ? '/fpv'
+            : query.get('full') === '1'
+              ? '/stream?full=1'
+              : '/stream',
+          request.signal
+        ),
         {
           headers: {
             'Content-Type': 'multipart/x-mixed-replace;boundary=frame',
