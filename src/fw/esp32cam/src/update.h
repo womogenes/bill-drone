@@ -11,6 +11,7 @@ extern volatile uint32_t fpvRadioMs;
 namespace fpv {
 extern esp_err_t rawError;
 extern uint32_t rawSent;
+extern int nativeLines, frameLines;
 }
 extern char logRing[2048];
 extern size_t logHead;
@@ -50,7 +51,7 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
     if (op == 'S') {
         wifiState(text, size);
         const size_t used = strlen(text);
-        snprintf(text + used, size - used, " %s 0x%x 0x%x %u", cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", unsigned(startError), unsigned(fpv::rawError), unsigned(fpv::rawSent));
+        snprintf(text + used, size - used, " %s 0x%x %u %d/%d", cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", unsigned(startError), unsigned(fpv::rawSent), fpv::frameLines, fpv::nativeLines);
         return nullptr;
     }
     if (op == 'L') {

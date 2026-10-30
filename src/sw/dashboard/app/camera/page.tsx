@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { readParts } from '@/lib/multipart';
 
 type Corners = number[][];
 type Result = { rms: number; views: number };
@@ -26,51 +27,6 @@ function parseTag(text: string): Tag {
     corners: fields.slice(0, 4).map((pair) => pair.split(',').map(Number)),
     position: fields[4].split(',').map(Number),
   };
-}
-
-function indexOf(bytes: Uint8Array, pattern: number[], from = 0) {
-  outer: for (let i = from; i <= bytes.length - pattern.length; i++) {
-    for (let j = 0; j < pattern.length; j++)
-      if (bytes[i + j] !== pattern[j]) continue outer;
-    return i;
-  }
-  return -1;
-}
-
-// Reads the camera's multipart stream: each part is a JPEG with its tag in an X-Tag header, so the outline drawn over a frame is that frame's.
-async function readPreview(
-  url: string,
-  signal: AbortSignal,
-  onFrame: (jpeg: Uint8Array, tag: string) => void
-) {
-  const response = await fetch(url, { signal });
-  if (!response.ok || !response.body)
-    throw new Error((await response.json()).error ?? 'Preview unavailable.');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = new Uint8Array(0);
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) throw new Error('Preview ended.');
-    const joined = new Uint8Array(buffer.length + value.length);
-    joined.set(buffer);
-    joined.set(value, buffer.length);
-    buffer = joined;
-    for (;;) {
-      const headerEnd = indexOf(buffer, [13, 10, 13, 10]);
-      if (headerEnd < 0) break;
-      const header = decoder.decode(buffer.subarray(0, headerEnd));
-      const length = Number(/Content-Length: *(\d+)/i.exec(header)?.[1] ?? 0);
-      const start = headerEnd + 4;
-      if (buffer.length < start + length + 2) break;
-      if (length)
-        onFrame(
-          buffer.slice(start, start + length),
-          /X-Tag: *(.*)/i.exec(header)?.[1] ?? 'none'
-        );
-      buffer = buffer.slice(start + length + 2);
-    }
-  }
 }
 
 async function calculate(body: object) {
@@ -185,7 +141,7 @@ export default function CameraPage() {
           canvas.height = bitmap.height;
           canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
           bitmap.close();
-          setTag(parseTag(header));
+          setTag(parseTag(/X-Tag: *(.*)/i.exec(header)?.[1] ?? 'none'));
           setStreamError('');
         })
         .catch(() => {})
@@ -201,7 +157,7 @@ export default function CameraPage() {
             connection.abort();
         }, 1000);
         try {
-          await readPreview(
+          await readParts(
             url,
             AbortSignal.any([closed.signal, connection.signal]),
             (jpeg, header) => {

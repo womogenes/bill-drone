@@ -329,6 +329,7 @@ void loop() {
         if (fpv::shareRadio())
             delay(300);
         restartCamera();
+        fpv::nativeLines = 0;
         recoveries += retry && cameraReady;
         return;
     }

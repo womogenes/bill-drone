@@ -1,11 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { readParts } from '@/lib/multipart';
 
 const HOST_KEY = 'camera-host';
 const MODE_KEY = 'camera-mode';
+// FPV frames go on screen this long after the earliest any frame could have, by their capture time, so the link's jitter up to it does not show.
+const PLAYOUT_MS = 80;
 type Mode = 'tag' | 'fpv';
 
 function saved(key: string) {
@@ -29,7 +32,7 @@ export function FpvPanel() {
   const [mode, setMode] = useState<Mode>(() =>
     saved(MODE_KEY) === 'fpv' ? 'fpv' : 'tag'
   );
-  const [attempt, setAttempt] = useState(0);
+  const canvas = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<{
     state: string;
     fps?: number;
@@ -67,6 +70,69 @@ export function FpvPanel() {
       clearInterval(timer);
     };
   }, [where]);
+
+  // FPV frames carry their capture time (X-Time, microseconds on the camera's clock): each is shown at that time, mapped to this clock by the smallest delay any frame has had (rising slowly, for clock drift), plus PLAYOUT_MS. Preview frames have none and are shown at once. The stream reconnects whenever it ends or fails.
+  useEffect(() => {
+    const closed = new AbortController();
+    const queue: { at: number; bitmap: ImageBitmap }[] = [];
+    let last: number | undefined;
+    let capture = 0;
+    let base = Infinity;
+    let frame = 0;
+    const render = () => {
+      let shown: ImageBitmap | undefined;
+      while (queue.length && queue[0].at <= performance.now()) {
+        shown?.close();
+        shown = queue.shift()!.bitmap;
+      }
+      const target = canvas.current;
+      if (shown && target) {
+        target.width = shown.width;
+        target.height = shown.height;
+        target.getContext('2d')!.drawImage(shown, 0, 0);
+      }
+      shown?.close();
+      frame = requestAnimationFrame(render);
+    };
+    frame = requestAnimationFrame(render);
+    const show = async (jpeg: Uint8Array, header: string) => {
+      const arrived = performance.now();
+      const stamp = /X-Time: *(\d+)/i.exec(header);
+      let at = arrived;
+      if (stamp) {
+        const us = Number(stamp[1]);
+        const step = last === undefined ? 0 : ((us - last) >>> 0) / 1000;
+        last = us;
+        // A restarted camera starts its clock again.
+        if (step > 10_000) base = Infinity;
+        capture += step > 10_000 ? 0 : step;
+        base = Math.min(arrived - capture, base + 0.05);
+        at = capture + base + PLAYOUT_MS;
+      }
+      const bitmap = await createImageBitmap(
+        new Blob([jpeg as BlobPart], { type: 'image/jpeg' })
+      ).catch(() => undefined);
+      if (!bitmap || closed.signal.aborted) return bitmap?.close();
+      const index = queue.findIndex((queued) => queued.at > at);
+      queue.splice(index < 0 ? queue.length : index, 0, { at, bitmap });
+      while (queue.length > 8) queue.shift()!.bitmap.close();
+    };
+    void (async () => {
+      while (!closed.signal.aborted) {
+        await readParts(
+          `/api/camera?${mode === 'fpv' ? 'fpv=1' : 'preview=1'}${where}`,
+          closed.signal,
+          (jpeg, header) => void show(jpeg, header)
+        ).catch(() => {});
+        await new Promise((done) => setTimeout(done, 1000));
+      }
+    })();
+    return () => {
+      closed.abort();
+      cancelAnimationFrame(frame);
+      for (const queued of queue) queued.bitmap.close();
+    };
+  }, [mode, where]);
 
   return (
     <section
@@ -113,13 +179,10 @@ export function FpvPanel() {
           ))}
         </div>
       </div>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        key={`${mode}-${where}-${attempt}`}
-        src={`/api/camera?${mode === 'fpv' ? 'fpv=1' : 'preview=1'}${where}&attempt=${attempt}`}
-        alt={mode === 'fpv' ? 'Live camera video' : 'Tracking preview'}
+      <canvas
+        ref={canvas}
+        aria-label={mode === 'fpv' ? 'Live camera video' : 'Tracking preview'}
         className="aspect-[3/2] w-full bg-black object-contain"
-        onError={() => setTimeout(() => setAttempt((n) => n + 1), 1000)}
       />
       {mode === 'fpv' && (
         <p className="text-sm text-muted-foreground">

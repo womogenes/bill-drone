@@ -42,9 +42,10 @@ constexpr float raiseExposureGain = 56, lowerExposureGain = 24;
 // FPV (fpv.h): the sensor's own JPEG at automatic exposure, no tag tracking. Measured on 2026-10-30 (OV3660, 20 MHz XCLK): 480x320 comes off the sensor every 31.2 ms, VGA and QVGA every 36 ms; a 24 MHz XCLK reads out faster but the driver then loses frames with Wi-Fi busy on the same core. The JPEG quality (fpvQualityRange, lower is finer) holds each frame near fpvTargetBytes, four datagrams, whatever the light: that bounds the video's airtime on a channel the drone's radio may share (it took the drone's status stream from 20.0 to 19.3 messages/s on its channel), and a frame loses one datagram less often. Over a 2-minute soak the dashboard received 32.0 fps with no frame lost, gaps p99 55 ms, max 211 ms. It switches back to tracking fpvLingerMs after the last keepalive, so a Wi-Fi dropout resumes without restarting the camera twice.
 constexpr framesize_t fpvFrameSize = FRAMESIZE_HVGA;
 constexpr size_t fpvTargetBytes = 5000;
-// Through the FPV receiver (fw/fpv_rx) the video must fit its USB bridge, 92 KB/s at most: frames go out only within fpvRadioBytesPerSecond, so whole frames are skipped evenly rather than chunks of many lost, and their size aims lower.
+// Through the FPV receiver (fw/fpv_rx) the video must fit its USB bridge, about 98 KB/s at 1 Mbaud: the sensor's frame is lengthened until the average frame fits fpvRadioBytesPerSecond, so every frame goes out evenly spaced (the receiver drops whole frames if a burst outruns it), and their size aims lower. fpvFramePeriodS is the sensor's own 480x320 JPEG frame. Each goes out fpvRadioCopies times: with one, a fifth of the frames lost a chunk (2026-10-30); with two, 1%; three did no better.
 constexpr size_t fpvRadioTargetBytes = 2600;
-constexpr float fpvRadioBytesPerSecond = 80000;
+constexpr float fpvRadioBytesPerSecond = 90000, fpvFramePeriodS = 0.0312f;
+constexpr int fpvRadioCopies = 2;
 constexpr int fpvQualityRange[2] = {10, 63};
 constexpr uint32_t fpvLingerMs = 3000;
 // Over the radio the keepalive (the drone's K V) goes unanswered for about 2 s at times while the video runs, so FPV outlasts two missed ones.

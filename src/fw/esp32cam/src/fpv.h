@@ -101,6 +101,23 @@ inline void broadcast(size_t length) {
     rawSent += rawError == ESP_OK;
 }
 
+// Over the radio the sensor's frame (VTS, register 0x380e, in lines) is lengthened until the average frame fits within fpvRadioBytesPerSecond at the frame rate, and shortened back as frames shrink, never below its own; nativeLines is cleared at each camera start.
+int nativeLines = 0, frameLines = 0;
+float averageBytes = 0;
+
+inline void pace(sensor_t *sensor, size_t bytes) {
+    averageBytes = averageBytes ? averageBytes * 0.9f + bytes * 0.1f : bytes;
+    if (!nativeLines)
+        nativeLines = frameLines = sensor->get_reg(sensor, 0x380e, 0xffff);
+    if (nativeLines <= 0 || frameNumber % 8)
+        return;
+    // Aimed at 85% of the budget, which then only catches bursts: aimed at all of it, one frame in five was skipped.
+    const int wanted = max(nativeLines, int(nativeLines * averageBytes / (0.85f * config::fpvRadioBytesPerSecond * config::fpvFramePeriodS)));
+    // A change of less than 5% is left alone, so the rate does not wander.
+    if (abs(wanted - frameLines) * 20 > frameLines && sensor->set_reg(sensor, 0x380e, 0xffff, wanted) == 0)
+        frameLines = wanted;
+}
+
 // From the loop while FPV is on: one frame out, then the quality stepped toward fpvTargetBytes. False when the driver gave no frame.
 inline bool send() {
     camera_fb_t *frame = esp_camera_fb_get();
@@ -111,34 +128,33 @@ inline bool send() {
     portEXIT_CRITICAL(&viewerLock);
     Chunk header = {{'F', 'P', 'V', '1'}, frameNumber++, 0, uint8_t((frame->len + chunkBytes - 1) / chunkBytes),
                     uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec), uint32_t(esp_timer_get_time())};
-    // The radio's byte budget, refilled with time up to one second's worth: a frame it cannot pay for is not broadcast.
-    static float budget = 0;
-    static uint32_t budgetUs = 0;
-    const uint32_t nowUs = uint32_t(esp_timer_get_time());
-    budget = min(config::fpvRadioBytesPerSecond, budget + (nowUs - budgetUs) * 1e-6f * config::fpvRadioBytesPerSecond);
-    budgetUs = nowUs;
-    const bool udp = udpWanted(), radio = radioWanted() && budget >= frame->len;
-    if (radio)
-        budget -= frame->len;
+    const bool udp = udpWanted(), radio = radioWanted();
     uint8_t *chunk = datagram + macHeader;
-    for (size_t offset = 0; offset < frame->len; offset += chunkBytes, ++header.index) {
-        const size_t length = min(chunkBytes, frame->len - offset);
-        memcpy(chunk, &header, sizeof(header));
-        memcpy(chunk + sizeof(header), frame->buf + offset, length);
-        if (radio)
-            broadcast(sizeof(header) + length);
-        // Out of Wi-Fi buffers the rest of the frame is dropped: the viewer cannot use it.
-        if (udp && lwip_sendto(socket, chunk, sizeof(header) + length, 0, reinterpret_cast<const sockaddr *>(&to), sizeof(to)) < 0)
-            break;
+    // Over the radio the frame goes out twice, the second copy after the whole first one: broadcast frames are not retried, and about 10% of chunks went missing one by one on channel 11 (2026-10-30); fpv_rx keeps the first copy of each.
+    for (int copy = 0; copy < (radio ? config::fpvRadioCopies : 1); ++copy) {
+        header.index = 0;
+        for (size_t offset = 0; offset < frame->len; offset += chunkBytes, ++header.index) {
+            const size_t length = min(chunkBytes, frame->len - offset);
+            memcpy(chunk, &header, sizeof(header));
+            memcpy(chunk + sizeof(header), frame->buf + offset, length);
+            if (radio)
+                broadcast(sizeof(header) + length);
+            // Out of Wi-Fi buffers the rest of the frame is dropped: the viewer cannot use it.
+            if (udp && copy == 0 && lwip_sendto(socket, chunk, sizeof(header) + length, 0, reinterpret_cast<const sockaddr *>(&to), sizeof(to)) < 0)
+                break;
+        }
     }
     // A step of quality per frame, with a dead band so it settles.
     const size_t target = udp ? config::fpvTargetBytes : config::fpvRadioTargetBytes;
     const int step = frame->len > target ? 1 : frame->len < target * 3 / 4 ? -1 : 0;
+    const size_t frameBytes = frame->len;
     esp_camera_fb_return(frame);
     const int quality = constrain(fpvQuality + step, config::fpvQualityRange[0], config::fpvQualityRange[1]);
     sensor_t *sensor = esp_camera_sensor_get();
     if (quality != fpvQuality && sensor->set_quality(sensor, quality) == 0)
         fpvQuality = quality;
+    if (radioWanted() && !udp)
+        pace(sensor, frameBytes);
     ++previewCount;
     return true;
 }

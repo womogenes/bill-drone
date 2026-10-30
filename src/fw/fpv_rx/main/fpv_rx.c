@@ -1,4 +1,4 @@
-// FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB at 921600 baud (this board's CP2102 runs no faster exactly, about 92 KB/s) as [length u16][rssi i8][chunk], the chunk starting with its FPV1 header. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
+// FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB at 1 Mbaud (this board's CP2102 stops there, about 98 KB/s of chunks) as [length u16][rssi i8][chunk], the chunk starting with its FPV1 header. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
 #include <string.h>
 #include "driver/uart.h"
 #include "esp_timer.h"
@@ -7,7 +7,7 @@
 #include "freertos/ringbuf.h"
 #include "nvs_flash.h"
 
-#define BAUD 921600
+#define BAUD 1000000
 #define HEADER 24 // a management frame's 802.11 header
 #define ACTION "\x7f" "FPV" // vendor-specific action category and marker, ahead of the chunk
 #define FCS 4
@@ -30,29 +30,40 @@ static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     // A frame's first chunk admits the whole frame only if the buffer has room for all its chunks: with the USB side behind, whole frames are dropped rather than chunks of many.
     const uint8_t *chunk = frame + HEADER + 4;
     const uint16_t number = chunk[4] | chunk[5] << 8;
-    if (chunk[6] == 0)
-        admitted = xRingbufferGetCurFreeSize(chunks) >= chunk[7] * (3 + 16 + CHUNK + 8) ? number : admitted - 1;
+    // The camera sends each frame twice; the first copy of each chunk goes on (up to 64 chunks a frame).
+    static uint16_t seen_frame;
+    static uint64_t seen;
+    if (number != seen_frame) {
+        seen_frame = number;
+        seen = 0;
+    }
+    const uint64_t bit = 1ull << (chunk[6] & 63);
+    if (seen & bit) return;
+    if (chunk[6] == 0 && admitted != number)
+        admitted = xRingbufferGetCurFreeSize(chunks) >= chunk[7] * (3 + 16 + CHUNK) ? number : admitted - 1;
     if (number != admitted) return;
-    uint8_t *out;
-    if (xRingbufferSendAcquire(chunks, (void **)&out, 3 + length, 0) != pdTRUE) return;
+    seen |= bit;
+    // The Wi-Fi task is the only writer, so one static buffer serves.
+    static uint8_t out[3 + 16 + CHUNK];
     out[0] = length & 0xff;
     out[1] = length >> 8;
     out[2] = (uint8_t)packet->rx_ctrl.rssi;
     memcpy(out + 3, chunk, length);
-    xRingbufferSendComplete(chunks, out);
+    xRingbufferSend(chunks, out, 3 + length, 0);
 }
 
 static void forward(void *unused) {
     for (;;) {
         size_t size;
-        uint8_t *item = xRingbufferReceive(chunks, &size, portMAX_DELAY);
+        uint8_t *item = xRingbufferReceiveUpTo(chunks, &size, portMAX_DELAY, 4096);
         uart_write_bytes(UART_NUM_0, item, size);
         vRingbufferReturnItem(chunks, item);
     }
 }
 
 void app_main(void) {
-    chunks = xRingbufferCreate(32 * 1024, RINGBUF_TYPE_NOSPLIT);
+    // A byte buffer, whose free size is all of its free space: a no-split buffer reports only the largest contiguous piece, which near its end refused frames that would have fitted.
+    chunks = xRingbufferCreate(32 * 1024, RINGBUF_TYPE_BYTEBUF);
     uart_config_t uart = {.baud_rate = BAUD, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT};
     ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 1024, 8192, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart));

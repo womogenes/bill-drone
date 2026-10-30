@@ -103,7 +103,7 @@ async function runHub(hub: Hub, url: URL) {
   }
 }
 
-// FPV chunks (fw/esp32cam/src/fpv.h) carry a 16-byte header (FPV1, frame number, index and count, capture and send times). With the receiver plugged in they arrive on its port as [length u16][rssi i8][chunk] while a K V request every 500 ms keeps the camera sending over the radio; otherwise over UDP, kept coming by "FPVW" to the camera's port 5601. A frame still missing a chunk when a newer one starts is dropped.
+// FPV chunks (fw/esp32cam/src/fpv.h) carry a 16-byte header (FPV1, frame number, index and count, capture and send times). With the receiver plugged in they arrive on its port as [length u16][rssi i8][chunk] at 1 Mbaud while a K V request every 500 ms keeps the camera sending over the radio; otherwise over UDP, kept coming by "FPVW" to the camera's port 5601. A frame still missing a chunk when a newer one starts is dropped.
 async function runFpv(hub: Hub) {
   let current = -1;
   let parts: Buffer[] = [];
@@ -249,7 +249,7 @@ const store = globalThis as { fpvReceiver?: Receiver };
 
 function receiver() {
   if (store.fpvReceiver || !existsSync(RECEIVER)) return store.fpvReceiver;
-  execFileSync('stty', ['-F', RECEIVER, '921600', 'raw', '-echo']);
+  execFileSync('stty', ['-F', RECEIVER, '1000000', 'raw', '-echo']);
   const port = new tty.ReadStream(
     openSync(RECEIVER, constants.O_RDONLY | constants.O_NOCTTY)
   );
