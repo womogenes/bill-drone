@@ -130,94 +130,128 @@ const controls = [
   },
 ] as const;
 type Setpoint = (typeof controls)[number]['key'];
-const tuningFields = [
-  { key: 'roll_p', label: 'Roll P', min: 0 },
-  { key: 'roll_i', label: 'Roll I', min: 0 },
-  { key: 'roll_damping', label: 'Roll damping', min: 0 },
-  { key: 'pitch_p', label: 'Pitch P', min: 0 },
-  { key: 'pitch_i', label: 'Pitch I', min: 0 },
-  { key: 'pitch_damping', label: 'Pitch damping', min: 0 },
-  { key: 'yaw_damping', label: 'Yaw damping', min: 0 },
-  { key: 'integral_limit', label: 'Integral limit', min: 0 },
-  { key: 'pitch_trim', label: 'Pitch trim (°)', min: -15 },
-  { key: 'left_trim', label: 'Left servo trim (°)', min: -15 },
-  { key: 'right_trim', label: 'Right servo trim (°)', min: -15 },
-  { key: 'servo_compensation', label: 'Servo compensation (°)', min: 0 },
-  { key: 'integrate_throttle', label: 'Integrate above throttle', min: 0 },
-  { key: 'target_rate', label: 'Target ramp (°/s)', min: 1 },
-  { key: 'velocity_damping', label: 'Velocity damping (°/(m/s))', min: 0 },
-  { key: 'velocity_leak', label: 'Velocity leak (s)', min: 0.1 },
-  { key: 'thrust_voltage', label: 'Thrust reference (V, 0 off)', min: 0 },
-  { key: 'yaw_i', label: 'Yaw I', min: 0 },
-  { key: 'hover_center', label: 'Hover centres on tag (1 on, 0 off)', min: 0 },
+// The gains dialog's sections: each field is a drone setting; label is read within its section's title.
+type Field = { key: string; label: string; min?: number; max?: number };
+const gainSections: { title: string; needs?: string; fields: Field[] }[] = [
   {
-    key: 'hover_distance',
-    label: 'Hover distance from tag (m, 0 = takeoff range)',
-    min: 0,
-  },
-  { key: 'hover_approach', label: 'Hover approach speed (m/s)', min: 0.02 },
-  { key: 'hover_ceiling', label: 'Hover ceiling above takeoff (m)', min: 0.2 },
-  {
-    key: 'hover_square',
-    label: 'Hover moves square to tag (1 on, 0 off)',
-    min: 0,
-  },
-  { key: 'hover_kside', label: 'Hover pull to square-on (m/s² per m)', min: 0 },
-  { key: 'hover_cam_pitch', label: 'Camera tilt up from body (°)', min: -30 },
-  {
-    key: 'hover_cam_roll',
-    label: 'Camera roll about its axis (°, 180 upside down)',
-    min: -180,
-  },
-  { key: 'hover_drag', label: 'Hover rotor drag (1/s, 0 off)', min: 0 },
-  {
-    key: 'hover_drag_tilt',
-    label: 'Hover drag thrust tilt offset (°)',
-    min: -10,
-  },
-  { key: 'hover_drag_tau', label: 'Hover drag correction time (s)', min: 0.1 },
-  { key: 'hover_trim_tau', label: 'Hover trim build-up time (s)', min: 0.1 },
-  { key: 'hover_trim_max', label: 'Hover trim limit (m/s²)', min: 0 },
-  { key: 'auto_trim', label: 'Self-trim per hop (0 off - 1)', min: 0, max: 1 },
-] as const;
-const modelFields = [
-  { key: 'pivot_height', label: 'Pivot height (m)', min: 0, max: undefined },
-  { key: 'com_x', label: 'CoM x (m)', min: -0.02, max: 0.02 },
-  {
-    key: 'roll_inertia',
-    label: 'Roll inertia (kg·m²)',
-    min: 0,
-    max: undefined,
+    title: 'Roll',
+    fields: [
+      { key: 'roll_p', label: 'P', min: 0 },
+      { key: 'roll_i', label: 'I', min: 0 },
+      { key: 'roll_damping', label: 'Damping', min: 0 },
+      { key: 'roll_bias', label: 'Bias (rad/s²)', min: -20, max: 20 },
+    ],
   },
   {
-    key: 'pitch_inertia',
-    label: 'Pitch inertia (kg·m²)',
-    min: 0,
-    max: undefined,
+    title: 'Pitch',
+    fields: [
+      { key: 'pitch_p', label: 'P', min: 0 },
+      { key: 'pitch_i', label: 'I', min: 0 },
+      { key: 'pitch_damping', label: 'Damping', min: 0 },
+      { key: 'pitch_bias', label: 'Bias (rad/s²)', min: -20, max: 20 },
+      { key: 'pitch_trim', label: 'Trim (°)', min: -15, max: 15 },
+    ],
   },
-  { key: 'yaw_inertia', label: 'Yaw inertia (kg·m²)', min: 0, max: undefined },
   {
-    key: 'reaction_torque_ratio',
-    label: 'Reaction torque ratio',
-    min: -0.1,
-    max: 0.1,
+    title: 'Yaw',
+    fields: [
+      { key: 'yaw_damping', label: 'Damping', min: 0 },
+      { key: 'yaw_i', label: 'I', min: 0 },
+      { key: 'yaw_bias', label: 'Bias (rad/s²)', min: -10, max: 10 },
+    ],
   },
-  { key: 'arm', label: 'Arm (m)', min: 0, max: undefined },
-] as const;
-const biasFields = [
-  { key: 'roll_bias', label: 'Roll bias (rad/s²)', min: -20, max: 20 },
-  { key: 'pitch_bias', label: 'Pitch bias (rad/s²)', min: -20, max: 20 },
-  { key: 'yaw_bias', label: 'Yaw bias (rad/s²)', min: -10, max: 10 },
-  { key: 'left_thrust_scale', label: 'Left thrust scale', min: 0.5, max: 1.5 },
   {
-    key: 'right_thrust_scale',
-    label: 'Right thrust scale',
-    min: 0.5,
-    max: 1.5,
+    title: 'Attitude loop',
+    fields: [
+      { key: 'integral_limit', label: 'Integral limit', min: 0 },
+      { key: 'integrate_throttle', label: 'Integrate above throttle', min: 0 },
+      { key: 'target_rate', label: 'Target ramp (°/s)', min: 1 },
+      { key: 'velocity_damping', label: 'Velocity damping (°/(m/s))', min: 0 },
+      { key: 'velocity_leak', label: 'Velocity leak (s)', min: 0.1 },
+      { key: 'auto_trim', label: 'Self-trim per hop (0-1)', min: 0, max: 1 },
+    ],
   },
-] as const;
-const gainKeys = [...tuningFields, ...modelFields, ...biasFields].map(
-  ({ key }) => key
+  {
+    title: 'Servos and thrust',
+    fields: [
+      { key: 'left_trim', label: 'Left servo trim (°)', min: -15, max: 15 },
+      { key: 'right_trim', label: 'Right servo trim (°)', min: -15, max: 15 },
+      { key: 'servo_compensation', label: 'Servo compensation (°)', min: 0 },
+      { key: 'thrust_voltage', label: 'Thrust reference (V, 0 off)', min: 0 },
+      {
+        key: 'left_thrust_scale',
+        label: 'Left thrust scale',
+        min: 0.5,
+        max: 1.5,
+      },
+      {
+        key: 'right_thrust_scale',
+        label: 'Right thrust scale',
+        min: 0.5,
+        max: 1.5,
+      },
+    ],
+  },
+  {
+    title: 'Hover on the tag',
+    fields: [
+      { key: 'hover_center', label: 'Centre on tag (1 on, 0 off)', min: 0 },
+      {
+        key: 'hover_distance',
+        label: 'Distance (m, 0 = takeoff range)',
+        min: 0,
+      },
+      { key: 'hover_approach', label: 'Approach speed (m/s)', min: 0.02 },
+      { key: 'hover_ceiling', label: 'Ceiling above takeoff (m)', min: 0.2 },
+      {
+        key: 'hover_square',
+        label: 'Move square to tag (1 on, 0 off)',
+        min: 0,
+      },
+      { key: 'hover_kside', label: 'Pull to square-on (m/s² per m)', min: 0 },
+      { key: 'hover_cam_pitch', label: 'Camera tilt up (°)', min: -30 },
+      {
+        key: 'hover_cam_roll',
+        label: 'Camera roll (°, 180 upside down)',
+        min: -180,
+      },
+    ],
+  },
+  {
+    title: 'Hover without the tag',
+    fields: [
+      { key: 'hover_drag', label: 'Rotor drag (1/s, 0 off)', min: 0 },
+      {
+        key: 'hover_drag_tilt',
+        label: 'Drag thrust tilt offset (°)',
+        min: -10,
+      },
+      { key: 'hover_drag_tau', label: 'Drag correction time (s)', min: 0.1 },
+      { key: 'hover_trim_tau', label: 'Trim build-up time (s)', min: 0.1 },
+      { key: 'hover_trim_max', label: 'Trim limit (m/s²)', min: 0 },
+    ],
+  },
+  {
+    title: 'Model',
+    needs: 'arm',
+    fields: [
+      { key: 'pivot_height', label: 'Pivot height (m)', min: 0 },
+      { key: 'com_x', label: 'CoM x (m)', min: -0.02, max: 0.02 },
+      { key: 'roll_inertia', label: 'Roll inertia (kg·m²)', min: 0 },
+      { key: 'pitch_inertia', label: 'Pitch inertia (kg·m²)', min: 0 },
+      { key: 'yaw_inertia', label: 'Yaw inertia (kg·m²)', min: 0 },
+      {
+        key: 'reaction_torque_ratio',
+        label: 'Reaction torque ratio',
+        min: -0.1,
+        max: 0.1,
+      },
+      { key: 'arm', label: 'Arm (m)', min: 0 },
+    ],
+  },
+];
+const gainKeys = gainSections.flatMap(({ fields }) =>
+  fields.map(({ key }) => key)
 );
 
 export const ControlPanel = memo(function ControlPanel({
@@ -268,6 +302,9 @@ export const ControlPanel = memo(function ControlPanel({
                 : '');
   const [draft, setDraft] = useState<Partial<Record<Setpoint, number>>>({});
   const [gains, setGains] = useState<Record<string, string>>({});
+  // A setting by name, undefined when this drone's firmware has none.
+  const setting = (key: string) =>
+    (settings as unknown as Record<string, number | undefined>)[key];
   const [open, setOpen] = useState(false);
   const [manual, setManual] = useState(MANUAL_DEFAULT);
   const [manualDraft, setManualDraft] = useState(MANUAL_DEFAULT);
@@ -533,10 +570,10 @@ export const ControlPanel = memo(function ControlPanel({
               setGains(
                 Object.fromEntries(
                   gainKeys
-                    .filter((key) => settings[key] !== undefined)
+                    .filter((key) => setting(key) !== undefined)
                     .map((key) => [
                       key,
-                      String(Number(settings[key].toPrecision(5))),
+                      String(Number(setting(key)!.toPrecision(5))),
                     ])
                 )
               );
@@ -554,7 +591,7 @@ export const ControlPanel = memo(function ControlPanel({
           >
             <Settings2 />
           </DialogTrigger>
-          <DialogContent className="sm:max-w-3xl">
+          <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-6xl">
             <DialogHeader>
               <DialogTitle>Control gains</DialogTitle>
             </DialogHeader>
@@ -581,88 +618,52 @@ export const ControlPanel = memo(function ControlPanel({
                 setOpen(false);
               }}
             >
-              <div className="grid grid-cols-2 gap-3">
-                {tuningFields.map(({ key, label, min }) => (
-                  <label
-                    key={key}
-                    className="flex items-center justify-between gap-3"
-                  >
-                    {label}
-                    <Input
-                      className="w-32"
-                      aria-label={label}
-                      type="number"
-                      min={min}
-                      max={key.endsWith('_trim') ? 15 : undefined}
-                      step="any"
-                      required
-                      value={gains[key] ?? ''}
-                      onChange={(event) =>
-                        setGains({ ...gains, [key]: event.target.value })
-                      }
-                    />
-                  </label>
-                ))}
+              <div className="grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
+                {gainSections
+                  .filter(
+                    ({ fields, needs }) =>
+                      (!needs || setting(needs) !== undefined) &&
+                      fields.some(({ key }) => setting(key) !== undefined)
+                  )
+                  .map(({ title, fields }) => (
+                    <section key={title} className="space-y-2">
+                      <h3 className="border-b pb-1 font-medium">{title}</h3>
+                      {fields
+                        .filter(({ key }) => setting(key) !== undefined)
+                        .map(({ key, label, min, max }) => (
+                          <label
+                            key={key}
+                            className="flex items-center justify-between gap-3"
+                          >
+                            <span className="text-muted-foreground">
+                              {label}
+                            </span>
+                            <Input
+                              className="w-28 shrink-0 tabular-nums"
+                              aria-label={`${title}: ${label}`}
+                              type="number"
+                              min={min}
+                              max={max}
+                              step="any"
+                              required
+                              value={gains[key] ?? ''}
+                              onChange={(event) =>
+                                setGains({
+                                  ...gains,
+                                  [key]: event.target.value,
+                                })
+                              }
+                            />
+                          </label>
+                        ))}
+                    </section>
+                  ))}
               </div>
-              {settings.arm !== undefined && (
-                <section className="space-y-3">
-                  <h3 className="font-medium">Model</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    {modelFields.map(({ key, label, min, max }) => (
-                      <label
-                        key={key}
-                        className="flex items-center justify-between gap-3"
-                      >
-                        {label}
-                        <Input
-                          className="w-32"
-                          aria-label={label}
-                          type="number"
-                          min={min}
-                          max={max}
-                          step="any"
-                          required
-                          value={gains[key] ?? ''}
-                          onChange={(event) =>
-                            setGains({ ...gains, [key]: event.target.value })
-                          }
-                        />
-                      </label>
-                    ))}
-                  </div>
-                </section>
-              )}
-              {settings.roll_bias !== undefined && (
-                <section className="space-y-3">
-                  <h3 className="font-medium">Bias and thrust scale</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    {biasFields.map(({ key, label, min, max }) => (
-                      <label
-                        key={key}
-                        className="flex items-center justify-between gap-3"
-                      >
-                        {label}
-                        <Input
-                          className="w-32"
-                          aria-label={label}
-                          type="number"
-                          min={min}
-                          max={max}
-                          step="any"
-                          required
-                          value={gains[key] ?? ''}
-                          onChange={(event) =>
-                            setGains({ ...gains, [key]: event.target.value })
-                          }
-                        />
-                      </label>
-                    ))}
-                  </div>
-                </section>
-              )}
-              <section className="space-y-3">
-                <h3 className="font-medium">Manual inputs</h3>
-                <div className="grid grid-cols-2 gap-3">
+              <section className="space-y-2 xl:w-1/3 xl:pr-6">
+                <h3 className="border-b pb-1 font-medium">
+                  Manual inputs (this browser)
+                </h3>
+                <div className="space-y-2">
                   <label className="flex items-center justify-between gap-3">
                     Pitch/roll step (°)
                     <Input
