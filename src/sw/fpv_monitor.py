@@ -3,7 +3,7 @@ FPV over the radio received by a USB Wi-Fi adapter in monitor mode (a TP-Link Ar
 
 sudo python3 src/sw/fpv_monitor.py [--interface wlan1] [--channel 11]   (or the bill-fpv-monitor service, src/sw/fpv-monitor.service)
 
-Needs root, so it does as little as it can and the dashboard server (sw/dashboard/app/api/camera/route.ts) does the rest: it turns the interface into a monitor on the channel the camera parks on (fw/esp32cam/src/ota.h radioChannel), with NetworkManager told to leave it alone, and passes every copy of every camera chunk (broadcast vendor action frames with BSSID FPVRAW, fw/esp32cam/src/fpv.h) to 127.0.0.1:5602 as FPVC, the signal (dBm, signed byte) and the chunk from its FPV1 header; FPVM every 500 ms says the monitor is running, which turns the dashboard's FPV to the radio.
+Needs root, so it does as little as it can and the dashboard server (sw/dashboard/app/api/camera/route.ts) does the rest: it turns the interface into a monitor on the channel the camera parks on (fw/esp32cam/src/ota.h radioChannel), with NetworkManager told to leave it alone, and passes every camera shard it hears (broadcast vendor action frames with BSSID FPVRAW, fw/esp32cam/src/fpv.h) to 127.0.0.1:5602 as FPVC, the signal (dBm, signed byte) and the shard from its FPV2 header; FPVM every 500 ms says the monitor is running, which turns the dashboard's FPV to the radio.
 """
 
 import argparse
@@ -82,7 +82,7 @@ def main():
             continue
         flags, signal = radiotap(packet[:length])
         chunk = frame[28:-4] if flags & FLAG_FCS else frame[28:]
-        if chunk[:4] == b"FPV1":
+        if chunk[:4] == b"FPV2":
             heard = time.monotonic()
             out.sendto(b"FPVC" + struct.pack("b", signal) + chunk, DASHBOARD)
 

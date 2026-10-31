@@ -5,6 +5,7 @@
 #include "esp_wifi.h"
 #include "lwip/sockets.h"
 #include "config.h"
+#include "fec.h"
 
 // FPV video. While a viewer has asked in the last fpvLingerMs the loop on core 1 stops tracking and sends each JPEG frame as chunks of up to chunkBytes, each with a Chunk header, by whichever way it was asked: over UDP to the latest viewer that sent "FPVW" to port (the dashboard's /api/camera on the camera's network), and as raw broadcast 802.11 action frames on the camera's current channel for the FPV receiver (fw/fpv_rx) when the drone forwards request K V (update.h), which needs no network. A lost chunk costs its frame; over TCP a lost segment stalled the stream for the retransmission timeout (one 2.6 s gap in 2 minutes on 2026-10-30, with the camera's network on the drone's channel). Raw frames go unacknowledged at rate, so there are no retries either.
 namespace fpv {
@@ -17,11 +18,13 @@ constexpr wifi_phy_rate_t rate = WIFI_PHY_RATE_MCS3_LGI, previewRate = WIFI_PHY_
 constexpr size_t macHeader = 28;
 constexpr uint8_t actionBody[4] = {127, 'F', 'P', 'V'};
 
+// Each frame goes out as shards (fec.h): its JPEG split evenly into data shards of up to chunkBytes, and over the radio as many parity shards plus one, any data of which rebuild it.
 struct __attribute__((packed)) Chunk {
-    char magic[4]; // "FPV1"
+    char magic[4]; // "FPV2"
     uint16_t frame;
-    uint8_t index, count;
-    uint32_t captureUs, sentUs; // the frame's capture start and the moment its first datagram left, on the camera's clock
+    uint8_t index, total, data, reserved; // this shard, the frame's shards, and how many of them carry the JPEG
+    uint16_t length; // the JPEG's bytes
+    uint32_t captureUs, sentUs; // the frame's capture start and the moment its first shard left, on the camera's clock
 };
 } // namespace fpv
 
@@ -106,24 +109,42 @@ inline void broadcast(size_t length, wifi_phy_rate_t phyRate = rate) {
 // The last time the drone asked for tag mode's preview over the radio (K P, web.h radioPreviewLoop).
 volatile uint32_t previewRadioMs = 0;
 
-// A whole JPEG as raw chunks at previewRate, each sent previewCopies times copyGapMs apart; from the preview task while FPV is off. The monitor-mode adapter misses copies at random, about 45% of them at -60 dBm, as it misses access points' beacons (80% heard at -46 dBm, 55% at -57, 2026-10-30): its receiver, not the air or the camera. With two copies a sixth of the frames were lost; a 1 KB preview frame at MCS0 takes about 1.3 ms of air, so a third copy costs 3% of the channel.
-constexpr int previewCopies = 3;
-constexpr uint32_t copyGapMs = 8;
-inline void broadcastFrame(const uint8_t *data, size_t length, uint32_t captureUs) {
-    Chunk header = {{'F', 'P', 'V', '1'}, frameNumber++, 0, uint8_t((length + chunkBytes - 1) / chunkBytes), captureUs, uint32_t(esp_timer_get_time())};
+// A whole JPEG as shards: the data shards over UDP to the viewer (to) when udp, and with the parity shards as raw frames at phyRate when radio. Parity replaced whole copies of the frame: the monitor-mode adapter misses a shard at random, 30-45% of them (2026-10-30, as it misses access points' beacons: its receiver, not the air or the camera), and a frame of three shards sent twice lost one 29% of the time, where any three of seven should lose about 2%. A one-shard preview frame goes out three times, as before. The adapter also goes deaf for a few shards at a time (runs of 2-6 missed, up to 14, 2026-10-30), so the shards are spread gapUs apart over the frame rather than sent back to back, which lost 8% of FPV frames with 77% of shards heard.
+inline void sendShards(const uint8_t *data, size_t length, uint32_t captureUs, bool radio, bool udp, const sockaddr_in *to,
+                       wifi_phy_rate_t phyRate, uint32_t gapUs) {
+    const int shards = max(1, int((length + chunkBytes - 1) / chunkBytes)), parity = radio ? shards + 1 : 0;
+    const size_t size = (length + shards - 1) / shards;
+    if (length > 0xffff || shards + parity > 255)
+        return;
+    Chunk header = {{'F', 'P', 'V', '2'}, frameNumber++, 0, uint8_t(shards + parity), uint8_t(shards), 0, uint16_t(length), captureUs,
+                    uint32_t(esp_timer_get_time())};
     uint8_t *chunk = datagram + macHeader;
-    for (int copy = 0; copy < previewCopies; ++copy) {
-        header.index = 0;
-        for (size_t offset = 0; offset < length; offset += chunkBytes, ++header.index) {
-            const size_t part = min(chunkBytes, length - offset);
-            memcpy(chunk, &header, sizeof(header));
-            memcpy(chunk + sizeof(header), data + offset, part);
-            broadcast(sizeof(header) + part, previewRate);
+    for (int index = 0; index < shards + parity; ++index) {
+        header.index = uint8_t(index);
+        memcpy(chunk, &header, sizeof(header));
+        size_t part = size;
+        if (index < shards) {
+            part = min(size, length - index * size);
+            memcpy(chunk + sizeof(header), data + index * size, part);
+        } else {
+            fec::parity(data, length, shards, size, index - shards, chunk + sizeof(header));
         }
-        if (copy + 1 < previewCopies)
-            delay(copyGapMs);
+        if (radio) {
+            broadcast(sizeof(header) + part, phyRate);
+            // Long gaps sleep, which frees the core; short ones wait out a tick's imprecision.
+            if (index + 1 < shards + parity && gapUs >= 4000)
+                delay(gapUs / 1000);
+            else if (index + 1 < shards + parity)
+                delayMicroseconds(gapUs);
+        }
+        // Out of Wi-Fi buffers the rest of the frame is dropped: the viewer cannot use it.
+        if (udp && index < shards && lwip_sendto(socket, chunk, sizeof(header) + part, 0, reinterpret_cast<const sockaddr *>(to), sizeof(*to)) < 0)
+            udp = false;
     }
 }
+
+// Tag mode's preview over the radio, from the preview task while FPV is off.
+inline void broadcastFrame(const uint8_t *data, size_t length, uint32_t captureUs) { sendShards(data, length, captureUs, true, false, nullptr, previewRate, 8000); }
 
 // Over the radio the sensor's frame (VTS, register 0x380e, in lines) is lengthened until the average frame fits within radioBudget at the frame rate, and shortened back as frames shrink, never below its own; nativeLines is cleared at each camera start.
 int nativeLines = 0, frameLines = 0;
@@ -150,24 +171,11 @@ inline bool send() {
     portENTER_CRITICAL(&viewerLock);
     const sockaddr_in to = viewer;
     portEXIT_CRITICAL(&viewerLock);
-    Chunk header = {{'F', 'P', 'V', '1'}, frameNumber++, 0, uint8_t((frame->len + chunkBytes - 1) / chunkBytes),
-                    uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec), uint32_t(esp_timer_get_time())};
-    const bool udp = udpWanted(), radio = radioWanted();
-    uint8_t *chunk = datagram + macHeader;
-    // Over the radio the frame goes out twice, the second copy after the whole first one: broadcast frames are not retried, and about 10% of chunks went missing one by one on channel 11 (2026-10-30); fpv_rx keeps the first copy of each.
-    for (int copy = 0; copy < (radio ? config::fpvRadioCopies : 1); ++copy) {
-        header.index = 0;
-        for (size_t offset = 0; offset < frame->len; offset += chunkBytes, ++header.index) {
-            const size_t length = min(chunkBytes, frame->len - offset);
-            memcpy(chunk, &header, sizeof(header));
-            memcpy(chunk + sizeof(header), frame->buf + offset, length);
-            if (radio)
-                broadcast(sizeof(header) + length);
-            // Out of Wi-Fi buffers the rest of the frame is dropped: the viewer cannot use it.
-            if (udp && copy == 0 && lwip_sendto(socket, chunk, sizeof(header) + length, 0, reinterpret_cast<const sockaddr *>(&to), sizeof(to)) < 0)
-                break;
-        }
-    }
+    const bool udp = udpWanted();
+    // Spread over most of a frame period, leaving time to fetch the next.
+    const uint32_t gapUs = uint32_t(config::fpvFramePeriodS * 0.8e6f) / (2 * max(1u, unsigned((frame->len + chunkBytes - 1) / chunkBytes)) + 1);
+    sendShards(frame->buf, frame->len, uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec), radioWanted(), udp,
+               &to, rate, gapUs);
     // A step of quality per frame, with a dead band so it settles.
     // Over the radio no more than the budget's share of a frame at the sensor's own rate.
     const size_t target = udp ? config::fpvTargetBytes : size_t(min(float(config::fpvTargetBytes), 0.85f * radioBudget * config::fpvFramePeriodS));

@@ -1,4 +1,4 @@
-// FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB at 1 Mbaud (this board's CP2102 stops there, about 98 KB/s of chunks) as [length u16][rssi i8][chunk], the chunk starting with its FPV1 header. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
+// FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB at 1 Mbaud (this board's CP2102 stops there, about 98 KB/s of chunks) as [length u16][rssi i8][chunk], the shard starting with its FPV2 header. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
 #include <string.h>
 #include "driver/uart.h"
 #include "esp_timer.h"
@@ -25,26 +25,28 @@ static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     const wifi_promiscuous_pkt_t *packet = buffer;
     const uint8_t *frame = packet->payload;
     const int length = (int)packet->rx_ctrl.sig_len - HEADER - 4 - FCS;
-    if (type != WIFI_PKT_MGMT || length < 16 || memcmp(frame + 16, bssid, 6) || memcmp(frame + HEADER, ACTION, 4) || memcmp(frame + HEADER + 4, "FPV1", 4)) return;
+    if (type != WIFI_PKT_MGMT || length < 20 || memcmp(frame + 16, bssid, 6) || memcmp(frame + HEADER, ACTION, 4) || memcmp(frame + HEADER + 4, "FPV2", 4)) return;
     heard_us = esp_timer_get_time();
-    // A frame's first chunk admits the whole frame only if the buffer has room for all its chunks: with the USB side behind, whole frames are dropped rather than chunks of many.
+    // The camera sends each frame as shards, any data of which rebuild it (fw/esp32cam/src/fec.h): the first that arrives admits the frame only if the buffer has room for that many, and the first data distinct shards go on. With the USB side behind, whole frames are dropped rather than shards of many.
     const uint8_t *chunk = frame + HEADER + 4;
     const uint16_t number = chunk[4] | chunk[5] << 8;
-    // The camera sends each frame twice; the first copy of each chunk goes on (up to 64 chunks a frame).
     static uint16_t seen_frame;
     static uint64_t seen;
-    if (number != seen_frame) {
+    static int passed;
+    static bool started;
+    if (!started || number != seen_frame) {
+        started = true;
         seen_frame = number;
         seen = 0;
+        passed = 0;
+        admitted = xRingbufferGetCurFreeSize(chunks) >= chunk[8] * (3 + 20 + CHUNK) ? number : number - 1;
     }
     const uint64_t bit = 1ull << (chunk[6] & 63);
-    if (seen & bit) return;
-    if (chunk[6] == 0 && admitted != number)
-        admitted = xRingbufferGetCurFreeSize(chunks) >= chunk[7] * (3 + 16 + CHUNK) ? number : admitted - 1;
-    if (number != admitted) return;
+    if (number != admitted || (seen & bit) || passed >= chunk[8]) return;
     seen |= bit;
+    ++passed;
     // The Wi-Fi task is the only writer, so one static buffer serves.
-    static uint8_t out[3 + 16 + CHUNK];
+    static uint8_t out[3 + 20 + CHUNK];
     out[0] = length & 0xff;
     out[1] = length >> 8;
     out[2] = (uint8_t)packet->rx_ctrl.rssi;

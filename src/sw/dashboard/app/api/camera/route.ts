@@ -3,6 +3,7 @@ import dgram from 'node:dgram';
 import { constants, existsSync, openSync } from 'node:fs';
 import tty from 'node:tty';
 import { resolve } from 'node:path';
+import { decode } from '@/lib/fec';
 
 export const runtime = 'nodejs';
 
@@ -103,35 +104,38 @@ async function runHub(hub: Hub, url: URL) {
   }
 }
 
-// FPV chunks (fw/esp32cam/src/fpv.h) carry a 16-byte header (FPV1, frame number, index and count, capture and send times). With the receiver plugged in they arrive on its port as [length u16][rssi i8][chunk] at 1 Mbaud, or from the monitor-mode adapter as UDP datagrams, while a K V request every 500 ms keeps the camera sending over the radio; otherwise over UDP, kept coming by "FPVW" to the camera's port 5601. A frame still missing a chunk when a newer one starts is dropped.
+// FPV shards (fw/esp32cam/src/fpv.h) carry a 20-byte header (FPV2, frame number, shard index, shard count, data shards, the JPEG's length, capture and send times); any data of a frame's shards rebuild it (lib/fec.ts). With the receiver plugged in they arrive on its port as [length u16][rssi i8][chunk] at 1 Mbaud, or from the monitor-mode adapter as UDP datagrams, while a K V request every 500 ms keeps the camera sending over the radio; otherwise over UDP, kept coming by "FPVW" to the camera's port 5601. A frame still short of shards when a newer one starts is dropped.
 // op: V for FPV, P for tag mode's preview over the radio (tracking on).
 async function runFpv(hub: Hub, op: 'V' | 'P') {
   let current = -1;
-  let parts: Buffer[] = [];
-  let got = 0;
+  let shards = new Map<number, Buffer>();
+  let done = false;
   hub.received = 0;
   const chunk = (message: Buffer) => {
-    if (message.length < 16 || message.toString('latin1', 0, 4) !== 'FPV1')
+    if (message.length < 20 || message.toString('latin1', 0, 4) !== 'FPV2')
       return;
     const frame = message.readUInt16LE(4);
     const index = message[6];
-    const count = message[7];
+    const data = message[8];
+    const length = message.readUInt16LE(10);
     if (frame !== current) {
       // A late chunk of a frame a few back; a frame far behind is a restarted camera counting from 0 again, whose frames were all dropped as late until the count caught up (2026-10-30).
       if (current >= 0 && ((current - frame) & 0xffff) < 64) return;
       current = frame;
-      parts = new Array(count);
-      got = 0;
+      shards = new Map();
+      done = false;
     }
-    if (index >= parts.length || parts[index]) return;
-    parts[index] = message.subarray(16);
-    if (++got < parts.length) return;
+    if (done || index >= message[7] || shards.has(index)) return;
+    shards.set(index, message.subarray(20));
+    if (shards.size < data) return;
+    done = true;
+    const jpeg = decode(shards, data, length);
+    if (!jpeg) return;
     hub.received!++;
-    const jpeg = Buffer.concat(parts);
     const part = new Uint8Array(
       Buffer.concat([
         Buffer.from(
-          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(8)} ${message.readUInt32LE(12)}\r\n\r\n`
+          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(12)} ${message.readUInt32LE(16)}\r\n\r\n`
         ),
         jpeg,
         Buffer.from('\r\n'),
@@ -177,7 +181,8 @@ function joinHub(host: string, path: string, signal: AbortSignal) {
   // FPV, or tag mode's preview over the radio: both chunked through runFpv.
   const fpv = path === '/fpv' || path === '/radio-preview';
   const url = cameraUrl(host, fpv ? '/' : path);
-  const key = fpv ? `fpv://${host}` : url.href;
+  // Each view its own hub: with one key for both, asking for FPV joined the running preview and the camera stayed in tag mode (2026-10-30).
+  const key = fpv ? `fpv://${host}${path}` : url.href;
   for (const other of hubs.values())
     if (other.host === host && other.key !== key) closeHub(other);
   let hub = hubs.get(key);
@@ -263,11 +268,11 @@ function receiver() {
     copies: 0,
     chunks: 0,
   };
-  // The monitor passes every copy (the camera sends each frame several times); the first of each goes on. The capture time tells a restarted camera's frame numbers from the same numbers before it.
+  // The monitor passes every shard it hears; the first of each goes on. The capture time tells a restarted camera's frame numbers from the same numbers before it.
   const recent = new Set<string>();
   const deliver = (chunk: Buffer) => {
     opened.copies++;
-    const key = `${chunk.readUInt16LE(4)}:${chunk[6]}:${chunk.readUInt32LE(8)}`;
+    const key = `${chunk.readUInt16LE(4)}:${chunk[6]}:${chunk.readUInt32LE(12)}`;
     if (recent.has(key)) return;
     recent.add(key);
     if (recent.size > 512) recent.delete(recent.values().next().value!);
@@ -292,13 +297,13 @@ function receiver() {
     port.on('data', (data: Buffer) => {
       buffer = Buffer.concat([buffer, data]);
       for (;;) {
-        const at = buffer.indexOf('FPV1', 3);
+        const at = buffer.indexOf('FPV2', 3);
         if (at < 0) {
           buffer = buffer.subarray(Math.max(0, buffer.length - 3));
           break;
         }
         const length = buffer.readUInt16LE(at - 3);
-        if (length < 16 || length > 1500) {
+        if (length < 20 || length > 1500) {
           buffer = buffer.subarray(at + 1);
           continue;
         }
