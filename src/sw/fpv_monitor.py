@@ -68,7 +68,10 @@ def main():
             out.sendto(b"FPVM", DASHBOARD)
             hello = now
         # The adapter sometimes keeps reporting the channel while hearing nothing from the camera on it (2026-10-30, twice), and setting the same channel again does not help; tuning away and back does. So without a camera chunk for RETUNE_S it goes through another channel (harmless when the camera is simply not streaming).
+        # After a reboot the adapter came back managed (2026-10-31, NetworkManager first), where setting a channel only failed busy: then monitor mode is set again.
         if now - heard > RETUNE_S and now - tuned > RETUNE_S:
+            if "type monitor" not in subprocess.run(["iw", "dev", args.interface, "info"], capture_output=True, text=True).stdout:
+                monitor(args.interface, args.channel)
             subprocess.run(["iw", "dev", args.interface, "set", "channel", str(1 if args.channel != 1 else 6), "HT20"], check=False)
             subprocess.run(["iw", "dev", args.interface, "set", "channel", str(args.channel), "HT20"], check=False)
             tuned = now
