@@ -52,6 +52,9 @@ class Drone:
                 while reply[:4] != identifier:
                     reply = self.ws.recv(timeout=max(0.01, answer - time.monotonic()))
             except TimeoutError:
+                # After a timeout this connection kept missing replies (2026-10-30) where a new one got them.
+                self.ws.close()
+                self.ws = None
                 continue
             except (ConnectionClosed, InvalidStatus, ConnectionRefusedError):
                 # The service refuses or drops clients while the radio link is down, as while the drone restarts, and is not there at all while it restarts.
@@ -160,12 +163,16 @@ def camera(drone, path):
     local = sectors(image, count)
     print(f"camera {running} -> {target}: {count} sectors", flush=True)
     started = time.monotonic()
+    # The fast rate while writing, as for the drone's own image: at the long-range rate a 4 KB request's 18 fragments spent long enough on a busy channel 6 that many were lost (2 KB/s, 2026-10-30).
+    hurried = fast(drone, 1)
     for index in range(count):
         digest = hashlib.sha256(local[index]).digest()[:HASH_SIZE]
-        drone.request(b"K", b"W" + struct.pack("<H", index) + digest + local[index], timeout=4, patience=40)
+        drone.request(b"K", b"W" + struct.pack("<H", index) + digest + local[index], timeout=4, patience=300)
         rate = (index + 1) * SECTOR / 1024 / (time.monotonic() - started)
         print(f"\rWrote {index + 1}/{count} sectors ({rate:.0f} KB/s)", end="", flush=True)
     print()
+    if hurried:
+        fast(drone, 0)
     drone.request(b"K", b"B", timeout=10)
     print(f"Booting the camera's {target}", flush=True)
     deadline = time.monotonic() + 30

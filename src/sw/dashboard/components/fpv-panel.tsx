@@ -29,7 +29,10 @@ function save(key: string, value: string) {
 export function FpvPanel({
   free,
   onFree,
+  roll = 0,
 }: {
+  // The camera's roll on its mount (the drone's hover_cam_roll, degrees): the picture is turned back by it, so it shows upright.
+  roll?: number;
   // The drone's hover_camera setting turned around (undefined without a drone): every dashboard shows what the drone flies.
   free?: boolean;
   onFree: (free: boolean) => void;
@@ -201,6 +204,7 @@ export function FpvPanel({
         ref={canvas}
         aria-label={mode === 'fpv' ? 'Live camera video' : 'Tracking preview'}
         className="aspect-[3/2] w-full bg-black object-contain"
+        style={{ transform: `rotate(${-roll}deg)` }}
       />
     </section>
   );

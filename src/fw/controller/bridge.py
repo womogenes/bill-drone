@@ -30,6 +30,9 @@ import serial
 from log_format import HEADER_FORMAT, HEADER_SIZE, PATTERN_CHANNELS, RECORD_SIZE, SAMPLE_FORMAT, STOP_REASONS
 from wire import PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
+# Messages of more fragments than this go out twice (send_message).
+COPY_ABOVE = 4
+
 RECORDINGS = Path(__file__).resolve().parents[2] / "sw/recordings"
 
 # drone/main/runtime.h Status, then its camera link fields (absent from firmware before the camera link).
@@ -366,7 +369,8 @@ class Service:
         if not 1 <= count <= 32:
             raise ValueError("Message exceeds 32 fragments")
         sequence = self.next_sequence()
-        for index in range(count):
+        # A message of more than COPY_ABOVE fragments goes out twice, the second pass after the whole first: losing any one fragment loses the message, and a 4 KB camera sector's 18 went unanswered 40% of the time (2026-10-30). The drone fills in fragments of the same sequence in any order, and answers a request id it has already handled with its first reply.
+        for index in [*range(count), *(range(count) if count > COPY_ABOVE else ())]:
             if not self.send(channel, data[index * PAYLOAD_SIZE:(index + 1) * PAYLOAD_SIZE], sequence, index, count,
                              request_id):
                 return

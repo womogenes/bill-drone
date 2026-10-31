@@ -511,6 +511,7 @@ export default function Page() {
               reading?.control ? reading.control.hover_camera === 0 : undefined
             }
             onFree={(free) => sendControl({ hover_camera: free ? 0 : 1 })}
+            roll={reading?.control?.hover_cam_roll}
           />
           <p
             className={`px-4 pt-4 tabular-nums ${recorder?.error || (reading?.logging?.dropped ?? 0) > 0 ? 'text-red-700' : 'text-muted-foreground'}`}

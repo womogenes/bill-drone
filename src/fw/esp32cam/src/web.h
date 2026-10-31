@@ -20,6 +20,7 @@ struct PreviewFrame {
     uint8_t tag; // 0 none, 1 tracked, 2 tracked with a valid pose
     float corners[4][2];
     float position[3];
+    uint32_t captureUs; // the frame's capture start (camera clock)
 };
 QueueHandle_t handoverQueue;
 SemaphoreHandle_t previewReady;
@@ -114,7 +115,8 @@ void finishFrame(camera_fb_t *frame, bool found, const float corners[4][2], cons
     if (previewWanted) {
         previewWanted = false;
         const bool full = previewFull;
-        PreviewFrame handover = {full ? frame : nullptr, reduced, uint8_t(found ? (packet.valid ? 2 : 1) : 0), {}, {}};
+        PreviewFrame handover = {full ? frame : nullptr, reduced, uint8_t(found ? (packet.valid ? 2 : 1) : 0), {}, {},
+                                 uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec)};
         if (found)
             memcpy(handover.corners, corners, sizeof(handover.corners));
         memcpy(handover.position, packet.position, sizeof(handover.position));
@@ -226,6 +228,37 @@ esp_err_t streamPreview(httpd_req_t *request) {
     return result;
 }
 
+// Tag mode's preview over the radio, for the monitor-mode adapter (sw/fpv_monitor.py), while the drone keeps asking (K P, update.h): the same 80x60 reduction the HTTP preview sends, encoded here and broadcast in FPV's chunks (fpv.h) stamped with the frame's capture time, every tracked frame. Asking for each frame only after sending the last and sending at most every 40 ms gave 14 of tracking's 22 fps (2026-10-30). Tracking carries on; it stands aside while the HTTP preview or FPV runs, which share its buffers.
+void radioPreviewLoop(void *) {
+    bool asked = false;
+    for (;;) {
+        if (!fpv::recent(fpv::previewRadioMs) || previewStreaming || fpvActive) {
+            if (asked)
+                previewWanted = false;
+            asked = false;
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        if (!asked) {
+            xSemaphoreTake(previewReady, 0);
+            previewFull = false;
+            previewWanted = asked = true;
+        }
+        if (xSemaphoreTake(previewReady, pdMS_TO_TICKS(500)) != pdTRUE) {
+            previewWanted = true;
+            continue;
+        }
+        const uint32_t captureUs = previewFrame.captureUs;
+        JpegOutput output = {0, false};
+        const bool encoded = fmt2jpg_cb(previewReduced, sizeof(previewReduced), flow::width, flow::height, PIXFORMAT_GRAYSCALE, 75, appendJpeg, &output);
+        // The copy is free again: the next frame's handover overlaps this one's sending.
+        previewWanted = true;
+        if (encoded && !output.overflow)
+            fpv::broadcastFrame(previewJpeg + jpegOffset, output.length, captureUs);
+        ++previewCount;
+    }
+}
+
 void startPreview() {
     handoverQueue = xQueueCreate(1, sizeof(PreviewFrame));
     previewReady = xSemaphoreCreateBinary();
@@ -233,6 +266,7 @@ void startPreview() {
     previewJpeg = static_cast<uint8_t *>(heap_caps_malloc(previewJpegBytes, MALLOC_CAP_SPIRAM));
     assert(handoverQueue && previewReady && previewPixels && previewJpeg);
     xTaskCreatePinnedToCore(copyLoop, "preview copy", 2048, nullptr, 3, nullptr, 0);
+    xTaskCreatePinnedToCore(radioPreviewLoop, "radio preview", 4096, nullptr, 1, nullptr, 0);
     httpd_config_t serverConfig = HTTPD_DEFAULT_CONFIG();
     serverConfig.server_port = 81;
     serverConfig.core_id = 0;

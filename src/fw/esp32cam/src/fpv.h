@@ -10,9 +10,9 @@
 namespace fpv {
 constexpr uint16_t port = 5601;
 constexpr size_t chunkBytes = 1400;
-// Raw frames: broadcast action frames with this BSSID (fpv_rx filters on it), sent at rate (MCS3, 26 Mbps).
+// Raw frames: broadcast action frames with this BSSID (fpv_rx filters on it), FPV's sent at rate (MCS3, 26 Mbps) and tag mode's small preview at previewRate (MCS0, 6.5 Mbps), which has the airtime to spare.
 constexpr uint8_t bssid[6] = {'F', 'P', 'V', 'R', 'A', 'W'};
-constexpr wifi_phy_rate_t rate = WIFI_PHY_RATE_MCS3_LGI;
+constexpr wifi_phy_rate_t rate = WIFI_PHY_RATE_MCS3_LGI, previewRate = WIFI_PHY_RATE_MCS0_LGI;
 // The 802.11 header, then the action frame's category and a marker, ahead of each chunk.
 constexpr size_t macHeader = 28;
 constexpr uint8_t actionBody[4] = {127, 'F', 'P', 'V'};
@@ -41,6 +41,8 @@ int rateSet = -1;
 // The last raw send's result, for K S.
 esp_err_t rawError = ESP_OK;
 uint32_t rawSent = 0;
+// The receiver's byte budget (bytes/s), from the drone's K V request: the ESP32 receiver's USB link or the monitor-mode adapter's air.
+float radioBudget = config::fpvRadioBytesPerSecond;
 
 // Only with Wi-Fi started (startWifi), which brings up the network stack.
 inline void start() {
@@ -85,11 +87,11 @@ inline bool shareRadio() {
 }
 
 // One chunk (at datagram + macHeader) as a raw frame; a full transmit queue gets a moment to drain.
-inline void broadcast(size_t length) {
+inline void broadcast(size_t length, wifi_phy_rate_t phyRate = rate) {
     // A vendor-specific action frame (category 127) from the station, joined or parked (ota.h): the access point refused data frames or accepted and never sent them, and a station joined to nothing sent no data frames. The third address is the BSSID fpv_rx looks for.
     const wifi_interface_t ifx = WIFI_IF_STA;
-    if (rateSet != ifx && esp_wifi_config_80211_tx_rate(ifx, rate) == ESP_OK)
-        rateSet = ifx;
+    if (rateSet != phyRate && esp_wifi_config_80211_tx_rate(ifx, phyRate) == ESP_OK)
+        rateSet = phyRate;
     static const uint8_t control[4] = {0xd0, 0x00, 0x00, 0x00};
     memcpy(datagram, control, 4);
     memset(datagram + 4, 0xff, 6);
@@ -101,7 +103,29 @@ inline void broadcast(size_t length) {
     rawSent += rawError == ESP_OK;
 }
 
-// Over the radio the sensor's frame (VTS, register 0x380e, in lines) is lengthened until the average frame fits within fpvRadioBytesPerSecond at the frame rate, and shortened back as frames shrink, never below its own; nativeLines is cleared at each camera start.
+// The last time the drone asked for tag mode's preview over the radio (K P, web.h radioPreviewLoop).
+volatile uint32_t previewRadioMs = 0;
+
+// A whole JPEG as raw chunks at previewRate, each sent previewCopies times copyGapMs apart; from the preview task while FPV is off. The monitor-mode adapter misses copies at random, about 45% of them at -60 dBm, as it misses access points' beacons (80% heard at -46 dBm, 55% at -57, 2026-10-30): its receiver, not the air or the camera. With two copies a sixth of the frames were lost; a 1 KB preview frame at MCS0 takes about 1.3 ms of air, so a third copy costs 3% of the channel.
+constexpr int previewCopies = 3;
+constexpr uint32_t copyGapMs = 8;
+inline void broadcastFrame(const uint8_t *data, size_t length, uint32_t captureUs) {
+    Chunk header = {{'F', 'P', 'V', '1'}, frameNumber++, 0, uint8_t((length + chunkBytes - 1) / chunkBytes), captureUs, uint32_t(esp_timer_get_time())};
+    uint8_t *chunk = datagram + macHeader;
+    for (int copy = 0; copy < previewCopies; ++copy) {
+        header.index = 0;
+        for (size_t offset = 0; offset < length; offset += chunkBytes, ++header.index) {
+            const size_t part = min(chunkBytes, length - offset);
+            memcpy(chunk, &header, sizeof(header));
+            memcpy(chunk + sizeof(header), data + offset, part);
+            broadcast(sizeof(header) + part, previewRate);
+        }
+        if (copy + 1 < previewCopies)
+            delay(copyGapMs);
+    }
+}
+
+// Over the radio the sensor's frame (VTS, register 0x380e, in lines) is lengthened until the average frame fits within radioBudget at the frame rate, and shortened back as frames shrink, never below its own; nativeLines is cleared at each camera start.
 int nativeLines = 0, frameLines = 0;
 float averageBytes = 0;
 
@@ -112,7 +136,7 @@ inline void pace(sensor_t *sensor, size_t bytes) {
     if (nativeLines <= 0 || frameNumber % 8)
         return;
     // Aimed at 85% of the budget, which then only catches bursts: aimed at all of it, one frame in five was skipped.
-    const int wanted = max(nativeLines, int(nativeLines * averageBytes / (0.85f * config::fpvRadioBytesPerSecond * config::fpvFramePeriodS)));
+    const int wanted = max(nativeLines, int(nativeLines * averageBytes / (0.85f * radioBudget * config::fpvFramePeriodS)));
     // A change of less than 5% is left alone, so the rate does not wander.
     if (abs(wanted - frameLines) * 20 > frameLines && sensor->set_reg(sensor, 0x380e, 0xffff, wanted) == 0)
         frameLines = wanted;
@@ -145,7 +169,8 @@ inline bool send() {
         }
     }
     // A step of quality per frame, with a dead band so it settles.
-    const size_t target = udp ? config::fpvTargetBytes : config::fpvRadioTargetBytes;
+    // Over the radio no more than the budget's share of a frame at the sensor's own rate.
+    const size_t target = udp ? config::fpvTargetBytes : size_t(min(float(config::fpvTargetBytes), 0.85f * radioBudget * config::fpvFramePeriodS));
     const int step = frame->len > target ? 1 : frame->len < target * 3 / 4 ? -1 : 0;
     const size_t frameBytes = frame->len;
     esp_camera_fb_return(frame);

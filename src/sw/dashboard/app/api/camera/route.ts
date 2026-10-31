@@ -103,8 +103,9 @@ async function runHub(hub: Hub, url: URL) {
   }
 }
 
-// FPV chunks (fw/esp32cam/src/fpv.h) carry a 16-byte header (FPV1, frame number, index and count, capture and send times). With the receiver plugged in they arrive on its port as [length u16][rssi i8][chunk] at 1 Mbaud while a K V request every 500 ms keeps the camera sending over the radio; otherwise over UDP, kept coming by "FPVW" to the camera's port 5601. A frame still missing a chunk when a newer one starts is dropped.
-async function runFpv(hub: Hub) {
+// FPV chunks (fw/esp32cam/src/fpv.h) carry a 16-byte header (FPV1, frame number, index and count, capture and send times). With the receiver plugged in they arrive on its port as [length u16][rssi i8][chunk] at 1 Mbaud, or from the monitor-mode adapter as UDP datagrams, while a K V request every 500 ms keeps the camera sending over the radio; otherwise over UDP, kept coming by "FPVW" to the camera's port 5601. A frame still missing a chunk when a newer one starts is dropped.
+// op: V for FPV, P for tag mode's preview over the radio (tracking on).
+async function runFpv(hub: Hub, op: 'V' | 'P') {
   let current = -1;
   let parts: Buffer[] = [];
   let got = 0;
@@ -116,8 +117,8 @@ async function runFpv(hub: Hub) {
     const index = message[6];
     const count = message[7];
     if (frame !== current) {
-      // A late chunk of an older frame.
-      if (current >= 0 && ((frame - current) & 0xffff) > 0x8000) return;
+      // A late chunk of a frame a few back; a frame far behind is a restarted camera counting from 0 again, whose frames were all dropped as late until the count caught up (2026-10-30).
+      if (current >= 0 && ((current - frame) & 0xffff) < 64) return;
       current = frame;
       parts = new Array(count);
       got = 0;
@@ -145,13 +146,13 @@ async function runFpv(hub: Hub) {
   let keepalive: () => void;
   let close: () => void;
   const radio = receiver();
-  if (radio) {
+  if (radioUp()) {
     radio.listeners.add(chunk);
     let asking = false;
     keepalive = () => {
       if (asking) return;
       asking = true;
-      cameraRequest('V')
+      cameraRequest(op, op === 'V' ? radioBudget() : [])
         .catch(() => {})
         .finally(() => (asking = false));
     };
@@ -173,7 +174,8 @@ async function runFpv(hub: Hub) {
 }
 
 function joinHub(host: string, path: string, signal: AbortSignal) {
-  const fpv = path === '/fpv';
+  // FPV, or tag mode's preview over the radio: both chunked through runFpv.
+  const fpv = path === '/fpv' || path === '/radio-preview';
   const url = cameraUrl(host, fpv ? '/' : path);
   const key = fpv ? `fpv://${host}` : url.href;
   for (const other of hubs.values())
@@ -182,7 +184,7 @@ function joinHub(host: string, path: string, signal: AbortSignal) {
   if (!hub) {
     hub = { key, host, viewers: new Set(), closed: new AbortController() };
     hubs.set(key, hub);
-    void (fpv ? runFpv(hub) : runHub(hub, url));
+    void (fpv ? runFpv(hub, path === '/fpv' ? 'V' : 'P') : runHub(hub, url));
   }
   const joined = hub;
   clearTimeout(joined.idle);
@@ -203,8 +205,8 @@ function joinHub(host: string, path: string, signal: AbortSignal) {
   });
 }
 
-// Requests to the camera through the drone's wire to it, over the bridge's update socket, one short connection each so tools/ota_direct.py can still take the socket: K S reports the camera's network, address, channel and state ("joined miso 192.168.86.248 ch6 running ...", "ap bill-fpv 192.168.4.1 ch11 ...", "radio - 0.0.0.0 ch11 fpv ..."), K V asks for FPV over the radio.
-function cameraRequest(op: string): Promise<string> {
+// Requests to the camera through the drone's wire to it, over the bridge's update socket, one short connection each so tools/ota_direct.py can still take the socket: K S reports the camera's network, address, channel and state ("joined miso 192.168.86.248 ch6 running ...", "ap bill-fpv 192.168.4.1 ch11 ...", "radio - 0.0.0.0 ch11 fpv ..."), K V asks for FPV over the radio (with the receiver's byte budget).
+function cameraRequest(op: string, body: number[] = []): Promise<string> {
   return new Promise((done, fail) => {
     const socket = new WebSocket('ws://127.0.0.1:8765/update');
     socket.binaryType = 'arraybuffer';
@@ -214,7 +216,7 @@ function cameraRequest(op: string): Promise<string> {
       fail(new Error('The drone did not answer for the camera.'));
     }, 3000);
     socket.onopen = () =>
-      socket.send(new Uint8Array([...id, 75, op.charCodeAt(0)]));
+      socket.send(new Uint8Array([...id, 75, op.charCodeAt(0), ...body]));
     socket.onerror = () => {};
     socket.onmessage = (event) => {
       const reply = new Uint8Array(event.data as ArrayBuffer);
@@ -240,52 +242,97 @@ async function reportedHost() {
   return host;
 }
 
-// The FPV receiver (fw/fpv_rx), when plugged in: video over the radio, needing no network. FPV_RX names its port if it moves. Opened once and read for as long as the server runs, its chunks going to whichever FPV stream is running: closing it after each stream left the port open in the process, and the stale readers took a share of the bytes.
-const RECEIVER =
-  process.env.FPV_RX ??
-  '/dev/serial/by-path/pci-0000:c1:00.3-usb-0:2.2:1.0-port0';
-type Receiver = { listeners: Set<(chunk: Buffer) => void> };
+// FPV over the radio, needing no network, comes from the monitor-mode Wi-Fi adapter's reader (sw/fpv_monitor.py) as UDP datagrams to 127.0.0.1:5602, with FPVM every 500 ms while it runs, or from the ESP32 receiver (fw/fpv_rx) on the serial port FPV_RX names. That port is never guessed: the receiver's CP2102 has the same USB serial number as the drone's and the controller's, and a port path once picked the controller after the boards moved. Both are opened once and kept for as long as the server runs, their chunks going to whichever FPV stream is running: closing the serial port after each stream left it open in the process, and the stale readers took a share of the bytes.
+const RECEIVER = process.env.FPV_RX;
+// chunks: every one heard, for the status.
+// copies: every chunk copy heard, chunks: the first of each, signal: the monitor's last (dBm), for the status.
+type Receiver = {
+  listeners: Set<(chunk: Buffer) => void>;
+  heard: number;
+  copies: number;
+  chunks: number;
+  signal?: number;
+};
 const store = globalThis as { fpvReceiver?: Receiver };
 
 function receiver() {
-  if (store.fpvReceiver || !existsSync(RECEIVER)) return store.fpvReceiver;
-  execFileSync('stty', ['-F', RECEIVER, '1000000', 'raw', '-echo']);
-  const port = new tty.ReadStream(
-    openSync(RECEIVER, constants.O_RDONLY | constants.O_NOCTTY)
-  );
-  const opened: Receiver = { listeners: new Set() };
-  let buffer = Buffer.alloc(0);
-  port.on('data', (data: Buffer) => {
-    buffer = Buffer.concat([buffer, data]);
-    for (;;) {
-      const at = buffer.indexOf('FPV1', 3);
-      if (at < 0) {
-        buffer = buffer.subarray(Math.max(0, buffer.length - 3));
-        break;
-      }
-      const length = buffer.readUInt16LE(at - 3);
-      if (length < 16 || length > 1500) {
-        buffer = buffer.subarray(at + 1);
-        continue;
-      }
-      if (buffer.length < at + length) break;
-      for (const listener of opened.listeners)
-        listener(buffer.subarray(at, at + length));
-      buffer = buffer.subarray(at + length);
-    }
+  if (store.fpvReceiver) return store.fpvReceiver;
+  const opened: Receiver = {
+    listeners: new Set(),
+    heard: 0,
+    copies: 0,
+    chunks: 0,
+  };
+  // The monitor passes every copy (the camera sends each frame several times); the first of each goes on. The capture time tells a restarted camera's frame numbers from the same numbers before it.
+  const recent = new Set<string>();
+  const deliver = (chunk: Buffer) => {
+    opened.copies++;
+    const key = `${chunk.readUInt16LE(4)}:${chunk[6]}:${chunk.readUInt32LE(8)}`;
+    if (recent.has(key)) return;
+    recent.add(key);
+    if (recent.size > 512) recent.delete(recent.values().next().value!);
+    opened.chunks++;
+    for (const listener of opened.listeners) listener(chunk);
+  };
+  const monitor = dgram.createSocket('udp4');
+  monitor.on('message', (message) => {
+    opened.heard = Date.now();
+    if (message.toString('latin1', 0, 4) !== 'FPVC') return;
+    opened.signal = message.readInt8(4);
+    deliver(message.subarray(5));
   });
-  // Unplugged: opened again on the next stream.
-  port.on('error', () => port.destroy());
-  port.on('close', () => {
-    if (store.fpvReceiver === opened) store.fpvReceiver = undefined;
-  });
+  monitor.on('error', () => {});
+  monitor.bind(5602, '127.0.0.1');
+  if (RECEIVER && existsSync(RECEIVER)) {
+    execFileSync('stty', ['-F', RECEIVER, '1000000', 'raw', '-echo']);
+    const port = new tty.ReadStream(
+      openSync(RECEIVER, constants.O_RDONLY | constants.O_NOCTTY)
+    );
+    let buffer = Buffer.alloc(0);
+    port.on('data', (data: Buffer) => {
+      buffer = Buffer.concat([buffer, data]);
+      for (;;) {
+        const at = buffer.indexOf('FPV1', 3);
+        if (at < 0) {
+          buffer = buffer.subarray(Math.max(0, buffer.length - 3));
+          break;
+        }
+        const length = buffer.readUInt16LE(at - 3);
+        if (length < 16 || length > 1500) {
+          buffer = buffer.subarray(at + 1);
+          continue;
+        }
+        if (buffer.length < at + length) break;
+        deliver(buffer.subarray(at, at + length));
+        buffer = buffer.subarray(at + length);
+      }
+    });
+    port.on('error', () => port.destroy());
+  }
   return (store.fpvReceiver = opened);
+}
+
+// The camera's byte budget for the receiver, KB/s little-endian in its K V request: the ESP32 receiver's USB link carries about 98 KB/s, the monitor-mode adapter far more.
+function radioBudget() {
+  const kilobytes = Date.now() - receiver().heard < 2000 ? 250 : 90;
+  return [kilobytes & 0xff, kilobytes >> 8];
+}
+
+// A receiver is there: the monitor heard from lately, or the ESP32 receiver's port.
+function radioUp() {
+  return (
+    Date.now() - receiver().heard < 2000 || !!(RECEIVER && existsSync(RECEIVER))
+  );
 }
 
 export async function GET(request: Request) {
   const query = new URL(request.url).searchParams;
   let host = query.get('host') || 'the camera';
-  const radio = query.get('fpv') === '1' && existsSync(RECEIVER);
+  const stream = query.get('mode') !== 'status' && query.get('full') !== '1';
+  // The monitor's first hello comes up to 500 ms after the listener opens on the first request.
+  if (stream && !radioUp()) await new Promise((done) => setTimeout(done, 700));
+  // With a radio receiver both views come over the radio: FPV, and tag mode's preview with tracking on.
+  const radio = stream && radioUp();
   try {
     const status = query.get('mode') === 'status';
     if (radio) host = 'radio';
@@ -296,9 +343,11 @@ export async function GET(request: Request) {
           host,
           query.get('fpv') === '1'
             ? '/fpv'
-            : query.get('full') === '1'
-              ? '/stream?full=1'
-              : '/stream',
+            : radio
+              ? '/radio-preview'
+              : query.get('full') === '1'
+                ? '/stream?full=1'
+                : '/stream',
           request.signal
         ),
         {
@@ -314,7 +363,13 @@ export async function GET(request: Request) {
     )?.received;
     const state = (await cameraRequest('S')).split(' ')[4];
     return Response.json(
-      { camera: state, received },
+      {
+        camera: state,
+        received,
+        copies: store.fpvReceiver?.copies,
+        chunks: store.fpvReceiver?.chunks,
+        signal: store.fpvReceiver?.signal,
+      },
       { headers: { 'Cache-Control': 'no-store' } }
     );
   } catch (error) {
