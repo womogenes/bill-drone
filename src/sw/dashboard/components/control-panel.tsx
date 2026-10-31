@@ -36,9 +36,10 @@ const keyIcons: Record<string, LucideIcon> = {
   Space,
 };
 
-const THROTTLE_STEP = 10;
-// T jumps collective straight to about hover, so liftoff doesn't linger half-supported on the feet.
-const TAKEOFF_DEFAULT = 690;
+// W and S move collective this much every KEY_REPEAT_MS (200 a second): at 100 a second S took a full second to bring a 680 takeoff back to hover thrust while the drone kept climbing (2026-10-31).
+const THROTTLE_STEP = 20;
+// T jumps collective straight to a little above hover (about 600 with the 10-inch props at 15-16 V), so liftoff doesn't linger half-supported on the feet; 680 climbed at 0.15 g.
+const TAKEOFF_DEFAULT = 630;
 const TAKEOFF_KEY = 'takeoffThrottle';
 
 // The takeoff throttle the T key sets, remembered per browser.
