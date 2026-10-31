@@ -15,7 +15,7 @@ DEFINES = os.environ.get("HOVER_DEFINES", "").split()
 LIBRARY = Path(__file__).with_name("libhover" + "".join("-" + define.replace("=", "_") for define in DEFINES) + ".so")
 HISTORY = 24
 HOLD, LAND, LAND_FAST = 1, 2, 3
-GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim")
+GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim")
 # Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_cam_roll, hover_drag_tilt) and the attitude controller's pitch_trim.
 ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "cam_roll", "drag_tilt", "pitch_trim")
 
@@ -30,6 +30,10 @@ class Pose(ctypes.Structure):
 
 class Drag(ctypes.Structure):
     _fields_ = [("specific", ctypes.c_float * 3), ("tilt", ctypes.c_float)]
+
+
+class Flow(ctypes.Structure):
+    _fields_ = [("capture_us", ctypes.c_int64), ("rate", ctypes.c_float * 2)]
 
 
 class State(ctypes.Structure):
@@ -64,7 +68,10 @@ def load(library, state):
     library.hover_rest.argtypes = [ctypes.POINTER(state), ctypes.c_float, ctypes.c_bool, ctypes.c_float]
     library.hover_rest.restype = None
     library.hover_update.argtypes = [ctypes.POINTER(state), ctypes.POINTER(Gains), ctypes.c_int, ctypes.POINTER(Pose), ctypes.c_int64, ctypes.c_float,
-                                     ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.POINTER(Drag), ctypes.POINTER(Output)]
+                                     ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.POINTER(Drag), ctypes.POINTER(Flow),
+                                     ctypes.POINTER(Output)]
+    library.hover_body_to_camera.argtypes = [ctypes.POINTER(Gains), ctypes.c_float * 3, ctypes.c_float * 3]
+    library.hover_body_to_camera.restype = None
     library.hover_update.restype = None
     return library
 
@@ -81,7 +88,7 @@ def gains(settings):
     values = {}
     for key in GAIN_KEYS:
         # Settings saved before an entry existed take its settings.def default (hover_square on, the trim's former constants), the rest zero.
-        value = settings.get("pitch_trim" if key == "pitch_trim" else "hover_" + key, {"square": 1.0, "trim_tau": 4.0, "trim_max": 0.5, "thrust_tilt_tau": 1.0}.get(key, 0.0))
+        value = settings.get("pitch_trim" if key == "pitch_trim" else "hover_" + key, {"square": 1.0, "trim_tau": 4.0, "trim_max": 0.5, "thrust_tilt_tau": 1.0, "flow_tau": 0.3}.get(key, 0.0))
         values[key] = math.radians(value) if key in ANGULAR_KEYS else value
     return Gains(**values)
 
@@ -95,11 +102,18 @@ class Hover:
     def rest(self, vertical_g, spinning, dt):
         library.hover_rest(ctypes.byref(self.state), vertical_g, spinning, dt)
 
-    def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None):
+    def body_to_camera(self, body):
+        """A body vector (forward, left, up) in the camera's axes (right, down, forward), as the firmware turns the gyro for the flow."""
+        out = (ctypes.c_float * 3)()
+        library.hover_body_to_camera(ctypes.byref(self.gains), (ctypes.c_float * 3)(*body), out)
+        return list(out)
+
+    def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None):
         """
-        drag is (specific force in the level reference's body axes in g, commanded thrust tilt in radians) or None.
+        drag is (specific force in the level reference's body axes in g, commanded thrust tilt in radians) or None; flow is (capture time in us, translational rate right and down in rad/s) or None.
         """
         inputs = Drag(specific=tuple(drag[0]), tilt=drag[1]) if drag else None
+        measured = Flow(capture_us=flow[0], rate=tuple(flow[1])) if flow else None
         library.hover_update(ctypes.byref(self.state), ctypes.byref(self.gains), mode, ctypes.byref(pose) if pose else None, now_us, dt, roll, pitch, yaw_rate, vertical_g, force,
-                             ctypes.byref(inputs) if inputs else None, ctypes.byref(self.output))
+                             ctypes.byref(inputs) if inputs else None, ctypes.byref(measured) if measured else None, ctypes.byref(self.output))
         return self.output

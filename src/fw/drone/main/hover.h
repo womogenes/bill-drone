@@ -36,6 +36,8 @@ typedef struct {
     float thrust_tilt, thrust_tilt_tau;
     // The trim a hold starts from (m/s²; body forward, left): flight_rt.c's self-trim carries each hop's learned trim over, so the steady push need not be relearned from zero every hop.
     float trim_start_x, trim_start_y;
+    // Optical flow without the tag (flight_rt.c flow_input): the scene's assumed distance along the camera's axis (m; 0 = off) turns the flow's translational rate into velocity across the camera, which pulls the estimate over flow_tau (s) and teaches the drag model its sideways offset (the wind, as the camera teaches it on the tag). Holding still needs only zero flow, so the distance sets the correction's strength, not where it settles.
+    float flow_depth, flow_tau;
     // Not settings: the laptop's nudge of the hold point (m; toward the tag, to the drone's left, and up), streamed with the targets (the dashboard's arrows and W/S in hover).
     float nudge_forward, nudge_left, nudge_up;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
@@ -53,6 +55,12 @@ typedef struct {
 typedef struct {
     float specific[3], tilt;
 } HoverDrag;
+
+// One camera flow measurement: its frame's capture time and the scene's translational angular rate in camera axes (rad/s; right, down), the drone's own rotation over the interval taken out.
+typedef struct {
+    int64_t capture_us;
+    float rate[2];
+} HoverFlow;
 
 #define HOVER_HISTORY 24
 
@@ -103,7 +111,11 @@ typedef struct {
 // While not hovering: forget the hover. With the motors off, learn the resting vertical specific force (g); spinning (manual flight), keep integrating the climb rate and height so a later hover or landing starts from them.
 void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt);
 // One control tick. mode is HOVER_HOLD, HOVER_LAND or HOVER_LAND_FAST; pose is the newest camera sighting or NULL (camera disabled or no tag); roll and pitch are the measured attitude from level and yaw_rate the measured heading rate (rad/s, positive left); vertical_g is the measured specific force along vertical, in g; force is the collective thrust in N being flown now, so taking over mid-flight is smooth; drag is what the rotor-drag model needs (used when gains->drag is set).
+// A body vector (forward, left, up) in camera axes (right, down, forward): the inverse of the mounting the hover turns sightings by (cam_roll, cam_pitch), for taking the drone's own rotation out of the flow.
+void hover_body_to_camera(const HoverGains *gains, const float *body, float *camera);
+// flow is the newest camera flow measurement or NULL (each is passed once).
 void hover_update(HoverState *state, const HoverGains *gains, int mode, const HoverPose *pose, int64_t now_us, float dt,
-                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, HoverOutput *output);
+                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
+                  HoverOutput *output);
 
 #endif

@@ -87,6 +87,41 @@ typedef struct {
 
 static Config config;
 static State state;
+// The last gyro readings (body rad/s) with their times, for taking the drone's rotation out of the camera's flow (flow_input).
+#define GYRO_HISTORY 16
+static struct { int64_t us[GYRO_HISTORY]; float rate[GYRO_HISTORY][3]; int next; } gyro_history;
+// The tracking camera's focal length in its full-resolution pixels (fw/esp32cam/src/config.h fx, fy at 320x240), and the flow it is trusted with.
+#define FLOW_FOCAL_PX 370.0f
+#define FLOW_MIN_INLIERS 6
+#define FLOW_MAX_RESIDUAL_PX 2.0f
+#define FLOW_MAX_AGE_US 150000
+
+// The camera's newest flow as the hover takes it: its shift turned into an angular rate (rad/s; right, down) less the part the drone's own rotation over the interval explains (a rotation rate W in camera axes sweeps the image centre at -W_down right and +W_right down). False without a new, trusted flow.
+static bool flow_input(const HoverGains *gains, HoverFlow *out) {
+    static uint32_t sequence;
+    CameraFlow flow;
+    if (!camera_flow(&flow, &sequence, FLOW_MAX_AGE_US) || flow.inliers < FLOW_MIN_INLIERS || flow.residual_px > FLOW_MAX_RESIDUAL_PX ||
+        flow.interval_us == 0 || flow.interval_us > 100000)
+        return false;
+    float mean[3] = {0, 0, 0};
+    int count = 0;
+    for (int k = 0; k < GYRO_HISTORY; k++) {
+        int64_t t = gyro_history.us[k];
+        if (t > flow.capture_us - (int64_t)flow.interval_us && t <= flow.capture_us) {
+            for (int i = 0; i < 3; i++) mean[i] += gyro_history.rate[k][i];
+            count++;
+        }
+    }
+    if (!count) return false;
+    for (int i = 0; i < 3; i++) mean[i] /= count;
+    float camera[3];
+    hover_body_to_camera(gains, mean, camera);
+    float interval = flow.interval_us / 1e6f;
+    out->capture_us = flow.capture_us - (int64_t)flow.interval_us / 2;
+    out->rate[0] = flow.shift[0] / FLOW_FOCAL_PX / interval + camera[1];
+    out->rate[1] = flow.shift[1] / FLOW_FOCAL_PX / interval - camera[0];
+    return true;
+}
 static Command command;
 static Record records[LOG_CAPACITY];
 static uint32_t log_head, log_tail, log_samples, log_dropped, log_elapsed, log_session;
@@ -380,6 +415,9 @@ static void runtime_task(void *arg) {
             }
         }
         for (int i = 0; i < 3; i++) state.gyro[i] -= state.bias[i];
+        gyro_history.us[gyro_history.next] = now;
+        memcpy(gyro_history.rate[gyro_history.next], state.gyro, sizeof(state.gyro));
+        gyro_history.next = (gyro_history.next + 1) % GYRO_HISTORY;
         if (!previous) {
             state.attitude.roll = atan2f(state.accel[1], state.accel[2]);
             state.attitude.pitch = atan2f(-state.accel[0], hypotf(state.accel[1], state.accel[2]));
@@ -429,7 +467,10 @@ static void runtime_task(void *arg) {
                 // Heading rate about vertical from the body rates (positive left).
                 float heading_rate = (state.gyro[1] * sinf(pose.roll) + state.gyro[2] * cosf(pose.roll)) / cosf(pose.pitch);
                 HoverDrag drag = drag_inputs(&state, &command);
-                hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag, &out);
+                HoverFlow flow;
+                bool have_flow = gains.flow_depth > 0 && flow_input(&gains, &flow);
+                hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag,
+                             have_flow ? &flow : NULL, &out);
                 // A finished landing disarms, ending the session like a stop, so the laptop can take off again (H or Enable) instead of being left armed with hover holding thrust at zero.
                 if (hover.landed && out.force <= 0) stop_locked(link_landing ? 8 : 7);
                 scaled.base = out.force > 0 ? fminf(THROTTLE_MAX, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;

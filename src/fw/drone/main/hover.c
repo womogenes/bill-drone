@@ -215,8 +215,43 @@ static void take(HoverState *state, const HoverGains *g, const HoverPose *pose) 
     state->have_pose = true;
 }
 
+void hover_body_to_camera(const HoverGains *g, const float *body, float *camera) {
+    // level()'s mounting, undone: body to the rolled camera's (right, down, ahead), then the roll taken off.
+    float ca = cosf(g->cam_pitch), sa = sinf(g->cam_pitch);
+    float right = -body[1], down = body[0] * sa - body[2] * ca, ahead = body[0] * ca + body[2] * sa;
+    float cc = cosf(g->cam_roll), sc = sinf(g->cam_roll);
+    camera[0] = cc * right + sc * down;
+    camera[1] = -sc * right + cc * down;
+    camera[2] = ahead;
+}
+
+// Flow without the tag: the velocity across the camera (right and down, the scene at flow_depth) corrects the estimate along those directions in the level frame, and the climb rate; the sideways part teaches the drag model's offset, which is how the wind is learned.
+static void take_flow(HoverState *state, const HoverGains *g, const HoverFlow *flow, float cy, float sy, float dt, bool dragging) {
+    static const float axes[2][3] = {{1, 0, 0}, {0, 1, 0}};
+    float pull = 1 - expf(-dt / fmaxf(g->flow_tau, dt));
+    for (int a = 0; a < 2; a++) {
+        float direction[3];
+        level(state, g, flow->capture_us, axes[a], direction);
+        // Moving along +axis makes the scene sweep the other way: rate = -velocity / distance.
+        float measured = -g->flow_depth * flow->rate[a];
+        float estimate = state->velocity[0] * direction[0] + state->velocity[1] * direction[1] + state->climb_rate * direction[2];
+        float error = (measured - estimate) * pull;
+        for (int i = 0; i < 2; i++) {
+            state->velocity[i] += error * direction[i];
+            for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3 + i] += error * direction[i];
+        }
+        state->climb_rate += error * direction[2];
+    }
+    if (dragging) {
+        // The sideways speed the flow now gives, against what the drag model reads (as with the tag below; forward stays the drag model's own until the camera measures expansion).
+        float left = -state->velocity[0] * sy + state->velocity[1] * cy;
+        state->drag_offset[1] = clamp(state->drag_offset[1] + (state->drag_velocity[1] - left) * dt / OFFSET_TAU, -MAX_OFFSET, MAX_OFFSET);
+    }
+}
+
 void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverPose *pose, int64_t now_us, float dt,
-                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, HoverOutput *output) {
+                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
+                  HoverOutput *output) {
     float weight = g->mass * GRAVITY;
     bool dragging = g->drag > 0 && drag;
     if (!state->engaged) {
@@ -325,6 +360,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
             state->velocity[1] *= keep;
         }
     }
+    // From engaging, not only once airborne: without the tag the height is the IMU's alone and drifts (in the sim it sank 2 m in 10 s, so the hold never counted as airborne), and the vertical flow is what keeps the climb rate honest. On the ground the flow reads zero, which is right.
+    if (flow && !seeing && g->flow_depth > 0 && state->engaged) take_flow(state, g, flow, cy, sy, dt, state->dragging);
     if (seeing && dragging && state->height >= AIRBORNE) {
         // The camera measures the velocity: whatever the drag model reads beyond it, in body axes, is its offset (servo zero, accelerometer bias, mounting).
         float forward = state->velocity[0] * cy + state->velocity[1] * sy, left = -state->velocity[0] * sy + state->velocity[1] * cy;

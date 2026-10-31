@@ -99,6 +99,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py, at the geometry they name), sw/sim/airframe.py supplies the motors, servos and angular accelerations and the body's inertia instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
     With hover and plant["excite"] (a test pattern as a recording's "pattern" event, sw/excite.py: {"after", "repeat", "segments"}), its roll and pitch steps add to the hover's attitude targets from "after" seconds past collective first reaching integrate_throttle, "repeat" times (0 = until the end), as flight_rt.c excite does; its other channels are ignored.
+    Optical flow (fw/drone/main/flight_rt.c flow_input): plant["flow"] = {"depth": the scene's true distance along the camera (m), "noise_px": per-frame shift noise (full-resolution px), "fps", "latency" (s)} gives the hover the camera's flow, its rotation taken out with the measured gyro as the firmware does; settings hover_flow_depth and hover_flow_tau turn it on.
     IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "vibration" (g RMS, white; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white and periodic (sw/sim/disturbance.py).
     """
     rng = random.Random(seed)
@@ -113,7 +114,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     weight = mass * 9.81
     k = plant["thrust_k"]
     hover_throttle = round(throttle(weight / 2 / k))
-    liftoff = plant.get("liftoff", False) or hover
+    # A hover takes off from the ground unless plant["liftoff"] is False: then it is engaged in the air, as pressing H in a manual flight does.
+    liftoff = plant.get("liftoff", hover)
     settings["base_throttle"] = TAKEOFF_THROTTLE if liftoff else hover_throttle
     controller = Controller()
 
@@ -216,6 +218,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         cam_pitch, cam_roll = math.radians(settings.get("hover_cam_pitch", 0.0)), math.radians(settings.get("hover_cam_roll", 0.0))
         # Frames waiting out their latency (ready time, capture time, sighting or None), the newest delivered one, and the next capture time.
         frames, newest, capture, sequence, missing_frames = deque(), None, 0.0, 0, 0
+        flow_plant, flows, flow_capture, flow_rng = plant.get("flow"), deque(), 0.0, random.Random(seed + 4000)
         seen, ranges = [], []
     # The test pattern's roll and pitch per control tick, and the step collective first reached integrate_throttle.
     excite = plant.get("excite") if hover else None
@@ -260,6 +263,23 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
             while frames and frames[0][0] <= now:
                 newest = frames.popleft()
                 sequence += 1
+            flow = None
+            if flow_plant:
+                period = 1 / flow_plant.get("fps", 43.0)
+                while flow_capture <= now:
+                    # The true image motion of a scene at depth: the body's rotation sweeps the centre (-W_down, +W_right) and its velocity across the camera (-v / depth); the shift gets pixel noise; the firmware takes the measured rotation back out.
+                    w = outer.body_to_camera(rate)
+                    v = outer.body_to_camera(apply(matrix, velocity, transpose=True))
+                    depth = flow_plant["depth"]
+                    shift = [(-w[1] - v[0] / depth) * 370.0 * period + flow_rng.gauss(0, flow_plant.get("noise_px", 0.3)),
+                             (w[0] - v[1] / depth) * 370.0 * period + flow_rng.gauss(0, flow_plant.get("noise_px", 0.3))]
+                    measured = outer.body_to_camera(gyro_filter)
+                    flows.append((flow_capture + flow_plant.get("latency", 0.045), flow_capture,
+                                  (shift[0] / 370.0 / period + measured[1], shift[1] / 370.0 / period - measured[0])))
+                    flow_capture += period
+                while flows and flows[0][0] <= now:
+                    _, captured, translational = flows.popleft()
+                    flow = (round((captured + 1) * 1e6), translational)
             # Like camera_candidates: the newest delivered frame's tag, if it saw one and was captured at most 150 ms ago.
             pose = None
             lost = camera_lost is not None and lifted is not None and now - lifted >= camera_lost
@@ -284,7 +304,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     moving = 0.0 if lifted is None else min(max(now - lifted - start, 0.0), length)
                     outer.gains.nudge_forward, outer.gains.nudge_left = forward_speed * moving, left_speed * moving
                 mode = HOLD if land_at is None or lifted is None or now - lifted < land_at else LAND_FAST if land_fast else LAND
-                out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag)
+                out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag, flow)
                 settings["base_throttle"] = min(HOVER_THROTTLE, throttle(out.force / 2 / math.cos(trim))) if out.force > 0 else 0
                 settings["roll"], settings["pitch"], settings["yaw_rate"] = math.degrees(out.roll), math.degrees(out.pitch), math.degrees(out.yaw_rate)
                 excited = 0.0
