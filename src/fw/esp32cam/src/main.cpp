@@ -144,7 +144,8 @@ bool startCamera(bool jpeg) {
          (sensor->set_pll(sensor, 0, 8, 1, 0, 0, 0, 1, 8) == 0 &&
           sensor->set_res_raw(sensor, (2048 - config::windowW) / 2, (1536 - config::windowH) / 2,
                               (2048 + config::windowW) / 2 + 31, (1536 + config::windowH) / 2 + 11, 8, 2, config::hts,
-                              config::vts, config::outW, config::outH, true, true) == 0));
+                              config::vts, config::outW, config::outH, true, true) == 0 &&
+          (config::rowSkip == 1 || sensor->set_reg(sensor, 0x3815, 0xff, 0x71) == 0)));
     if (!configured) {
         esp_camera_deinit();
         return false;

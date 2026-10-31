@@ -30,10 +30,12 @@ constexpr float anchorMaxRad = 0.35f, anchorDecisive = 2;
 constexpr unsigned maxAgeUs = 150000;
 // OV3660 mode: the whole 2048x1536 array (about 47 x 36 degrees through this lens), binned 2x2 and scaled to 320x240; the central 1536x1152 window (36 x 27 degrees) ran at 29.4 fps but lost the tag on modest attitude swings in hover. A line takes hts SYSCLK cycles; a frame is the window's binned lines plus 15. The ESP32's 10 MHz pixel clock needs 32 us to move a 320-pixel line, and a faster line rate than this panicked, so 320x240 stops at 29.4 fps from the central window and 22.2 fps from the whole array. For 100 fps (measured 101.5 Hz, detection off) the output must be 160x120: outW 160, outH 120, hts 1300, sysclkMhz 80 (PLL multiplier and PCLK divider 16), frame buffers in DRAM, intrinsics halved. Its 9.6 ms exposure needs several times this room's light, and whole-frame searches with DRAM frame buffers ran internal RAM down to 5 KB and panicked.
 constexpr int windowW = 2048, windowH = 1536, outW = 320, outH = 240;
-constexpr int hts = 2300, sysclkMhz = 40, vts = windowH / 2 + 15;
+// Binned rows read per row kept: 2 reads every other binned row (vertical increment 0x71 in place of binning's 0x31), 384 of the 768 for the 240 output rows, which halves the frame at the same line time and so the same DMA pace; the field of view and calibration stay.
+constexpr int rowSkip = 2;
+constexpr int hts = 2300, sysclkMhz = 40, vts = windowH / 2 / rowSkip + 15;
 constexpr unsigned framePeriodUs = unsigned(vts) * hts / sysclkMhz;
 // Readout time per output row.
-constexpr float rowUs = float(windowH / 2) / outH * hts / sysclkMhz;
+constexpr float rowUs = float(windowH / 2 / rowSkip) / outH * hts / sysclkMhz;
 // A frame older than this when fetched is replaced by the next capture; a just-finished one is one period old.
 constexpr unsigned maxFrameAgeUs = 2 * framePeriodUs;
 // Exposure in lines of 57.5 us: 174 is 10 ms, a third of the frame. It grows by a quarter while the gain is above raiseExposureGain and shrinks back while the gain is below lowerExposureGain. Measured on 2026-10-21 with the tag at 1.7 m, 10 ms needed 26.6x gain and raised the position jitter from 4.4/3.2/1.8 mm (33 ms) to 8.6/5.9/3.3 mm.
