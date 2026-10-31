@@ -112,7 +112,8 @@ volatile uint32_t previewRadioMs = 0;
 // A whole JPEG as shards: the data shards over UDP to the viewer (to) when udp, and with as many parity shards plus one (up to maxParity) as raw frames at phyRate when radio. Parity replaced whole copies of the frame: the monitor-mode adapter misses a shard at random, 30-45% of them (2026-10-30, as it misses access points' beacons: its receiver, not the air or the camera), and a frame of three shards sent twice lost one 29% of the time, where any three of seven should lose about 2%. A one-shard preview frame goes out three times, as before. The adapter also goes deaf for a few shards at a time (runs of 2-6 missed, up to 14, 2026-10-30), so the shards are spread gapUs apart over the frame rather than sent back to back, which lost 8% of FPV frames with 77% of shards heard.
 // The parity is built from each data shard's copy in internal RAM as it goes out, so the frame is read from PSRAM once: computing it from the frame in PSRAM, five passes over it, competed with the driver writing the next frame and corrupted most JPEGs (2026-10-30). At most maxParity parity shards.
 // Internal RAM has no room for all of them at once: two serve tag mode's one-shard preview, and FPV borrows maxParity from the heap while it runs (useLargeParity), taken after the camera's JPEG start so it cannot take that driver's DMA memory.
-constexpr int maxParity = 6;
+// 8 keeps a 12 KB frame (7 data shards) whole with more than half its 15 shards lost: at 6 the adapter, hearing 41% of shards, rebuilt half the frames (2026-10-31).
+constexpr int maxParity = 8;
 uint8_t smallParity[2 * chunkBytes];
 uint8_t *parityStore = smallParity;
 int parityCapacity = 2;

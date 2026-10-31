@@ -66,6 +66,8 @@ bool flight_runtime_idle(void);
 const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t expected_generation,
                                uint32_t arm_sequence);
 uint32_t flight_runtime_stop_generation(void);
+// A flight-log recording while disarmed (on), for sensor data with the motors off, or its end; the same recording arming starts, so it needs the laptop's recorder and the previous recording sent. Returns why it was refused, or NULL.
+const char *flight_runtime_record(bool on, bool recorder);
 // Brackets every flash and NVS write: begin fails unless disarmed with zero throttle; outputs stay zero until end.
 bool flight_runtime_begin_maintenance(void);
 void flight_runtime_end_maintenance(void);

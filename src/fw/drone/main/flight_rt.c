@@ -629,6 +629,31 @@ const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t
     return error;
 }
 
+const char *flight_runtime_record(bool on, bool recorder) {
+    const char *error = NULL;
+    portENTER_CRITICAL(&lock);
+    if (state.enabled) {
+        error = "Armed: the flight is already recording";
+    } else if (!on) {
+        if (log_active) log_elapsed = esp_timer_get_time() - log_started;
+        log_active = false;
+    } else if (log_active) {
+        // Already recording: a repeated request changes nothing.
+    } else if (!recorder) {
+        error = "Recorder not subscribed or previous recording still open";
+    } else if (log_head != log_tail) {
+        error = "Previous recording not yet sent";
+    } else {
+        state.reason = 1;
+        log_head = log_tail = log_samples = log_dropped = log_elapsed = 0;
+        log_session = esp_random() | 1;
+        log_started = esp_timer_get_time();
+        log_active = true;
+    }
+    portEXIT_CRITICAL(&lock);
+    return error;
+}
+
 void flight_runtime_log(LogState *log) {
     portENTER_CRITICAL(&lock);
     *log = (LogState){

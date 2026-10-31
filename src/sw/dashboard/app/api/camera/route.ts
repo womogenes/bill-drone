@@ -317,9 +317,9 @@ function receiver() {
   return (store.fpvReceiver = opened);
 }
 
-// The camera's byte budget for the receiver, KB/s little-endian in its K V request: the ESP32 receiver's USB link carries about 98 KB/s, the monitor-mode adapter far more.
+// The camera's byte budget for the receiver, KB/s little-endian in its K V request: the ESP32 receiver's USB link carries about 98 KB/s; the monitor-mode adapter takes in about 210 shards/s whatever is sent (2026-10-31: 12 KB frames, 15 shards each at 32 fps, reached the dashboard at 16 fps, where 190 KB/s, about 5 KB frames, gave 28 fps), so frames stay near 5 KB (the camera aims at 85%).
 function radioBudget() {
-  const kilobytes = Date.now() - receiver().heard < 2000 ? 250 : 90;
+  const kilobytes = Date.now() - receiver().heard < 2000 ? 190 : 90;
   return [kilobytes & 0xff, kilobytes >> 8];
 }
 

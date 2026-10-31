@@ -1,17 +1,24 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["websockets>=15,<17"]
+# ///
 """
 Record the camera's FPV stream from the dashboard (sw/dashboard/app/api/camera/route.ts) as a folder of JPEGs named by capture time, for visual-inertial and vision tests on real footage.
 
-uv run src/sw/vio/record_camera.py --out ~/sw/vio/footage/room [--seconds 60]
+uv run src/sw/vio/record_camera.py --out ~/sw/vio/footage/room [--seconds 60] [--imu]
 
-Each frame is <capture_us>.jpg, its capture start on the camera's clock (fw/esp32cam/src/fpv.h), and frames.csv lists capture_us, the laptop's receive time (Unix seconds) and the file. Asking for the stream turns the camera to FPV (tag tracking off) until 3 s after the recording ends.
+With --imu the drone records its flight log while disarmed for the same span (request O, fw/drone/main/radio.c): the laptop service saves it under sw/recordings like a flight, with the IMU at 100 Hz on the drone's clock; the two clocks are aligned afterwards from the motion. Each frame is <capture_us>.jpg, its capture start on the camera's clock (fw/esp32cam/src/fpv.h), and frames.csv lists capture_us, the laptop's receive time (Unix seconds) and the file. Asking for the stream turns the camera to FPV (tag tracking off) until 3 s after the recording ends.
 """
 
 import argparse
 import csv
 import re
+import sys
 import time
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "fw/tools"))
 
 
 def main():
@@ -19,7 +26,14 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--seconds", type=float, default=60)
     parser.add_argument("--url", default="http://localhost:3000/api/camera?fpv=1")
+    parser.add_argument("--imu", action="store_true", help="record the drone's flight log (IMU) while disarmed alongside")
     args = parser.parse_args()
+    drone = None
+    if args.imu:
+        from ota_direct import Drone
+
+        drone = Drone("ws://127.0.0.1:8765/update")
+        drone.request(b"O", b"\x01")
     out = args.out.expanduser()
     out.mkdir(parents=True, exist_ok=True)
     stream = urllib.request.urlopen(args.url, timeout=10)
@@ -43,6 +57,9 @@ def main():
                 rows.writerow([header.group(2).decode(), f"{time.time():.6f}", name])
                 count += 1
                 buffer = buffer[start + length:]
+    if drone:
+        drone.request(b"O", b"\x00")
+        print("Flight log stopped; the laptop service saves it under sw/recordings")
     print(f"{count} frames in {args.seconds:.0f} s to {out}")
 
 

@@ -45,7 +45,8 @@ constexpr float raiseExposureGain = 56, lowerExposureGain = 24;
 constexpr framesize_t fpvFrameSize = FRAMESIZE_HVGA;
 // 20 MHz XCLK, 480x320 every 31.2 ms. 24 MHz gave a frame every 26.0 ms (38.4 fps over UDP, 2026-10-30) but corrupted most JPEGs, with bands shifted and brightness jumping part way down the frame, unnoticed until the pictures were looked at; at 20 MHz none were in 60 consecutive frames.
 constexpr int fpvXclkHz = 20000000;
-constexpr size_t fpvTargetBytes = 5000;
+// 12 KB from 2026-10-31, for footage clean enough for vision work; the 5 KB before suited Wi-Fi on the drone's channel and the ESP32 receiver's USB link, neither in use now. Over the radio the receiver's budget caps it too.
+constexpr size_t fpvTargetBytes = 12000;
 // Over the radio the video must fit the receiver, whose budget comes with the drone's K V request: the ESP32 receiver's (fw/fpv_rx) USB bridge, about 98 KB/s at 1 Mbaud, or the monitor-mode adapter's air (sw/fpv_monitor.py); fpvRadioBytesPerSecond until one says. The sensor's frame is lengthened until the average frame fits, so every frame goes out evenly spaced (the ESP32 receiver drops whole frames if a burst outruns it), and their size aims at the budget's share. fpvFramePeriodS is the sensor's own 480x320 JPEG frame at fpvXclkHz. Each goes out as erasure-coded shards (fpv.h sendShards): with one copy a fifth of the frames lost a chunk at the ESP32 receiver (2026-10-30).
 constexpr float fpvRadioBytesPerSecond = 90000, fpvFramePeriodS = 0.0312f;
 constexpr int fpvQualityRange[2] = {10, 63};

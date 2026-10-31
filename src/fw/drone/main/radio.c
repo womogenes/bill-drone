@@ -423,7 +423,7 @@ static const char *change_settings(const int *indices, const float *values, int 
     return NULL;
 }
 
-// Requests: A arm, I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update). Fills reply after the id and status bytes; returns an error or NULL.
+// Requests: A arm, O record while disarmed (1) or stop recording (0), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -508,6 +508,14 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
                                                  request_sequence);
         arm_history_add(&arm_history, request, !failure);
         return failure;
+    }
+    if (op == 'O') {
+        // A recording while disarmed (1) or its end (0), as arming's needs the recorder and the previous one closed.
+        int64_t now = esp_timer_get_time();
+        portENTER_CRITICAL(&lock);
+        bool recorder = subscribed(now) && !session_open;
+        portEXIT_CRITICAL(&lock);
+        return length >= 1 ? flight_runtime_record(body[0], recorder) : "Malformed record request";
     }
     if (op == 'I') {
         char running_sha[24], target_sha[24];
