@@ -53,6 +53,8 @@ int main(int argc, char **argv) {
   auto imu = rows(root + "imu0/data.csv");
   auto cam = rows(root + "cam0/data.csv");
   std::ofstream out(argv[3]);
+  // Fixed, to the nanosecond: 9 significant digits rounded epoch times (TUM-VI's, about 1.5e9 s) to 10 s.
+  out << std::fixed;
   out.precision(9);
   size_t i = 0;
   for (const auto &frame : cam) {
