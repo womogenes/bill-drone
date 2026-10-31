@@ -288,11 +288,23 @@ function receiver() {
   });
   monitor.on('error', () => {});
   monitor.bind(5602, '127.0.0.1');
-  if (RECEIVER && existsSync(RECEIVER)) {
-    execFileSync('stty', ['-F', RECEIVER, '1000000', 'raw', '-echo']);
-    const port = new tty.ReadStream(
-      openSync(RECEIVER, constants.O_RDONLY | constants.O_NOCTTY)
-    );
+  // The port is opened again, with its settings, after an error or 5 s without a whole shard: the bridge's service finds the controller by asking each USB board for its MAC (fw/controller/find_port.py), which resets the receiver and leaves its port at the bootloader's baud, and an error ended the old stream for good.
+  let port: tty.ReadStream | undefined;
+  let heard = 0;
+  const open = () => {
+    port?.destroy();
+    port = undefined;
+    if (!RECEIVER || !existsSync(RECEIVER)) return;
+    try {
+      execFileSync('stty', ['-F', RECEIVER, '1000000', 'raw', '-echo']);
+      port = new tty.ReadStream(
+        openSync(RECEIVER, constants.O_RDONLY | constants.O_NOCTTY)
+      );
+    } catch (error) {
+      console.error(`FPV receiver ${RECEIVER}: ${error}`);
+      return;
+    }
+    heard = Date.now();
     let buffer = Buffer.alloc(0);
     port.on('data', (data: Buffer) => {
       buffer = Buffer.concat([buffer, data]);
@@ -308,11 +320,18 @@ function receiver() {
           continue;
         }
         if (buffer.length < at + length) break;
+        heard = Date.now();
         deliver(buffer.subarray(at, at + length));
         buffer = buffer.subarray(at + length);
       }
     });
-    port.on('error', () => port.destroy());
+    port.on('error', () => port?.destroy());
+  };
+  if (RECEIVER) {
+    open();
+    setInterval(() => {
+      if (Date.now() - heard > 5000) open();
+    }, 5000);
   }
   return (store.fpvReceiver = opened);
 }
