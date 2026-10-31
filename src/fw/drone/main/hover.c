@@ -111,6 +111,8 @@
 #ifndef NUDGE_TAU
 #define NUDGE_TAU 0.2f
 #endif
+// A nudge that moves further than this in one tick (m) was wrapped by the laptop, not flown: without the tag only its speed matters, so the dashboard wraps the forward and left nudge around its limit to keep a held arrow flying, and the jump counts as no motion.
+#define NUDGE_JUMP 0.5f
 // Below this height (m) a hold is still on the ground taking off: the IMU climb rate leaks toward zero, and centring neither tilts nor turns and lets the range target follow the drone. The tag-height target never asks for less than MIN_HEIGHT above the engage point (m).
 #define AIRBORNE 0.05f
 #define MIN_HEIGHT 0.2f
@@ -384,7 +386,9 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     state->height += state->climb_rate * dt;
     float smooth = 1 - expf(-dt / NUDGE_TAU), nudge[3] = {g->nudge_forward, g->nudge_left, g->nudge_up};
     for (int i = 0; i < 3; i++) {
-        state->nudge_rate[i] += ((nudge[i] - state->nudge[i]) / fmaxf(dt, 1e-4f) - state->nudge_rate[i]) * smooth;
+        float moved = nudge[i] - state->nudge[i];
+        if (fabsf(moved) > NUDGE_JUMP) moved = 0;
+        state->nudge_rate[i] += (moved / fmaxf(dt, 1e-4f) - state->nudge_rate[i]) * smooth;
         state->nudge[i] = nudge[i];
     }
 

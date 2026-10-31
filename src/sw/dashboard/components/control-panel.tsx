@@ -91,6 +91,8 @@ const tiltKeys = {
 } as const;
 // In hover and landing the arrows move the hold point instead while held (m/s): up toward the tag, left to the drone's left; W and S raise and lower it.
 const NUDGE_SPEED = 0.2;
+// Without the tag (Free) the arrows fly the drone at their speed (fw/drone/main/hover.c): forward and back faster. Sideways stays at NUDGE_SPEED: there the rotor drag the speed estimate reads is small (hover_drag 1 against about 0.1-0.2/s measured), and in the sim a 0.5 m/s sideways arrow flew at 1.45 m/s and coasted 4.7 m after release (2026-10-31).
+const FREE_NUDGE_FORWARD = 0.5;
 const NUDGE_CLIMB = 0.15;
 const NUDGE_TICK_MS = 50;
 const nudgeKeys = {
@@ -243,7 +245,8 @@ export const ControlPanel = memo(function ControlPanel({
   onChange: (settings: Partial<ControlSettings>) => void;
   onMode: (mode: number) => void;
   onHover: () => void;
-  onNudge: (forward: number, left: number, up: number) => void;
+  // free: without the tag, where only the nudge's speed counts, so the forward and left nudge may wrap at its limit.
+  onNudge: (forward: number, left: number, up: number, free: boolean) => void;
   onStop: () => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
@@ -294,6 +297,8 @@ export const ControlPanel = memo(function ControlPanel({
   const throttle = useRef(settings.base_throttle);
   // Key handlers read the mode through a ref so a mode change doesn't re-register them and forget held keys.
   const modeRef = useRef(mode);
+  const freeRef = useRef(settings.hover_camera === 0);
+  freeRef.current = settings.hover_camera === 0;
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
@@ -377,15 +382,17 @@ export const ControlPanel = memo(function ControlPanel({
 
     function nudge() {
       const tick = NUDGE_TICK_MS / 1000;
+      const free = freeRef.current;
+      const scale = free ? FREE_NUDGE_FORWARD / NUDGE_SPEED : 1;
       let forward = 0;
       let left = 0;
       let up = 0;
       for (const code of nudging) {
-        forward += nudgeKeys[code][0] * tick;
+        forward += nudgeKeys[code][0] * scale * tick;
         left += nudgeKeys[code][1] * tick;
         up += nudgeKeys[code][2] * tick;
       }
-      if (forward || left || up) onNudge(forward, left, up);
+      if (forward || left || up) onNudge(forward, left, up, free);
     }
 
     function stopNudging() {

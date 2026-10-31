@@ -305,6 +305,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     since = now - lifted if lifted is not None else (now if not liftoff else None)
                     moving = 0.0 if since is None else min(max(since - start, 0.0), length)
                     outer.gains.nudge_forward, outer.gains.nudge_left = forward_speed * moving, left_speed * moving
+                    # plant["nudge_wrap"] (m): wrapped at that limit, as the dashboard does without the tag.
+                    if plant.get("nudge_wrap"):
+                        limit = plant["nudge_wrap"]
+                        outer.gains.nudge_forward, outer.gains.nudge_left = [(value + limit) % (2 * limit) - limit for value in (outer.gains.nudge_forward, outer.gains.nudge_left)]
                 mode = HOLD if land_at is None or lifted is None or now - lifted < land_at else LAND_FAST if land_fast else LAND
                 out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag, flow)
                 settings["base_throttle"] = min(HOVER_THROTTLE, throttle(out.force / 2 / math.cos(trim))) if out.force > 0 else 0

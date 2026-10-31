@@ -361,13 +361,25 @@ export default function Page() {
   }, [armed, setTargets]);
 
   const nudgeHold = useCallback(
-    (forward: number, left: number, up: number) => {
+    (forward: number, left: number, up: number, free: boolean) => {
       const step = (value: number, change: number) =>
         Math.round(
           Math.max(-NUDGE_MAX, Math.min(NUDGE_MAX, value + change)) * 1000
         ) / 1000;
+      // Without the tag the drone flies the nudge's speed and takes a jump of more than 0.5 m as a wrap (hover.c NUDGE_JUMP), so a held arrow keeps flying past the limit.
+      const wrap = (value: number, change: number) => {
+        const next = value + change;
+        const wrapped =
+          next > NUDGE_MAX
+            ? next - 2 * NUDGE_MAX
+            : next < -NUDGE_MAX
+              ? next + 2 * NUDGE_MAX
+              : next;
+        return Math.round(wrapped * 1000) / 1000;
+      };
+      const flat = free ? wrap : step;
       const [x, y, z] = targets.current.nudge;
-      setTargets({ nudge: [step(x, forward), step(y, left), step(z, up)] });
+      setTargets({ nudge: [flat(x, forward), flat(y, left), step(z, up)] });
     },
     [setTargets]
   );
