@@ -249,6 +249,16 @@ async function reportedHost() {
 
 // FPV over the radio, needing no network, comes from the monitor-mode Wi-Fi adapter's reader (sw/fpv_monitor.py) as UDP datagrams to 127.0.0.1:5602, with FPVM every 500 ms while it runs, or from the ESP32 receiver (fw/fpv_rx) on the serial port FPV_RX names. That port is never guessed: the receiver's CP2102 has the same USB serial number as the drone's and the controller's, and a port path once picked the controller after the boards moved. Both are opened once and kept for as long as the server runs, their chunks going to whichever FPV stream is running: closing the serial port after each stream left it open in the process, and the stale readers took a share of the bytes.
 const RECEIVER = process.env.FPV_RX;
+// The receiver's port raw at 1 Mbaud: input and output flushed, output resumed, settings applied now (TCSANOW).
+const TERMIOS = `import os, sys, termios
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+a = termios.tcgetattr(fd)
+a[0:4] = [0, 0, termios.CS8 | termios.CREAD | termios.CLOCAL, 0]
+a[4] = a[5] = termios.B1000000
+a[6][termios.VMIN], a[6][termios.VTIME] = 1, 0
+termios.tcflush(fd, termios.TCIOFLUSH)
+termios.tcsetattr(fd, termios.TCSANOW, a)
+termios.tcflow(fd, termios.TCOON)`;
 // chunks: every one heard, for the status.
 // copies: every chunk copy heard, chunks: the first of each, signal: the monitor's last (dBm), for the status.
 type Receiver = {
@@ -296,7 +306,8 @@ function receiver() {
     port = undefined;
     if (!RECEIVER || !existsSync(RECEIVER)) return;
     try {
-      execFileSync('stty', ['-F', RECEIVER, '1000000', 'raw', '-echo']);
+      // Not stty: it applies settings only once the output has drained, and a port left at its defaults echoes the receiver's bytes back while a 0x13 among them (XOFF) holds the output, so it waited forever and froze the server (2026-10-31). This flushes and applies at once, and the timeout bounds it anyway.
+      execFileSync('python3', ['-c', TERMIOS, RECEIVER], { timeout: 3000 });
       port = new tty.ReadStream(
         openSync(RECEIVER, constants.O_RDONLY | constants.O_NOCTTY)
       );
