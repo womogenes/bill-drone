@@ -9,8 +9,8 @@
 // Control and log rate; must divide the 100 Hz FreeRTOS tick. Records per FLG1 batch: one batch every 40 ms.
 #define SAMPLE_HZ 100
 #define LOG_BATCH 4
-// MPU6050 DLPF_CFG: 3 is 42 Hz gyro bandwidth with 4.8 ms delay, 2 is 98 Hz with 2.8 ms but aliases vibration above the 50 Hz Nyquist rate.
-#define IMU_DLPF 3
+// MPU6050 DLPF_CFG: 3 is 42 Hz gyro bandwidth with 4.8 ms delay, 2 is 98 Hz with 2.8 ms. Each tick averages the FIFO's 1 kHz samples (flight_rt.c read_fifo), which removes the aliasing a single sample had, so 2: the mean's own 4.5 ms plus 2.8 ms is about 2 ms more delay than one sample through 3.
+#define IMU_DLPF 2
 // Servo (MG995, analog) and ESC refresh rates, independent of each other; the ESCs take 1000–2200 us pulses at 50 or 400 Hz alike.
 #define SERVO_HZ 100
 #define ESC_HZ 400

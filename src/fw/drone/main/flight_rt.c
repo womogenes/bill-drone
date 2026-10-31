@@ -251,6 +251,31 @@ static esp_err_t write_mpu(uint8_t reg, uint8_t value) {
     return i2c_master_write_to_device(I2C_NUM_0, MPU, data, sizeof(data), pdMS_TO_TICKS(10));
 }
 
+// The MPU6050's FIFO holds every 1 kHz sample (accelerometer then gyro, big-endian, FIFO_SAMPLE bytes), and each tick takes the mean of those since the last: one sample every 10 ms let the rotors' vibration near 100 Hz (5500-6600 rpm with the 10-inch props) alias to 0-10 Hz, where the height and attitude loops act; the 10 ms mean nulls 100 Hz and its multiples, and the gyro's mean is the rotation over the tick. More than FIFO_MOST samples (a missed tick, an overflow, startup) resets the FIFO, and the tick falls back to the single newest sample. Its reads may take two FreeRTOS ticks (20 ms): at the 100 Hz tick a shorter timeout rounds to none, and every read failed (2026-10-31).
+#define FIFO_SAMPLE 12
+#define FIFO_MOST 16
+static int read_fifo(int32_t sum[6]) {
+    uint8_t reg = 0x72, count[2];
+    if (i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1, count, 2, pdMS_TO_TICKS(20)) != ESP_OK) return 0;
+    int samples = ((count[0] << 8) | count[1]) / FIFO_SAMPLE;
+    if (samples > FIFO_MOST) {
+        write_mpu(0x6a, 0x44);
+        return 0;
+    }
+    if (!samples) return 0;
+    uint8_t data[FIFO_MOST * FIFO_SAMPLE];
+    reg = 0x74;
+    if (i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1, data, samples * FIFO_SAMPLE, pdMS_TO_TICKS(20)) != ESP_OK) return 0;
+    for (int k = 0; k < samples; k++)
+        for (int i = 0; i < 6; i++) sum[i] += (int16_t)((data[k * FIFO_SAMPLE + i * 2] << 8) | data[k * FIFO_SAMPLE + i * 2 + 1]);
+    return samples;
+}
+
+// The rounded mean of samples values summing to sum.
+static int16_t mean(int32_t sum, int samples) {
+    return (int16_t)((sum + (sum >= 0 ? samples / 2 : -samples / 2)) / samples);
+}
+
 // Sign bits (x 1, y 2, z 4) of the sensor-to-body mapping, plus its axis order from bit 3; 0 there is the identity order.
 static float frame(void) {
     return (config.accel_scale[0] < 0) | (config.accel_scale[1] < 0) << 1 | (config.accel_scale[2] < 0) << 2 |
@@ -339,6 +364,8 @@ static void runtime_task(void *arg) {
             ? i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1,
                                           data, sizeof(data), pdMS_TO_TICKS(10))
             : ESP_ERR_INVALID_STATE;
+        int32_t sum[6] = {0};
+        int samples = result == ESP_OK ? read_fifo(sum) : 0;
         uint64_t now = esp_timer_get_time();
         portENTER_CRITICAL(&lock);
         bool recording = log_active;
@@ -382,6 +409,13 @@ static void runtime_task(void *arg) {
 
         int16_t sensor[7], raw[7];
         for (int i = 0; i < 7; i++) sensor[i] = (int16_t)((data[1 + i * 2] << 8) | data[2 + i * 2]);
+        // The tick's mean from the FIFO in place of the newest sample (the temperature stays the newest).
+        if (samples) {
+            for (int i = 0; i < 3; i++) {
+                sensor[i] = mean(sum[i], samples);
+                sensor[4 + i] = mean(sum[3 + i], samples);
+            }
+        }
         // Reordered to body axes, so the log's raw values need only the signs.
         raw[3] = sensor[3];
         for (int i = 0; i < 3; i++) {
@@ -965,7 +999,7 @@ void flight_runtime_outputs(void) {
     }
 }
 
-// Wakes the MPU6050 with 1 kHz output, so each control tick reads a sample at most 1 ms old; the DLPF is the anti-alias filter.
+// Wakes the MPU6050 with 1 kHz output into its FIFO (accelerometer and gyro), which each control tick averages (read_fifo); the DLPF only has to clear what the 10 ms mean does not.
 static bool configure_sensor(void) {
     i2c_config_t bus = {.mode = I2C_MODE_MASTER, .sda_io_num = SDA, .scl_io_num = SCL,
                         .sda_pullup_en = GPIO_PULLUP_ENABLE, .scl_pullup_en = GPIO_PULLUP_ENABLE,
@@ -975,7 +1009,7 @@ static bool configure_sensor(void) {
     bool ok = write_mpu(0x6b, 1) == ESP_OK;
     vTaskDelay(pdMS_TO_TICKS(100));
     uint8_t registers[][2] = {
-        {0x19, 0}, {0x1a, IMU_DLPF}, {0x1b, 0}, {0x1c, 0}, {0x37, 0x20}, {0x38, 1},
+        {0x19, 0}, {0x1a, IMU_DLPF}, {0x1b, 0}, {0x1c, 0}, {0x37, 0x20}, {0x38, 1}, {0x23, 0x78}, {0x6a, 0x44},
     };
     for (size_t i = 0; i < sizeof(registers) / sizeof(registers[0]); i++) {
         if (write_mpu(registers[i][0], registers[i][1]) != ESP_OK) ok = false;
