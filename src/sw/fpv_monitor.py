@@ -19,6 +19,9 @@ DASHBOARD = ("127.0.0.1", 5602)
 FIELDS = {0: (8, 8), 1: (1, 1), 2: (1, 1), 3: (4, 2), 4: (2, 2), 5: (1, 1)}
 FLAG_FCS = 0x10
 RETUNE_S = 3.0
+# Without the camera for RETUNE_S it searches: each channel for SEARCH_S, the likeliest first, returning to the last channel it found the camera on every other step. The camera keeps whatever channel it was last given (fw/esp32cam/src/ota.h, the drone's H request), which depends on the place.
+SEARCH = (11, 9, 3, 13, 12, 1, 2, 4, 5, 7, 8, 10, 6)
+SEARCH_S = 0.6
 
 
 def monitor(interface, channel):
@@ -61,19 +64,22 @@ def main():
     raw.settimeout(0.5)
     out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     hello, heard, tuned = 0.0, time.monotonic(), time.monotonic()
+    channel, found, searching = args.channel, args.channel, 0
     print(f"monitoring {args.interface} on channel {args.channel}", flush=True)
     while True:
         now = time.monotonic()
         if now - hello >= 0.5:
             out.sendto(b"FPVM", DASHBOARD)
             hello = now
-        # The adapter sometimes keeps reporting the channel while hearing nothing from the camera on it (2026-10-30, twice), and setting the same channel again does not help; tuning away and back does. So without a camera chunk for RETUNE_S it goes through another channel (harmless when the camera is simply not streaming).
-        # After a reboot the adapter came back managed (2026-10-31, NetworkManager first), where setting a channel only failed busy: then monitor mode is set again.
-        if now - heard > RETUNE_S and now - tuned > RETUNE_S:
+        # Nothing from the camera for RETUNE_S: search the channels, SEARCH_S each (setting a channel also wakes the adapter when it keeps reporting one while hearing nothing on it, as it did twice on 2026-10-30). After a reboot it came back managed (2026-10-31), where setting a channel only failed busy: then monitor mode is set again.
+        if now - heard > RETUNE_S and now - tuned > SEARCH_S:
             if "type monitor" not in subprocess.run(["iw", "dev", args.interface, "info"], capture_output=True, text=True).stdout:
-                monitor(args.interface, args.channel)
-            subprocess.run(["iw", "dev", args.interface, "set", "channel", str(1 if args.channel != 1 else 6), "HT20"], check=False)
-            subprocess.run(["iw", "dev", args.interface, "set", "channel", str(args.channel), "HT20"], check=False)
+                monitor(args.interface, channel)
+            # Every other step back on the channel the camera was last found on, which is where it is when it was only idle (it sends only while a viewer asks), so video resumes within about a second.
+            others = [c for c in SEARCH if c != found]
+            channel = found if searching % 2 == 0 else others[(searching // 2) % len(others)]
+            searching += 1
+            subprocess.run(["iw", "dev", args.interface, "set", "channel", str(channel), "HT20"], check=False)
             tuned = now
         try:
             packet = raw.recv(4096)
@@ -86,7 +92,10 @@ def main():
         flags, signal = radiotap(packet[:length])
         chunk = frame[28:-4] if flags & FLAG_FCS else frame[28:]
         if chunk[:4] == b"FPV2":
+            if time.monotonic() - heard > RETUNE_S:
+                print(f"camera found on channel {channel}", flush=True)
             heard = time.monotonic()
+            found, searching = channel, 0
             out.sendto(b"FPVC" + struct.pack("b", signal) + chunk, DASHBOARD)
 
 

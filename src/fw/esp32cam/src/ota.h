@@ -1,4 +1,5 @@
 #pragma once
+#include <Preferences.h>
 #include <WiFi.h>
 #include <ArduinoOTA.h>
 #include "esp_wifi.h"
@@ -14,7 +15,26 @@ struct WifiNetwork {
 #include "wifi.example.h"
 #endif
 // Away from every known network the station joins nothing and parks on radioChannel, clear of the drone's ESP-NOW link on channel 6, ready for FPV's raw frames (fpv.h). The access point (apSsid) starts there only when asked (the drone's K A request, update.h), for Wi-Fi updates, until the camera restarts: switching between the two reallocated the Wi-Fi driver's internal RAM, and JPEG capture then lacked its 32 KB block of DMA memory (2026-10-30, 12 bytes short), and with the access point up no raw frame went out.
-constexpr int radioChannel = 11;
+// The radio channel and transmit power (quarter dBm) for FPV's raw frames: the drone's H and T requests set them and they are kept (Preferences "radio"), as the best channel depends on the place (2026-10-31, chunks heard at -28 to -36 dBm: channel 11 20-33%, 13 44-52%, 9 59-71%, 3 57-68%; the drone's link on 6 kept its 20 status messages a second on each). The power applies once Wi-Fi is up: full power at Wi-Fi start browned the camera out (2026-10-26); 14 dBm afterwards did not, with the capacitors added on 2026-10-31 (the driver caps the request near there anyway).
+int radioChannel = 11, radioPower = 56;
+
+inline void loadRadio() {
+    Preferences store;
+    if (!store.begin("radio", true))
+        return;
+    radioChannel = store.getUChar("channel", radioChannel);
+    radioPower = store.getUChar("power", radioPower);
+    store.end();
+}
+
+inline void saveRadio() {
+    Preferences store;
+    if (!store.begin("radio", false))
+        return;
+    store.putUChar("channel", radioChannel);
+    store.putUChar("power", radioPower);
+    store.end();
+}
 constexpr uint32_t parkAfterMs = 30000;
 const WifiNetwork *wifiChosen = nullptr;
 bool apStarted = false, parked = false;
@@ -40,6 +60,7 @@ inline void park() {
         esp_wifi_disconnect();
         delay(20);
     }
+    esp_wifi_set_max_tx_power(radioPower);
     apStarted = false;
     parked = true;
 }
@@ -54,6 +75,7 @@ inline void startAp() {
 }
 
 inline void startWifi() {
+    loadRadio();
     // Nothing is printed: UART0 is the drone link. Without wifi.h there is no Wi-Fi and no OTA.
     if (!wifiConfigured())
         return;

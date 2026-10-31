@@ -66,6 +66,29 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
         text[end - start] = 0;
         return nullptr;
     }
+    if (op == 'H') {
+        // Radio channel for FPV's raw frames (1-13), kept across restarts (ota.h saveRadio); the receiver (sw/fpv_monitor.py) searches for it.
+        if (length < 1 || body[0] < 1 || body[0] > 13) return "Channel 1-13";
+        radioChannel = body[0];
+        esp_err_t error = esp_wifi_set_channel(radioChannel, WIFI_SECOND_CHAN_NONE);
+        if (!error)
+            saveRadio();
+        snprintf(text, size, "ch%d", radioChannel);
+        return error ? esp_err_to_name(error) : nullptr;
+    }
+    if (op == 'T') {
+        // Transmit power in quarter dBm (8-84: 2-21 dBm), kept across restarts and applied once Wi-Fi is up (ota.h).
+        if (length < 1 || body[0] < 8 || body[0] > 84) return "Power 8-84 (quarter dBm)";
+        esp_err_t error = esp_wifi_set_max_tx_power(body[0]);
+        if (!error) {
+            radioPower = body[0];
+            saveRadio();
+        }
+        int8_t power = 0;
+        esp_wifi_get_max_tx_power(&power);
+        snprintf(text, size, "%.2f dBm", power / 4.0);
+        return error ? esp_err_to_name(error) : nullptr;
+    }
     if (op == 'A') {
         startAp();
         return nullptr;
