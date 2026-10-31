@@ -499,6 +499,13 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
     if (op == 'J') {
         // Camera reset through its EN line (1: into the ROM's download mode), only disarmed: a hung camera came back only from a power cycle by hand (2026-10-31).
         if (!flight_runtime_idle()) return "Disarm and zero throttle first";
+        // 2, pin, ms: pull one free pin low instead, to find which one the camera's EN or IO0 is wired to.
+        if (length >= 3 && body[0] == 2) return camera_probe_pin(body[1], body[2] * 10) ? NULL : "Not a free pin";
+        // 3: the camera restarts itself with IO0 held low (no EN wire needed), toward the ROM's download mode.
+        if (length >= 1 && body[0] == 3) {
+            camera_restart_holding_io0(500);
+            return NULL;
+        }
         camera_reset(length >= 1 && body[0] == 1);
         return NULL;
     }

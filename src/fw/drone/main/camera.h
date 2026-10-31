@@ -58,5 +58,9 @@ const char *camera_update(uint8_t op, const uint8_t *body, size_t length, uint32
 size_t camera_raw(uint32_t baud, const uint8_t *data, size_t length, uint32_t wait_ms, uint8_t *out, size_t size);
 // Resets the camera through its EN line (drone GPIO 23), into its ROM's download mode with IO0 (GPIO 26) held low when download is set.
 void camera_reset(bool download);
+// Wiring check: pulls one of the drone's free pins low for ms (open drain), then releases it. False for a pin in use.
+bool camera_probe_pin(int gpio, uint32_t ms);
+// Holds IO0 low while the camera restarts itself (no EN wire), for hold_ms.
+void camera_restart_holding_io0(uint32_t hold_ms);
 
 #endif

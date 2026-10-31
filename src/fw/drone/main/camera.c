@@ -19,9 +19,9 @@
 #define TX 27
 #define SYNC 13
 #define BAUD 2000000
-// The camera's EN (reset) and IO0 (boot mode, also the image sensor's XCLK) through about 1 kohm each: open drain, released (high impedance) except while camera_reset pulls them low, so the drone can never drive them high or fight the camera's own pull-ups and clock.
+// The camera's EN (reset) and IO0 (boot mode, also the image sensor's XCLK) through about 1 kohm each: open drain, released (high impedance) except while camera_reset pulls them low, so the drone can never drive them high or fight the camera's own pull-ups and clock. IO0 is wired to GPIO 4 (2026-10-31); EN is not wired yet (a pulse on every free pin did not restart the camera).
 #define CAMERA_EN 23
-#define CAMERA_IO0 26
+#define CAMERA_IO0 4
 #define RESET_PULSE_MS 50
 // The camera's own limit is 150 ms capture-to-queued; anything older on arrival is dropped.
 #define MAX_AGE_US 150000
@@ -290,5 +290,29 @@ void camera_reset(bool download) {
     gpio_set_level(CAMERA_EN, 1);
     // The ROM reads IO0 as it leaves reset; held a little longer to be sure, then released for the sensor's clock.
     vTaskDelay(pdMS_TO_TICKS(RESET_PULSE_MS));
+    gpio_set_level(CAMERA_IO0, 1);
+}
+
+bool camera_probe_pin(int gpio, uint32_t ms) {
+    // The drone's free pins only (not its servos, ESCs, I2C, camera link, load cell, LED or battery input).
+    static const int free_pins[] = {4, 5, 12, 15, 17, 21, 23, 26};
+    bool allowed = false;
+    for (size_t i = 0; i < sizeof(free_pins) / sizeof(free_pins[0]); i++) allowed |= free_pins[i] == gpio;
+    if (!allowed) return false;
+    gpio_set_level(gpio, 1);
+    gpio_config_t line = {.pin_bit_mask = 1ULL << gpio, .mode = GPIO_MODE_OUTPUT_OD};
+    gpio_config(&line);
+    gpio_set_level(gpio, 0);
+    vTaskDelay(pdMS_TO_TICKS(ms));
+    gpio_set_level(gpio, 1);
+    return true;
+}
+
+void camera_restart_holding_io0(uint32_t hold_ms) {
+    gpio_set_level(CAMERA_IO0, 0);
+    char text[64];
+    // The camera's own restart (as the update's X), with IO0 low: whether its software reset re-reads the boot strap decides if it comes up in the ROM's download mode.
+    camera_update('X', NULL, 0, 1000, text, sizeof(text));
+    vTaskDelay(pdMS_TO_TICKS(hold_ms));
     gpio_set_level(CAMERA_IO0, 1);
 }
