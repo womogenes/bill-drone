@@ -132,6 +132,7 @@ void flowLoop(void *) {
 bool startCamera(bool jpeg) {
     cameraConfig.pixel_format = jpeg ? PIXFORMAT_JPEG : PIXFORMAT_GRAYSCALE;
     cameraConfig.frame_size = jpeg ? config::fpvFrameSize : FRAMESIZE_QVGA;
+    cameraConfig.xclk_freq_hz = jpeg ? config::fpvXclkHz : 20000000;
     cameraConfig.jpeg_quality = fpvQuality;
     startError = esp_camera_init(&cameraConfig);
     if (startError != ESP_OK)
