@@ -247,11 +247,15 @@ async function reportedHost() {
   return host;
 }
 
-// FPV over the radio, needing no network, comes from the monitor-mode Wi-Fi adapter's reader (sw/fpv_monitor.py) as UDP datagrams to 127.0.0.1:5602, with FPVM every 500 ms while it runs, or from the ESP32 receiver (fw/fpv_rx) on the serial port FPV_RX names. That port is never guessed: the receiver's CP2102 has the same USB serial number as the drone's and the controller's, and a port path once picked the controller after the boards moved. Both are opened once and kept for as long as the server runs, their chunks going to whichever FPV stream is running: closing the serial port after each stream left it open in the process, and the stale readers took a share of the bytes.
-const RECEIVER = process.env.FPV_RX;
-// The receiver's port raw at 1 Mbaud: input and output flushed, output resumed, settings applied now (TCSANOW).
-const TERMIOS = `import os, sys, termios
+// FPV over the radio, needing no network, comes from the monitor-mode Wi-Fi adapter's reader (sw/fpv_monitor.py) as UDP datagrams to 127.0.0.1:5602, with FPVM every 500 ms while it runs, or from the ESP32 receiver (fw/fpv_rx) on one of the serial ports FPV_RX names (space separated, the first present one the bridge has not locked). Those ports are never guessed: the receiver's CP2102 has the same USB serial number as the drone's and the controller's, and a port path once picked the controller after the boards moved; the bridge holds the controller's port with an exclusive lock, which rules it out even if the boards swap places. Both are opened once and kept for as long as the server runs, their chunks going to whichever FPV stream is running: closing the serial port after each stream left it open in the process, and the stale readers took a share of the bytes.
+const RECEIVERS = (process.env.FPV_RX ?? '').split(/\s+/).filter(Boolean);
+// The receiver's port raw at 1 Mbaud: input and output flushed, output resumed, settings applied now (TCSANOW). Exits with 3, touching nothing, if another process (the bridge, on the controller) holds the port's lock.
+const TERMIOS = `import fcntl, os, sys, termios
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(3)
 a = termios.tcgetattr(fd)
 a[0:4] = [0, 0, termios.CS8 | termios.CREAD | termios.CLOCAL, 0]
 a[4] = a[5] = termios.B1000000
@@ -304,17 +308,19 @@ function receiver() {
   const open = () => {
     port?.destroy();
     port = undefined;
-    if (!RECEIVER || !existsSync(RECEIVER)) return;
-    try {
-      // Not stty: it applies settings only once the output has drained, and a port left at its defaults echoes the receiver's bytes back while a 0x13 among them (XOFF) holds the output, so it waited forever and froze the server (2026-10-31). This flushes and applies at once, and the timeout bounds it anyway.
-      execFileSync('python3', ['-c', TERMIOS, RECEIVER], { timeout: 3000 });
-      port = new tty.ReadStream(
-        openSync(RECEIVER, constants.O_RDONLY | constants.O_NOCTTY)
-      );
-    } catch (error) {
-      console.error(`FPV receiver ${RECEIVER}: ${error}`);
-      return;
+    for (const path of RECEIVERS.filter((path) => existsSync(path))) {
+      try {
+        // Not stty: it applies settings only once the output has drained, and a port left at its defaults echoes the receiver's bytes back while a 0x13 among them (XOFF) holds the output, so it waited forever and froze the server (2026-10-31). This flushes and applies at once, and the timeout bounds it anyway.
+        execFileSync('python3', ['-c', TERMIOS, path], { timeout: 3000 });
+        port = new tty.ReadStream(
+          openSync(path, constants.O_RDONLY | constants.O_NOCTTY)
+        );
+        break;
+      } catch (error) {
+        console.error(`FPV receiver ${path}: ${error}`);
+      }
     }
+    if (!port) return;
     heard = Date.now();
     let buffer = Buffer.alloc(0);
     port.on('data', (data: Buffer) => {
@@ -338,7 +344,7 @@ function receiver() {
     });
     port.on('error', () => port?.destroy());
   };
-  if (RECEIVER) {
+  if (RECEIVERS.length) {
     open();
     setInterval(() => {
       if (Date.now() - heard > 5000) open();
@@ -356,7 +362,8 @@ function radioBudget() {
 // A receiver is there: the monitor heard from lately, or the ESP32 receiver's port.
 function radioUp() {
   return (
-    Date.now() - receiver().heard < 2000 || !!(RECEIVER && existsSync(RECEIVER))
+    Date.now() - receiver().heard < 2000 ||
+    RECEIVERS.some((path) => existsSync(path))
   );
 }
 
