@@ -8,6 +8,8 @@ Talks to the camera's ESP32 ROM bootloader over its wire to the drone (request U
 uv run tools/camera_rom.py listen    # what the camera sends at 115200
 uv run tools/camera_rom.py sync      # the ROM's SYNC handshake
 uv run tools/camera_rom.py run       # sync, then leave the loader and run the application in flash (as esptool run)
+uv run tools/camera_rom.py reset     # reset the camera through its EN line (drone request J, GPIO 23)
+uv run tools/camera_rom.py download  # reset it into the ROM's download mode (IO0 held low, GPIO 26), then sync
 
 The bootloader protocol (SLIP frames: direction, opcode, length, checksum, data) is Espressif's serial protocol; the drone must be disarmed.
 """
@@ -60,9 +62,14 @@ def sync(drone):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    parser.add_argument("action", choices=("listen", "sync", "run"))
+    parser.add_argument("action", choices=("listen", "sync", "run", "reset", "download"))
     args = parser.parse_args()
     drone = Drone("ws://127.0.0.1:8765/update")
+    if args.action in ("reset", "download"):
+        drone.request(b"J", bytes([args.action == "download"]), timeout=3, patience=10)
+        print("Camera reset" + (" into download mode" if args.action == "download" else ""))
+        if args.action == "reset":
+            return
     if args.action == "listen":
         data = raw(drone, b"", 1500)
         print(len(data), "bytes:", data[:300])

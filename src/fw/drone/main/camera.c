@@ -19,6 +19,10 @@
 #define TX 27
 #define SYNC 13
 #define BAUD 2000000
+// The camera's EN (reset) and IO0 (boot mode, also the image sensor's XCLK) through about 1 kohm each: open drain, released (high impedance) except while camera_reset pulls them low, so the drone can never drive them high or fight the camera's own pull-ups and clock.
+#define CAMERA_EN 23
+#define CAMERA_IO0 26
+#define RESET_PULSE_MS 50
 // The camera's own limit is 150 ms capture-to-queued; anything older on arrival is dropped.
 #define MAX_AGE_US 150000
 
@@ -185,6 +189,10 @@ void camera_start(void) {
     gpio_config_t sync = {.pin_bit_mask = 1ULL << SYNC, .mode = GPIO_MODE_INPUT,
                           .pull_down_en = GPIO_PULLDOWN_ENABLE, .intr_type = GPIO_INTR_POSEDGE};
     ESP_ERROR_CHECK(gpio_config(&sync));
+    gpio_set_level(CAMERA_EN, 1);
+    gpio_set_level(CAMERA_IO0, 1);
+    gpio_config_t lines = {.pin_bit_mask = 1ULL << CAMERA_EN | 1ULL << CAMERA_IO0, .mode = GPIO_MODE_OUTPUT_OD};
+    ESP_ERROR_CHECK(gpio_config(&lines));
     if (xTaskCreatePinnedToCore(receive_task, "camera", 3072, NULL, 4, NULL, 0) != pdPASS) abort();
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
     ESP_ERROR_CHECK(gpio_isr_handler_add(SYNC, sync_edge, NULL));
@@ -273,4 +281,14 @@ bool camera_flow(CameraFlow *flow, uint32_t *sequence, uint32_t max_age_us) {
     }
     portEXIT_CRITICAL(&lock);
     return fresh;
+}
+
+void camera_reset(bool download) {
+    if (download) gpio_set_level(CAMERA_IO0, 0);
+    gpio_set_level(CAMERA_EN, 0);
+    vTaskDelay(pdMS_TO_TICKS(RESET_PULSE_MS));
+    gpio_set_level(CAMERA_EN, 1);
+    // The ROM reads IO0 as it leaves reset; held a little longer to be sure, then released for the sensor's clock.
+    vTaskDelay(pdMS_TO_TICKS(RESET_PULSE_MS));
+    gpio_set_level(CAMERA_IO0, 1);
 }

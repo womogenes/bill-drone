@@ -56,5 +56,7 @@ void camera_stats(CameraStats *stats);
 const char *camera_update(uint8_t op, const uint8_t *body, size_t length, uint32_t timeout_ms, char *text, size_t size);
 // Recovery: sends length bytes to the camera at baud, collects what comes back for wait_ms into out (at most size) and restores the link's own baud; for reaching the camera's ROM bootloader (115200) when its application is not running. Returns the bytes collected.
 size_t camera_raw(uint32_t baud, const uint8_t *data, size_t length, uint32_t wait_ms, uint8_t *out, size_t size);
+// Resets the camera through its EN line (drone GPIO 23), into its ROM's download mode with IO0 (GPIO 26) held low when download is set.
+void camera_reset(bool download);
 
 #endif
