@@ -1,6 +1,6 @@
 """
 Hover landings for the touchdown detector (fw/drone/main/hover.c), in the simulator and replayed from recordings.
-uv run -m sw.sim.landing_test [--runs 200] [--source path/to/hover.c] [--defines "PROBE_RATE=1.0f ..."] flies randomized landings: each takes off on IDENTIFIED_ESC with the 2026-10-29 07:20 camera-hover settings, holds at a random tag height, then lands at a random land_rate (0.05-0.2 m/s) with the hover_mass setting off by up to ±20 % from what the plant needs, the plant's mass off by up to ±10 %, the pack at 16.7 V, 14.3 V or sagging from one to the other over the flight (through the firmware's voltage compensation against the airframe's fitted voltage power, which leaves up to 18 % more thrust per table newton on the low pack), a small level-reference error and accelerometer bias, and the camera's height drifting by up to ±0.3 m over the descent (the drone's attitude error at the tag's 2 m range). It reports any touchdown declared in the air, how long after the body first touched the floor the landing ended (by the detector, or by the tilt and shock cut), the contact speed and the tilt through the touchdown.
+uv run -m sw.sim.landing_test [--runs 200] [--source path/to/hover.c] [--defines "PROBE_RATE=1.0f ..."] flies randomized landings: each takes off on IDENTIFIED_ESC with the 2026-10-29 07:20 camera-hover settings, holds at a random tag height, then lands at a random land_rate (0.05-0.2 m/s) with the hover_mass setting off by up to ±20 % from what the plant needs, the plant's mass off by up to ±10 %, the pack at 16.7 V, 14.3 V or sagging from one to the other over the flight (through the firmware's voltage compensation against the airframe's fitted voltage power, which leaves up to 18 % more thrust per table newton on the low pack), a small level-reference error and accelerometer bias, and the camera's height drifting by up to ±0.3 m over the descent (the drone's attitude error at the tag's 2 m range). --no-camera lands without the tag, --gust adds rougher air. It reports any touchdown declared in the air, how long after the body first touched the floor the landing ended (by the detector, or by the tilt and shock cut), the contact speed and the tilt through the touchdown.
 uv run -m sw.sim.landing_test --replay sw/recordings/<flight>.bin [--contact s] replays a recorded landing through hover.c with the recorded estimates, specific force and attitude forced in each tick. Before the contact time given (or throughout without one) the drone is taken to be in the air: thrust the new code flies below the recorded one shows in the specific force as that difference, lagged by the motors, over the weight. After it the floor holds the drone and the recorded specific force stands. It prints when probes start and what they find, and when touchdown comes.
 --source flies another copy of hover.c (its own hover.h beside it gives the state layout), so versions can be compared without touching the one other simulations use.
 """
@@ -156,7 +156,11 @@ def fly(case, source=None, defines=()):
     # The thrust the compensated motors make per table newton at the pack's starting voltage, so hover_mass is off by mass_error from what this plant needs.
     factor = (case["volts"][0] / thrust_voltage) ** (power - 2)
     settings |= {"hover_land_rate": case["land_rate"], "hover_mass": SIM_MASS * case["plant_mass"] / factor * case["mass_error"], "hover_ceiling": 1.2}
+    if not case.get("camera", True):
+        settings["hover_camera"] = 0
+    settings |= case.get("settings", {})
     plant = sweep.IDENTIFIED_ESC | {"land_at": case["land_at"], "mass": sweep.IDENTIFIED_ESC["mass"] * case["plant_mass"], "level_error": case["level_error"], "accel_bias": case["accel_bias"],
+                                    **({"gust": case["gust"], "roll_gust": case["gust"]} if case.get("gust") else {}),
                                     "camera": sweep.IDENTIFIED_ESC["camera"] | {"tag": (2.0, 0.1, case["tag_height"]), "fov": FOV}}
     expected = case["tag_height"] / case["land_rate"]
     seconds = 1.5 + case["land_at"] + 2 * expected + 6
@@ -343,12 +347,16 @@ def main():
     parser.add_argument("--save", help="write every run's figures here (JSON)")
     parser.add_argument("--replay", help="a recording to replay instead of simulating")
     parser.add_argument("--contact", type=float, help="with --replay: when the drone touched the floor (s from the recording's start)")
+    parser.add_argument("--no-camera", action="store_true", help="never see the tag (hover_camera 0): height from the IMU alone, as a landing outdoors after a lost link")
+    parser.add_argument("--set", nargs="*", default=[], help="settings to override, name=value")
+    parser.add_argument("--gust", type=float, default=0, help="random pitch and roll disturbance (rad/s² RMS) on top of the room's; indoors fitted 0.49 and 0.89")
     args = parser.parse_args()
     defines = args.defines.split()
     if args.replay:
         replay(args.replay, args.contact, args.source, defines)
         return
-    cases = [draw(args.seed + i) for i in range(args.runs)]
+    overrides = {name: float(value) for name, value in (pair.split("=") for pair in args.set)}
+    cases = [draw(args.seed + i) | {"camera": not args.no_camera, "gust": args.gust, "settings": overrides} for i in range(args.runs)]
     with ProcessPoolExecutor(args.workers) as pool:
         results = list(pool.map(fly, cases, [args.source] * len(cases), [defines] * len(cases)))
     if args.save:

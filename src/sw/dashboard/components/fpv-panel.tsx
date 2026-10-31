@@ -2,11 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { typing } from '@/components/control-panel';
 import { Input } from '@/components/ui/input';
 import { readParts } from '@/lib/multipart';
 
 const HOST_KEY = 'camera-host';
-const MODE_KEY = 'camera-mode';
 // FPV frames go on screen this long after the earliest any frame could have, by their capture time, so the link's jitter up to it does not show.
 const PLAYOUT_MS = 80;
 type Mode = 'tag' | 'fpv';
@@ -25,13 +25,18 @@ function save(key: string, value: string) {
   } catch {}
 }
 
-// Rendered in the browser only (the page loads it without server rendering), so the saved choices are there from the start. Always streams: the tracking preview (the flow's 80x60 reduction, tracking undisturbed, over the camera's network) or FPV, the camera's own 480x320 video over the radio to the FPV receiver or over its network, during which it does not track the tag, so camera hover has no sightings; it resumes tracking 3 s after FPV ends.
-export function FpvPanel() {
+// Rendered in the browser only (the page loads it without server rendering), so the saved address is there from the start. Always streams, by the drone's hover_camera setting: the tracking preview (the flow's 80x60 reduction, tracking undisturbed, over the camera's network) or FPV, the camera's own 480x320 video over the radio to the FPV receiver or over its network, during which it does not track the tag, so camera hover has no sightings; it resumes tracking 3 s after FPV ends.
+export function FpvPanel({
+  free,
+  onFree,
+}: {
+  // The drone's hover_camera setting turned around (undefined without a drone): every dashboard shows what the drone flies.
+  free?: boolean;
+  onFree: (free: boolean) => void;
+}) {
   // Empty: the address the camera reports through the drone.
   const [host, setHost] = useState(() => saved(HOST_KEY) ?? '');
-  const [mode, setMode] = useState<Mode>(() =>
-    saved(MODE_KEY) === 'fpv' ? 'fpv' : 'tag'
-  );
+  const mode: Mode = free ? 'fpv' : 'tag';
   const canvas = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<{
     state: string;
@@ -134,6 +139,18 @@ export function FpvPanel() {
     };
   }, [mode, where]);
 
+  // F switches between tag and free flight, like the buttons.
+  useEffect(() => {
+    if (free === undefined) return;
+    function keydown(event: KeyboardEvent) {
+      if (event.code !== 'KeyF' || event.repeat || typing(event)) return;
+      event.preventDefault();
+      onFree(!free);
+    }
+    window.addEventListener('keydown', keydown);
+    return () => window.removeEventListener('keydown', keydown);
+  }, [free, onFree]);
+
   return (
     <section
       aria-labelledby="camera-heading"
@@ -162,19 +179,20 @@ export function FpvPanel() {
             save(HOST_KEY, event.target.value);
           }}
         />
-        <div className="flex gap-1" role="group" aria-label="Camera mode">
+        <div className="flex gap-1" role="group" aria-label="Camera mode (F)">
           {(['tag', 'fpv'] as const).map((choice) => (
             <Button
               key={choice}
               size="sm"
-              variant={mode === choice ? 'default' : 'outline'}
-              aria-pressed={mode === choice}
-              onClick={() => {
-                setMode(choice);
-                save(MODE_KEY, choice);
-              }}
+              variant={
+                free !== undefined && mode === choice ? 'default' : 'outline'
+              }
+              aria-pressed={free !== undefined && mode === choice}
+              disabled={free === undefined}
+              title="F"
+              onClick={() => onFree(choice === 'fpv')}
             >
-              {choice === 'tag' ? 'Tag' : 'FPV'}
+              {choice === 'tag' ? 'Tag' : 'Free'}
             </Button>
           ))}
         </div>
@@ -184,11 +202,6 @@ export function FpvPanel() {
         aria-label={mode === 'fpv' ? 'Live camera video' : 'Tracking preview'}
         className="aspect-[3/2] w-full bg-black object-contain"
       />
-      {mode === 'fpv' && (
-        <p className="text-sm text-muted-foreground">
-          Tag tracking off: camera hover has no sightings.
-        </p>
-      )}
     </section>
   );
 }

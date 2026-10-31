@@ -24,10 +24,10 @@
 #define MPU 0x68
 // Motor watchdog: the laptop's targets must keep arriving.
 #define HEARTBEAT_MS 500
-// A camera hover that loses the laptop lands itself instead of stopping the motors in the air (2026-10-29 07:28 dropped from 0.4 m): the hover needs nothing from the laptop. The watchdog still stops a manual flight, a hover not yet off the ground, and a link-loss landing that has not touched down within LINK_LAND_S (s).
-#define LINK_LAND_S 15.0f
-// ... and only once the hover's height estimate has it this far off the ground (m).
-#define LINK_LAND_HEIGHT 0.05f
+// A flight that loses the laptop lands itself, in any mode, instead of stopping the motors in the air (2026-10-29 07:28 dropped from 0.4 m): the landing needs nothing from the laptop. The controller's airborne time, not the hover's height estimate (outdoors, without the tag, only the IMU's), says it is flying. When the laptop returns it keeps landing until the laptop asks to fly: hover, or manual collective at liftoff (integrate_throttle); a reconnecting dashboard's zero collective does not end it. The watchdog still stops a flight not yet off the ground, and a link-loss landing that has not touched down within LINK_LAND_S (s, 12 m at the default 0.2 m/s).
+#define LINK_LAND_S 60.0f
+// Without the tag the landing holds its velocity on the rotor-drag model (hover.h drag, in 1/s), at least this much: with nothing damping the drift, a no-tag landing tipped over in 18 of 48 simulated runs, with the drag model at 1 in 2 (sw/sim/landing_test.py --no-camera, 2026-10-30).
+#define LINK_LAND_DRAG 1.0f
 // Tolerate one missed control tick; a second consecutive miss stops the motors.
 #define MAX_SAMPLE_MS (2500 / SAMPLE_HZ)
 // Degrees.
@@ -115,8 +115,9 @@ static struct {
 static float battery_v;
 // The streamed hover mode (hover.h), the hover loop, and the command actually flown this tick (hover replaces base and targets), which the recording logs.
 static int hover_mode;
-// The link-loss landing (LINK_LAND_S) under way since link_land_us; the laptop's targets cannot end it, a stop can.
+// The link-loss landing (LINK_LAND_S) under way since link_land_us; a stop ends it, and so does the laptop asking to fly again. requested_mode is the hover mode the laptop last sent, which the landing overrides.
 static bool link_landing;
+static int requested_mode;
 static uint64_t link_land_us;
 static HoverState hover;
 static Command flown;
@@ -306,8 +307,11 @@ static void runtime_task(void *arg) {
         bool recording = log_active;
         // now was read before the lock, so a target accepted on the network core in between leaves heartbeat_us just after it; signed, that is a fresh heartbeat rather than an unsigned wrap to a huge age.
         bool stale = (int64_t)(now - state.heartbeat_us) > HEARTBEAT_MS * 1000LL;
-        if (state.enabled && (link_landing || (stale && hover_mode != HOVER_OFF && hover.engaged && !hover.landed &&
-                                               hover.height >= LINK_LAND_HEIGHT && state.controller.airborne > 0))) {
+        if (link_landing && !stale && (requested_mode == HOVER_HOLD || (requested_mode == HOVER_OFF && command.base >= command.integrate_throttle))) {
+            link_landing = false;
+            hover_mode = requested_mode;
+        }
+        if (state.enabled && (link_landing || (stale && state.controller.airborne > 0 && !hover.landed && hover.bias > 0.5f))) {
             if (!link_landing) {
                 link_landing = true;
                 link_land_us = now;
@@ -420,6 +424,7 @@ static void runtime_task(void *arg) {
                 gains.nudge_forward = nudge[0];
                 gains.nudge_left = nudge[1];
                 gains.nudge_up = nudge[2];
+                if (link_landing && !hover.tracking) gains.drag = fmaxf(gains.drag, LINK_LAND_DRAG);
                 HoverOutput out;
                 // Heading rate about vertical from the body rates (positive left).
                 float heading_rate = (state.gyro[1] * sinf(pose.roll) + state.gyro[2] * cosf(pose.roll)) / cosf(pose.pitch);
@@ -563,7 +568,8 @@ bool flight_runtime_targets(const float *targets) {
         command.target_roll = targets[1] / DEG;
         command.target_pitch = targets[2] / DEG;
         command.target_yaw = targets[3] / DEG;
-        hover_mode = targets[8];
+        requested_mode = targets[8];
+        if (!link_landing) hover_mode = requested_mode;
         nudge[0] = targets[9];
         nudge[1] = targets[10];
         nudge[2] = targets[11];

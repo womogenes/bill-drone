@@ -506,7 +506,12 @@ export default function Page() {
           )}
         </div>
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
-          <FpvPanel />
+          <FpvPanel
+            free={
+              reading?.control ? reading.control.hover_camera === 0 : undefined
+            }
+            onFree={(free) => sendControl({ hover_camera: free ? 0 : 1 })}
+          />
           <p
             className={`px-4 pt-4 tabular-nums ${recorder?.error || (reading?.logging?.dropped ?? 0) > 0 ? 'text-red-700' : 'text-muted-foreground'}`}
           >

@@ -14,6 +14,8 @@ export type Side = 'left' | 'right';
 
 export type ControlSettings = {
   enabled: boolean;
+  // 1 flies camera hover on the tag; 0 is free flight, the camera streaming FPV instead (components/fpv-panel.tsx).
+  hover_camera: number;
   roll: number;
   pitch: number;
   yaw_rate: number;

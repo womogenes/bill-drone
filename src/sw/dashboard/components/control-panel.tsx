@@ -58,7 +58,7 @@ const LAND = 2;
 const LAND_FAST = 3;
 
 // Keys typed into a field or a dialog aren't flight commands.
-function typing(event: KeyboardEvent) {
+export function typing(event: KeyboardEvent) {
   return (
     event.ctrlKey ||
     event.metaKey ||
@@ -147,15 +147,31 @@ const tuningFields = [
   { key: 'thrust_voltage', label: 'Thrust reference (V, 0 off)', min: 0 },
   { key: 'yaw_i', label: 'Yaw I', min: 0 },
   { key: 'hover_center', label: 'Hover centres on tag (1 on, 0 off)', min: 0 },
-  { key: 'hover_distance', label: 'Hover distance from tag (m, 0 = takeoff range)', min: 0 },
+  {
+    key: 'hover_distance',
+    label: 'Hover distance from tag (m, 0 = takeoff range)',
+    min: 0,
+  },
   { key: 'hover_approach', label: 'Hover approach speed (m/s)', min: 0.02 },
   { key: 'hover_ceiling', label: 'Hover ceiling above takeoff (m)', min: 0.2 },
-  { key: 'hover_square', label: 'Hover moves square to tag (1 on, 0 off)', min: 0 },
+  {
+    key: 'hover_square',
+    label: 'Hover moves square to tag (1 on, 0 off)',
+    min: 0,
+  },
   { key: 'hover_kside', label: 'Hover pull to square-on (m/s² per m)', min: 0 },
   { key: 'hover_cam_pitch', label: 'Camera tilt up from body (°)', min: -30 },
-  { key: 'hover_cam_roll', label: 'Camera roll about its axis (°, 180 upside down)', min: -180 },
+  {
+    key: 'hover_cam_roll',
+    label: 'Camera roll about its axis (°, 180 upside down)',
+    min: -180,
+  },
   { key: 'hover_drag', label: 'Hover rotor drag (1/s, 0 off)', min: 0 },
-  { key: 'hover_drag_tilt', label: 'Hover drag thrust tilt offset (°)', min: -10 },
+  {
+    key: 'hover_drag_tilt',
+    label: 'Hover drag thrust tilt offset (°)',
+    min: -10,
+  },
   { key: 'hover_drag_tau', label: 'Hover drag correction time (s)', min: 0.1 },
   { key: 'hover_trim_tau', label: 'Hover trim build-up time (s)', min: 0.1 },
   { key: 'hover_trim_max', label: 'Hover trim limit (m/s²)', min: 0 },
@@ -732,6 +748,7 @@ export const ControlPanel = memo(function ControlPanel({
           { keys: ['T'], label: 'Takeoff' },
           { keys: ['H'], label: 'Hover (arms if needed)' },
           { keys: ['L'], label: 'Land (hold for fast)' },
+          { keys: ['F'], label: 'Camera: tag or free flight' },
           { keys: ['A', 'D'], label: 'Yaw' },
           {
             keys: ['ArrowUp', 'ArrowDown'],
