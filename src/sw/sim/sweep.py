@@ -301,7 +301,9 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 if nudge:
                     # (start s after liftoff, toward-tag and left speeds in m/s, seconds): the hold point moving as the dashboard's held arrows move it.
                     start, forward_speed, left_speed, length = nudge
-                    moving = 0.0 if lifted is None else min(max(now - lifted - start, 0.0), length)
+                    # From liftoff, or from the start for a hover engaged in the air.
+                    since = now - lifted if lifted is not None else (now if not liftoff else None)
+                    moving = 0.0 if since is None else min(max(since - start, 0.0), length)
                     outer.gains.nudge_forward, outer.gains.nudge_left = forward_speed * moving, left_speed * moving
                 mode = HOLD if land_at is None or lifted is None or now - lifted < land_at else LAND_FAST if land_fast else LAND
                 out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag, flow)

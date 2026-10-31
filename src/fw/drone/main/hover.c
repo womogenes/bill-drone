@@ -381,10 +381,12 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     if (mode == HOVER_HOLD) {
         // The goal is climb; centring goes to the tag's height instead, climbs toward the ceiling to bring the tag into view until it has been flown on (a glimpse from the ground does not count), and holds the height reached when it is lost.
         // The height nudge raises the goal once flying (the takeoff climb and the search for the tag keep theirs), and its speed feeds the climb command.
-        float goal = g->climb, up = state->tracking ? g->nudge_up : 0;
+        // Without the tag, W and S move the height goal the same way once the drag model holds the drone (state->dragging: airborne).
+        float goal = g->climb, up = state->tracking || state->dragging ? g->nudge_up : 0;
         if (g->center) goal = seeing ? clamp(state->tag_height + up, MIN_HEIGHT, g->ceiling) : state->tracking ? fmaxf(g->climb, state->target) : g->ceiling;
+        else goal += up;
         state->target += clamp(goal - state->target, -g->climb_rate * dt, g->climb_rate * dt);
-        command = clamp(g->kz * (state->target - state->height) + (state->tracking ? state->nudge_rate[2] : 0), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
+        command = clamp(g->kz * (state->target - state->height) + (state->tracking || state->dragging ? state->nudge_rate[2] : 0), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
     } else {
         float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? 3 : 1);
         command = fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
@@ -465,7 +467,15 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     if (!seeing) {
         // Tag lost after flying on it: keep damping the dead-reckoned velocity, with the trim learned on the tag. Before the tag is first flown on, the attitude controller's own damping holds the drone, unless the drag model keeps the velocity: then the hold flies on it from takeoff, and also returns to the place where the tag was last seen (or where it took off), as far as the dead reckoning knows it.
         if ((!state->tracking && !dragging) || state->height < AIRBORNE) return;
-        float ax = -g->kd * state->velocity[0] - state->push[0], ay = -g->kd * state->velocity[1] - state->push[1];
+        // With the drag model the arrows fly the drone: the nudge's speed (toward the drone's heading and to its left) moves the hold point, and the velocity damping aims at that speed, so holding an arrow flies at it and letting go stops where the hold point stopped.
+        float vx = 0, vy = 0;
+        if (dragging) {
+            vx = state->nudge_rate[0] * cy - state->nudge_rate[1] * sy;
+            vy = state->nudge_rate[0] * sy + state->nudge_rate[1] * cy;
+            state->place[0] -= vx * dt;
+            state->place[1] -= vy * dt;
+        }
+        float ax = -g->kd * (state->velocity[0] - vx) - state->push[0], ay = -g->kd * (state->velocity[1] - vy) - state->push[1];
         if (dragging) {
             ax -= g->kp * state->place[0];
             ay -= g->kp * state->place[1];
