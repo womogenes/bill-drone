@@ -1,0 +1,20 @@
+# The dashboard (src/sw/dashboard), built with npm run build, on http://localhost:3000; FPV_RX is the ESP32 receiver's port (fw/fpv_rx), used when present. Installed with the bridge's (sw/bill-drone-bridge.service). Next runs directly: npm and pnpm ignore the stop signal.
+[Unit]
+Description=bill-drone dashboard
+After=network.target bill-drone-bridge.service
+
+[Service]
+User=willi
+Group=uucp
+WorkingDirectory=/home/willi/coding/ee/bill-drone/src/sw/dashboard
+Environment=HOME=/home/willi
+# node is pnpm's.
+Environment=PATH=/home/willi/.local/share/pnpm:/usr/bin:/bin
+Environment=FPV_RX=/dev/serial/by-path/pci-0000:c3:00.4-usb-0:1:1.0-port0
+ExecStart=/home/willi/coding/ee/bill-drone/src/sw/dashboard/node_modules/.bin/next start
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

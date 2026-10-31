@@ -1,0 +1,17 @@
+# The laptop service between the controller and the dashboard (src/fw/controller/bridge.py), on whichever USB serial device the controller is (src/fw/controller/find_port.py). Install once, with the dashboard's (sw/bill-drone-dashboard.service), after stopping any systemd-run units of the same names:
+#   sudo install -m644 src/sw/bill-drone-bridge.service src/sw/bill-drone-dashboard.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now bill-drone-bridge bill-drone-dashboard
+[Unit]
+Description=bill-drone laptop service (controller bridge)
+After=network.target
+
+[Service]
+User=willi
+Group=uucp
+WorkingDirectory=/home/willi/coding/ee/bill-drone
+Environment=HOME=/home/willi
+ExecStart=/bin/sh -c 'exec /home/willi/.local/bin/uv run src/fw/controller/bridge.py --port "$(/home/willi/.local/bin/uv run src/fw/controller/find_port.py)"'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

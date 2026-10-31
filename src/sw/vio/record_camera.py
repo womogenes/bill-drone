@@ -36,30 +36,38 @@ def main():
         drone.request(b"O", b"\x01")
     out = args.out.expanduser()
     out.mkdir(parents=True, exist_ok=True)
-    stream = urllib.request.urlopen(args.url, timeout=10)
+    stream = None
     buffer = b""
     count = 0
     end = time.monotonic() + args.seconds
     with open(out / "frames.csv", "w", newline="") as index:
-        rows = csv.writer(index)
-        rows.writerow(["capture_us", "received_unix_s", "file"])
-        while time.monotonic() < end:
-            buffer += stream.read1(65536)
-            while True:
-                header = re.search(rb"Content-Length: (\d+)\r\nX-Time: (\d+) \d+\r\n\r\n", buffer)
-                if not header:
-                    break
-                start, length = header.end(), int(header.group(1))
-                if len(buffer) < start + length:
-                    break
-                name = f"{int(header.group(2))}.jpg"
-                (out / name).write_bytes(buffer[start:start + length])
-                rows.writerow([header.group(2).decode(), f"{time.time():.6f}", name])
-                count += 1
-                buffer = buffer[start + length:]
-    if drone:
-        drone.request(b"O", b"\x00")
-        print("Flight log stopped; the laptop service saves it under sw/recordings")
+        try:
+            rows = csv.writer(index)
+            rows.writerow(["capture_us", "received_unix_s", "file"])
+            while time.monotonic() < end:
+                # A stream that stalls (a radio gap of over 10 s on 2026-10-31) is opened again rather than ending the recording.
+                try:
+                    stream = stream or urllib.request.urlopen(args.url, timeout=10)
+                    buffer += stream.read1(65536)
+                except (TimeoutError, OSError):
+                    stream, buffer = None, b""
+                    continue
+                while True:
+                    header = re.search(rb"Content-Length: (\d+)\r\nX-Time: (\d+) \d+\r\n\r\n", buffer)
+                    if not header:
+                        break
+                    start, length = header.end(), int(header.group(1))
+                    if len(buffer) < start + length:
+                        break
+                    name = f"{int(header.group(2))}.jpg"
+                    (out / name).write_bytes(buffer[start:start + length])
+                    rows.writerow([header.group(2).decode(), f"{time.time():.6f}", name])
+                    count += 1
+                    buffer = buffer[start + length:]
+        finally:
+            if drone:
+                drone.request(b"O", b"\x00")
+                print("Flight log stopped; the laptop service saves it under sw/recordings")
     print(f"{count} frames in {args.seconds:.0f} s to {out}")
 
 
