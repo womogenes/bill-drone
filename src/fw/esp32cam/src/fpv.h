@@ -109,25 +109,49 @@ inline void broadcast(size_t length, wifi_phy_rate_t phyRate = rate) {
 // The last time the drone asked for tag mode's preview over the radio (K P, web.h radioPreviewLoop).
 volatile uint32_t previewRadioMs = 0;
 
-// A whole JPEG as shards: the data shards over UDP to the viewer (to) when udp, and with the parity shards as raw frames at phyRate when radio. Parity replaced whole copies of the frame: the monitor-mode adapter misses a shard at random, 30-45% of them (2026-10-30, as it misses access points' beacons: its receiver, not the air or the camera), and a frame of three shards sent twice lost one 29% of the time, where any three of seven should lose about 2%. A one-shard preview frame goes out three times, as before. The adapter also goes deaf for a few shards at a time (runs of 2-6 missed, up to 14, 2026-10-30), so the shards are spread gapUs apart over the frame rather than sent back to back, which lost 8% of FPV frames with 77% of shards heard.
+// A whole JPEG as shards: the data shards over UDP to the viewer (to) when udp, and with as many parity shards plus one (up to maxParity) as raw frames at phyRate when radio. Parity replaced whole copies of the frame: the monitor-mode adapter misses a shard at random, 30-45% of them (2026-10-30, as it misses access points' beacons: its receiver, not the air or the camera), and a frame of three shards sent twice lost one 29% of the time, where any three of seven should lose about 2%. A one-shard preview frame goes out three times, as before. The adapter also goes deaf for a few shards at a time (runs of 2-6 missed, up to 14, 2026-10-30), so the shards are spread gapUs apart over the frame rather than sent back to back, which lost 8% of FPV frames with 77% of shards heard.
+// The parity is built from each data shard's copy in internal RAM as it goes out, so the frame is read from PSRAM once: computing it from the frame in PSRAM, five passes over it, competed with the driver writing the next frame and corrupted most JPEGs (2026-10-30). At most maxParity parity shards.
+// Internal RAM has no room for all of them at once: two serve tag mode's one-shard preview, and FPV borrows maxParity from the heap while it runs (useLargeParity), taken after the camera's JPEG start so it cannot take that driver's DMA memory.
+constexpr int maxParity = 6;
+uint8_t smallParity[2 * chunkBytes];
+uint8_t *parityStore = smallParity;
+int parityCapacity = 2;
+
+inline void useLargeParity(bool on) {
+    if (parityStore != smallParity)
+        heap_caps_free(parityStore);
+    parityStore = smallParity;
+    parityCapacity = 2;
+    if (!on)
+        return;
+    if (uint8_t *large = static_cast<uint8_t *>(heap_caps_malloc(maxParity * chunkBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT))) {
+        parityStore = large;
+        parityCapacity = maxParity;
+    }
+}
+
 inline void sendShards(const uint8_t *data, size_t length, uint32_t captureUs, bool radio, bool udp, const sockaddr_in *to,
                        wifi_phy_rate_t phyRate, uint32_t gapUs) {
-    const int shards = max(1, int((length + chunkBytes - 1) / chunkBytes)), parity = radio ? shards + 1 : 0;
+    const int shards = max(1, int((length + chunkBytes - 1) / chunkBytes)), parity = radio ? min(shards + 1, parityCapacity) : 0;
     const size_t size = (length + shards - 1) / shards;
-    if (length > 0xffff || shards + parity > 255)
+    if (length > 0xffff)
         return;
     Chunk header = {{'F', 'P', 'V', '2'}, frameNumber++, 0, uint8_t(shards + parity), uint8_t(shards), 0, uint16_t(length), captureUs,
                     uint32_t(esp_timer_get_time())};
-    uint8_t *chunk = datagram + macHeader;
+    uint8_t *chunk = datagram + macHeader, *payload = chunk + sizeof(header);
+    for (int j = 0; j < parity; ++j)
+        memset(parityStore + j * chunkBytes, 0, size);
     for (int index = 0; index < shards + parity; ++index) {
         header.index = uint8_t(index);
         memcpy(chunk, &header, sizeof(header));
         size_t part = size;
         if (index < shards) {
             part = min(size, length - index * size);
-            memcpy(chunk + sizeof(header), data + index * size, part);
+            memcpy(payload, data + index * size, part);
+            for (int j = 0; j < parity; ++j)
+                fec::accumulate(parityStore + j * chunkBytes, payload, part, fec::coefficient(shards, j, index));
         } else {
-            fec::parity(data, length, shards, size, index - shards, chunk + sizeof(header));
+            memcpy(payload, parityStore + (index - shards) * chunkBytes, size);
         }
         if (radio) {
             broadcast(sizeof(header) + part, phyRate);

@@ -17,23 +17,19 @@ inline void init() {
     }
 }
 
-inline uint8_t coefficient(int data, int parity, int shard) { return exps[255 - logs[(data + parity) ^ shard]]; }
-
-// Parity shard parity (from 0) of a message of length bytes in data shards of size bytes, the last one zero-padded, into out (size bytes).
-inline void parity(const uint8_t *message, size_t length, int data, size_t size, int parity, uint8_t *out) {
+inline uint8_t coefficient(int data, int parity, int shard) {
     if (!exps[0])
         init();
-    memset(out, 0, size);
+    return exps[255 - logs[(data + parity) ^ shard]];
+}
+
+// Adds coefficient (from coefficient()) times in (n bytes) into out.
+inline void accumulate(uint8_t *out, const uint8_t *in, size_t n, uint8_t coefficient) {
     uint8_t row[256];
-    for (int i = 0; i < data; ++i) {
-        const int scale = logs[coefficient(data, parity, i)];
-        row[0] = 0;
-        for (int v = 1; v < 256; ++v)
-            row[v] = exps[scale + logs[v]];
-        const size_t start = i * size, n = start >= length ? 0 : length - start < size ? length - start : size;
-        const uint8_t *in = message + start;
-        for (size_t b = 0; b < n; ++b)
-            out[b] ^= row[in[b]];
-    }
+    row[0] = 0;
+    for (int v = 1; v < 256; ++v)
+        row[v] = exps[logs[coefficient] + logs[v]];
+    for (size_t b = 0; b < n; ++b)
+        out[b] ^= row[in[b]];
 }
 } // namespace fec

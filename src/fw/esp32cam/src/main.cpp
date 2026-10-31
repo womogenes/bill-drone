@@ -297,6 +297,7 @@ void publish(PosePacket &packet) {
 void restartCamera() {
     esp_camera_deinit();
     cameraReady = false;
+    fpv::useLargeParity(false);
     lastStartMs = millis();
     for (int attempt = 0; attempt < 3 && !cameraReady; ++attempt) {
         // After a failed start the sensor is held in power-down (GPIO32) for a second before the next try. A sensor that stopped answering its probe on 2026-10-30 recovered only from a power cycle; whether power-down clears that state is untested.
@@ -313,6 +314,7 @@ void restartCamera() {
         cameraReady = startCamera(fpvActive);
     }
     cameraStalled = !cameraReady;
+    fpv::useLargeParity(fpvActive && cameraReady);
     finder.tracking = false;
     flow::primed = false;
 }
