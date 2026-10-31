@@ -126,6 +126,9 @@ static Command command;
 static Record records[LOG_CAPACITY];
 static uint32_t log_head, log_tail, log_samples, log_dropped, log_elapsed, log_session;
 static uint64_t log_started;
+// A stop keeps the recording going for POST_ROLL_US, so a touchdown and what follows it (a tip-over after the motors stop) are in the log; log_ends is when it closes (0: no stop pending).
+#define POST_ROLL_US 1500000
+static uint64_t log_ends;
 // running: the control task has started; until then targets, arming and calibration are refused.
 static bool log_active, running, sensor_configured;
 // maintenance: a flash or NVS write is in progress, so outputs are held at zero and arming is refused.
@@ -240,8 +243,7 @@ static void stop_locked(int reason) {
         state.throttle[side] = 0;
         pulse(side * 2 + 1, ESC_STOP_US);
     }
-    if (log_active) log_elapsed = esp_timer_get_time() - log_started;
-    log_active = false;
+    if (log_active && !log_ends) log_ends = esp_timer_get_time() + POST_ROLL_US;
 }
 
 static esp_err_t write_mpu(uint8_t reg, uint8_t value) {
@@ -577,6 +579,11 @@ static void runtime_task(void *arg) {
         }
         uint32_t duration = esp_timer_get_time() - started;
         if (recording) capture(now, raw, duration);
+        if (log_ends && now >= log_ends) {
+            log_elapsed = now - log_started;
+            log_active = false;
+            log_ends = 0;
+        }
         portEXIT_CRITICAL(&lock);
         vTaskDelayUntil(&deadline, period);
     }
@@ -666,6 +673,7 @@ const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t
         log_session = esp_random() | 1;
         log_started = esp_timer_get_time();
         log_active = true;
+        log_ends = 0;
     }
     portEXIT_CRITICAL(&lock);
     return error;
@@ -679,6 +687,7 @@ const char *flight_runtime_record(bool on, bool recorder) {
     } else if (!on) {
         if (log_active) log_elapsed = esp_timer_get_time() - log_started;
         log_active = false;
+        log_ends = 0;
     } else if (log_active) {
         // Already recording: a repeated request changes nothing.
     } else if (!recorder) {
