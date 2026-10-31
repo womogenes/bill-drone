@@ -43,5 +43,7 @@ void camera_stats(CameraStats *stats);
 #define CAMERA_UPDATE_BODY (2 + 8 + 4096)
 // Sends one camera firmware update request (fw/esp32cam/src/update.h: op I, W, B or X and its body) and waits up to timeout_ms for the answer. Returns an error, or NULL with the answer's text in text (NUL-terminated). Call from one task at a time.
 const char *camera_update(uint8_t op, const uint8_t *body, size_t length, uint32_t timeout_ms, char *text, size_t size);
+// Recovery: sends length bytes to the camera at baud, collects what comes back for wait_ms into out (at most size) and restores the link's own baud; for reaching the camera's ROM bootloader (115200) when its application is not running. Returns the bytes collected.
+size_t camera_raw(uint32_t baud, const uint8_t *data, size_t length, uint32_t wait_ms, uint8_t *out, size_t size);
 
 #endif

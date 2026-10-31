@@ -23,6 +23,10 @@
 #define MAX_AGE_US 150000
 
 static QueueHandle_t events;
+// Raw passthrough (camera_raw): while set, the receive task collects bytes here instead of parsing them.
+static volatile bool raw_mode;
+static uint8_t raw_buffer[512];
+static volatile size_t raw_length;
 static pcnt_unit_handle_t rx_counter;
 static volatile uint32_t edges, edge_us;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
@@ -102,6 +106,14 @@ static void receive_task(void *arg) {
             int n = uart_read_bytes(PORT, bytes, buffered < sizeof(bytes) ? buffered : sizeof(bytes), 0);
             if (n <= 0) break;
             buffered -= n;
+            if (raw_mode) {
+                portENTER_CRITICAL(&lock);
+                size_t room = sizeof(raw_buffer) - raw_length, take = (size_t)n < room ? (size_t)n : room;
+                memcpy(raw_buffer + raw_length, bytes, take);
+                raw_length += take;
+                portEXIT_CRITICAL(&lock);
+                continue;
+            }
             const uint8_t *data = bytes;
             size_t length = n;
             // Update replies share the wire with the packets; each parser skips the other's bytes.
@@ -220,4 +232,24 @@ const char *camera_update(uint8_t op, const uint8_t *body, size_t length, uint32
     }
     snprintf(text, size, "%.*s", (int)shown, reply.text);
     return NULL;
+}
+
+size_t camera_raw(uint32_t baud, const uint8_t *data, size_t length, uint32_t wait_ms, uint8_t *out, size_t size) {
+    portENTER_CRITICAL(&lock);
+    raw_length = 0;
+    portEXIT_CRITICAL(&lock);
+    raw_mode = true;
+    uart_set_baudrate(PORT, baud);
+    uart_flush_input(PORT);
+    if (length) uart_write_bytes(PORT, data, length);
+    uart_wait_tx_done(PORT, pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(wait_ms));
+    portENTER_CRITICAL(&lock);
+    size_t n = raw_length < size ? raw_length : size;
+    memcpy(out, raw_buffer, n);
+    portEXIT_CRITICAL(&lock);
+    uart_set_baudrate(PORT, BAUD);
+    uart_flush_input(PORT);
+    raw_mode = false;
+    return n;
 }

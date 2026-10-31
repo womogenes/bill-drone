@@ -53,9 +53,14 @@ def main():
     parser.add_argument("--seconds", type=float, default=40)
     parser.add_argument("--noise", action="store_true", help="add MPU6050-like IMU noise and bias")
     parser.add_argument("--global-shutter", action="store_true", help="read every row at once (OpenVINS models no rolling shutter)")
+    parser.add_argument("--cam-pitch", type=float, default=0.0, help="camera pitched down by this many degrees (the tilt mount, hw/camera_tilt)")
     args = parser.parse_args()
     if args.global_shutter:
         scene.READOUT_S = 0.0
+    if args.cam_pitch:
+        # Down is a positive turn about the body's y (left) axis, taking forward toward -z; the rendered camera and the configuration both read it.
+        a = np.radians(args.cam_pitch)
+        scene.CAMERA_TO_BODY = np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]]) @ scene.CAMERA_TO_BODY
     out_dir = Path(args.out).expanduser()
     out = dataset.Writer(out_dir)
     rng = np.random.default_rng(0)

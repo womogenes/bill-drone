@@ -423,7 +423,7 @@ static const char *change_settings(const int *indices, const float *values, int 
     return NULL;
 }
 
-// Requests: A arm, O record while disarmed (1) or stop recording (0), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update). Fills reply after the id and status bytes; returns an error or NULL.
+// Requests: A arm, O record while disarmed (1) or stop recording (0), U raw bytes to the camera's wire (recovery), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -488,11 +488,22 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
     }
     if (op == 'K') {
         if (!length) return "Expected a camera request";
-        if (!flight_runtime_idle()) return "Disable control and zero throttle before updating the camera";
+        // Only what is safe in flight passes while armed: the tag preview over the radio (P), status (S), slots (I) and log (L). Writing, booting or restarting the camera (W, B, X), its access point (A) and FPV (V, which stops tag tracking) wait for the drone to be disarmed with zero throttle. All of them used to, which stopped the dashboard's preview in hover (2026-10-31).
+        if (!flight_runtime_idle() && !strchr("PSIL", body[0])) return "Disable control and zero throttle first: only P, S, I and L reach the camera in flight";
         // Selecting the new image reads all of it to check its hash.
         const char *failure = camera_update(body[0], body + 1, length - 1, body[0] == 'B' ? 5000 : 2000, text, REPLY - 5);
         if (failure) return failure;
         *size = strlen(text);
+        return NULL;
+    }
+    if (op == 'U') {
+        // Raw bytes to and from the camera's wire (camera_raw), only disarmed: baud (u32), wait ms (u16), then the bytes. For waking a camera stuck in its ROM bootloader (2026-10-31: silent from 01:23 after line errors, no remote power switch).
+        if (!flight_runtime_idle()) return "Disarm and zero throttle first";
+        if (length < 6) return "Malformed raw camera request";
+        uint32_t baud = body[0] | body[1] << 8 | body[2] << 16 | (uint32_t)body[3] << 24;
+        uint16_t wait = body[4] | body[5] << 8;
+        if (baud < 9600 || baud > 2000000 || wait > 3000) return "Raw camera request out of range";
+        *size = camera_raw(baud, body + 6, length - 6, wait, (uint8_t *)text, REPLY - 5);
         return NULL;
     }
     if (op == 'A') {
