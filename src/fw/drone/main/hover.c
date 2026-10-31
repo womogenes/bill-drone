@@ -229,10 +229,13 @@ void hover_body_to_camera(const HoverGains *g, const float *body, float *camera)
     camera[2] = ahead;
 }
 
-// Flow without the tag: the velocity across the camera (right and down, the scene at flow_depth) corrects the estimate along those directions in the level frame, and the climb rate; the sideways part teaches the drag model's offset, which is how the wind is learned.
+// Flow without the tag: the velocity across the camera (right and down, the scene at flow_depth) corrects the estimate along those directions in the level frame, and the climb rate; the sideways part teaches the drag model's offset, which is how the wind is learned, and a steady disagreement in the climb rate is the vertical acceleration's bias, which it learns (critically damped, as the drag model's bias).
+// A flow arrives once a camera frame (about 22 a second), not every tick, so each corrects over the time since the previous one: corrected per tick, flow_tau acted about 4.5 times longer than set, and without the bias the height still drifted (in the sim 7 m RMS in 30 s without flow, 0.2 m with both, 2026-10-31).
 static void take_flow(HoverState *state, const HoverGains *g, const HoverFlow *flow, float cy, float sy, float dt, bool dragging) {
     static const float axes[2][3] = {{1, 0, 0}, {0, 1, 0}};
-    float pull = 1 - expf(-dt / fmaxf(g->flow_tau, dt));
+    float interval = state->flow_us && flow->capture_us > state->flow_us ? fminf((flow->capture_us - state->flow_us) / 1e6f, 0.1f) : dt;
+    state->flow_us = flow->capture_us;
+    float tau = fmaxf(g->flow_tau, interval), pull = 1 - expf(-interval / tau), climb_error = 0;
     for (int a = 0; a < 2; a++) {
         float direction[3];
         level(state, g, flow->capture_us, axes[a], direction);
@@ -240,12 +243,14 @@ static void take_flow(HoverState *state, const HoverGains *g, const HoverFlow *f
         float measured = -g->flow_depth * flow->rate[a];
         float estimate = state->velocity[0] * direction[0] + state->velocity[1] * direction[1] + state->climb_rate * direction[2];
         float error = (measured - estimate) * pull;
+        climb_error += (measured - estimate) * direction[2];
         for (int i = 0; i < 2; i++) {
             state->velocity[i] += error * direction[i];
             for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3 + i] += error * direction[i];
         }
         state->climb_rate += error * direction[2];
     }
+    state->flow_bias = clamp(state->flow_bias - climb_error * interval / (4 * tau * tau), -MAX_BIAS, MAX_BIAS);
     if (dragging) {
         // The sideways speed the flow now gives, against what the drag model reads (as with the tag below; forward stays the drag model's own until the camera measures expansion).
         float left = -state->velocity[0] * sy + state->velocity[1] * cy;
@@ -260,6 +265,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     bool dragging = g->drag > 0 && drag;
     if (!state->engaged) {
         state->engaged = true;
+        state->flow_bias = 0;
+        state->flow_us = 0;
         // Continue from the thrust being flown, so taking over a manual flight does not step.
         state->integral = force > 0.5f * weight ? clamp(force / g->mass - GRAVITY, -MAX_INTEGRAL, MAX_INTEGRAL) : 0;
         state->force = force;
@@ -351,7 +358,7 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     }
 
     // IMU: integrate vertical acceleration (LAND_BIAS); without the camera, leak the climb rate.
-    state->climb_rate += (vertical_g - (LAND_BIAS && mode != HOVER_HOLD ? state->hold_g : state->bias)) * GRAVITY * dt;
+    state->climb_rate += ((vertical_g - (LAND_BIAS && mode != HOVER_HOLD ? state->hold_g : state->bias)) * GRAVITY - state->flow_bias) * dt;
     if (pose && (!state->have_pose || pose->sequence != state->sequence)) {
         // Reacquiring the tag in the air keeps the targets: they are relative to the tag, so a drift while it was lost is flown back rather than adopted. On the ground they restart from the new sighting.
         if (!seeing) {

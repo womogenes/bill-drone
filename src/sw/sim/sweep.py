@@ -99,8 +99,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py, at the geometry they name), sw/sim/airframe.py supplies the motors, servos and angular accelerations and the body's inertia instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
     With hover and plant["excite"] (a test pattern as a recording's "pattern" event, sw/excite.py: {"after", "repeat", "segments"}), its roll and pitch steps add to the hover's attitude targets from "after" seconds past collective first reaching integrate_throttle, "repeat" times (0 = until the end), as flight_rt.c excite does; its other channels are ignored.
-    Optical flow (fw/drone/main/flight_rt.c flow_input): plant["flow"] = {"depth": the scene's true distance along the camera (m), "noise_px": per-frame shift noise (full-resolution px), "fps", "latency" (s)} gives the hover the camera's flow, its rotation taken out with the measured gyro as the firmware does; settings hover_flow_depth and hover_flow_tau turn it on.
-    IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "vibration" (g RMS, white; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white and periodic (sw/sim/disturbance.py).
+    Optical flow (fw/drone/main/flight_rt.c flow_input): plant["flow"] = {"depth": the scene's true distance along the camera (m), "noise_px": per-frame shift noise (full-resolution px), "fps", "latency" (s), "max_px": the largest shift per frame and axis the camera's block search finds (full-resolution px; fw/esp32cam/src/flow.h reach, about 14; none by default)} gives the hover the camera's flow, the mean image motion over each frame interval with the mean measured gyro over it taken out as the firmware does; a frame whose shift exceeds max_px on either axis gives none; settings hover_flow_depth and hover_flow_tau turn it on.
+    IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "flight_accel_bias" (g, along body up) on it only while the motors are commanded (vibration rectification and the like, which the resting calibration of the vertical specific force cannot learn), "vibration" (g RMS, white, while the motors are commanded; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white and periodic (sw/sim/disturbance.py).
     """
     rng = random.Random(seed)
     accel_rng = random.Random(seed + 1000)
@@ -138,6 +138,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     drag_x, drag_y = rotor_drag if isinstance(rotor_drag, (list, tuple)) else (rotor_drag, rotor_drag)
     disturbances = Disturbances(plant.get("disturbances"), seed)
     accel_bias = list(plant.get("accel_bias", (0.0, 0.0))) + [0.0]
+    flight_accel_bias = plant.get("flight_accel_bias", 0.0)
     vibration = plant.get("vibration", 0.0)
     vibration = list(vibration) if isinstance(vibration, (list, tuple)) else [vibration] * 3
     level_error = [math.radians(value) for value in plant.get("level_error", (0.0, 0.0))]
@@ -219,6 +220,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         # Frames waiting out their latency (ready time, capture time, sighting or None), the newest delivered one, and the next capture time.
         frames, newest, capture, sequence, missing_frames = deque(), None, 0.0, 0, 0
         flow_plant, flows, flow_capture, flow_rng = plant.get("flow"), deque(), 0.0, random.Random(seed + 4000)
+        # Each tick's true rotation and velocity in camera axes and measured rotation, for the means over a frame interval.
+        flow_ticks = deque(maxlen=16)
         seen, ranges = [], []
     # The test pattern's roll and pitch per control tick, and the step collective first reached integrate_throttle.
     excite = plant.get("excite") if hover else None
@@ -241,7 +244,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 shaking[axis] = [a1 * shaking[axis][0] + a2 * shaking[axis][1] + shake_size[axis] * shake_rng.gauss(0, 1), shaking[axis][0]]
                 noise[axis] += shaking[axis][0]
         gyro_filter = [g + 0.7 * (r + n - g) for g, r, n in zip(gyro_filter, rate, noise)]
-        accel_filter = [a + 0.7 * (s + b + accel_rng.gauss(0, ACCEL_NOISE) + (accel_rng.gauss(0, v) if v else 0.0) - a) for a, s, b, v in zip(accel_filter, specific, accel_bias, vibration)]
+        # The rotors' vibration and the in-flight bias only while the motors are commanded: at rest the drone learns its resting specific force from a quiet accelerometer.
+        spinning = commanded[0] + commanded[1] > 0
+        bias = accel_bias[:2] + [flight_accel_bias if spinning else 0.0]
+        accel_filter = [a + 0.7 * (s + b + accel_rng.gauss(0, ACCEL_NOISE) + (accel_rng.gauss(0, v) if v and spinning else 0.0) - a) for a, s, b, v in zip(accel_filter, specific, bias, vibration)]
         attitude = estimator.update(accel_filter, gyro_filter, DT, powered=True)
         # The drone flies relative to its level reference: an error in it offsets the attitude both loops see.
         attitude = (attitude[0] - level_error[0], attitude[1] - level_error[1])
@@ -266,16 +272,18 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
             flow = None
             if flow_plant:
                 period = 1 / flow_plant.get("fps", 43.0)
+                flow_ticks.append((now, outer.body_to_camera(rate), outer.body_to_camera(apply(matrix, velocity, transpose=True)), outer.body_to_camera(gyro_filter)))
                 while flow_capture <= now:
-                    # The true image motion of a scene at depth: the body's rotation sweeps the centre (-W_down, +W_right) and its velocity across the camera (-v / depth); the shift gets pixel noise; the firmware takes the measured rotation back out.
-                    w = outer.body_to_camera(rate)
-                    v = outer.body_to_camera(apply(matrix, velocity, transpose=True))
+                    # The true image motion of a scene at depth over the frame interval: the body's rotation sweeps the centre (-W_down, +W_right) and its velocity across the camera (-v / depth); the shift gets pixel noise; the firmware takes the mean measured rotation over the interval back out (flight_rt.c flow_input).
+                    ticks = [tick for tick in flow_ticks if flow_capture - period < tick[0] <= flow_capture] or [flow_ticks[-1]]
+                    w, v, measured = [[sum(tick[part][axis] for tick in ticks) / len(ticks) for axis in range(3)] for part in (1, 2, 3)]
                     depth = flow_plant["depth"]
                     shift = [(-w[1] - v[0] / depth) * 370.0 * period + flow_rng.gauss(0, flow_plant.get("noise_px", 0.3)),
                              (w[0] - v[1] / depth) * 370.0 * period + flow_rng.gauss(0, flow_plant.get("noise_px", 0.3))]
-                    measured = outer.body_to_camera(gyro_filter)
-                    flows.append((flow_capture + flow_plant.get("latency", 0.045), flow_capture,
-                                  (shift[0] / 370.0 / period + measured[1], shift[1] / 370.0 / period - measured[0])))
+                    if not flow_plant.get("max_px") or max(abs(shift[0]), abs(shift[1])) <= flow_plant["max_px"]:
+                        # Stamped at the interval's middle, as flow_input stamps it.
+                        flows.append((flow_capture + flow_plant.get("latency", 0.045), flow_capture - period / 2,
+                                      (shift[0] / 370.0 / period + measured[1], shift[1] / 370.0 / period - measured[0])))
                     flow_capture += period
                 while flows and flows[0][0] <= now:
                     _, captured, translational = flows.popleft()

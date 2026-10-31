@@ -99,6 +99,9 @@ typedef struct {
     float push[2];
     // What a later hold should start its trim from (m/s²; body forward, left): the trim plus the push's opposite turned into the body, for flight_rt.c's carry-over.
     float carry[2];
+    // Optical flow (hover.c take_flow): the vertical acceleration's bias it has found (m/s²), and the previous flow's capture time (us, 0 before the first), so each flow corrects over the time it covers.
+    float flow_bias;
+    int64_t flow_us;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).
