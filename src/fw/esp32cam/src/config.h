@@ -49,6 +49,8 @@ constexpr int fpvXclkHz = 20000000;
 constexpr size_t fpvTargetBytes = 12000;
 // Over the radio the video must fit the receiver, whose budget comes with the drone's K V request: the ESP32 receiver's (fw/fpv_rx) USB bridge, about 98 KB/s at 1 Mbaud, or the monitor-mode adapter's air (sw/fpv_monitor.py); fpvRadioBytesPerSecond until one says. The sensor's frame is lengthened until the average frame fits, so every frame goes out evenly spaced (the ESP32 receiver drops whole frames if a burst outruns it), and their size aims at the budget's share. fpvFramePeriodS is the sensor's own 480x320 JPEG frame at fpvXclkHz. Each goes out as erasure-coded shards (fpv.h sendShards): with one copy a fifth of the frames lost a chunk at the ESP32 receiver (2026-10-30).
 constexpr float fpvRadioBytesPerSecond = 90000, fpvFramePeriodS = 0.0312f;
+// The monitor-mode adapter took in about 210 shards a second however many were sent (2026-10-31); paced a little under it, frames arrive whole and evenly.
+constexpr float fpvRadioShardsPerSecond = 190;
 constexpr int fpvQualityRange[2] = {10, 63};
 constexpr uint32_t fpvLingerMs = 3000;
 // While tracking, detector allocations below this size go to internal RAM.

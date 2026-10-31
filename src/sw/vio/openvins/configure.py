@@ -112,25 +112,30 @@ cam0:
 {transform}
   cam_overlaps: []
   camera_model: pinhole
-  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_coeffs: [{k1:.6f}, {k2:.6f}, 0.0, 0.0]
   distortion_model: radtan
-  intrinsics: [{focal:.3f}, {focal:.3f}, {cx:.3f}, {cy:.3f}]
+  intrinsics: [{fx:.3f}, {fy:.3f}, {cx:.3f}, {cy:.3f}]
   resolution: [{width}, {height}]
   rostopic: /cam0/image_raw
   timeshift_cam_imu: 0.0
 """
 
 
-def write(folder, gyro_noise=0.03, accel_noise=0.15, init_imu_thresh=0.5, pixel_sigma=1.5):
+def write(folder, gyro_noise=0.03, accel_noise=0.15, init_imu_thresh=0.5, pixel_sigma=1.5, camera=None, dynamic=False):
+    """camera: the real camera's fx, fy, cx, cy, k1 and k2 (sw/vio/recorded.py), else the simulated one's; dynamic: initialize from motion rather than from rest."""
+    camera = camera or {"fx": scene.FOCAL, "fy": scene.FOCAL, "cx": scene.CENTRE[0], "cy": scene.CENTRE[1], "k1": 0.0, "k2": 0.0}
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     transform = np.eye(4)
     transform[:3, :3] = scene.CAMERA_TO_BODY
     transform[:3, 3] = scene.CAMERA_POSITION
     rows = "\n".join(f"    - [{', '.join(f'{v:.6f}' for v in row)}]" for row in transform)
-    (folder / "estimator_config.yaml").write_text(ESTIMATOR.format(init_imu_thresh=init_imu_thresh, pixel_sigma=pixel_sigma))
+    estimator = ESTIMATOR.format(init_imu_thresh=init_imu_thresh, pixel_sigma=pixel_sigma)
+    if dynamic:
+        estimator = estimator.replace("init_dyn_use: false", "init_dyn_use: true")
+    (folder / "estimator_config.yaml").write_text(estimator)
     (folder / "kalibr_imu_chain.yaml").write_text(IMU.format(gyro_noise=gyro_noise, accel_noise=accel_noise))
-    (folder / "kalibr_imucam_chain.yaml").write_text(CAMERA.format(transform=rows, focal=scene.FOCAL, cx=scene.CENTRE[0], cy=scene.CENTRE[1], width=scene.WIDTH, height=scene.HEIGHT))
+    (folder / "kalibr_imucam_chain.yaml").write_text(CAMERA.format(transform=rows, width=scene.WIDTH, height=scene.HEIGHT, **camera))
     return folder / "estimator_config.yaml"
 
 

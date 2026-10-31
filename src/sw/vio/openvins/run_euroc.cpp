@@ -1,3 +1,4 @@
+#include <cstdlib>
 // Runs OpenVINS (ov_msckf) on a EuRoC-layout dataset (sw/vio/dataset.py) without ROS: IMU samples and camera frames fed in time order through VioManager, and after each frame the estimate written as one CSV line: time (s), body position in the world (m), body-to-world quaternion (w, x, y, z), velocity (m/s), and the estimated camera-to-IMU time offset (s).
 // run_euroc <estimator_config.yaml> <dataset folder> <out.csv>
 #include <fstream>
@@ -75,7 +76,16 @@ int main(int argc, char **argv) {
     message.masks.push_back(cv::Mat::zeros(message.images[0].rows, message.images[0].cols, CV_8UC1));
     vio->feed_measurement_camera(message);
     static int frames = 0;
-    if (++frames % 100 == 0) std::cerr << frames << " frames, t " << time << (vio->initialized() ? " initialized" : " waiting") << std::endl;
+    if (++frames % 100 == 0) {
+      // Points with a 3D position (the frame's active tracks) and the points the last MSCKF update used, with the tracker's own picture of its tracks.
+      double active_time;
+      std::unordered_map<size_t, Eigen::Vector3d> positions;
+      std::unordered_map<size_t, Eigen::Vector3d> uvd;
+      vio->get_active_tracks(active_time, positions, uvd);
+      std::cerr << frames << " frames, t " << time << (vio->initialized() ? " initialized" : " waiting") << ", active tracks " << positions.size()
+                << ", MSCKF used " << vio->get_good_features_MSCKF().size() << ", SLAM " << vio->get_features_SLAM().size() << std::endl;
+      if (const char *dump = std::getenv("OV_TRACKS")) cv::imwrite(std::string(dump) + "/tracks_" + std::to_string(frames) + ".png", vio->get_historical_viz_image());
+    }
     if (!vio->initialized()) continue;
     auto state = vio->get_state();
     // OpenVINS keeps the JPL quaternion of global-to-IMU; written as the body-to-world rotation.

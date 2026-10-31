@@ -131,12 +131,13 @@ inline void useLargeParity(bool on) {
     }
 }
 
-inline void sendShards(const uint8_t *data, size_t length, uint32_t captureUs, bool radio, bool udp, const sockaddr_in *to,
-                       wifi_phy_rate_t phyRate, uint32_t gapUs) {
+// Returns the shards sent.
+inline int sendShards(const uint8_t *data, size_t length, uint32_t captureUs, bool radio, bool udp, const sockaddr_in *to,
+                      wifi_phy_rate_t phyRate, uint32_t gapUs) {
     const int shards = max(1, int((length + chunkBytes - 1) / chunkBytes)), parity = radio ? min(shards + 1, parityCapacity) : 0;
     const size_t size = (length + shards - 1) / shards;
     if (length > 0xffff)
-        return;
+        return 0;
     Chunk header = {{'F', 'P', 'V', '2'}, frameNumber++, 0, uint8_t(shards + parity), uint8_t(shards), 0, uint16_t(length), captureUs,
                     uint32_t(esp_timer_get_time())};
     uint8_t *chunk = datagram + macHeader, *payload = chunk + sizeof(header);
@@ -166,6 +167,7 @@ inline void sendShards(const uint8_t *data, size_t length, uint32_t captureUs, b
         if (udp && index < shards && lwip_sendto(socket, chunk, sizeof(header) + part, 0, reinterpret_cast<const sockaddr *>(to), sizeof(*to)) < 0)
             udp = false;
     }
+    return shards + parity;
 }
 
 // Tag mode's preview over the radio, from the preview task while FPV is off.
@@ -175,14 +177,20 @@ inline void broadcastFrame(const uint8_t *data, size_t length, uint32_t captureU
 int nativeLines = 0, frameLines = 0;
 float averageBytes = 0;
 
-inline void pace(sensor_t *sensor, size_t bytes) {
+// Shards a frame took on average, for the shard rate's share of the pacing.
+float averageShards = 0;
+
+inline void pace(sensor_t *sensor, size_t bytes, int shards) {
     averageBytes = averageBytes ? averageBytes * 0.9f + bytes * 0.1f : bytes;
+    averageShards = averageShards ? averageShards * 0.9f + shards * 0.1f : shards;
     if (!nativeLines)
         nativeLines = frameLines = sensor->get_reg(sensor, 0x380e, 0xffff);
     if (nativeLines <= 0 || frameNumber % 8)
         return;
     // Aimed at 85% of the budget, which then only catches bursts: aimed at all of it, one frame in five was skipped.
-    const int wanted = max(nativeLines, int(nativeLines * averageBytes / (0.85f * radioBudget * config::fpvFramePeriodS)));
+    // And no more shards a second than the monitor-mode adapter takes in (config::fpvRadioShardsPerSecond): sent beyond it, the excess was lost from random frames, which showed as uneven gaps.
+    const int wanted = max({nativeLines, int(nativeLines * averageBytes / (0.85f * radioBudget * config::fpvFramePeriodS)),
+                            int(nativeLines * averageShards / (config::fpvRadioShardsPerSecond * config::fpvFramePeriodS))});
     // A change of less than 5% is left alone, so the rate does not wander.
     if (abs(wanted - frameLines) * 20 > frameLines && sensor->set_reg(sensor, 0x380e, 0xffff, wanted) == 0)
         frameLines = wanted;
@@ -199,8 +207,8 @@ inline bool send() {
     const bool udp = udpWanted();
     // Spread over most of a frame period, leaving time to fetch the next.
     const uint32_t gapUs = uint32_t(config::fpvFramePeriodS * 0.8e6f) / (2 * max(1u, unsigned((frame->len + chunkBytes - 1) / chunkBytes)) + 1);
-    sendShards(frame->buf, frame->len, uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec), radioWanted(), udp,
-               &to, rate, gapUs);
+    const int shardsSent = sendShards(frame->buf, frame->len, uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec),
+                                      radioWanted(), udp, &to, rate, gapUs);
     // A step of quality per frame, with a dead band so it settles.
     // Over the radio no more than the budget's share of a frame at the sensor's own rate.
     const size_t target = udp ? config::fpvTargetBytes : size_t(min(float(config::fpvTargetBytes), 0.85f * radioBudget * config::fpvFramePeriodS));
@@ -212,7 +220,7 @@ inline bool send() {
     if (quality != fpvQuality && sensor->set_quality(sensor, quality) == 0)
         fpvQuality = quality;
     if (radioWanted() && !udp)
-        pace(sensor, frameBytes);
+        pace(sensor, frameBytes, shardsSent);
     ++previewCount;
     return true;
 }
