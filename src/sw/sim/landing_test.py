@@ -91,14 +91,14 @@ def install(source, defines):
             self.landing_us = None
             self.off = 0.0
 
-        def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None):
+        def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None):
             # The camera's height error near the floor (the drone's attitude error times the 2 m range): from the landing's start the tag's apparent height drifts by height_error (m, positive reads the drone low) over the time the descent should take.
             if mode != hover.HOLD and self.landing_us is None:
                 self.landing_us, self.descent = now_us, max(0.5, self.state.height / self.gains.land_rate)
             if pose and self.landing_us is not None:
                 share = min(1.0, (now_us - self.landing_us) / 1e6 / self.descent)
                 pose.tag[1] += Recorded.height_error * share
-            out = super().update(mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag)
+            out = super().update(mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow)
             state = self.state
             self.off = self.off + dt if state.landed and out.force <= 0 else 0
             if self.off > 1.0:
@@ -311,7 +311,7 @@ def replay(recording, contact=None, source=None, defines=()):
         weight = state.hold_force if getattr(state, "hold_force", 0) > 0 else gains.mass * 9.81
         before = (state.landed, getattr(state, "probing", False))
         hover.library.hover_update(ctypes.byref(state), ctypes.byref(gains), int(mode[i]), None, int(t[i] * 1e6) + 1000000, 0.01, float(roll[i]), float(pitch[i]), 0.0,
-                                   float(vertical[i]) + difference / weight, state.force if state.engaged else float(force[i]), None, ctypes.byref(out))
+                                   float(vertical[i]) + difference / weight, state.force if state.engaged else float(force[i]), None, None, ctypes.byref(out))
         if not landing:
             # The hold as flown: its thrust (and the integral that gives it, so the landing starts from it), which the new code's references learn from.
             lean = max(0.5, math.cos(roll[i]) * math.cos(pitch[i]))

@@ -206,8 +206,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     shaking = [[0.0, 0.0] for _ in range(3)]
     shake_rng = random.Random(seed + 6000)
     places, touched = [], None
-    # Landing (plant["land_at"]): when the hover's touchdown flag set and collective reached zero (s after liftoff), the descent speed and largest tilt from level in the 1 s before and after the feet came back.
-    landing = {"landed_s": None, "off_s": None, "contact_speed": None, "contact_tilt": 0.0}
+    # Landing (plant["land_at"]): when the hover's touchdown flag set and collective reached zero (s after liftoff), the descent speed, the horizontal speed and the largest tilt from level in the 1 s before and after the feet came back.
+    landing = {"landed_s": None, "off_s": None, "contact_speed": None, "contact_drift": None, "contact_tilt": 0.0}
     if hover:
         from sw.sim.hover import HOLD, LAND, LAND_FAST, Hover, Pose
         use_camera = settings.get("hover_camera", 1)
@@ -426,6 +426,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
             if hover and touched is None and now - lifted >= 2.0 and position[2] + lowest < 0.01:
                 touched = now - lifted
                 landing["contact_speed"] = -velocity[2]
+                landing["contact_drift"] = math.hypot(velocity[0], velocity[1])
             if hover and land_at is not None and now - lifted >= land_at:
                 if landing["landed_s"] is None and outer.state.landed:
                     landing["landed_s"] = now - lifted
