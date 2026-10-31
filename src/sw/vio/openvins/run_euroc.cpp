@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include "utils/quat_ops.h"
 // Runs OpenVINS (ov_msckf) on a EuRoC-layout dataset (sw/vio/dataset.py) without ROS: IMU samples and camera frames fed in time order through VioManager, and after each frame the estimate written as one CSV line: time (s), body position in the world (m), body-to-world quaternion (w, x, y, z), velocity (m/s), and the estimated camera-to-IMU time offset (s).
 // run_euroc <estimator_config.yaml> <dataset folder> <out.csv>
 #include <fstream>
@@ -56,13 +57,30 @@ int main(int argc, char **argv) {
   size_t i = 0;
   for (const auto &frame : cam) {
     double time = std::stod(frame[0]) * 1e-9;
-    // Every IMU sample up to the frame first.
-    for (; i < imu.size() && std::stod(imu[i][0]) * 1e-9 <= time; i++) {
+    // Every IMU sample up to IMU_LEAD_S past the frame first: OpenVINS interpolates the IMU to the frame's time (and the camera-IMU offset), so it needs readings after it; fed only up to the frame, initialization never finished ("IMU was only propagated 0.947 of 0.960") and updates lost their features.
+    const double IMU_LEAD_S = 0.05;
+    for (; i < imu.size() && std::stod(imu[i][0]) * 1e-9 <= time + IMU_LEAD_S; i++) {
       ov_core::ImuData sample;
       sample.timestamp = std::stod(imu[i][0]) * 1e-9;
       sample.wm << std::stod(imu[i][1]), std::stod(imu[i][2]), std::stod(imu[i][3]);
       sample.am << std::stod(imu[i][4]), std::stod(imu[i][5]), std::stod(imu[i][6]);
       vio->feed_measurement_imu(sample);
+    }
+    // OV_GT_INIT: start from the ground truth (simulated datasets) instead of OpenVINS's initializer, to tell the filter's problems from the initializer's.
+    static auto truth = std::getenv("OV_GT_INIT") ? rows(root + "state_groundtruth_estimate0/data.csv") : std::vector<std::vector<std::string>>();
+    if (!truth.empty() && !vio->initialized() && time > std::stod(truth[0][0]) * 1e-9 + 1.0) {
+      size_t k = 0;
+      while (k + 1 < truth.size() && std::stod(truth[k + 1][0]) * 1e-9 <= time) k++;
+      const auto &row = truth[k];
+      Eigen::Quaterniond body(std::stod(row[4]), std::stod(row[5]), std::stod(row[6]), std::stod(row[7]));
+      Eigen::Matrix<double, 17, 1> imustate = Eigen::Matrix<double, 17, 1>::Zero();
+      imustate(0) = std::stod(row[0]) * 1e-9;
+      imustate.block(1, 0, 4, 1) = ov_core::rot_2_quat(body.toRotationMatrix().transpose());
+      for (int j = 0; j < 3; j++) {
+        imustate(5 + j) = std::stod(row[1 + j]);
+        imustate(8 + j) = std::stod(row[8 + j]);
+      }
+      vio->initialize_with_gt(imustate);
     }
     ov_core::CameraData message;
     message.timestamp = time;
