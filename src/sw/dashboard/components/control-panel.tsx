@@ -94,7 +94,7 @@ const yawKeys = ['ArrowLeft', 'ArrowRight'];
 const NUDGE_SPEED = 0.2;
 // Without the tag (Free) the arrows fly the drone at their speed (fw/drone/main/hover.c): forward and back faster. Sideways stays at NUDGE_SPEED: there the rotor drag the speed estimate reads is small (hover_drag 1 against about 0.1-0.2/s measured), and in the sim a 0.5 m/s sideways arrow flew at 1.45 m/s and coasted 4.7 m after release (2026-10-31).
 const FREE_NUDGE_FORWARD = 0.5;
-const NUDGE_CLIMB = 0.15;
+const NUDGE_CLIMB = 0.3;
 const NUDGE_TICK_MS = 50;
 const nudgeKeys = {
   ArrowUp: [NUDGE_SPEED, 0, 0],
