@@ -82,14 +82,15 @@ function readManual() {
     return MANUAL_DEFAULT;
   }
 }
-// Positive pitch is nose down, so the up arrow tilts forward.
+// Positive pitch is nose down, so the up arrow tilts forward; A and D roll, and the left and right arrows yaw (yawKeys).
 const tiltKeys = {
   ArrowUp: { axis: 'pitch', direction: 1 },
   ArrowDown: { axis: 'pitch', direction: -1 },
-  ArrowLeft: { axis: 'roll', direction: -1 },
-  ArrowRight: { axis: 'roll', direction: 1 },
+  KeyA: { axis: 'roll', direction: -1 },
+  KeyD: { axis: 'roll', direction: 1 },
 } as const;
-// In hover and landing the arrows move the hold point instead while held (m/s): up toward the tag, left to the drone's left; W and S raise and lower it.
+const yawKeys = ['ArrowLeft', 'ArrowRight'];
+// In hover and landing the up and down arrows and A and D move the hold point instead while held (m/s): up toward the tag, A to the drone's left; W and S raise and lower it.
 const NUDGE_SPEED = 0.2;
 // Without the tag (Free) the arrows fly the drone at their speed (fw/drone/main/hover.c): forward and back faster. Sideways stays at NUDGE_SPEED: there the rotor drag the speed estimate reads is small (hover_drag 1 against about 0.1-0.2/s measured), and in the sim a 0.5 m/s sideways arrow flew at 1.45 m/s and coasted 4.7 m after release (2026-10-31).
 const FREE_NUDGE_FORWARD = 0.5;
@@ -98,8 +99,8 @@ const NUDGE_TICK_MS = 50;
 const nudgeKeys = {
   ArrowUp: [NUDGE_SPEED, 0, 0],
   ArrowDown: [-NUDGE_SPEED, 0, 0],
-  ArrowLeft: [0, NUDGE_SPEED, 0],
-  ArrowRight: [0, -NUDGE_SPEED, 0],
+  KeyA: [0, NUDGE_SPEED, 0],
+  KeyD: [0, -NUDGE_SPEED, 0],
   KeyW: [0, 0, NUDGE_CLIMB],
   KeyS: [0, 0, -NUDGE_CLIMB],
 } as const;
@@ -362,7 +363,8 @@ export const ControlPanel = memo(function ControlPanel({
 
     function changeYaw() {
       const yaw_rate =
-        manual.yaw * (Number(held.has('KeyA')) - Number(held.has('KeyD')));
+        manual.yaw *
+        (Number(held.has('ArrowLeft')) - Number(held.has('ArrowRight')));
       setDraft((previous) => ({ ...previous, yaw_rate }));
       onChange({ yaw_rate });
     }
@@ -410,9 +412,7 @@ export const ControlPanel = memo(function ControlPanel({
         return;
       }
       if (
-        !['KeyW', 'KeyS', 'KeyA', 'KeyD', 'KeyT', 'KeyL'].includes(
-          event.code
-        ) &&
+        !['KeyW', 'KeyS', 'KeyT', 'KeyL', ...yawKeys].includes(event.code) &&
         !(event.code in tiltKeys)
       )
         return;
@@ -458,7 +458,7 @@ export const ControlPanel = memo(function ControlPanel({
       if (!held.delete(event.code)) return;
       event.preventDefault();
       if (event.code === 'KeyL') releaseLand();
-      if (event.code === 'KeyA' || event.code === 'KeyD') changeYaw();
+      if (yawKeys.includes(event.code)) changeYaw();
       if (event.code in tiltKeys)
         changeTilt(event.code as keyof typeof tiltKeys);
       if (!held.has('KeyW') && !held.has('KeyS')) {
@@ -756,13 +756,13 @@ export const ControlPanel = memo(function ControlPanel({
           { keys: ['H'], label: 'Hover (arms if needed)' },
           { keys: ['L'], label: 'Land (hold for fast)' },
           { keys: ['F'], label: 'Camera: tag or free flight' },
-          { keys: ['A', 'D'], label: 'Yaw' },
+          { keys: ['ArrowLeft', 'ArrowRight'], label: 'Yaw' },
           {
             keys: ['ArrowUp', 'ArrowDown'],
             label: 'Pitch; in hover, move the hold closer or farther',
           },
           {
-            keys: ['ArrowLeft', 'ArrowRight'],
+            keys: ['A', 'D'],
             label: 'Roll; in hover, move the hold left or right',
           },
           { keys: ['Space'], label: 'Stop' },

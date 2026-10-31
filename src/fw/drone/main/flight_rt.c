@@ -476,7 +476,8 @@ static void runtime_task(void *arg) {
                 scaled.base = out.force > 0 ? fminf(THROTTLE_MAX, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
                 scaled.target_roll = out.roll;
                 scaled.target_pitch = out.pitch;
-                scaled.target_yaw = out.yaw_rate;
+                // The tag steers the heading; without the camera nothing does, so the laptop's yaw (A and D) turns the drone, as in manual flight.
+                scaled.target_yaw = command.hover_camera ? out.yaw_rate : command.target_yaw;
                 // Once flying on the tag, hover damps the velocity itself, measured by the camera and dead-reckoned through losses: flight_math's damping is off, since its leaky integral of attitude error would cancel any steady tilt hover asks for, and its velocity follows hover's, so it would resume from the real velocity.
                 if (out.tracking) {
                     state.controller.velocity[0] = out.velocity[0];
