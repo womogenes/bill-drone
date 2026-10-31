@@ -114,6 +114,8 @@
 // Below this height (m) a hold is still on the ground taking off: the IMU climb rate leaks toward zero, and centring neither tilts nor turns and lets the range target follow the drone. The tag-height target never asks for less than MIN_HEIGHT above the engage point (m).
 #define AIRBORNE 0.05f
 #define MIN_HEIGHT 0.2f
+// With the drag model the velocity counts from when the collective carries this share of the weight, before the height does: the IMU height crosses AIRBORNE about half a second after the feet leave the floor, and on 2026-10-31 a takeoff from the drone's 5° nose-up rest was moving back at 0.8 m/s by then, unseen and so never braked. Below it the feet hold the drone and the velocity is zero.
+#define LIFTING 0.8f
 // Rotor drag: the servos' dead time beyond the tick the runtime's tilt is already late by (us; sw/sim/sweep.py FITTED has 70 ms), how slowly the camera teaches the drag model its offset (s), and that offset's limit (m/s).
 #define SERVO_DELAY_US 60000
 #define OFFSET_TAU 5.0f
@@ -278,8 +280,10 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     // Heading from the gyro; horizontal velocity from tilt (g tan(tilt) less the push the trim cancels, once airborne, as on the ground a resting tilt pushes nothing); both recorded with the attitude.
     state->yaw = wrap(state->yaw + yaw_rate * dt);
     float cy = cosf(state->yaw), sy = sinf(state->yaw);
+    // Taking off with the drag model: not yet AIRBORNE by the height, but the collective (last tick's) already lifting.
+    bool lifting = dragging && state->height < AIRBORNE && state->force >= LIFTING * weight;
     // With the drag model, the measured specific force turned level instead, less the acceleration bias the drag model has found in it: it carries the real thrust tilt and the drag, and its level-reference error cancels against the attitude's (both are relative to pose_zero); what remains is mostly the attitude estimate's own drift.
-    if (state->height >= AIRBORNE) {
+    if (state->height >= AIRBORNE || lifting) {
         float ahead, left;
         if (dragging) {
             const float *f = drag->specific;
@@ -294,6 +298,14 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         float push[2] = {dragging ? 0 : state->push[0], dragging ? 0 : state->push[1]};
         state->velocity[0] += (ahead * cy - left * sy + push[0]) * dt;
         state->velocity[1] += (ahead * sy + left * cy + push[1]) * dt;
+        // Airborne, the drag model's correction below moves the place.
+        if (lifting) {
+            state->place[0] += state->velocity[0] * dt;
+            state->place[1] += state->velocity[1] * dt;
+        }
+    } else if (dragging) {
+        state->velocity[0] = state->velocity[1] = 0;
+        state->place[0] = state->place[1] = 0;
     }
     float *now = state->history[state->next];
     state->history_us[state->next] = now_us;
@@ -466,7 +478,7 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     float forward, left;
     if (!seeing) {
         // Tag lost after flying on it: keep damping the dead-reckoned velocity, with the trim learned on the tag. Before the tag is first flown on, the attitude controller's own damping holds the drone, unless the drag model keeps the velocity: then the hold flies on it from takeoff, and also returns to the place where the tag was last seen (or where it took off), as far as the dead reckoning knows it.
-        if ((!state->tracking && !dragging) || state->height < AIRBORNE) return;
+        if ((!state->tracking && !dragging) || (state->height < AIRBORNE && !lifting)) return;
         // With the drag model the arrows fly the drone: the nudge's speed (toward the drone's heading and to its left) moves the hold point, and the velocity damping aims at that speed, so holding an arrow flies at it and letting go stops where the hold point stopped.
         float vx = 0, vy = 0;
         if (dragging) {
