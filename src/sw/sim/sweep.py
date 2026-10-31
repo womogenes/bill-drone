@@ -94,7 +94,7 @@ def sighting(camera, position, angles, cam_pitch, rng, cam_roll=0.0):
 
 def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     """
-    Simulate one flight. A log list receives (time, position, roll/pitch/yaw, estimated roll/pitch, servo tilts, motor thrusts, pitch target, tag seen, with hover the hover's own tag-relative position estimate, arc and range setpoint as the drone logs them, the roll target, and the test pattern's part of it) every control step.
+    Simulate one flight. A log list receives (time, position, roll/pitch/yaw, estimated roll/pitch, servo tilts, motor thrusts, pitch target, tag seen, with hover the hover's own tag-relative position estimate, arc and range setpoint as the drone logs them, the roll target, the test pattern's part of it, and the IMU as the drone reads it: filtered gyro in rad/s and specific force in g, body forward, left, up) every control step.
     With hover and plant["land_at"], the hover loop is switched to its landing (HOVER_LAND, or HOVER_LAND_FAST with plant["land_fast"]) that many seconds after liftoff, as the dashboard's L does; the result then also holds when it came down and how.
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py, at the geometry they name), sw/sim/airframe.py supplies the motors, servos and angular accelerations and the body's inertia instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
@@ -388,7 +388,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 angles[2] + (q * math.sin(roll) + r * math.cos(roll)) / math.cos(pitch) * h,
             ]
         if log is not None:
-            log.append((now, list(position), list(angles), list(attitude), list(servo), list(motor), math.radians(settings["pitch"]), visible, (list(outer.state.position), outer.state.arc, outer.state.setpoint) if hover else None, math.radians(settings["roll"]), math.radians(excited)))
+            log.append((now, list(position), list(angles), list(attitude), list(servo), list(motor), math.radians(settings["pitch"]), visible, (list(outer.state.position), outer.state.arc, outer.state.setpoint) if hover else None, math.radians(settings["roll"]), math.radians(excited), list(gyro_filter), list(accel_filter)))
         roll, pitch = angles[0], angles[1]
         angle = max(abs(roll), abs(pitch - trim))
         worst = max(worst, angle)

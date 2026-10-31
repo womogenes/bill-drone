@@ -1,0 +1,11 @@
+# The OpenVINS dataset runner, against an OpenVINS built without ROS (OPENVINS: its source; OPENVINS_BUILD: the ov_msckf build folder).
+cmake_minimum_required(VERSION 3.10)
+project(run_euroc C CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(Eigen3 REQUIRED)
+find_package(OpenCV 4 REQUIRED)
+find_package(Boost REQUIRED COMPONENTS system filesystem thread date_time)
+find_package(Ceres REQUIRED)
+add_executable(run_euroc run_euroc.cpp)
+target_include_directories(run_euroc PRIVATE ${OPENVINS}/ov_msckf/src ${OPENVINS}/ov_core/src ${OPENVINS}/ov_init/src ${EIGEN3_INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(run_euroc ${OPENVINS_BUILD}/libov_msckf_lib.so ${OpenCV_LIBRARIES} Boost::system Boost::filesystem Boost::thread Ceres::ceres)
