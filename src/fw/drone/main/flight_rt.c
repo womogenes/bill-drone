@@ -219,9 +219,10 @@ static void write_servo(int side) {
 
 static void stop_locked(int reason) {
     if (state.enabled && command.auto_trim > 0 && hover.tracking && trim.count >= TRIM_SAMPLES) {
+        // Sideways only, as with roll_bias below: the forward trim is wherever the CoM sat this flight (a carried 0.48 m/s² with a carried pitch_bias of -6.6 pitched the nose up and sent the drone back at both liftoffs on 2026-11-01 23:29 UTC), so trim_start_x stays as set.
         float start[2] = {command.hover.trim_start_x, command.hover.trim_start_y};
-        for (int axis = 0; axis < 2; axis++)
-            trim.hover[axis] = limit(start[axis] + command.auto_trim * (hover.carry[axis] - start[axis]), -command.hover.trim_max, command.hover.trim_max);
+        trim.hover[0] = start[0];
+        trim.hover[1] = limit(start[1] + command.auto_trim * (hover.carry[1] - start[1]), -command.hover.trim_max, command.hover.trim_max);
         trim.hover_ready = true;
     }
     if (state.enabled && trim.count >= TRIM_SAMPLES) {
