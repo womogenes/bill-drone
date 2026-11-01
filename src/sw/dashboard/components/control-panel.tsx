@@ -8,7 +8,6 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
-  Check,
   Space,
   Settings2,
   Square,
@@ -36,22 +35,6 @@ const keyIcons: Record<string, LucideIcon> = {
   Space,
 };
 
-// W and S move collective this much every KEY_REPEAT_MS (200 a second): at 100 a second S took a full second to bring a 680 takeoff back to hover thrust while the drone kept climbing (2026-10-31).
-const THROTTLE_STEP = 20;
-// T jumps collective straight to a little above hover (about 600 with the 10-inch props at 15-16 V), so liftoff doesn't linger half-supported on the feet; 680 climbed at 0.15 g.
-const TAKEOFF_DEFAULT = 630;
-const TAKEOFF_KEY = 'takeoffThrottle';
-
-// The takeoff throttle the T key sets, remembered per browser.
-function savedTakeoff() {
-  try {
-    const value = Number(localStorage.getItem(TAKEOFF_KEY));
-    return value > 0 && value <= THROTTLE_MAX ? value : TAKEOFF_DEFAULT;
-  } catch {
-    return TAKEOFF_DEFAULT;
-  }
-}
-const KEY_REPEAT_MS = 100;
 // L hands the drone its controlled landing (a steady descent, then motors off at touchdown), from hover or manual flight; holding it past LAND_FAST_MS descends faster.
 const LAND_FAST_MS = 300;
 const MANUAL = 0;
@@ -91,10 +74,8 @@ const tiltKeys = {
   KeyD: { axis: 'roll', direction: 1 },
 } as const;
 const yawKeys = ['ArrowLeft', 'ArrowRight'];
-// In hover and landing the up and down arrows and A and D move the hold point instead while held (m/s): up toward the tag, A to the drone's left; W and S raise and lower it.
+// In hover and landing on the tag the up and down arrows and A and D move the hold point while held (m/s): up toward the tag, A to the drone's left; W and S raise and lower it, with or without the tag. Without the tag the arrows and A and D tilt the drone directly instead (fw/drone/main/hover.c stick).
 const NUDGE_SPEED = 0.2;
-// Without the tag (Free) the arrows fly the drone at their speed (fw/drone/main/hover.c): forward and back faster. Sideways stays at NUDGE_SPEED: there the rotor drag the speed estimate reads is small (hover_drag 1 against about 0.1-0.2/s measured), and in the sim a 0.5 m/s sideways arrow flew at 1.45 m/s and coasted 4.7 m after release (2026-10-31).
-const FREE_NUDGE_FORWARD = 0.5;
 const NUDGE_CLIMB = 0.3;
 const NUDGE_TICK_MS = 50;
 const nudgeKeys = {
@@ -281,8 +262,7 @@ export const ControlPanel = memo(function ControlPanel({
   onChange: (settings: Partial<ControlSettings>) => void;
   onMode: (mode: number) => void;
   onHover: () => void;
-  // free: without the tag, where only the nudge's speed counts, so the forward and left nudge may wrap at its limit.
-  onNudge: (forward: number, left: number, up: number, free: boolean) => void;
+  onNudge: (forward: number, left: number, up: number) => void;
   onStop: () => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
@@ -309,29 +289,6 @@ export const ControlPanel = memo(function ControlPanel({
   const [open, setOpen] = useState(false);
   const [manual, setManual] = useState(MANUAL_DEFAULT);
   const [manualDraft, setManualDraft] = useState(MANUAL_DEFAULT);
-  const [takeoff, setTakeoff] = useState(TAKEOFF_DEFAULT);
-  const [takeoffDraft, setTakeoffDraft] = useState(String(TAKEOFF_DEFAULT));
-  const takeoffRef = useRef(TAKEOFF_DEFAULT);
-  useEffect(() => {
-    const value = savedTakeoff();
-    takeoffRef.current = value;
-    setTakeoff(value);
-    setTakeoffDraft(String(value));
-  }, []);
-  const draftTakeoff = Math.round(Number(takeoffDraft));
-  const takeoffValid =
-    takeoffDraft.trim() !== '' &&
-    draftTakeoff > 0 &&
-    draftTakeoff <= THROTTLE_MAX;
-  const confirmTakeoff = () => {
-    if (!takeoffValid) return;
-    takeoffRef.current = draftTakeoff;
-    setTakeoff(draftTakeoff);
-    setTakeoffDraft(String(draftTakeoff));
-    try {
-      localStorage.setItem(TAKEOFF_KEY, String(draftTakeoff));
-    } catch {}
-  };
   useEffect(() => setManual(readManual()), []);
   const throttle = useRef(settings.base_throttle);
   // Key handlers read the mode through a ref so a mode change doesn't re-register them and forget held keys.
@@ -359,7 +316,6 @@ export const ControlPanel = memo(function ControlPanel({
     if (!available || !settings.enabled || open) return;
 
     const held = new Set<string>();
-    let timer: ReturnType<typeof setInterval> | undefined;
     // Arrows held for a hover nudge, and the timer moving the hold point while any is.
     const nudging = new Set<keyof typeof nudgeKeys>();
     let nudgeTimer: ReturnType<typeof setInterval> | undefined;
@@ -386,19 +342,6 @@ export const ControlPanel = memo(function ControlPanel({
       if (modeRef.current === LAND_FAST) setMode(LAND);
     }
 
-    function changeThrottle() {
-      const direction = Number(held.has('KeyW')) - Number(held.has('KeyS'));
-      if (!direction) return;
-
-      const next = Math.max(
-        0,
-        Math.min(THROTTLE_MAX, throttle.current + direction * THROTTLE_STEP)
-      );
-      throttle.current = next;
-      setDraft((previous) => ({ ...previous, base_throttle: next }));
-      onChange({ base_throttle: next });
-    }
-
     function changeYaw() {
       const yaw_rate =
         manual.yaw *
@@ -422,17 +365,15 @@ export const ControlPanel = memo(function ControlPanel({
 
     function nudge() {
       const tick = NUDGE_TICK_MS / 1000;
-      const free = freeRef.current;
-      const scale = free ? FREE_NUDGE_FORWARD / NUDGE_SPEED : 1;
       let forward = 0;
       let left = 0;
       let up = 0;
       for (const code of nudging) {
-        forward += nudgeKeys[code][0] * scale * tick;
+        forward += nudgeKeys[code][0] * tick;
         left += nudgeKeys[code][1] * tick;
         up += nudgeKeys[code][2] * tick;
       }
-      if (forward || left || up) onNudge(forward, left, up, free);
+      if (forward || left || up) onNudge(forward, left, up);
     }
 
     function stopNudging() {
@@ -445,12 +386,11 @@ export const ControlPanel = memo(function ControlPanel({
       if (event.code === 'Space') {
         stopNudging();
         held.clear();
-        clearInterval(timer);
         clearTimeout(landFast);
         return;
       }
       if (
-        !['KeyW', 'KeyS', 'KeyT', 'KeyL', ...yawKeys].includes(event.code) &&
+        !['KeyW', 'KeyS', 'KeyL', ...yawKeys].includes(event.code) &&
         !(event.code in tiltKeys)
       )
         return;
@@ -459,8 +399,11 @@ export const ControlPanel = memo(function ControlPanel({
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat || held.has(event.code)) return;
-      // A nudge key moves the hold point while held; it is not a held flight key, so its keyup and a blur leave hover alone.
-      if (event.code in nudgeKeys && modeRef.current !== MANUAL) {
+      // There is no manual flight: outside hover only L and yaw act. Without the tag the arrows and A and D are held tilt; otherwise a nudge key moves the hold point while held, and is not a held flight key, so its keyup and a blur leave hover alone.
+      const hovering = modeRef.current !== MANUAL;
+      const stick = event.code in tiltKeys && freeRef.current;
+      if (!hovering && event.code in nudgeKeys) return;
+      if (event.code in nudgeKeys && !stick) {
         nudging.add(event.code as keyof typeof nudgeKeys);
         nudge();
         if (nudgeTimer === undefined)
@@ -471,16 +414,6 @@ export const ControlPanel = memo(function ControlPanel({
 
       if (event.code === 'KeyL') {
         land();
-      } else if (event.code === 'KeyT') {
-        held.delete('KeyT');
-        const value = takeoffRef.current;
-        throttle.current = value;
-        setDraft((previous) => ({ ...previous, base_throttle: value }));
-        onChange({ base_throttle: value });
-      } else if (event.code === 'KeyW' || event.code === 'KeyS') {
-        changeThrottle();
-        if (timer === undefined)
-          timer = setInterval(changeThrottle, KEY_REPEAT_MS);
       } else if (event.code in tiltKeys) {
         changeTilt(event.code as keyof typeof tiltKeys);
       } else {
@@ -499,28 +432,29 @@ export const ControlPanel = memo(function ControlPanel({
       if (yawKeys.includes(event.code)) changeYaw();
       if (event.code in tiltKeys)
         changeTilt(event.code as keyof typeof tiltKeys);
-      if (!held.has('KeyW') && !held.has('KeyS')) {
-        clearInterval(timer);
-        timer = undefined;
-      }
     }
 
-    // A lost keyup can't be trusted, so held keys stop the motors; L alone just drops back from land fast, and landing carries on.
+    // A lost keyup can't be trusted: in hover the tilt and yaw held fall back to zero and the hold carries on, otherwise held keys stop the motors; L alone just drops back from land fast, and landing carries on.
     function blur() {
       stopNudging();
       if (held.has('KeyL')) releaseLand();
       held.delete('KeyL');
-      if (held.size) onStop();
+      const flying = held.size > 0;
       held.clear();
-      clearInterval(timer);
-      timer = undefined;
+      if (!flying) return;
+      if (modeRef.current === MANUAL) {
+        onStop();
+        return;
+      }
+      changeYaw();
+      changeTilt('ArrowUp');
+      changeTilt('KeyA');
     }
 
     window.addEventListener('keydown', keydown, true);
     window.addEventListener('keyup', keyup);
     window.addEventListener('blur', blur);
     return () => {
-      clearInterval(timer);
       clearInterval(nudgeTimer);
       clearTimeout(landFast);
       window.removeEventListener('keydown', keydown, true);
@@ -538,11 +472,12 @@ export const ControlPanel = memo(function ControlPanel({
     manual,
   ]);
 
-  // H works disarmed too: it arms like Enable, then hovers.
+  // H (or T) works disarmed too: it arms like Enable, then hovers, taking off.
   useEffect(() => {
     if (!available || open) return;
     function keydown(event: KeyboardEvent) {
-      if (event.code !== 'KeyH' || typing(event)) return;
+      if ((event.code !== 'KeyH' && event.code !== 'KeyT') || typing(event))
+        return;
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat) return;
@@ -662,7 +597,7 @@ export const ControlPanel = memo(function ControlPanel({
               </div>
               <section className="space-y-2 xl:w-1/3 xl:pr-6">
                 <h3 className="border-b pb-1 font-medium">
-                  Manual inputs (this browser)
+                  Free flight inputs (this browser)
                 </h3>
                 <div className="space-y-2">
                   <label className="flex items-center justify-between gap-3">
@@ -750,22 +685,18 @@ export const ControlPanel = memo(function ControlPanel({
       </div>
       <div className="flex flex-col gap-2 text-muted-foreground">
         {[
-          {
-            keys: ['W', 'S'],
-            label: 'Throttle; in hover, raise or lower the hold',
-          },
-          { keys: ['T'], label: 'Takeoff' },
-          { keys: ['H'], label: 'Hover (arms if needed)' },
+          { keys: ['W', 'S'], label: 'Climb or descend' },
+          { keys: ['T', 'H'], label: 'Take off and hover (arms if needed)' },
           { keys: ['L'], label: 'Land (hold for fast)' },
           { keys: ['F'], label: 'Camera: tag or free flight' },
           { keys: ['ArrowLeft', 'ArrowRight'], label: 'Yaw' },
           {
             keys: ['ArrowUp', 'ArrowDown'],
-            label: 'Pitch; in hover, move the hold closer or farther',
+            label: 'Tilt forward or back; on the tag, move the hold',
           },
           {
             keys: ['A', 'D'],
-            label: 'Roll; in hover, move the hold left or right',
+            label: 'Tilt left or right; on the tag, move the hold',
           },
           { keys: ['Space'], label: 'Stop' },
         ].map(({ keys, label }) => (
@@ -781,37 +712,6 @@ export const ControlPanel = memo(function ControlPanel({
               })}
             </KbdGroup>
             <span>{label}</span>
-            {label === 'Takeoff' && (
-              <form
-                className="flex items-center gap-1"
-                noValidate
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  confirmTakeoff();
-                }}
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  max={THROTTLE_MAX}
-                  step={10}
-                  value={takeoffDraft}
-                  onChange={(event) => setTakeoffDraft(event.target.value)}
-                  aria-label="Takeoff throttle"
-                  className="h-7 w-20 tabular-nums"
-                />
-                <Button
-                  type="submit"
-                  variant="outline"
-                  size="icon"
-                  className="size-7"
-                  aria-label="Set takeoff throttle"
-                  disabled={!takeoffValid || draftTakeoff === takeoff}
-                >
-                  <Check />
-                </Button>
-              </form>
-            )}
           </div>
         ))}
         {(mode !== MANUAL || nudge.some(Boolean)) && (

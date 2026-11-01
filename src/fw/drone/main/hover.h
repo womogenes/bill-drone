@@ -42,6 +42,8 @@ typedef struct {
     float nudge_forward, nudge_left, nudge_up;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
     float pitch_trim;
+    // Not settings: the laptop's tilt without the tag (radians; pitch positive nose down, roll positive right side down), filled in by the runtime. While one is held its axis flies that tilt outright instead of holding; once released the hold brakes and holds where the drone stopped.
+    float stick_pitch, stick_roll;
 } HoverGains;
 
 // One camera sighting: the tag centre in the camera frame (m; right, down, forward), the wall's normal into it in the camera frame when the camera settled the tag's tilt (zero otherwise), and its capture time.
@@ -102,6 +104,8 @@ typedef struct {
     // Optical flow (hover.c take_flow): the vertical acceleration's bias it has found (m/s²), and the previous flow's capture time (us, 0 before the first), so each flow corrects over the time it covers.
     float flow_bias;
     int64_t flow_us;
+    // Since a stick was let go, how long the hold may still take to brake (s; hover.c BRAKE_S, ended early once under BRAKED): meanwhile the place follows the drone, so it holds where it stops, not where the stick was let go.
+    float braking;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

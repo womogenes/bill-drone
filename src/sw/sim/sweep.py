@@ -319,6 +319,11 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     if plant.get("nudge_wrap"):
                         limit = plant["nudge_wrap"]
                         outer.gains.nudge_forward, outer.gains.nudge_left = [(value + limit) % (2 * limit) - limit for value in (outer.gains.nudge_forward, outer.gains.nudge_left)]
+                if plant.get("stick"):
+                    # (start s after liftoff, pitch and roll in degrees, seconds): the laptop's tilt held without the tag, as the dashboard's arrows and A and D send it.
+                    start, stick_pitch, stick_roll, length = plant["stick"]
+                    held = lifted is not None and start <= now - lifted < start + length
+                    outer.gains.stick_pitch, outer.gains.stick_roll = (math.radians(stick_pitch), math.radians(stick_roll)) if held else (0.0, 0.0)
                 mode = HOLD if land_at is None or lifted is None or now - lifted < land_at else LAND_FAST if land_fast else LAND
                 out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag, flow)
                 settings["base_throttle"] = min(HOVER_THROTTLE, throttle(out.force / 2 / math.cos(trim))) if out.force > 0 else 0

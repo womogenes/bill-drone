@@ -15,7 +15,7 @@ DEFINES = os.environ.get("HOVER_DEFINES", "").split()
 LIBRARY = Path(__file__).with_name("libhover" + "".join("-" + define.replace("=", "_") for define in DEFINES) + ".so")
 HISTORY = 24
 HOLD, LAND, LAND_FAST = 1, 2, 3
-GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim")
+GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll")
 # Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_cam_roll, hover_drag_tilt) and the attitude controller's pitch_trim.
 ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "cam_roll", "drag_tilt", "pitch_trim")
 
@@ -48,7 +48,7 @@ class State(ctypes.Structure):
         ("drag_velocity", ctypes.c_float * 2), ("dragging", ctypes.c_bool), ("thrust_tilt", ctypes.c_float)] + [
         (name, ctypes.c_float) for name in ("hold_force", "hold_g", "recent_g", "land_time", "land_height", "stall_time", "impulse")] + [("probing", ctypes.c_bool)] + [
         (name, ctypes.c_float) for name in ("ceiling", "probe_start", "probe_g", "probe_force", "probe_velocity", "probe_expected", "probe_wait", "sink")] + [("nudge", ctypes.c_float * 3), ("nudge_rate", ctypes.c_float * 3),
-        ("push", ctypes.c_float * 2), ("carry", ctypes.c_float * 2), ("flow_bias", ctypes.c_float), ("flow_us", ctypes.c_int64)]
+        ("push", ctypes.c_float * 2), ("carry", ctypes.c_float * 2), ("flow_bias", ctypes.c_float), ("flow_us", ctypes.c_int64), ("braking", ctypes.c_float)]
 
 
 class Output(ctypes.Structure):

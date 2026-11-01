@@ -124,6 +124,9 @@
 #define MAX_OFFSET 1.0f
 // The integrated acceleration's bias the drag model may find (m/s², about 6 degrees of attitude error).
 #define MAX_BIAS 1.0f
+// After a stick is let go the hold brakes for up to BRAKE_S (s), or until the speed estimate is under BRAKED (m/s), before it holds a place: the place is then where the drone stopped.
+#define BRAKE_S 2.0f
+#define BRAKED 0.15f
 
 static float clamp(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
@@ -498,6 +501,13 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
             state->place[0] -= vx * dt;
             state->place[1] -= vy * dt;
         }
+        // A held stick flies its tilt outright on its axis (the other axis still holds); let go, the hold brakes, then holds where the drone stopped.
+        bool stick = dragging && (g->stick_pitch || g->stick_roll);
+        if (stick)
+            state->braking = BRAKE_S;
+        else if (state->braking > 0)
+            state->braking = hypotf(state->velocity[0], state->velocity[1]) < BRAKED ? 0 : state->braking - dt;
+        if (stick || state->braking > 0) state->place[0] = state->place[1] = 0;
         float ax = -g->kd * (state->velocity[0] - vx) - state->push[0], ay = -g->kd * (state->velocity[1] - vy) - state->push[1];
         if (dragging) {
             ax -= g->kp * state->place[0];
@@ -505,6 +515,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         }
         forward = state->trim[0] + ax * cy + ay * sy;
         left = state->trim[1] - ax * sy + ay * cy;
+        if (dragging && g->stick_pitch) forward = GRAVITY * tanf(g->stick_pitch);
+        if (dragging && g->stick_roll) left = -GRAVITY * tanf(g->stick_roll);
     } else {
         // The tag relative to the drone now: the sighting moved on by the drone's velocity over its age, then turned into the body's heading.
         float lead = clamp((now_us - state->capture_us) / 1e6f, 0, 0.1f);
