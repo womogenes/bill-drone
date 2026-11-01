@@ -225,9 +225,10 @@ static void stop_locked(int reason) {
         trim.hover_ready = true;
     }
     if (state.enabled && trim.count >= TRIM_SAMPLES) {
+        // Roll only: its trim is the motors' thrust split, the airframe's own. The pitch trim is wherever the CoM sat this flight, which the next need not share (the battery moves between flights, and slid within them on 2026-10-31, when a carried pitch_bias kicked the nose at the next liftoff); the controller finds it in flight instead (Controller tilt, the pitch integrator), and pitch_bias stays as set.
         float old[2] = {command.roll_bias, command.pitch_bias};
-        for (int axis = 0; axis < 2; axis++)
-            trim.bias[axis] = limit(old[axis] + limit(command.auto_trim * (trim.sum[axis] / trim.count - old[axis]), -TRIM_STEP, TRIM_STEP), -command.integral_limit, command.integral_limit);
+        trim.bias[0] = limit(old[0] + limit(command.auto_trim * (trim.sum[0] / trim.count - old[0]), -TRIM_STEP, TRIM_STEP), -command.integral_limit, command.integral_limit);
+        trim.bias[1] = old[1];
         trim.ready = true;
     }
     trim.sum[0] = trim.sum[1] = 0;
