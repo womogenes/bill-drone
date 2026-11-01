@@ -100,7 +100,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py, at the geometry they name), sw/sim/airframe.py supplies the motors, servos and angular accelerations and the body's inertia instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
     With hover and plant["excite"] (a test pattern as a recording's "pattern" event, sw/excite.py: {"after", "repeat", "segments"}), its roll and pitch steps add to the hover's attitude targets from "after" seconds past collective first reaching integrate_throttle, "repeat" times (0 = until the end), as flight_rt.c excite does; its other channels are ignored.
     Optical flow (fw/drone/main/flight_rt.c flow_input): plant["flow"] = {"depth": the scene's true distance along the camera (m), "noise_px": per-frame shift noise (full-resolution px), "fps", "latency" (s), "max_px": the largest shift per frame and axis the camera's block search finds (full-resolution px; fw/esp32cam/src/flow.h reach, about 14; none by default)} gives the hover the camera's flow, the mean image motion over each frame interval with the mean measured gyro over it taken out as the firmware does; a frame whose shift exceeds max_px on either axis gives none; settings hover_flow_depth and hover_flow_tau turn it on.
-    IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "flight_accel_bias" (g, along body up) on it only while the motors are commanded (vibration rectification and the like, which the resting calibration of the vertical specific force cannot learn), "vibration" (g RMS, white, while the motors are commanded; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white and periodic (sw/sim/disturbance.py).
+    IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "flight_accel_bias" (g, along body up) on it only while the motors are commanded (vibration rectification and the like, which the resting calibration of the vertical specific force cannot learn), "vibration" (g RMS, white, while the motors are commanded; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white, periodic and ramping (sw/sim/disturbance.py); with "sensed_disturbances" the accelerometer feels their forces.
     """
     rng = random.Random(seed)
     accel_rng = random.Random(seed + 1000)
@@ -137,6 +137,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     rotor_drag, wind_size, wind_keep, wind = plant.get("rotor_drag", 0.0), plant.get("wind", 0.0), math.exp(-DT / plant.get("wind_tau", 2.0)), [0.0, 0.0, 0.0]
     drag_x, drag_y = rotor_drag if isinstance(rotor_drag, (list, tuple)) else (rotor_drag, rotor_drag)
     disturbances = Disturbances(plant.get("disturbances"), seed)
+    # plant["sensed_disturbances"]: the disturbances' forces are real forces (wind, the room's flow), which the accelerometer feels; otherwise they move the drone unfelt, as the earlier calibrations fitted them.
+    sensed = plant.get("sensed_disturbances", False)
     accel_bias = list(plant.get("accel_bias", (0.0, 0.0))) + [0.0]
     flight_accel_bias = plant.get("flight_accel_bias", 0.0)
     vibration = plant.get("vibration", 0.0)
@@ -410,9 +412,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 torque = [t + c for t, c in zip(torque, cross(foot, apply(matrix, reaction, transpose=True)))]
             if lifted is None and liftoff and not touching:
                 lifted = now
+            felt = [mass * f if lifted is not None and sensed else 0.0 for f in extra_force]
             velocity = [v + (p / mass - (9.81 if axis == 2 else 0.0) + (extra_force[axis] if lifted is not None else 0.0)) * h for axis, (v, p) in enumerate(zip(velocity, push))]
             position = [x + v * h for x, v in zip(position, velocity)]
-            specific = [value / weight for value in apply(matrix, push, transpose=True)]
+            specific = [value / weight for value in apply(matrix, [a + b for a, b in zip(push, felt)], transpose=True)]
             rate = [r + t / i * h for r, t, i in zip(rate, torque, inertia)]
             p, q, r = rate
             roll, pitch = angles[0], angles[1]
@@ -513,6 +516,10 @@ def in_room(airframe, room):
 
 # The current plant, 2026-10-29b (see models/NOTES.md): the airframe refit on every 9-inch flight after the CoM change (05:53-07:43, runaways cut, the ESC swap at 06:45 followed) with the roll actuator pinned by the PRBS flights (table authority, about 11 ms dead time and 50 ms lag) and no roll attitude spring, an ESC start-up time from standstill and the servo tilt's measured forward push; the sideways speed's roll moment (loose in the fit) at the 2026-10-29 fit's value, and the 2026-10-29 disturbances and rotor drag (recalibrating them to the hovers' statistics traded that moment against the roll drift and broke the PRBS and hover_kd checks). It flies hover_kd the right way round (calm at 2.0, the 0.4 Hz swing at 0.81 that the ±3° PRBS grows). Its liftoff kick peaks too late at pitch_bias 3.9 (0.4-0.6 s against 0.2 s).
 IDENTIFIED_ESC = in_room(model("airframe_2026-10-29b.json"), "2026-10-29")
+# The 10-inch drone as the camera measured it on 2026-10-31 (the tag hover 20:57 UTC): almost no forward rotor drag (0.04/s, its drag model's forward reading uncorrelated with the real speed) and about 0.1/s sideways, the room's drifts as real forces the accelerometer feels, and no steady room push (each flight's push depends on where the CoM sits; give one with a constant or ramping pitch term). Fly tag-free hovers and manual flights on this one: the earlier rooms' 0.58/s forward drag let the drag model see a speed the real drone cannot.
+CURRENT = in_room(model("airframe_2026-10-29_10in_zerofit.json"), "2026-10-29") | {
+    "rotor_drag": (0.04, 0.1), "sensed_disturbances": True,
+    "disturbances": [d for d in ROOMS["2026-10-29"]["disturbances"] if d["kind"] != "constant"]}
 
 
 if __name__ == "__main__":

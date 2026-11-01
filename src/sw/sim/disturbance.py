@@ -6,6 +6,7 @@ A term is a dict with "channel" and "kind":
   drift     {"sd", "tau"}: a random force that wanders with that standard deviation and correlation time (s), an Ornstein-Uhlenbeck process
   white     {"sd"}: independent each control tick (fast jitter that only shakes)
   sine      {"amplitude", "period", "phase"}: a periodic force (phase in radians)
+  ramp      {"rate", "start", "limit"}: zero until start (s from the run's start), then growing at rate per second up to limit (a battery sliding forward: a pitch torque that grows through the flight)
 Terms on one channel add. sw/sim/fit_disturbances.py fits constants and drifts from flight logs.
 """
 
@@ -39,6 +40,8 @@ class Disturbances:
                 value = term["state"]
             elif kind == "white":
                 value = term["sd"] * self.rng.gauss(0, 1)
+            elif kind == "ramp":
+                value = math.copysign(min(abs(term["rate"]) * max(0.0, self.time - term.get("start", 0.0)), term.get("limit", math.inf)), term["rate"])
             elif kind == "sine":
                 value = term["amplitude"] * math.sin(2 * math.pi * self.time / term["period"] + term.get("phase", 0.0))
             else:
