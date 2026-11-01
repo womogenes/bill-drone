@@ -19,8 +19,8 @@
 #define TX 27
 #define SYNC 13
 #define BAUD 2000000
-// The camera's EN (reset) and IO0 (boot mode, also the image sensor's XCLK) through about 1 kohm each: open drain, released (high impedance) except while camera_reset pulls them low, so the drone can never drive them high or fight the camera's own pull-ups and clock. IO0 is wired to GPIO 4 (2026-10-31); EN is not wired yet (a pulse on every free pin did not restart the camera).
-#define CAMERA_EN 23
+// The camera's EN (reset) and IO0 (boot mode, also the image sensor's XCLK) through about 1 kohm each: open drain, released (high impedance) except while camera_reset pulls them low, so the drone can never drive them high or fight the camera's own pull-ups and clock. IO0 is wired to GPIO 4 (2026-10-31); EN to GPIO 26 (2026-11-01: of the free pins only a pulse on 26 restarted the camera).
+#define CAMERA_EN 26
 #define CAMERA_IO0 4
 #define RESET_PULSE_MS 50
 // The camera's own limit is 150 ms capture-to-queued; anything older on arrival is dropped.

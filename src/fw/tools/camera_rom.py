@@ -8,8 +8,8 @@ Talks to the camera's ESP32 ROM bootloader over its wire to the drone (request U
 uv run tools/camera_rom.py listen    # what the camera sends at 115200
 uv run tools/camera_rom.py sync      # the ROM's SYNC handshake
 uv run tools/camera_rom.py run       # sync, then leave the loader and run the application in flash (as esptool run)
-uv run tools/camera_rom.py reset     # reset the camera through its EN line (drone request J, GPIO 23)
-uv run tools/camera_rom.py download  # reset it into the ROM's download mode (IO0 held low, GPIO 26), then sync
+uv run tools/camera_rom.py reset     # reset the camera through its EN line (drone request J, GPIO 26)
+uv run tools/camera_rom.py download  # reset it into the ROM's download mode (IO0 held low, GPIO 4), then sync
 
 The bootloader protocol (SLIP frames: direction, opcode, length, checksum, data) is Espressif's serial protocol; the drone must be disarmed.
 """
