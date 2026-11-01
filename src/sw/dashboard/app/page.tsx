@@ -54,6 +54,35 @@ const NO_NUDGE: [number, number, number] = [0, 0, 0];
 const NUDGE_MAX = 1;
 // A hover message this recent means a hold is being flown and recorded.
 const HOVER_FRESH_MS = 3000;
+// A steady rotor tilt beyond this (degrees, averaged over TILT_TAU_S seconds) means the CoM is well off centre or moving: by about 15-20 degrees the drone has no pitch authority left.
+const TILT_WARNING = 10;
+const TILT_TAU_S = 1;
+
+// Updates the steady rotor tilt from a reading and returns it when it is beyond TILT_WARNING, else null; disarmed or without thrust it starts over.
+function tiltWarningFor(
+  reading: Reading | null,
+  steady: { current: { time: number; tilt: number } | null }
+) {
+  const control = reading?.control;
+  const actuators = reading?.actuators;
+  if (!reading || !control?.enabled || !actuators || !actuators.left.throttle) {
+    steady.current = null;
+    return null;
+  }
+  // Left tilts forward with positive angles, right with negative (sw/sim/flight.py MODEL servo directions).
+  const tilt =
+    (actuators.left.servo_angle -
+      control.left_trim -
+      (actuators.right.servo_angle - control.right_trim)) /
+    2;
+  const last = steady.current;
+  const dt = last ? Math.max(0, (reading.time - last.time) / 1000) : 0;
+  const mean = last
+    ? last.tilt + (tilt - last.tilt) * (1 - Math.exp(-dt / TILT_TAU_S))
+    : tilt;
+  steady.current = { time: reading.time, tilt: mean };
+  return Math.abs(mean) > TILT_WARNING ? mean : null;
+}
 // Battery voltage EMA time constant; time-based so irregular packet timing doesn't change the smoothing.
 const VOLTAGE_TAU = 1500;
 
@@ -98,6 +127,9 @@ export default function Page() {
   const [requestError, setRequestError] = useState('');
   const [calibrationPending, setCalibrationPending] = useState(false);
   const latestReading = useRef<Reading | null>(null);
+  // The rotors' steady forward tilt (degrees, positive forward) over the last second of an armed flight: holding the nose against a CoM off centre (negative: forward of it) also points the thrust, and a growing one is a battery sliding (2026-10-31).
+  const steadyTilt = useRef<{ time: number; tilt: number } | null>(null);
+  const [tiltWarning, setTiltWarning] = useState<number | null>(null);
   const [hoverState, setHoverState] = useState<HoverSample | null>(null);
   const latestHover = useRef<HoverSample | null>(null);
   const [hoverHistory] = useState(() =>
@@ -116,9 +148,11 @@ export default function Page() {
       displayFrame.current = undefined;
       const current = latestReading.current;
       const hover = latestHover.current;
+      const warning = tiltWarningFor(current, steadyTilt);
       startTransition(() => {
         setReading(current);
         setHoverState(hover);
+        setTiltWarning(warning);
       });
     });
   }, []);
@@ -518,6 +552,15 @@ export default function Page() {
           )}
         </div>
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
+          {tiltWarning !== null && (
+            <p className="px-4 pt-4 font-medium text-red-700">
+              Rotors held {Math.abs(tiltWarning).toFixed(0)}°{' '}
+              {tiltWarning < 0
+                ? 'back: CoM forward of centre'
+                : 'forward: CoM behind centre'}{' '}
+              or moving. Land and check the battery.
+            </p>
+          )}
           <p
             className={`px-4 pt-4 tabular-nums ${recorder?.error || (reading?.logging?.dropped ?? 0) > 0 ? 'text-red-700' : 'text-muted-foreground'}`}
           >
