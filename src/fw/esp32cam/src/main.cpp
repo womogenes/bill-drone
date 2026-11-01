@@ -360,6 +360,17 @@ void loop() {
         return;
     }
     crumbs[0] = 2;
+#ifdef DEBUG_CONSOLE
+    // An F on the console dumps this frame: FRAME, width and height (u16), then the grayscale pixels.
+    uint8_t request = 0;
+    if (uart_read_bytes(linkPort, &request, 1, 0) == 1 && request == 'F') {
+        const uint16_t size[2] = {uint16_t(frame->width), uint16_t(frame->height)};
+        uart_write_bytes(linkPort, "FRAME", 5);
+        uart_write_bytes(linkPort, size, sizeof(size));
+        uart_write_bytes(linkPort, frame->buf, frame->len);
+        uart_wait_tx_done(linkPort, portMAX_DELAY);
+    }
+#endif
     const uint32_t started = uint32_t(esp_timer_get_time());
     ++captureCount;
     PosePacket packet;
