@@ -432,6 +432,11 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         *size = op == 'S' ? settings_json(text, REPLY - 5) : settings_schema(text, REPLY - 5, length ? body[0] : 0);
         return *size ? NULL : "Settings do not fit the reply";
     }
+    if (op == 'E') {
+        // ESC calibration (props off): the stage byte, as flight_runtime_esc_calibration takes it.
+        if (length < 1) return "Malformed ESC calibration request";
+        return flight_runtime_esc_calibration(body[0]);
+    }
     if (op == 'X') {
         // Servo bench test: a float32 amplitude (degrees) and a byte of cycles starts it; one byte (any) reads the results.
         if (length == 5) {

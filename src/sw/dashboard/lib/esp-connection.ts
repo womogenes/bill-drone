@@ -4,7 +4,8 @@ import type { HoverState, Side, Targets } from './telemetry';
 export type DroneRequest =
   | { type: 'stop' | 'arm' | 'calibrate' }
   | { type: 'zero'; side: 'left' | 'right' }
-  | { type: 'tune'; settings: Record<string, number> };
+  | { type: 'tune'; settings: Record<string, number> }
+  | { type: 'esc'; stage: 0 | 1 | 2 };
 
 export type ServiceMessage =
   | ({ type: 'reading' } & Record<string, unknown>)

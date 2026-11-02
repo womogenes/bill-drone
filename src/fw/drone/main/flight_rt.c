@@ -207,8 +207,18 @@ static void rewind_pattern(void) {
     excite.active = false;
 }
 
-// The ESC pulse (us) for a throttle: 1000 us plus the throttle, or ESC_STOP_US for a stopped motor.
-static float esc_us(int throttle) { return throttle > 0 ? 1000 + throttle : ESC_STOP_US; }
+// ESC calibration (flight_runtime_esc_calibration): 0 off, 1 the top of the range (ESC_TOP_US), 2 its bottom (1000 us), on both ESCs while disarmed, until ESC_CALIBRATION_US after it began. Teaching the ESCs this range is what makes the thrust table's throttles mean the same thrust on both, flight to flight.
+#define ESC_TOP_US 2200
+#define ESC_CALIBRATION_US 120000000LL
+static int esc_calibration;
+static int64_t esc_calibration_us;
+
+// The ESC pulse (us) for a throttle: 1000 us plus the throttle, or ESC_STOP_US for a stopped motor; during ESC calibration its stage's pulse instead.
+static float esc_us(int throttle) {
+    if (esc_calibration && esp_timer_get_time() - esc_calibration_us > ESC_CALIBRATION_US) esc_calibration = 0;
+    if (esc_calibration) return esc_calibration == 1 ? ESC_TOP_US : 1000;
+    return throttle > 0 ? 1000 + throttle : ESC_STOP_US;
+}
 
 // Caller holds lock so an emergency stop cannot race a later duty write.
 // Latches a duty update without waiting for the previous transition.
@@ -479,6 +489,8 @@ static void runtime_task(void *arg) {
             command.dt = dt;
             // Propeller thrust at a fixed throttle goes with the square of battery voltage, so the table's newtons are scaled to the measured voltage: a sagging pack gets more throttle for the same force.
             Command scaled = command;
+            // The pitch speed moment compensation needs a measured speed: the hover's while it flies on the tag (below); flight_math's own dead reckoning from g tan(pitch) reads a held trim pitch as speed.
+            bool tracking = false;
             if (hover_mode && hover.bias > 0.5f) {
                 CameraPose camera;
                 HoverPose seen, *tag = NULL;
@@ -522,6 +534,7 @@ static void runtime_task(void *arg) {
                     state.controller.velocity[0] = out.velocity[0];
                     state.controller.velocity[1] = out.velocity[1];
                     scaled.velocity_damping = 0;
+                    tracking = true;
                 }
             }
             float add[EXCITE_CHANNELS] = {0};
@@ -542,6 +555,7 @@ static void runtime_task(void *arg) {
                 scaled.target_yaw += add[2] / DEG;
                 scaled.base = fmaxf(scaled.base + add[3], 0);
             }
+            if (!tracking) scaled.pitch_speed = 0;
             flown = scaled;
             if (command.thrust_voltage > 0 && battery_v > 0) {
                 float ratio = limit(battery_v / command.thrust_voltage, 1 - VOLTAGE_RANGE, 1 + VOLTAGE_RANGE);
@@ -626,6 +640,22 @@ static void runtime_task(void *arg) {
     }
 }
 
+const char *flight_runtime_esc_calibration(int stage) {
+    if (stage < 0 || stage > 2) return "ESC calibration stage must be 0, 1 or 2";
+    portENTER_CRITICAL(&lock);
+    const char *error = state.enabled || spinning() ? "Disarm first" : NULL;
+    if (!error) {
+        esc_calibration = stage;
+        esc_calibration_us = esp_timer_get_time();
+        for (int side = 0; side < 2; side++) {
+            state.throttle[side] = 0;
+            pulse(side * 2 + 1, esc_us(0));
+        }
+    }
+    portEXIT_CRITICAL(&lock);
+    return error;
+}
+
 // The update service writes flash only while this holds: flash writes stall this core's code fetches.
 bool flight_runtime_idle(void) {
     portENTER_CRITICAL(&lock);
@@ -699,6 +729,7 @@ const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t
     const char *error = arm_refusal(&check);
     // Hover takes off by itself, so it is switched on only after arming.
     if (!error && hover_mode) error = "Hover mode must be off to arm";
+    if (!error && esc_calibration) error = "Finish the ESC calibration first";
     if (!error && battery_v > NO_PACK_V && battery_v < ARM_MIN_V) error = "Battery under 14.0 V: charge or swap it";
     if (!error) {
         command.enabled = 1;

@@ -44,7 +44,7 @@ CAMERA_KEYS = (
     "unsynced", "skipped_bytes", "overflows", "line_errors", "sync_edges", "rx_edges",
     "sequence", "age_ms", "valid", "trusted",
 )
-REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T"}
+REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T", "esc": b"E"}
 # Schema entries per D reply (drone/main/settings.h SCHEMA_PAGE).
 SCHEMA_PAGE = 12
 
@@ -716,6 +716,9 @@ class Service:
                 body = bytes([("left", "right").index(message["side"])])
             elif kind == "tune":
                 body = json.dumps(message["settings"]).encode()
+            elif kind == "esc":
+                # ESC calibration stage: 0 off, 1 the top of the range, 2 the bottom (drone/main/flight_rt.c).
+                body = bytes([int(message["stage"])])
             data = await self.request(REQUESTS[kind], body)
             if kind == "tune":
                 self.settings = json.loads(data)

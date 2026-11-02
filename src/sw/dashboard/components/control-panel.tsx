@@ -16,6 +16,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Kbd, KbdGroup } from '@/components/ui/kbd';
+import { EscCalibration } from '@/components/esc-calibration';
 import {
   Dialog,
   DialogContent,
@@ -237,6 +238,8 @@ export const ControlPanel = memo(function ControlPanel({
   onHover,
   onNudge,
   onStop,
+  escError,
+  onEscStage,
 }: {
   settings: ControlSettings;
   recorderReady: boolean;
@@ -251,6 +254,8 @@ export const ControlPanel = memo(function ControlPanel({
   onHover: () => void;
   onNudge: (forward: number, left: number, up: number) => void;
   onStop: () => void;
+  escError: string | null;
+  onEscStage: (stage: 0 | 1 | 2) => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
   const ready = available && recorderReady && imu === 'calibrated';
@@ -499,6 +504,11 @@ export const ControlPanel = memo(function ControlPanel({
               );
           }}
         >
+          <EscCalibration
+            disabled={!available || settings.enabled}
+            error={escError}
+            onStage={onEscStage}
+          />
           <DialogTrigger
             render={
               <Button

@@ -62,6 +62,8 @@ void flight_runtime_outputs(void);
 void flight_runtime_start(void);
 void flight_runtime_set_voltage(uint16_t millivolts);
 bool flight_runtime_idle(void);
+// ESC calibration, disarmed only: stage 0 off, 1 both ESCs at the top of their range (2200 us), 2 at the bottom (1000 us); it ends by itself after 2 minutes. NULL or an error.
+const char *flight_runtime_esc_calibration(int stage);
 // Returns why arming was refused (arming.h), or NULL once armed and recording. expected_generation is flight_runtime_stop_generation() from when the request arrived. arm_sequence is the arm packet's laptop sequence.
 const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t expected_generation,
                                uint32_t arm_sequence);

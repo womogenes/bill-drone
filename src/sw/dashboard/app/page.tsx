@@ -182,6 +182,8 @@ export default function Page() {
   const [reading, setReading] = useState<Reading | null>(null);
   const [requestError, setRequestError] = useState('');
   const [calibrationPending, setCalibrationPending] = useState(false);
+  // The drone's refusal of the last ESC calibration stage, if any.
+  const [escError, setEscError] = useState<string | null>(null);
   const latestReading = useRef<Reading | null>(null);
   // The rotors' steady forward tilt (degrees, positive forward) over the last second of an armed flight: holding the nose against a CoM off centre (negative: forward of it) also points the thrust, and a growing one is a battery sliding (2026-10-31).
   const steadyTilt = useRef<{ time: number; tilt: number } | null>(null);
@@ -284,6 +286,7 @@ export default function Page() {
         if (socket.current !== ws) return;
         if (message.type === 'result') {
           if (message.request === 'calibrate') setCalibrationPending(false);
+          if (message.request === 'esc') setEscError(message.error);
           if (message.request === 'arm' && hoverPending.current) {
             hoverPending.current = false;
             if (!message.error) setTargets({ mode: 1 });
@@ -681,6 +684,11 @@ export default function Page() {
               onHover={hover}
               onNudge={nudgeHold}
               onStop={stopMotors}
+              escError={escError}
+              onEscStage={(stage) => {
+                setEscError(null);
+                request({ type: 'esc', stage });
+              }}
             />
           )}
           {/* Always shown, so the layout stays put: armed, the flight's map; else the camera's latest sighting, the last flight's map, or an empty one. */}
