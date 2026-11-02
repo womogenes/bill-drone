@@ -135,6 +135,8 @@
 #define SPEED_SMOOTH 0.5f
 #define SPEED_TAKEOFF_S 2.0f
 #define SPEED_LEARN 5.0f
+// After the tag is found again following a loss, the hold's position terms ease in over this long (us): the drift while blind arrives as one jump in the sighting, and at full gain it commanded the tilt limit on both axes at once (2026-11-02 05:13 UTC: 0.5 m after 0.7 s lost, pitch -10 and roll +10, and the overshoot to 17 degrees made the pilot stop it).
+#define REACQUIRE_EASE_US 1000000
 
 static float clamp(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
@@ -375,6 +377,7 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         if (!seeing) {
             state->have_pose = false;
             if (state->height < AIRBORNE) state->have_setpoint = false;
+            if (state->tracking) state->reacquired_us = now_us;
         }
         take(state, g, pose);
         state->seen_us = now_us;
@@ -597,7 +600,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         float closing = state->velocity[0] * ux + state->velocity[1] * uy;
         float sideways = -state->velocity[0] * uy + state->velocity[1] * ux;
         // The nudged hold point: nearer the tag by nudge_forward, and nudge_left to the drone's left (seen from the drone, the tag then sits that far further round to the right).
-        float hold = g->kp * (range - (state->setpoint - g->nudge_forward)), place = g->kside * range * wrap(around - (state->arc - g->nudge_left / range));
+        float ease = state->reacquired_us ? clamp((now_us - state->reacquired_us) / (float)REACQUIRE_EASE_US, 0, 1) : 1;
+        float hold = ease * g->kp * (range - (state->setpoint - g->nudge_forward)), place = ease * g->kside * range * wrap(around - (state->arc - g->nudge_left / range));
         // The velocity damping aims at the nudged hold point's own speed.
         float toward = hold - g->kd * (closing + rate - state->nudge_rate[0]), across = place - g->kd * (sideways + arc_rate * range - state->nudge_rate[1]);
         // Cancel the learned push outright, in the yaw-turned frame, so a turn does not swing it sideways as a body-fixed trim would.

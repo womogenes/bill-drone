@@ -49,7 +49,7 @@ class State(ctypes.Structure):
         (name, ctypes.c_float) for name in ("hold_force", "hold_g", "recent_g", "land_time", "land_height", "stall_time", "impulse")] + [("probing", ctypes.c_bool)] + [
         (name, ctypes.c_float) for name in ("ceiling", "probe_start", "probe_g", "probe_force", "probe_velocity", "probe_expected", "probe_wait", "sink")] + [("nudge", ctypes.c_float * 3), ("nudge_rate", ctypes.c_float * 3),
         ("push", ctypes.c_float * 2), ("carry", ctypes.c_float * 2), ("flow_bias", ctypes.c_float), ("flow_us", ctypes.c_int64), ("braking", ctypes.c_float)] + [
-        (name, ctypes.c_float) for name in ("speed_raw", "speed_offset", "speed_sum", "speed_time", "speed")] + [("speed_ready", ctypes.c_bool)]
+        (name, ctypes.c_float) for name in ("speed_raw", "speed_offset", "speed_sum", "speed_time", "speed")] + [("speed_ready", ctypes.c_bool)] + [("reacquired_us", ctypes.c_int64)]
 
 
 class Output(ctypes.Structure):

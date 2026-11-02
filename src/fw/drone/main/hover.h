@@ -115,6 +115,8 @@ typedef struct {
     // Speed from the servos (gains speed_tilt): the thrust tilt less speed_pitch times the pitch, smoothed (radians); its offset, and the sum and time of the takeoff window that first sets it; the forward speed it gives (m/s, NaN until the offset is known).
     float speed_raw, speed_offset, speed_sum, speed_time, speed;
     bool speed_ready;
+    // When the tag was last found again after being lost (us; hover.c REACQUIRE_EASE_US).
+    int64_t reacquired_us;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).
