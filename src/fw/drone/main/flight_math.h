@@ -39,6 +39,8 @@ typedef struct {
     float thrust_voltage;
     // Yaw-rate integral gain (1/s), runtime-only like the fields below it; the integrator shares integral_limit.
     float yaw_i;
+    // Speed moment compensation (rad/s² per m/s of forward speed, 0 = off): added to the pitch command against the nose-up moment forward speed makes (flight_math.c). Runtime-only; flight_rt.c passes it only while the hover flies on the tag.
+    float pitch_speed;
     // Hover and landing (hover.h), and whether they use the camera (0 = IMU only). Also runtime-only.
     HoverGains hover;
     float hover_camera;

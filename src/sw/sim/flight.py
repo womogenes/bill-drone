@@ -107,6 +107,8 @@ MODEL_OFFSET = 6 + len(TUNING_LAYOUT)
 # The runtime-only Command fields after the model block: the battery voltage thrust compensation is relative to, and the yaw-rate integral gain.
 THRUST_VOLTAGE = MODEL_OFFSET + len(MODEL_KEYS)
 YAW_I = THRUST_VOLTAGE + 1
+# The speed moment compensation (rad/s² per m/s, 0 = off; flight_math.c), runtime-only after yaw_i.
+PITCH_SPEED = YAW_I + 1
 
 
 class Attitude:

@@ -9,7 +9,7 @@ from collections import deque
 from pathlib import Path
 
 from sw.sim.disturbance import Disturbances
-from sw.sim.flight import MODEL, YAW_I, Attitude, Controller, throttle, thrust
+from sw.sim.flight import MODEL, PITCH_SPEED, YAW_I, Attitude, Controller, throttle, thrust
 
 MASS = 0.940  # kg, the final assembly with the printed deck and IMU bracket (Bill's estimate, 2026-10-24)
 DT = 0.01
@@ -338,6 +338,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                         settings["roll"] += excited
                         settings["pitch"] += pattern[tick % len(pattern)][1]
                 configure()
+                # As flight_rt.c: the speed moment compensation only while the hold flies on the tag, whose velocity it takes.
+                controller.command[PITCH_SPEED] = settings.get("pitch_speed", 0.0) if out.tracking else 0.0
                 if out.tracking:
                     controller.state[13], controller.state[14] = out.velocity[0], out.velocity[1]
         left, right, left_angle, right_angle = controller.update(attitude, gyro_filter, DT)

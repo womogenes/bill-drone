@@ -163,7 +163,9 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
 
     float roll_torque = model->roll_inertia * (c->roll_p * roll_error + state->roll_i - c->roll_damping * c->gx);
     float pitch_bias = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit) * clamp(state->airborne / PITCH_BIAS_RAMP, 0, 1);
-    float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * c->gy);
+    // Speed moment (pitch_speed, 0 = off): forward speed pitches this airframe nose-up (the rotors flap back; on the hover sim's model a backward drift likewise kept the nose falling through the braking tilt, as at 2026-11-02 04:55 UTC). The torque builds with the speed, so it lags the tilt that made it by the speed's own time constant, and the attitude loop meets it only as error; cancelled here from the forward velocity. flight_rt.c sets pitch_speed only while the hover flies on the tag, when velocity is the hover's measured one, not the g tan(pitch) dead reckoning above. With 0 the torque is exactly as before.
+    float speed_torque = c->pitch_speed * state->velocity[1];
+    float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * c->gy + speed_torque);
     float yaw_torque = model->yaw_inertia * (c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias + state->yaw_i);
 
     float left_vertical = fmaxf(0, (force + roll_torque / model->arm) / 2);
