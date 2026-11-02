@@ -40,11 +40,13 @@ typedef struct {
     float flow_depth, flow_tau;
     // Speed from the servos: forward airspeed pitches this airframe (rotor flapping), so the pitch loop holds it with a steady thrust tilt, tilt = speed_pitch * pitch + speed_tilt * forward speed + offset (fitted on the camera's speed over five tag hovers, 2026-10-31 and 11-01: speed_tilt 5.0 degrees per m/s, speed_pitch -0.54, the servo compensation's share; 0.19 m/s error on flights left out of the fit). speed_tilt (radians per m/s; 0 = off) turns it on; the offset (CoM and servo zero) is learned from the camera while it sees the tag, else from the first SPEED_TAKEOFF_S airborne plus speed_takeoff (radians: the climb reads that much lower); without the tag it pulls the forward velocity estimate over speed_tau (s).
     float speed_tilt, speed_pitch, speed_takeoff, speed_tau;
+    // The dashboard's arrows on the tag move the hold point at this speed (m/s); kept here so it is set like the rest. The hold flies at the point's speed (nudge_rate).
+    float nudge_speed;
     // Not settings: the laptop's nudge of the hold point (m; toward the tag, to the drone's left, and up), streamed with the targets (the dashboard's arrows and W/S in hover).
     float nudge_forward, nudge_left, nudge_up;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
     float pitch_trim;
-    // Not settings: the laptop's tilt (radians; pitch positive nose down, roll positive right side down), filled in by the runtime, with or without the tag. While one is held its axis flies that tilt outright instead of holding; once released the hold brakes and holds where the drone stopped.
+    // Not settings: the laptop's tilt without the tag (radians; pitch positive nose down, roll positive right side down), filled in by the runtime; on the tag the arrows move the hold point instead (nudge). While one is held its axis flies that tilt outright instead of holding; once released the hold brakes and holds where the drone stopped.
     float stick_pitch, stick_roll;
 } HoverGains;
 

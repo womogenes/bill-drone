@@ -61,9 +61,15 @@ const tiltKeys = {
   KeyD: { axis: 'roll', direction: 1 },
 } as const;
 const yawKeys = ['ArrowLeft', 'ArrowRight'];
-// In hover and landing W and S raise and lower the hold point while held, at the drone's hover_climb_rate. The arrows and A and D tilt the drone directly, with or without the tag (fw/drone/main/hover.c stick): moving the hold point at 0.2 m/s instead could not bring back a drone drifting off (2026-11-02).
+// In hover and landing W and S raise and lower the hold point while held, at the drone's hover_climb_rate. On the tag the arrows and A and D move it too (toward the tag and to the drone's left: [forward, left]), at hover_nudge_speed, and the map shows it as the target; without the tag they tilt the drone directly (fw/drone/main/hover.c stick).
 const NUDGE_TICK_MS = 50;
 const nudgeKeys = { KeyW: 1, KeyS: -1 } as const;
+const moveKeys = {
+  ArrowUp: [1, 0],
+  ArrowDown: [-1, 0],
+  KeyA: [0, 1],
+  KeyD: [0, -1],
+} as const;
 
 function nudgeText([forward, left, up]: [number, number, number]) {
   const parts = [];
@@ -281,13 +287,16 @@ export const ControlPanel = memo(function ControlPanel({
   const setting = (key: string) =>
     (settings as unknown as Record<string, number | undefined>)[key];
   const [open, setOpen] = useState(false);
-  // Every key's size is a drone setting, so it can be tuned over the bridge like the rest: the arrows and A and D tilt as far as the hold itself may (hover_tilt; a per-browser step had been left at 5 degrees, too little to bring back a drifting drone, 2026-11-02), the left and right arrows turn at hover_yaw_rate and W and S climb at hover_climb_rate.
-  const keySizes = useRef({ tilt: 15, yaw: 30, climb: 0.3 });
+  // Every key's size is a drone setting, so it can be tuned over the bridge like the rest: the arrows and A and D tilt as far as the hold itself may (hover_tilt; a per-browser step had been left at 5 degrees, too little to bring back a drifting drone, 2026-11-02), on the tag they move the hold point at hover_nudge_speed, the left and right arrows turn at hover_yaw_rate and W and S climb at hover_climb_rate.
+  const keySizes = useRef({ tilt: 15, yaw: 30, climb: 0.3, move: 0.5 });
   keySizes.current = {
     tilt: setting('hover_tilt') ?? 15,
     yaw: setting('hover_yaw_rate') ?? 30,
     climb: setting('hover_climb_rate') ?? 0.3,
+    move: setting('hover_nudge_speed') ?? 0.5,
   };
+  const freeRef = useRef(settings.hover_camera === 0);
+  freeRef.current = settings.hover_camera === 0;
   const throttle = useRef(settings.base_throttle);
   // Key handlers read the mode through a ref so a mode change doesn't re-register them and forget held keys.
   const modeRef = useRef(mode);
@@ -313,7 +322,7 @@ export const ControlPanel = memo(function ControlPanel({
 
     const held = new Set<string>();
     // Arrows held for a hover nudge, and the timer moving the hold point while any is.
-    const nudging = new Set<keyof typeof nudgeKeys>();
+    const nudging = new Set<string>();
     let nudgeTimer: ReturnType<typeof setInterval> | undefined;
     let landFast: ReturnType<typeof setTimeout> | undefined;
 
@@ -361,10 +370,22 @@ export const ControlPanel = memo(function ControlPanel({
 
     function nudge() {
       const tick = NUDGE_TICK_MS / 1000;
+      let forward = 0;
+      let left = 0;
       let up = 0;
-      for (const code of nudging)
-        up += nudgeKeys[code] * keySizes.current.climb * tick;
-      if (up) onNudge(0, 0, up);
+      for (const code of nudging) {
+        if (code in nudgeKeys)
+          up +=
+            nudgeKeys[code as keyof typeof nudgeKeys] *
+            keySizes.current.climb *
+            tick;
+        else {
+          const [x, y] = moveKeys[code as keyof typeof moveKeys];
+          forward += x * keySizes.current.move * tick;
+          left += y * keySizes.current.move * tick;
+        }
+      }
+      if (forward || left || up) onNudge(forward, left, up);
     }
 
     function stopNudging() {
@@ -390,12 +411,15 @@ export const ControlPanel = memo(function ControlPanel({
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat || held.has(event.code)) return;
-      // There is no manual flight: outside hover only L and yaw act. In hover the arrows and A and D are held tilt; W and S move the hold point's height while held, and are not held flight keys, so their keyup and a blur leave hover alone.
+      // There is no manual flight: outside hover only L and yaw act. In hover W and S, and on the tag the arrows and A and D, move the hold point while held, and are not held flight keys, so their keyup and a blur leave hover alone; without the tag the arrows and A and D are held tilt.
       const hovering = modeRef.current !== MANUAL;
       if (!hovering && (event.code in nudgeKeys || event.code in tiltKeys))
         return;
-      if (event.code in nudgeKeys) {
-        nudging.add(event.code as keyof typeof nudgeKeys);
+      if (
+        event.code in nudgeKeys ||
+        (event.code in moveKeys && !freeRef.current)
+      ) {
+        nudging.add(event.code);
         nudge();
         if (nudgeTimer === undefined)
           nudgeTimer = setInterval(nudge, NUDGE_TICK_MS);
@@ -413,7 +437,7 @@ export const ControlPanel = memo(function ControlPanel({
     }
 
     function keyup(event: KeyboardEvent) {
-      if (nudging.delete(event.code as keyof typeof nudgeKeys)) {
+      if (nudging.delete(event.code)) {
         if (!nudging.size) stopNudging();
         return;
       }
@@ -620,11 +644,11 @@ export const ControlPanel = memo(function ControlPanel({
           { keys: ['ArrowLeft', 'ArrowRight'], label: 'Yaw' },
           {
             keys: ['ArrowUp', 'ArrowDown'],
-            label: 'Tilt forward or back',
+            label: 'Move the target closer or farther; without the tag, tilt',
           },
           {
             keys: ['A', 'D'],
-            label: 'Tilt left or right',
+            label: 'Move the target left or right; without the tag, tilt',
           },
           { keys: ['Space'], label: 'Stop' },
         ].map(({ keys, label }) => (
