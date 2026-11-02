@@ -199,6 +199,27 @@ const gainSections: { title: string; needs?: string; fields: Field[] }[] = [
       },
       { key: 'hover_trim_tau', label: 'Trim build-up time (s)', min: 0.1 },
       { key: 'hover_trim_max', label: 'Trim limit (m/s²)', min: 0 },
+      {
+        key: 'hover_gps_tau',
+        label: 'GPS velocity correction time (s, 0 off)',
+        min: 0,
+      },
+      {
+        key: 'hover_gps_place_tau',
+        label: 'GPS position correction time (s, 0 off)',
+        min: 0,
+      },
+      {
+        key: 'hover_gps_height_tau',
+        label: 'GPS height correction time (s, 0 off)',
+        min: 0,
+      },
+      {
+        key: 'hover_gps_heading',
+        label: 'Heading at takeoff (° from north)',
+        min: -180,
+        max: 180,
+      },
     ],
   },
   {

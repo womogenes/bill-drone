@@ -44,6 +44,8 @@ typedef struct {
     float nudge_speed;
     // The furthest from the picture's centre the hold's pitch may put the tag, as last seen (radians; 0 = no limit): the camera sees about 18 degrees either way and the body overshoots.
     float view;
+    // GPS without the tag (hover.c take_gps): its velocity pulls the estimate over gps_tau (s; 0 = off), its position the hold's place over gps_place_tau and its height the height over gps_height_tau (s; 0 = not used); gps_heading is where the drone's nose points at engage (radians clockwise from true north), which turns north and east into the hold's frame until the flight's own accelerations against the GPS's refine it.
+    float gps_tau, gps_place_tau, gps_height_tau, gps_heading;
     // Not settings: the laptop's nudge of the hold point (m; toward the tag, to the drone's left, and up), streamed with the targets (the dashboard's arrows and W/S in hover).
     float nudge_forward, nudge_left, nudge_up;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
@@ -70,6 +72,12 @@ typedef struct {
     float rate[2];
 } HoverFlow;
 
+// One GPS solution: when it was measured (us, this clock), velocity (m/s; north, east, up) and position (m; north and east of any fixed origin, and up).
+typedef struct {
+    int64_t capture_us;
+    float velocity[3], position[3];
+} HoverGps;
+
 #define HOVER_HISTORY 24
 
 typedef struct {
@@ -79,10 +87,10 @@ typedef struct {
     float bias;
     // Height above the engage point (m) and climb rate (m/s), from the IMU and the camera; the height target; the last climb-rate command (m/s); the climb-rate integral (m/s²); the last thrust (N).
     float height, climb_rate, target, command, integral, force;
-    // Heading integrated from the gyro (positive left, drifting), and the attitude, heading, horizontal velocity and commanded thrust tilt of recent ticks, so a sighting is levelled with the attitude it was captured at and compared with the velocity of its time, and the drag model sees the tilt the servos have reached.
+    // Heading integrated from the gyro (positive left, drifting), and the attitude, heading, horizontal velocity, commanded thrust tilt and inertial velocity (state->inertial) of recent ticks, so a sighting is levelled with the attitude it was captured at and compared with the velocity of its time, and the drag model sees the tilt the servos have reached.
     float yaw;
     int64_t history_us[HOVER_HISTORY];
-    float history[HOVER_HISTORY][6];
+    float history[HOVER_HISTORY][8];
     int next;
     // Camera: the newest sighting's sequence and capture time; the tag relative to the drone in the level frame turned by yaw (forward, left, up at yaw 0) and the drone's velocity in it; the tag's height above the engage point; the range target (m) and the bearing target (radians, positive right); the heading of the line to the tag that holds the drone's place on the circle about it, and the smoothed heading of the wall's normal, both in the yaw-turned frame.
     uint32_t sequence;
@@ -117,6 +125,11 @@ typedef struct {
     bool speed_ready;
     // When the tag was last found again after being lost (us; hover.c REACQUIRE_EASE_US).
     int64_t reacquired_us;
+    // The horizontal acceleration measured (the specific force turned level) integrated since engaging, uncorrected (m/s; yaw-turned frame): its changes against the GPS's velocity changes give the heading. The dead-reckoned position the GPS corrects (m; yaw-turned frame, from the first fix).
+    float inertial[2], track[2];
+    // GPS (take_gps): the newest fix's capture time (us, 0 before the first since engaging); the hold frame's heading (radians clockwise from north) and the evidence for it, the sum of inertial velocity changes times the GPS's conjugate (m²/s², a complex number as x, y) and its magnitude sum, both fading; the previous fix's velocity (m/s; north, east) and inertial velocity; the first fix's position less the dead reckoning then (m; north, east, up).
+    int64_t gps_us;
+    float heading, turn[2], turn_weight, gps_velocity[2], gps_inertial[2], origin[3];
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).
@@ -131,9 +144,9 @@ void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt);
 // One control tick. mode is HOVER_HOLD, HOVER_LAND or HOVER_LAND_FAST; pose is the newest camera sighting or NULL (camera disabled or no tag); roll and pitch are the measured attitude from level and yaw_rate the measured heading rate (rad/s, positive left); vertical_g is the measured specific force along vertical, in g; force is the collective thrust in N being flown now, so taking over mid-flight is smooth; drag is what the rotor-drag model needs (used when gains->drag is set).
 // A body vector (forward, left, up) in camera axes (right, down, forward): the inverse of the mounting the hover turns sightings by (cam_roll, cam_pitch), for taking the drone's own rotation out of the flow.
 void hover_body_to_camera(const HoverGains *gains, const float *body, float *camera);
-// flow is the newest camera flow measurement or NULL (each is passed once).
+// flow is the newest camera flow measurement and gps the newest GPS solution, or NULL (each is passed once).
 void hover_update(HoverState *state, const HoverGains *gains, int mode, const HoverPose *pose, int64_t now_us, float dt,
                   float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
-                  HoverOutput *output);
+                  const HoverGps *gps, HoverOutput *output);
 
 #endif

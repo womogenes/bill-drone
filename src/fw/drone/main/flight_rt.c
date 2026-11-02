@@ -15,6 +15,7 @@
 #include "settings.h"
 #include "arming.h"
 #include "camera.h"
+#include "gps.h"
 #include "hover.h"
 
 #define LOG_CAPACITY 200
@@ -101,6 +102,36 @@ static struct { int64_t us[GYRO_HISTORY]; float rate[GYRO_HISTORY][3]; int next;
 #define FLOW_MIN_INLIERS 6
 #define FLOW_MAX_RESIDUAL_PX 2.0f
 #define FLOW_MAX_AGE_US 150000
+
+// GPS solutions the hover takes: a 3D fix inside the module's accuracy masks, its speed known to GPS_MAX_SPEED_ACCURACY (m/s) and its position to GPS_MAX_ACCURACY (m), arriving no later than GPS_MAX_AGE_US. NAV-PVT comes out about GPS_LATENCY_US after the epoch it describes (the u-blox M10's solution time at 10 Hz plus the 100 bytes at 115200).
+#define GPS_MAX_SPEED_ACCURACY 0.6f
+#define GPS_MAX_ACCURACY 8.0f
+#define GPS_MAX_AGE_US 300000
+#define GPS_LATENCY_US 60000
+#define EARTH_RADIUS 6371000.0
+
+// The newest GPS solution as the hover takes it (once each): north and east of the first fix taken since boot (m), up above sea level. False without a new, good fix.
+static bool gps_input(HoverGps *out) {
+    static int64_t taken_us = -1;
+    static int32_t latitude0, longitude0;
+    static float east_scale;
+    GpsFix fix;
+    if (!gps_fix(&fix, GPS_MAX_AGE_US) || fix.received_us == taken_us) return false;
+    const UbxPvt *p = &fix.pvt;
+    if (p->fix_type != 3 || !(p->flags & 1) || p->speed_accuracy_mm_s > GPS_MAX_SPEED_ACCURACY * 1000 || p->horizontal_accuracy_mm > GPS_MAX_ACCURACY * 1000)
+        return false;
+    if (taken_us < 0) {
+        latitude0 = p->latitude;
+        longitude0 = p->longitude;
+        east_scale = cos(p->latitude * 1e-7 * M_PI / 180);
+    }
+    taken_us = fix.received_us;
+    const float metres = EARTH_RADIUS * M_PI / 180 * 1e-7;
+    *out = (HoverGps){.capture_us = fix.received_us - GPS_LATENCY_US,
+                      .velocity = {p->velocity_mm_s[0] / 1000.0f, p->velocity_mm_s[1] / 1000.0f, -p->velocity_mm_s[2] / 1000.0f},
+                      .position = {(p->latitude - latitude0) * metres, (p->longitude - longitude0) * metres * east_scale, p->height_mm / 1000.0f}};
+    return true;
+}
 
 // The camera's newest flow as the hover takes it: its shift turned into an angular rate (rad/s; right, down) less the part the drone's own rotation over the interval explains (a rotation rate W in camera axes sweeps the image centre at -W_down right and +W_right down). False without a new, trusted flow.
 static bool flow_input(const HoverGains *gains, HoverFlow *out) {
@@ -535,8 +566,10 @@ static void runtime_task(void *arg) {
                 HoverDrag drag = drag_inputs(&state, &command);
                 HoverFlow flow;
                 bool have_flow = gains.flow_depth > 0 && flow_input(&gains, &flow);
+                HoverGps gps;
+                bool have_gps = gains.gps_tau > 0 && gps_input(&gps);
                 hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag,
-                             have_flow ? &flow : NULL, &out);
+                             have_flow ? &flow : NULL, have_gps ? &gps : NULL, &out);
                 // A finished landing disarms, ending the session like a stop, so the laptop can take off again (H or Enable) instead of being left armed with hover holding thrust at zero.
                 if (hover.landed && out.force <= 0) stop_locked(link_landing ? 8 : 7);
                 scaled.base = out.force > 0 ? fminf(THROTTLE_MAX, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;

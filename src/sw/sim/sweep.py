@@ -99,8 +99,9 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py, at the geometry they name), sw/sim/airframe.py supplies the motors, servos and angular accelerations and the body's inertia instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
     With hover and plant["excite"] (a test pattern as a recording's "pattern" event, sw/excite.py: {"after", "repeat", "segments"}), its roll and pitch steps add to the hover's attitude targets from "after" seconds past collective first reaching integrate_throttle, "repeat" times (0 = until the end), as flight_rt.c excite does; its other channels are ignored.
+    GPS (fw/drone/main/flight_rt.c gps_input): plant["gps"] = {"rate" (Hz), "latency" (s, measurement to arrival; the firmware assumes 0.06), "velocity_noise" and "vertical_noise" (m/s RMS, white), "position_noise" (m RMS) wandering over "position_tau" (s), "heading": where the world's forward axis (the drone's nose at takeoff) points, degrees clockwise from north} gives the hover each fix once; settings hover_gps_tau (and hover_gps_heading, the drone's belief about that heading) turn it on.
     Optical flow (fw/drone/main/flight_rt.c flow_input): plant["flow"] = {"depth": the scene's true distance along the camera (m), "noise_px": per-frame shift noise (full-resolution px), "fps", "latency" (s), "max_px": the largest shift per frame and axis the camera's block search finds (full-resolution px; fw/esp32cam/src/flow.h reach, about 14; none by default)} gives the hover the camera's flow, the mean image motion over each frame interval with the mean measured gyro over it taken out as the firmware does; a frame whose shift exceeds max_px on either axis gives none; settings hover_flow_depth and hover_flow_tau turn it on.
-    IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "flight_accel_bias" (g, along body up) on it only while the motors are commanded (vibration rectification and the like, which the resting calibration of the vertical specific force cannot learn), "vibration" (g RMS, white, while the motors are commanded; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air, "wind" (m/s RMS per horizontal axis, time constant "wind_tau"); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white, periodic and ramping (sw/sim/disturbance.py); with "sensed_disturbances" the accelerometer feels their forces.
+    IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "flight_accel_bias" (g, along body up) on it only while the motors are commanded (vibration rectification and the like, which the resting calibration of the vertical specific force cannot learn), "vibration" (g RMS, white, while the motors are commanded; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air. The air: "wind_mean" (m/s; world forward, left) blowing steadily, plus turbulence of "wind" (m/s RMS per horizontal axis) and "wind_vertical" (m/s RMS up) with time constants "wind_tau" and "wind_vertical_tau" (s, the latter defaulting to the former; outdoors about the turbulence length scale over the mean wind: near the ground about 15 m horizontally and the height vertically, MIL-F-8785C); the airframe's speed terms (its forward and sideways speed moments and drag) and the bluff-body drag go by the airspeed, and "vertical_drag" (1/s) pulls the vertical velocity toward the air's (the rotors' thrust change with their inflow: about g / (2 v_induced), 0.7/s for these rotors at hover; 0 by default, as the indoor calibrations had it); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white, periodic and ramping (sw/sim/disturbance.py); with "sensed_disturbances" the accelerometer feels their forces.
     """
     rng = random.Random(seed)
     accel_rng = random.Random(seed + 1000)
@@ -134,7 +135,12 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     roll_disturbance, roll_gust_size, roll_gust = plant.get("roll_disturbance", 0.0), plant.get("roll_gust", 0.0), 0.0
     roll_rng = random.Random(seed + 5000)
     trim = math.radians(settings["pitch_trim"])
-    rotor_drag, wind_size, wind_keep, wind = plant.get("rotor_drag", 0.0), plant.get("wind", 0.0), math.exp(-DT / plant.get("wind_tau", 2.0)), [0.0, 0.0, 0.0]
+    rotor_drag, wind_size, wind_keep = plant.get("rotor_drag", 0.0), plant.get("wind", 0.0), math.exp(-DT / plant.get("wind_tau", 2.0))
+    wind_mean = list(plant.get("wind_mean", (0.0, 0.0))) + [0.0]
+    wind_vertical, vertical_drag = plant.get("wind_vertical", 0.0), plant.get("vertical_drag", 0.0)
+    vertical_keep = math.exp(-DT / plant.get("wind_vertical_tau", plant.get("wind_tau", 2.0)))
+    turbulence = [0.0, 0.0, 0.0]
+    wind = list(wind_mean)
     drag_x, drag_y = rotor_drag if isinstance(rotor_drag, (list, tuple)) else (rotor_drag, rotor_drag)
     disturbances = Disturbances(plant.get("disturbances"), seed)
     # plant["sensed_disturbances"]: the disturbances' forces are real forces (wind, the room's flow), which the accelerometer feels; otherwise they move the drone unfelt, as the earlier calibrations fitted them.
@@ -224,6 +230,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         flow_plant, flows, flow_capture, flow_rng = plant.get("flow"), deque(), 0.0, random.Random(seed + 4000)
         # Each tick's true rotation and velocity in camera axes and measured rotation, for the means over a frame interval.
         flow_ticks = deque(maxlen=16)
+        gps_plant, gps_fixes, gps_capture, gps_rng = plant.get("gps"), deque(), 0.0, random.Random(seed + 6000)
+        gps_error = [0.0, 0.0, 0.0]
         seen, ranges = [], []
     # The test pattern's roll and pitch per control tick, and the step collective first reached integrate_throttle.
     excite = plant.get("excite") if hover else None
@@ -290,6 +298,26 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 while flows and flows[0][0] <= now:
                     _, captured, translational = flows.popleft()
                     flow = (round((captured + 1) * 1e6), translational)
+            gps = None
+            if gps_plant:
+                period = 1 / gps_plant.get("rate", 10.0)
+                while gps_capture <= now:
+                    # The true velocity and position in north, east, up (the world's forward axis points gps_plant["heading"] degrees clockwise from north; left is 90 degrees counterclockwise of it), with white velocity noise and a slowly wandering position error (Ornstein-Uhlenbeck, position_noise m RMS over position_tau s; height twice that).
+                    psi = math.radians(gps_plant.get("heading", 0.0))
+                    keep = math.exp(-period / gps_plant.get("position_tau", 30.0))
+                    sizes = [gps_plant.get("position_noise", 0.7)] * 2 + [2 * gps_plant.get("position_noise", 0.7)]
+                    gps_error = [keep * e + s * math.sqrt(1 - keep * keep) * gps_rng.gauss(0, 1) for e, s in zip(gps_error, sizes)]
+                    north = lambda x, y: x * math.cos(psi) + y * math.sin(psi)
+                    east = lambda x, y: x * math.sin(psi) - y * math.cos(psi)
+                    noise = gps_plant.get("velocity_noise", 0.05)
+                    speed = [north(*velocity[:2]) + gps_rng.gauss(0, noise), east(*velocity[:2]) + gps_rng.gauss(0, noise), velocity[2] + gps_rng.gauss(0, gps_plant.get("vertical_noise", 0.1))]
+                    place = [north(*position[:2]) + gps_error[0], east(*position[:2]) + gps_error[1], position[2] + gps_error[2]]
+                    gps_fixes.append((gps_capture + gps_plant.get("latency", 0.06), speed, place))
+                    gps_capture += period
+                while gps_fixes and gps_fixes[0][0] <= now:
+                    arrived, speed, place = gps_fixes.popleft()
+                    # Stamped as flight_rt.c gps_input does: its arrival less the latency it assumes.
+                    gps = (round((arrived - 0.06 + 1) * 1e6), speed, place)
             # Like camera_candidates: the newest delivered frame's tag, if it saw one and was captured at most 150 ms ago.
             pose = None
             lost = camera_lost is not None and lifted is not None and now - lifted >= camera_lost
@@ -325,7 +353,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     held = lifted is not None and start <= now - lifted < start + length
                     outer.gains.stick_pitch, outer.gains.stick_roll = (math.radians(stick_pitch), math.radians(stick_roll)) if held else (0.0, 0.0)
                 mode = HOLD if land_at is None or lifted is None or now - lifted < land_at else LAND_FAST if land_fast else LAND
-                out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag, flow)
+                out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag, flow, gps)
                 settings["base_throttle"] = min(HOVER_THROTTLE, throttle(out.force / 2 / math.cos(trim))) if out.force > 0 else 0
                 settings["roll"], settings["pitch"], settings["yaw_rate"] = math.degrees(out.roll), math.degrees(out.pitch), math.degrees(out.yaw_rate)
                 excited = 0.0
@@ -357,11 +385,12 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         extra_force, extra_torque = sampled[:3], sampled[3:]
         if roll_gust_size:
             roll_gust = gust_keep * roll_gust + roll_gust_size * math.sqrt(1 - gust_keep * gust_keep) * roll_rng.gauss(0, 1)
-        if wind_size:
-            wind = [wind_keep * w + wind_size * math.sqrt(1 - wind_keep * wind_keep) * wind_rng.gauss(0, 1) for w in wind[:2]] + [0.0]
+        if wind_size or wind_vertical:
+            turbulence = [keep * w + size * math.sqrt(1 - keep * keep) * wind_rng.gauss(0, 1) for w, size, keep in zip(turbulence, (wind_size, wind_size, wind_vertical), (wind_keep, wind_keep, vertical_keep))]
+            wind = [m + t for m, t in zip(wind_mean, turbulence)]
         clearance = position[2] + min(apply(matrix, foot)[2] for foot in feet)
         if airframe:
-            body_velocity = apply(matrix, velocity, transpose=True)
+            body_velocity = apply(matrix, [v - w for v, w in zip(velocity, wind)], transpose=True)
             tilt_commands = [math.degrees(left_angle - servo_zero[0]) * MODEL["left_servo_direction"], math.degrees(right_angle - servo_zero[1]) * MODEL["right_servo_direction"]]
             # The near-ground pitch term goes by the lowest foot's height (as the logged height above the engage point) or the time since liftoff, as it was fitted.
             near = None if not ground_by else max(0.0, clearance) if ground_by == "height" else (now - lifted if lifted is not None else 0.0) if liftoff else 10.0
@@ -396,12 +425,15 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     height * (forward[0] + forward[1]) + plant["com_x"] * (vertical[0] + vertical[1]) + extra * inertia[1],
                     arm * (forward[1] - forward[0]) + 0.015 * (vertical[1] - vertical[0]),
                 ]
-            speed = math.sqrt(sum(v * v for v in velocity))
+            relative = [v - w for v, w in zip(velocity, wind)] if lifted is not None or not liftoff else velocity
+            speed = math.sqrt(sum(v * v for v in relative))
             # Every force except gravity, in the world frame: thrust, drag, then each foot below the floor.
-            push = [f - DRAG * speed * v for f, v in zip(apply(matrix, [sum(forward), 0.0, sum(vertical)]), velocity)]
+            push = [f - DRAG * speed * v for f, v in zip(apply(matrix, [sum(forward), 0.0, sum(vertical)]), relative)]
+            if vertical_drag and (lifted is not None or not liftoff):
+                push[2] -= mass * vertical_drag * relative[2]
             if rotor_drag:
                 # Blade flapping and induced drag: a force against the airspeed in the rotor plane, proportional to it.
-                air = apply(matrix, [v - w for v, w in zip(velocity, wind)], transpose=True)
+                air = apply(matrix, relative, transpose=True)
                 push = [p + d for p, d in zip(push, apply(matrix, [-mass * drag_x * air[0], -mass * drag_y * air[1], 0.0]))]
             spin = apply(matrix, rate)
             touching = False

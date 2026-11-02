@@ -311,7 +311,7 @@ def replay(recording, contact=None, source=None, defines=()):
         weight = state.hold_force if getattr(state, "hold_force", 0) > 0 else gains.mass * 9.81
         before = (state.landed, getattr(state, "probing", False))
         hover.library.hover_update(ctypes.byref(state), ctypes.byref(gains), int(mode[i]), None, int(t[i] * 1e6) + 1000000, 0.01, float(roll[i]), float(pitch[i]), 0.0,
-                                   float(vertical[i]) + difference / weight, state.force if state.engaged else float(force[i]), None, None, ctypes.byref(out))
+                                   float(vertical[i]) + difference / weight, state.force if state.engaged else float(force[i]), None, None, None, ctypes.byref(out))
         if not landing:
             # The hold as flown: its thrust (and the integral that gives it, so the landing starts from it), which the new code's references learn from.
             lean = max(0.5, math.cos(roll[i]) * math.cos(pitch[i]))

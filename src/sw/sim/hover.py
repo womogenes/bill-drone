@@ -15,9 +15,9 @@ DEFINES = os.environ.get("HOVER_DEFINES", "").split()
 LIBRARY = Path(__file__).with_name("libhover" + "".join("-" + define.replace("=", "_") for define in DEFINES) + ".so")
 HISTORY = 24
 HOLD, LAND, LAND_FAST = 1, 2, 3
-GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "view", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll")
+GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "view", "gps_tau", "gps_place_tau", "gps_height_tau", "gps_heading", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll")
 # Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_cam_roll, hover_drag_tilt) and the attitude controller's pitch_trim.
-ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "cam_roll", "drag_tilt", "pitch_trim", "speed_tilt", "speed_takeoff", "view")
+ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "cam_roll", "drag_tilt", "pitch_trim", "speed_tilt", "speed_takeoff", "view", "gps_heading")
 
 
 class Gains(ctypes.Structure):
@@ -36,11 +36,15 @@ class Flow(ctypes.Structure):
     _fields_ = [("capture_us", ctypes.c_int64), ("rate", ctypes.c_float * 2)]
 
 
+class Gps(ctypes.Structure):
+    _fields_ = [("capture_us", ctypes.c_int64), ("velocity", ctypes.c_float * 3), ("position", ctypes.c_float * 3)]
+
+
 class State(ctypes.Structure):
     _fields_ = [(name, ctypes.c_bool) for name in ("engaged", "landed", "have_pose", "have_setpoint", "have_normal", "found", "tracking")] + [
         (name, ctypes.c_float) for name in ("bias", "height", "climb_rate", "target", "command", "integral", "force", "yaw")
     ] + [
-        ("history_us", ctypes.c_int64 * HISTORY), ("history", (ctypes.c_float * 6) * HISTORY), ("next", ctypes.c_int),
+        ("history_us", ctypes.c_int64 * HISTORY), ("history", (ctypes.c_float * 8) * HISTORY), ("next", ctypes.c_int),
         ("sequence", ctypes.c_uint32), ("capture_us", ctypes.c_int64), ("seen_us", ctypes.c_int64),
         ("position", ctypes.c_float * 3), ("velocity", ctypes.c_float * 3),
     ] + [(name, ctypes.c_float) for name in ("tag_height", "setpoint", "bearing", "arc", "normal")] + [
@@ -49,7 +53,9 @@ class State(ctypes.Structure):
         (name, ctypes.c_float) for name in ("hold_force", "hold_g", "recent_g", "land_time", "land_height", "stall_time", "impulse")] + [("probing", ctypes.c_bool)] + [
         (name, ctypes.c_float) for name in ("ceiling", "probe_start", "probe_g", "probe_force", "probe_velocity", "probe_expected", "probe_wait", "sink")] + [("nudge", ctypes.c_float * 3), ("nudge_rate", ctypes.c_float * 3),
         ("push", ctypes.c_float * 2), ("carry", ctypes.c_float * 2), ("flow_bias", ctypes.c_float), ("flow_us", ctypes.c_int64), ("braking", ctypes.c_float)] + [
-        (name, ctypes.c_float) for name in ("speed_raw", "speed_offset", "speed_sum", "speed_time", "speed")] + [("speed_ready", ctypes.c_bool)] + [("reacquired_us", ctypes.c_int64)]
+        (name, ctypes.c_float) for name in ("speed_raw", "speed_offset", "speed_sum", "speed_time", "speed")] + [("speed_ready", ctypes.c_bool)] + [("reacquired_us", ctypes.c_int64)] + [
+        ("inertial", ctypes.c_float * 2), ("track", ctypes.c_float * 2), ("gps_us", ctypes.c_int64), ("heading", ctypes.c_float), ("turn", ctypes.c_float * 2),
+        ("turn_weight", ctypes.c_float), ("gps_velocity", ctypes.c_float * 2), ("gps_inertial", ctypes.c_float * 2), ("origin", ctypes.c_float * 3)]
 
 
 class Output(ctypes.Structure):
@@ -70,7 +76,7 @@ def load(library, state):
     library.hover_rest.restype = None
     library.hover_update.argtypes = [ctypes.POINTER(state), ctypes.POINTER(Gains), ctypes.c_int, ctypes.POINTER(Pose), ctypes.c_int64, ctypes.c_float,
                                      ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.POINTER(Drag), ctypes.POINTER(Flow),
-                                     ctypes.POINTER(Output)]
+                                     ctypes.POINTER(Gps), ctypes.POINTER(Output)]
     library.hover_body_to_camera.argtypes = [ctypes.POINTER(Gains), ctypes.c_float * 3, ctypes.c_float * 3]
     library.hover_body_to_camera.restype = None
     library.hover_update.restype = None
@@ -109,12 +115,13 @@ class Hover:
         library.hover_body_to_camera(ctypes.byref(self.gains), (ctypes.c_float * 3)(*body), out)
         return list(out)
 
-    def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None):
+    def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None, gps=None):
         """
-        drag is (specific force in the level reference's body axes in g, commanded thrust tilt in radians) or None; flow is (capture time in us, translational rate right and down in rad/s) or None.
+        drag is (specific force in the level reference's body axes in g, commanded thrust tilt in radians) or None; flow is (capture time in us, translational rate right and down in rad/s) or None; gps is (capture time in us, velocity north, east, up in m/s, position north, east, up in m) or None.
         """
         inputs = Drag(specific=tuple(drag[0]), tilt=drag[1]) if drag else None
         measured = Flow(capture_us=flow[0], rate=tuple(flow[1])) if flow else None
+        located = Gps(capture_us=gps[0], velocity=tuple(gps[1]), position=tuple(gps[2])) if gps else None
         library.hover_update(ctypes.byref(self.state), ctypes.byref(self.gains), mode, ctypes.byref(pose) if pose else None, now_us, dt, roll, pitch, yaw_rate, vertical_g, force,
-                             ctypes.byref(inputs) if inputs else None, ctypes.byref(measured) if measured else None, ctypes.byref(self.output))
+                             ctypes.byref(inputs) if inputs else None, ctypes.byref(measured) if measured else None, ctypes.byref(located) if located else None, ctypes.byref(self.output))
         return self.output

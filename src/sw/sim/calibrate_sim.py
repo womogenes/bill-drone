@@ -19,7 +19,7 @@ from sw.flight_log import read_flight
 from sw.sim import airframe as A
 from sw.sim import identify_airframe as N
 from sw.sim import plot_prediction as P
-from sw.sim.sweep import IDENTIFIED_ESC, run
+from sw.sim.sweep import CURRENT, IDENTIFIED_ESC, run
 
 MODELS = Path(__file__).with_name("models")
 RECORDINGS = Path(__file__).parents[1] / "recordings"
@@ -34,7 +34,8 @@ BANDS = ((0.3, 0.8), (0.8, 1.5), (1.5, 3.0))
 SEEDS = 6
 # Searched: name, low, high, start (log-scaled; the lag and correlation times start at the current plant's, see starting).
 SPACE = (("pitch_gain", 0.6, 1.8, 1.0), ("wake_gain", 0.3, 3.0, 1.0), ("wake_tau", 0.2, 2.0, 1.0), ("roll_gain", 0.6, 2.5, 1.0), ("roll_pendulum_gain", 0.2, 3.0, 1.0), ("pitch_pendulum_gain", 0.2, 3.0, 1.0),
-         ("pitch_drift", 0.3, 3.0, 1.0), ("roll_drift", 0.3, 3.0, 1.0), ("pitch_tau", 0.05, 1.5, 0.1), ("roll_tau", 0.05, 1.5, 0.1), ("force_drift", 0.3, 3.0, 1.0), ("side_drift", 0.3, 5.0, 1.0), ("side_tau", 0.2, 10.0, 0.47), ("side_moment_gain", 0.2, 4.0, 1.0))
+         ("pitch_drift", 0.3, 3.0, 1.0), ("roll_drift", 0.3, 3.0, 1.0), ("pitch_tau", 0.05, 1.5, 0.1), ("roll_tau", 0.05, 1.5, 0.1), ("force_drift", 0.3, 3.0, 1.0), ("side_drift", 0.3, 5.0, 1.0), ("side_tau", 0.2, 10.0, 0.47), ("side_moment_gain", 0.2, 4.0, 1.0),
+         ("speed_moment_gain", 0.3, 4.0, 1.0), ("servo_inertia_gain", 0.5, 5.0, 1.0))
 HORIZONS = (25, 50, 100)
 PENALTY = 4.0
 
@@ -94,7 +95,9 @@ def plant(x):
     airframe = airframe | {"wash_z": cz + (geometry["pivot_z"] - cz - arm) / p["wash"], "pitch_wake": p["pitch_wake"] * v["wake_gain"], "wake_tau": v["wake_tau"], "differential_slope": p["differential_slope"] * v["roll_gain"],
                            "roll_pendulum": p["roll_pendulum"] * v["roll_pendulum_gain"], "pitch_pendulum": p["pitch_pendulum"] * v["pitch_pendulum_gain"],
                            # The sideways speed's roll moment: its effective height above the CoM, scaled.
-                           "drag_z_y": cz + (p["drag_z_y"] - cz) * v["side_moment_gain"]}
+                           "drag_z_y": cz + (p["drag_z_y"] - cz) * v["side_moment_gain"],
+                           # The forward speed's pitch moment (the rotors flapping back) likewise, and the servos' reflected inertia, which sets the high-frequency tilt authority: the multi-step fit leaves both loose (on the 2026-11-02 10-inch hovers the closed-loop swing needed about 1.7 and 3 times their fitted values).
+                           "drag_z_x": cz + (p["drag_z_x"] - cz) * v["speed_moment_gain"], "servo_inertia": p["servo_inertia"] * v["servo_inertia_gain"]}
     terms = []
     for t in BASE["disturbances"]:
         t = dict(t)
@@ -184,6 +187,7 @@ def main():
     parser.add_argument("--start", default="", help="name=value,... to start the search from")
     parser.add_argument("--hovers", help="camera hovers to match, recording names without .bin (default: HOVERS)")
     parser.add_argument("--flights", help="recording names or globs for the prediction penalty (default: FLIGHTS)")
+    parser.add_argument("--base", choices=("identified", "current"), default="identified", help="the plant scaled: sweep.IDENTIFIED_ESC (the 2026-10-29 room) or sweep.CURRENT (the room as the camera measured it from 2026-10-31: little rotor drag, sensed drifts, no steady push)")
     parser.add_argument("--airframe", type=Path, help="the airframe to scale (default: sweep.IDENTIFIED_ESC's)")
     parser.add_argument("--disturbances", type=Path, help="the disturbances to scale (default: sweep.IDENTIFIED_ESC's)")
     parser.add_argument("--report", action="store_true", help="print each hover's real and simulated statistics at the start and stop")
@@ -197,6 +201,8 @@ def main():
         HOVERS = tuple(args.hovers.split(","))
     if args.flights:
         FLIGHTS = tuple(path.stem for path in N.paths([str(RECORDINGS / item) if "/" not in item else item for item in args.flights.split(",")]))
+    if args.base == "current":
+        BASE = CURRENT
     if args.airframe:
         BASE = BASE | {"airframe": json.loads(args.airframe.read_text())}
     if args.disturbances:
