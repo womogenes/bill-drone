@@ -45,6 +45,8 @@
 #define VOLTAGE_RANGE 0.15f
 // Arming is refused with the pack under ARM_MIN_V (about 3.5 V a cell on 4S): on 2026-11-02 the drone armed at 9.9 V after a half hour powered on the bench and sagged to 6.3 V in the hop. Below NO_PACK_V there is no pack (the bench on USB alone), which stays allowed.
 #define ARM_MIN_V 14.0f
+// Self-trim learns nothing from a hop that ends with the pack under TRIM_MIN_V (3 V a cell under load on 4S): starved motors split the thrust differently, and on 2026-11-02 a hop at 6.3 V moved roll_bias from 0.4 to 3.2, which rolled the next liftoff left.
+#define TRIM_MIN_V 12.0f
 #define NO_PACK_V 5.0f
 // Oldest camera sighting hover uses (us).
 #define HOVER_POSE_US 150000
@@ -221,7 +223,7 @@ static void write_servo(int side) {
 }
 
 static void stop_locked(int reason) {
-    if (state.enabled && trim.count >= TRIM_SAMPLES) {
+    if (state.enabled && trim.count >= TRIM_SAMPLES && !(battery_v > NO_PACK_V && battery_v < TRIM_MIN_V)) {
         // Roll only: its trim is the motors' thrust split, the airframe's own. The pitch trim is wherever the CoM sat this flight, which the next need not share (the battery moves between flights, and slid within them on 2026-10-31, when a carried pitch_bias kicked the nose at the next liftoff); the controller finds it in flight instead (Controller tilt, the pitch integrator), and pitch_bias stays as set.
         float old[2] = {command.roll_bias, command.pitch_bias};
         trim.bias[0] = limit(old[0] + limit(command.auto_trim * (trim.sum[0] / trim.count - old[0]), -TRIM_STEP, TRIM_STEP), -command.integral_limit, command.integral_limit);
