@@ -364,6 +364,9 @@ def instrumented(data, flights, residual):
         j = int(np.searchsorted(flights, i))
         used = True
         for axis in range(2):
+            # Only an axis the pattern steps: a pitch-only pattern has no roll instrument (its cross-spectra are zero, and the ratio would be 0/0).
+            if not np.any(z[:, axis]):
+                continue
             accel = (data.rate[i, window.start + 1:window.stop + 1, axis] - data.rate[i, window, axis]) / DT
             f, e = csd(z[:, axis], residual[j, window, axis] / DT, fs=1 / DT, nperseg=INSTRUMENT_SEGMENT)
             _, a = csd(z[:, axis], accel, fs=1 / DT, nperseg=INSTRUMENT_SEGMENT)
@@ -373,7 +376,8 @@ def instrumented(data, flights, residual):
                 real[axis, b] += a[band].sum() * len(z)
     if not used:
         return np.zeros(0)
-    ratio = (error / real).ravel()
+    excited = real != 0
+    ratio = error[excited] / real[excited]
     return np.concatenate([ratio.real, ratio.imag])
 
 

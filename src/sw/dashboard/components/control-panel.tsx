@@ -1,8 +1,8 @@
 'use client';
 
-import { FLIGHT_MODES, THROTTLE_MAX } from '@/lib/telemetry';
+import { FLIGHT_MODES } from '@/lib/telemetry';
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
   ArrowDown,
@@ -16,7 +16,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Kbd, KbdGroup } from '@/components/ui/kbd';
-import { Slider } from '@/components/ui/slider';
 import {
   Dialog,
   DialogContent,
@@ -25,7 +24,6 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import type { ControlSettings, Reading } from '@/lib/telemetry';
-import { signed } from '@/lib/format';
 
 const keyIcons: Record<string, LucideIcon> = {
   ArrowUp,
@@ -83,19 +81,8 @@ function nudgeText([forward, left, up]: [number, number, number]) {
   return `Hold nudge: ${parts.join(', ') || 'none'}`;
 }
 
-const controls = [
-  { key: 'roll', label: 'Roll', min: -15, max: 15, suffix: '°' },
-  { key: 'pitch', label: 'Pitch', min: -15, max: 15, suffix: '°' },
-  { key: 'yaw_rate', label: 'Yaw rate', min: -45, max: 45, suffix: '°/s' },
-  {
-    key: 'base_throttle',
-    label: 'Collective throttle',
-    min: 0,
-    max: THROTTLE_MAX,
-    suffix: '',
-  },
-] as const;
-type Setpoint = (typeof controls)[number]['key'];
+// The setpoints the keys stream (the drone's targets).
+type Setpoint = 'roll' | 'pitch' | 'yaw_rate' | 'base_throttle';
 // The gains dialog's sections: each field is a drone setting; label is read within its section's title.
 type Field = { key: string; label: string; min?: number; max?: number };
 const gainSections: { title: string; needs?: string; fields: Field[] }[] = [
@@ -295,23 +282,15 @@ export const ControlPanel = memo(function ControlPanel({
     climb: setting('hover_climb_rate') ?? 0.3,
     move: setting('hover_nudge_speed') ?? 0.5,
   };
-  const freeRef = useRef(settings.hover_camera === 0);
-  freeRef.current = settings.hover_camera === 0;
+  const free = settings.hover_camera === 0;
+  const freeRef = useRef(free);
+  freeRef.current = free;
   const throttle = useRef(settings.base_throttle);
   // Key handlers read the mode through a ref so a mode change doesn't re-register them and forget held keys.
   const modeRef = useRef(mode);
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
-
-  const changeSetpoint = useCallback(
-    (key: Setpoint, value: number) => {
-      if (key === 'base_throttle') throttle.current = value;
-      setDraft((previous) => ({ ...previous, [key]: value }));
-      onChange({ [key]: value });
-    },
-    [onChange]
-  );
 
   useEffect(() => {
     throttle.current = draft.base_throttle ?? settings.base_throttle;
@@ -635,24 +614,24 @@ export const ControlPanel = memo(function ControlPanel({
           <Square />
         </Button>
       </div>
-      <div className="flex flex-col gap-2 text-muted-foreground">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
         {[
-          { keys: ['W', 'S'], label: 'Climb or descend' },
-          { keys: ['T', 'H'], label: 'Take off and hover (arms if needed)' },
-          { keys: ['L'], label: 'Land (hold for fast)' },
-          { keys: ['F'], label: 'Camera: tag or free flight' },
+          { keys: ['T', 'H'], label: 'Take off' },
+          { keys: ['L'], label: 'Land (hold: fast)' },
+          { keys: ['W', 'S'], label: 'Up / down' },
           { keys: ['ArrowLeft', 'ArrowRight'], label: 'Yaw' },
           {
             keys: ['ArrowUp', 'ArrowDown'],
-            label: 'Move the target closer or farther; without the tag, tilt',
+            label: free ? 'Tilt fwd / back' : 'Target closer / farther',
           },
           {
             keys: ['A', 'D'],
-            label: 'Move the target left or right; without the tag, tilt',
+            label: free ? 'Tilt left / right' : 'Target left / right',
           },
+          { keys: ['F'], label: free ? 'Switch to tag' : 'Switch to free' },
           { keys: ['Space'], label: 'Stop' },
         ].map(({ keys, label }) => (
-          <div key={label} className="flex items-center gap-2">
+          <div key={keys.join()} className="flex items-center gap-2">
             <KbdGroup>
               {keys.map((key) => {
                 const Icon = keyIcons[key];
@@ -663,11 +642,11 @@ export const ControlPanel = memo(function ControlPanel({
                 );
               })}
             </KbdGroup>
-            <span>{label}</span>
+            <span className="truncate">{label}</span>
           </div>
         ))}
         {(mode !== MANUAL || nudge.some(Boolean)) && (
-          <span className="tabular-nums">{nudgeText(nudge)}</span>
+          <span className="col-span-2 tabular-nums">{nudgeText(nudge)}</span>
         )}
       </div>
       <p
@@ -676,60 +655,6 @@ export const ControlPanel = memo(function ControlPanel({
       >
         {problem || 'Good to fly.'}
       </p>
-      {controls.map((control) => (
-        <SetpointSlider
-          key={control.key}
-          control={control}
-          value={draft[control.key] ?? settings[control.key]}
-          disabled={!available || !settings.enabled}
-          onChange={changeSetpoint}
-        />
-      ))}
-      <Button
-        variant="outline"
-        disabled={!available || !settings.enabled}
-        onClick={() => {
-          setDraft((previous) => ({ ...previous, roll: 0, pitch: 0 }));
-          onChange({ roll: 0, pitch: 0 });
-        }}
-      >
-        Level
-      </Button>
     </section>
-  );
-});
-
-const SetpointSlider = memo(function SetpointSlider({
-  control: { key, label, min, max, suffix },
-  value,
-  disabled,
-  onChange,
-}: {
-  control: (typeof controls)[number];
-  value: number;
-  disabled: boolean;
-  onChange: (key: Setpoint, value: number) => void;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex justify-between tabular-nums">
-        <label id={`control-${key}`}>{label}</label>
-        <span>
-          {key === 'base_throttle' ? value : signed(value, 0)}
-          {suffix}
-        </span>
-      </div>
-      <Slider
-        aria-labelledby={`control-${key}`}
-        min={min}
-        max={max}
-        step={1}
-        value={[value]}
-        disabled={disabled}
-        onValueChange={(values) =>
-          onChange(key, Array.isArray(values) ? values[0] : values)
-        }
-      />
-    </div>
   );
 });
