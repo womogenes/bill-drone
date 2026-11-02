@@ -6,6 +6,9 @@
 #include "mbedtls/sha256.h"
 #include "packet.h"
 extern bool cameraReady, cameraStalled;
+extern int exposureLines, maxExposureLines;
+extern float exposureGain;
+void setExposureCap(int lines);
 extern volatile bool fpvActive;
 extern volatile uint32_t fpvRadioMs;
 namespace fpv {
@@ -55,7 +58,8 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
     if (op == 'S') {
         wifiState(text, size);
         const size_t used = strlen(text);
-        snprintf(text + used, size - used, " %s 0x%x %u %u/%u", cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", unsigned(startError), unsigned(fpv::rawSent), unsigned(goodRequests), unsigned(badRequests));
+        // Then the exposure (lines of config::rowUs-ish 57.5 us) and the gain the tracking runs at.
+        snprintf(text + used, size - used, " %s 0x%x %u %u/%u exp %d/%d gain %.0f", cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", unsigned(startError), unsigned(fpv::rawSent), unsigned(goodRequests), unsigned(badRequests), exposureLines, maxExposureLines, exposureGain);
         return nullptr;
     }
     if (op == 'L') {
@@ -64,6 +68,14 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
         for (size_t i = start; i < end; ++i)
             text[i - start] = logRing[i % sizeof(logRing)] >= ' ' ? logRing[i % sizeof(logRing)] : '|';
         text[end - start] = 0;
+        return nullptr;
+    }
+    if (op == 'E') {
+        // The exposure cap in lines (u16; 0 = the whole frame), kept across restarts; the reply is the cap now in force.
+        if (length < 2)
+            return "Malformed exposure cap";
+        setExposureCap(body[0] | body[1] << 8);
+        snprintf(text, size, "%d", maxExposureLines);
         return nullptr;
     }
     if (op == 'H') {

@@ -31,6 +31,10 @@ uint32_t lastStartMs = 0;
 esp_err_t startError = ESP_OK;
 uint32_t stalls = 0, recoveries = 0;
 int exposureLines;
+// The sensor's gain at the last exposure adjustment, for K S.
+float exposureGain = 0;
+// The longest exposure adjustExposure may reach (lines), set by the drone's K E and kept across restarts (Preferences "exposure"): a long exposure smears the tag when the drone rotates, and in dim light the exposure ran to the frame's 23 ms, where with the tag in view 73% of frames at 40-70 degrees/s of rotation lost it, against 8% under 20 (2026-11-02). Darker but sharp finds the tag; bright but smeared does not.
+int maxExposureLines = config::vts - 4;
 // What each core was doing, kept across a panic restart: /status shows the values from before the last reset.
 RTC_NOINIT_ATTR uint32_t crumbs[3];
 uint32_t lastCrumbs[3];
@@ -167,11 +171,13 @@ bool startCamera(bool jpeg) {
 void adjustExposure() {
     sensor_t *sensor = esp_camera_sensor_get();
     const float gain = sensor->get_reg(sensor, 0x350a, 0x3ff) / 16.0f;
+    exposureGain = gain;
     int lines = exposureLines;
     if (gain > config::raiseExposureGain)
-        lines = min(config::vts - 4, lines * 5 / 4);
+        lines = min(maxExposureLines, lines * 5 / 4);
     else if (gain < config::lowerExposureGain)
-        lines = max(config::exposureLines, lines * 4 / 5);
+        lines = max(min(config::exposureLines, maxExposureLines), lines * 4 / 5);
+    lines = min(lines, maxExposureLines);
     if (lines != exposureLines && sensor->set_aec_value(sensor, lines) == 0)
         exposureLines = lines;
 }
@@ -181,6 +187,24 @@ void detectorWorkspace(Workspace where) {
     heap_caps_malloc_extmem_enable(where == workspaceInternal && !previewStreaming ? config::trackInternalBytes
                                    : where == workspaceExternal                    ? 0
                                                                                    : 4096);
+}
+
+// Sets the exposure cap (lines; 0 = the whole frame) and keeps it.
+void setExposureCap(int lines) {
+    maxExposureLines = lines > 0 ? constrain(lines, 20, config::vts - 4) : config::vts - 4;
+    Preferences store;
+    if (store.begin("exposure", false)) {
+        store.putUShort("max", uint16_t(maxExposureLines));
+        store.end();
+    }
+}
+
+void loadExposureCap() {
+    Preferences store;
+    if (store.begin("exposure", true)) {
+        maxExposureLines = constrain(int(store.getUShort("max", config::vts - 4)), 20, config::vts - 4);
+        store.end();
+    }
 }
 
 void setup() {
@@ -208,6 +232,7 @@ void setup() {
     // Mounting holds the sync line high (the card's DAT3) and leaves it low.
     blackbox::mount();
     loadCalibration();
+    loadExposureCap();
 
     // AI Thinker ESP32-CAM pinout; the camera driver identifies the sensor.
     camera_config_t &camera = cameraConfig;
