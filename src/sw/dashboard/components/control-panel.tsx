@@ -55,7 +55,7 @@ export function typing(event: KeyboardEvent) {
 }
 // Keyboard setpoint sizes are a local preference, not drone settings.
 const MANUAL_KEY = 'manual-inputs';
-const MANUAL_DEFAULT = { tilt: 15, yaw: 20 };
+const MANUAL_DEFAULT = { yaw: 20 };
 function readManual() {
   try {
     return {
@@ -301,6 +301,9 @@ export const ControlPanel = memo(function ControlPanel({
   const [manual, setManual] = useState(MANUAL_DEFAULT);
   const [manualDraft, setManualDraft] = useState(MANUAL_DEFAULT);
   useEffect(() => setManual(readManual()), []);
+  // The arrows and A and D tilt as far as the hold itself may (hover_tilt): a per-browser step had been left at 5 degrees, and arrows asking for that could not bring back a drifting drone (2026-11-02).
+  const stickTilt = useRef(15);
+  stickTilt.current = setting('hover_tilt') ?? 15;
   const throttle = useRef(settings.base_throttle);
   // Key handlers read the mode through a ref so a mode change doesn't re-register them and forget held keys.
   const modeRef = useRef(mode);
@@ -367,7 +370,7 @@ export const ControlPanel = memo(function ControlPanel({
           (binding.axis === axis && held.has(key) ? binding.direction : 0),
         0
       );
-      const value = manual.tilt * direction;
+      const value = stickTilt.current * direction;
       setDraft((previous) => ({ ...previous, [axis]: value }));
       onChange({ [axis]: value });
     }
@@ -552,10 +555,7 @@ export const ControlPanel = memo(function ControlPanel({
                     ])
                   )
                 );
-                const next = {
-                  tilt: Number(manualDraft.tilt),
-                  yaw: Number(manualDraft.yaw),
-                };
+                const next = { yaw: Number(manualDraft.yaw) };
                 setManual(next);
                 try {
                   localStorage.setItem(MANUAL_KEY, JSON.stringify(next));
@@ -609,25 +609,6 @@ export const ControlPanel = memo(function ControlPanel({
                   Free flight inputs (this browser)
                 </h3>
                 <div className="space-y-2">
-                  <label className="flex items-center justify-between gap-3">
-                    Pitch/roll step (°)
-                    <Input
-                      className="w-32"
-                      aria-label="Pitch/roll step (°)"
-                      type="number"
-                      min={0}
-                      max={15}
-                      step="any"
-                      required
-                      value={manualDraft.tilt}
-                      onChange={(event) =>
-                        setManualDraft({
-                          ...manualDraft,
-                          tilt: Number(event.target.value),
-                        })
-                      }
-                    />
-                  </label>
                   <label className="flex items-center justify-between gap-3">
                     Yaw rate (°/s)
                     <Input
