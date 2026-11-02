@@ -585,6 +585,16 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
                 state->arc = wrap(state->arc + arc_rate * dt);
             }
         }
+        // A held stick (the arrows, A and D) flies its tilt outright on its axis, as without the tag: moving the hold point at 0.2 m/s instead could not bring back a drone drifting off (2026-11-02 04:01 UTC). Meanwhile, and while the hold brakes after it, the hold point follows the drone, so it holds where the stick was let go instead of flying back.
+        bool stick = g->stick_pitch || g->stick_roll;
+        if (stick)
+            state->braking = BRAKE_S;
+        else if (state->braking > 0)
+            state->braking = hypotf(state->velocity[0], state->velocity[1]) < BRAKED ? 0 : state->braking - dt;
+        if (stick || state->braking > 0) {
+            state->setpoint = range + g->nudge_forward;
+            state->arc = wrap(around + g->nudge_left / range);
+        }
         // Toward the tag: close the range error and damp the closing speed toward the target's rate. Across it (positive left): damp the sideways speed toward the target's rate, and pull weakly toward the place on the circle, so the drone neither drifts around the tag nor fights the range and heading loops for it. Moving left turns the line to the tag right (smaller around).
         float ux = px / range, uy = py / range;
         float closing = state->velocity[0] * ux + state->velocity[1] * uy;
@@ -607,11 +617,13 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         bool moving = hypotf(state->nudge_rate[0], state->nudge_rate[1]) > NUDGE_MOVING;
         for (int i = 0; i < 2; i++) {
             // Nor while the hold point is being moved: the error then is the move, not a steady push.
-            if (moving) continue;
+            if (moving || stick || state->braking > 0) continue;
             if (fabsf(total[i]) < limit || step[i] * total[i] < 0) state->trim[i] = clamp(state->trim[i] + step[i], -g->trim_max, g->trim_max);
         }
         forward += state->trim[0];
         left += state->trim[1];
+        if (g->stick_pitch) forward = GRAVITY * tanf(g->stick_pitch);
+        if (g->stick_roll) left = -GRAVITY * tanf(g->stick_roll);
         // Tag right of the bearing target: turn right, a negative yaw rate.
         output->yaw_rate = clamp(-g->kyaw * wrap(bearing - state->bearing), -g->yaw_rate, g->yaw_rate);
         state->tracking = true;

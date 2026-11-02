@@ -498,9 +498,9 @@ static void runtime_task(void *arg) {
                 gains.nudge_forward = nudge[0];
                 gains.nudge_left = nudge[1];
                 gains.nudge_up = nudge[2];
-                // Without the tag the laptop's tilt (the arrows, A and D) flies the drone directly; a link-loss landing ignores what the lost laptop last sent.
-                gains.stick_pitch = command.hover_camera || link_landing ? 0 : command.target_pitch;
-                gains.stick_roll = command.hover_camera || link_landing ? 0 : command.target_roll;
+                // The laptop's tilt (the arrows, A and D) flies the drone directly, with or without the tag; a link-loss landing ignores what the lost laptop last sent.
+                gains.stick_pitch = link_landing ? 0 : command.target_pitch;
+                gains.stick_roll = link_landing ? 0 : command.target_roll;
                 if (link_landing && !hover.tracking) gains.drag = fmaxf(gains.drag, LINK_LAND_DRAG);
                 HoverOutput out;
                 // Heading rate about vertical from the body rates (positive left).

@@ -157,6 +157,13 @@ class Recorder:
     def event(self, message):
         self.events.write(json.dumps({**message, "received_at": now()}) + "\n")
 
+    def command(self, message):
+        """
+        A change in the dashboard's commands, into the open recording only: what the pilot asked for and when, against which the flight can be read (on 2026-11-02 a landing the pilot pressed for never showed in the log, and nothing said whether it was sent).
+        """
+        if self.events is not None:
+            self.event(message)
+
     def receive(self, channel, payload):
         self.last_message = time.monotonic()
         if self.stalled:
@@ -322,6 +329,8 @@ class Service:
         self.updaters = set()
         self.update_owner = {}
         self.recorder = Recorder(recordings)
+        # The dashboard's last targets as recorded (Recorder.command).
+        self.last_command = None
         self.record_queue = asyncio.Queue(maxsize=64)
         self.record_pending = set()
         self.senders = {}
@@ -672,8 +681,15 @@ class Service:
     def dashboard_message(self, ws, message):
         kind = message["type"]
         if kind == "targets":
+            # Only changes: the browser streams the same targets every 50 ms.
+            command = {"mode": message.get("mode", 0), **{key: round(float(message[key]), 2) for key in ("base_throttle", "roll", "pitch", "yaw_rate")},
+                       "nudge": [round(float(value), 2) for value in message.get("nudge", ())]}
+            if command != self.last_command:
+                self.last_command = command
+                self.queue_record("command", {"type": "command", **command})
             self.send(1, encode_targets(message))
         elif kind == "stop":
+            self.queue_record("command", {"type": "command", "stop": True})
             stop = self.stop()
             self.start_transaction(ws, self.confirm_stop(ws, stop))
         else:

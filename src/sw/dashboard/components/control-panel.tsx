@@ -74,15 +74,10 @@ const tiltKeys = {
   KeyD: { axis: 'roll', direction: 1 },
 } as const;
 const yawKeys = ['ArrowLeft', 'ArrowRight'];
-// In hover and landing on the tag the up and down arrows and A and D move the hold point while held (m/s): up toward the tag, A to the drone's left; W and S raise and lower it, with or without the tag. Without the tag the arrows and A and D tilt the drone directly instead (fw/drone/main/hover.c stick).
-const NUDGE_SPEED = 0.2;
+// In hover and landing W and S raise and lower the hold point while held (m/s). The arrows and A and D tilt the drone directly, with or without the tag (fw/drone/main/hover.c stick): moving the hold point at 0.2 m/s instead could not bring back a drone drifting off (2026-11-02).
 const NUDGE_CLIMB = 0.3;
 const NUDGE_TICK_MS = 50;
 const nudgeKeys = {
-  ArrowUp: [NUDGE_SPEED, 0, 0],
-  ArrowDown: [-NUDGE_SPEED, 0, 0],
-  KeyA: [0, NUDGE_SPEED, 0],
-  KeyD: [0, -NUDGE_SPEED, 0],
   KeyW: [0, 0, NUDGE_CLIMB],
   KeyS: [0, 0, -NUDGE_CLIMB],
 } as const;
@@ -309,8 +304,6 @@ export const ControlPanel = memo(function ControlPanel({
   const throttle = useRef(settings.base_throttle);
   // Key handlers read the mode through a ref so a mode change doesn't re-register them and forget held keys.
   const modeRef = useRef(mode);
-  const freeRef = useRef(settings.hover_camera === 0);
-  freeRef.current = settings.hover_camera === 0;
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
@@ -415,11 +408,11 @@ export const ControlPanel = memo(function ControlPanel({
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat || held.has(event.code)) return;
-      // There is no manual flight: outside hover only L and yaw act. Without the tag the arrows and A and D are held tilt; otherwise a nudge key moves the hold point while held, and is not a held flight key, so its keyup and a blur leave hover alone.
+      // There is no manual flight: outside hover only L and yaw act. In hover the arrows and A and D are held tilt; W and S move the hold point's height while held, and are not held flight keys, so their keyup and a blur leave hover alone.
       const hovering = modeRef.current !== MANUAL;
-      const stick = event.code in tiltKeys && freeRef.current;
-      if (!hovering && event.code in nudgeKeys) return;
-      if (event.code in nudgeKeys && !stick) {
+      if (!hovering && (event.code in nudgeKeys || event.code in tiltKeys))
+        return;
+      if (event.code in nudgeKeys) {
         nudging.add(event.code as keyof typeof nudgeKeys);
         nudge();
         if (nudgeTimer === undefined)
@@ -708,11 +701,11 @@ export const ControlPanel = memo(function ControlPanel({
           { keys: ['ArrowLeft', 'ArrowRight'], label: 'Yaw' },
           {
             keys: ['ArrowUp', 'ArrowDown'],
-            label: 'Tilt forward or back; on the tag, move the hold',
+            label: 'Tilt forward or back',
           },
           {
             keys: ['A', 'D'],
-            label: 'Tilt left or right; on the tag, move the hold',
+            label: 'Tilt left or right',
           },
           { keys: ['Space'], label: 'Stop' },
         ].map(({ keys, label }) => (

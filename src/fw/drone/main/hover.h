@@ -44,7 +44,7 @@ typedef struct {
     float nudge_forward, nudge_left, nudge_up;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
     float pitch_trim;
-    // Not settings: the laptop's tilt without the tag (radians; pitch positive nose down, roll positive right side down), filled in by the runtime. While one is held its axis flies that tilt outright instead of holding; once released the hold brakes and holds where the drone stopped.
+    // Not settings: the laptop's tilt (radians; pitch positive nose down, roll positive right side down), filled in by the runtime, with or without the tag. While one is held its axis flies that tilt outright instead of holding; once released the hold brakes and holds where the drone stopped.
     float stick_pitch, stick_roll;
 } HoverGains;
 
