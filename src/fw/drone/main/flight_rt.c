@@ -43,6 +43,9 @@
 // Battery smoothing for thrust compensation (s), and the furthest the smoothed voltage may sit from thrust_voltage, as a ratio, before it is treated as an ADC fault and clamped.
 #define VOLTAGE_TAU 0.3f
 #define VOLTAGE_RANGE 0.15f
+// Arming is refused with the pack under ARM_MIN_V (about 3.5 V a cell on 4S): on 2026-11-02 the drone armed at 9.9 V after a half hour powered on the bench and sagged to 6.3 V in the hop. Below NO_PACK_V there is no pack (the bench on USB alone), which stays allowed.
+#define ARM_MIN_V 14.0f
+#define NO_PACK_V 5.0f
 // Oldest camera sighting hover uses (us).
 #define HOVER_POSE_US 150000
 
@@ -694,6 +697,7 @@ const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t
     const char *error = arm_refusal(&check);
     // Hover takes off by itself, so it is switched on only after arming.
     if (!error && hover_mode) error = "Hover mode must be off to arm";
+    if (!error && battery_v > NO_PACK_V && battery_v < ARM_MIN_V) error = "Battery under 14.0 V: charge or swap it";
     if (!error) {
         command.enabled = 1;
         state.enabled = true;

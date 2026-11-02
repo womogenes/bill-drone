@@ -57,6 +57,25 @@ const TILT_WARNING = 10;
 const TILT_TAU_S = 1;
 
 // Updates the steady rotor tilt from a reading and returns it when it is beyond TILT_WARNING, else null; disarmed or without thrust it starts over.
+// A pack under ARM_MIN_V, or one a disarmed drone is running down faster than DRAIN_V_PER_MIN (from the once-a-second history), else null.
+function batteryWarningFor(
+  reading: Reading | null,
+  hourHistory: (start: number, end: number) => VoltageSample[]
+) {
+  const volts = reading?.voltage_ema;
+  if (volts === undefined || volts <= NO_PACK_V) return null;
+  if (volts < ARM_MIN_V)
+    return `Battery at ${volts.toFixed(1)} V, under ${ARM_MIN_V} V: it will not arm. Unplug it and charge or swap it.`;
+  if (reading?.control?.enabled) return null;
+  const now = Date.now();
+  const minute = hourHistory(now - 60_000, now);
+  const drain =
+    minute.length > 30 ? minute[0].ema - minute[minute.length - 1].ema : 0;
+  return drain >= DRAIN_V_PER_MIN
+    ? `Battery falling ${drain.toFixed(1)} V a minute while disarmed. Unplug it between tests.`
+    : null;
+}
+
 function tiltWarningFor(
   reading: Reading | null,
   steady: { current: { time: number; tilt: number } | null }
@@ -83,6 +102,10 @@ function tiltWarningFor(
 }
 // Battery voltage EMA time constant; time-based so irregular packet timing doesn't change the smoothing.
 const VOLTAGE_TAU = 1500;
+// The drone refuses to arm under ARM_MIN_V (fw/drone/main/flight_rt.c); NO_PACK_V and below is no pack at all. A disarmed pack falling faster than DRAIN_V_PER_MIN is being run down on the bench: on 2026-11-02 a half hour of hang tests took a 4S pack from 14.5 V to 9.9 V.
+const ARM_MIN_V = 14;
+const NO_PACK_V = 5;
+const DRAIN_V_PER_MIN = 0.3;
 
 const statuses = {
   offline: {
@@ -128,6 +151,7 @@ export default function Page() {
   // The rotors' steady forward tilt (degrees, positive forward) over the last second of an armed flight: holding the nose against a CoM off centre (negative: forward of it) also points the thrust, and a growing one is a battery sliding (2026-10-31).
   const steadyTilt = useRef<{ time: number; tilt: number } | null>(null);
   const [tiltWarning, setTiltWarning] = useState<number | null>(null);
+  const [batteryWarning, setBatteryWarning] = useState<string | null>(null);
   const [hoverState, setHoverState] = useState<HoverSample | null>(null);
   const latestHover = useRef<HoverSample | null>(null);
   const [hoverHistory] = useState(() =>
@@ -147,13 +171,15 @@ export default function Page() {
       const current = latestReading.current;
       const hover = latestHover.current;
       const warning = tiltWarningFor(current, steadyTilt);
+      const battery = batteryWarningFor(current, voltageHourHistory.read);
       startTransition(() => {
         setReading(current);
         setHoverState(hover);
         setTiltWarning(warning);
+        setBatteryWarning(battery);
       });
     });
-  }, []);
+  }, [voltageHourHistory]);
   const [stopEpoch, setStopEpoch] = useState(0);
   const [fps, setFps] = useState<number | null>(null);
   const packetCount = useRef(0);
@@ -538,6 +564,11 @@ export default function Page() {
           )}
         </div>
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
+          {batteryWarning && (
+            <p className="px-4 pt-4 font-medium text-red-700">
+              {batteryWarning}
+            </p>
+          )}
           {tiltWarning !== null && (
             <p className="px-4 pt-4 font-medium text-red-700">
               Rotors held {Math.abs(tiltWarning).toFixed(0)}°{' '}
