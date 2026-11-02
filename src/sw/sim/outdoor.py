@@ -1,7 +1,7 @@
 """
 Outdoor hovers in the hover sim, without the tag: uv run -m sw.sim.outdoor [--runs 48] [--winds 0,2,4,6] [--seconds 40] [--gps] [--set name=value,...] [--settings recording] [--airframe models/airframe_<day>.json] [--nominal] [--workers N]
 
-Each run takes off in Free mode (hover_camera 0) on a recording's settings (default: the newest 9-inch tag hover), climbs to --climb and holds for --seconds in the open air: a mean wind of the given speed from a random direction, with turbulence after MIL-F-8785C's low-altitude Dryden scales at the hover height (horizontal RMS 0.2 of the mean wind over 15 m, vertical 0.1 over the height; plus 0.1 m/s of still-air gusts) and the rotors' inflow damping the vertical airspeed. The room's torque drifts stay (the airframe's own noise); its force drifts, the room's recirculation, are replaced by the wind. With --gps the drone's GPS (sweep.run plant["gps"]: 10 Hz, 0.05 m/s velocity noise, 0.7 m of wandering position error) feeds the hold, its heading belief off by up to ±30 degrees.
+Each run takes off in Free mode (hover_camera 0) on a recording's settings (default: the newest 9-inch tag hover), on the 9-inch airframe as calibrated to its closed-loop hovers (calibrate_sim), climbs to --climb and holds for --seconds in the open air: a mean wind of the given speed from a random direction, with turbulence after MIL-F-8785C's low-altitude Dryden scales at the hover height (horizontal RMS 0.2 of the mean wind over 15 m, vertical 0.1 over the height; plus 0.1 m/s of still-air gusts) and the rotors' inflow damping the vertical airspeed. The room's torque drifts stay (the airframe's own noise); its force drifts, the room's recirculation, are replaced by the wind. With --gps the drone's GPS (sweep.run plant["gps"]: 10 Hz, 0.05 m/s velocity noise, 0.7 m of wandering position error) feeds the hold, its heading belief off by up to ±30 degrees.
 
 Indoors nothing measured the airframe above about 0.5 m/s of airspeed, so every run also draws the terms that matter there from wide ranges (unless --nominal): the forward speed's pitching moment ×0.5-3 of the airframe's (the rotors flapping back, linear in airspeed as fitted), the sideways one ×0.5-2, rotor drag 0.04-0.4/s forward and 0.1-0.4/s sideways, the tilt's pitch authority ×0.8-1.2, the thrust level ±8 %, the servos' dead time and response ±25 %, the GPS latency 40-120 ms (the firmware assumes 60).
 
@@ -25,7 +25,8 @@ from sw.sim.sweep import CURRENT, run
 MODELS = Path(__file__).with_name("models")
 RECORDINGS = Path(__file__).parents[1] / "recordings"
 SETTINGS = "2026-11-02T08-15-23"
-AIRFRAME = MODELS / "airframe_2026-11-02_9in.json"
+AIRFRAME = MODELS / "airframe_2026-11-02_9in_calibrated.json"
+DISTURBANCES = MODELS / "disturbances_2026-11-02_9in_calibrated.json"
 GPS = {"rate": 10.0, "latency": 0.06, "velocity_noise": 0.05, "vertical_noise": 0.1, "position_noise": 0.7, "position_tau": 30.0}
 SETTLE = 5.0
 FLYAWAY = 10.0
@@ -35,7 +36,7 @@ def loguniform(rng, low, high):
     return math.exp(rng.uniform(math.log(low), math.log(high)))
 
 
-def plant(airframe, wind, seed, gps, nominal, height):
+def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwind=False):
     """The outdoor plant for one run: the airframe with its uncertain terms drawn, the wind and the GPS."""
     rng = random.Random(seed)
     p = dict(airframe) | {f"{axis}_push": 0.0 for axis in ("roll", "pitch", "yaw")}
@@ -55,10 +56,13 @@ def plant(airframe, wind, seed, gps, nominal, height):
     for key in ("servo_wn", "right_servo_wn"):
         p[key] = full[key] / draws["servo"]
     direction = rng.uniform(0, 2 * math.pi)
+    if headwind:
+        # Taking off facing the wind: the air blows from ahead (toward the drone's tail), give or take 20 degrees.
+        direction = math.pi + rng.uniform(-1, 1) * math.radians(20)
     speed = max(wind, 0.5)
     out = CURRENT | {
         "airframe": p, "rotor_drag": draws["drag"], "sensed_disturbances": True,
-        "disturbances": [d for d in CURRENT["disturbances"] if d["channel"] in ("roll", "pitch", "yaw")],
+        "disturbances": [d for d in disturbances or CURRENT["disturbances"] if d["channel"] in ("roll", "pitch", "yaw")],
         "wind_mean": (wind * math.cos(direction), wind * math.sin(direction)), "wind": 0.2 * wind + 0.1, "wind_tau": 15.0 / speed,
         "wind_vertical": 0.1 * wind + 0.05, "wind_vertical_tau": height / speed, "vertical_drag": 0.7,
     }
@@ -68,9 +72,12 @@ def plant(airframe, wind, seed, gps, nominal, height):
 
 
 def fly(job):
-    airframe, flown, wind, seed, args = job
-    p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb)
+    airframe, disturbances, flown, wind, seed, args = job
+    p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind)
     s = dict(flown)
+    if args.preload:
+        # The wind's expected nose-up moment at liftoff, cancelled by pitch_bias (rad/s², ramped in once airborne): preload per m/s of the wind.
+        s["pitch_bias"] = args.preload * wind
     if args.gps:
         # The drone's belief about where its nose points at takeoff: the truth give or take 30 degrees (a phone compass and eyeballing).
         s["hover_gps_heading"] = p["gps"]["heading"] + random.Random(seed + 1).uniform(-30, 30)
@@ -103,10 +110,13 @@ def main():
     parser.add_argument("--seconds", type=float, default=40.0, help="hold after settling")
     parser.add_argument("--climb", type=float, default=1.5, help="hold height above the takeoff point (m)")
     parser.add_argument("--gps", action="store_true")
+    parser.add_argument("--headwind", action="store_true", help="take off facing the wind (±20 degrees) instead of at a random heading")
+    parser.add_argument("--preload", type=float, default=0.0, help="pitch_bias per m/s of wind (rad/s² per m/s), for headwind takeoffs")
     parser.add_argument("--nominal", action="store_true", help="the airframe as fitted, no drawn uncertainty")
     parser.add_argument("--settings", default=SETTINGS, help="recording whose settings to fly")
     parser.add_argument("--set", default="", help="setting overrides, name=value,...")
     parser.add_argument("--airframe", type=Path, default=AIRFRAME)
+    parser.add_argument("--disturbances", type=Path, default=DISTURBANCES, help="the airframe's torque drifts (the force drifts are left out: outdoors the wind replaces them)")
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--out", type=Path, help="write every run's result as JSON")
     args = parser.parse_args()
@@ -116,10 +126,11 @@ def main():
         flown |= {"hover_gps_tau": 0.5, "hover_gps_place_tau": 2.0}
     flown |= {k: float(v) for k, v in (item.split("=") for item in args.set.split(",") if item)}
     winds = [float(w) for w in args.winds.split(",")]
-    jobs = [(airframe, flown, wind, 1000 * k + seed, args) for k, wind in enumerate(winds) for seed in range(args.runs)]
+    disturbances = json.loads(args.disturbances.read_text())
+    jobs = [(airframe, disturbances, flown, wind, 1000 * k + seed, args) for k, wind in enumerate(winds) for seed in range(args.runs)]
     with Pool(args.workers) as pool:
         results = pool.map(fly, jobs)
-    print(f"{args.airframe.name}, settings {args.settings}{' + ' + args.set if args.set else ''}, {'GPS' if args.gps else 'no GPS'}, {'nominal' if args.nominal else 'drawn'} plant, {args.runs} runs per wind, {args.seconds:.0f} s hold at {args.climb} m")
+    print(f"{args.airframe.name} with {args.disturbances.name}, settings {args.settings}{' + ' + args.set if args.set else ''}, {'GPS' if args.gps else 'no GPS'}, {'nominal' if args.nominal else 'drawn'} plant, {args.runs} runs per wind, {args.seconds:.0f} s hold at {args.climb} m")
     for wind in winds:
         runs = [r for r in results if r["wind"] == wind]
         fates = {f: sum(r["fate"] == f for r in runs) for f in ("lost", "touched", "flew off", "no liftoff")}
