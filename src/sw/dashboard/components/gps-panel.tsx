@@ -1,0 +1,92 @@
+'use client';
+
+import { memo } from 'react';
+import type { GpsReading } from '@/lib/telemetry';
+
+const FIXES: Record<number, string> = {
+  0: 'No fix',
+  1: 'Dead reckoning',
+  2: '2D',
+  3: '3D',
+  4: '3D + DR',
+  5: 'Time only',
+};
+
+export const GpsPanel = memo(function GpsPanel({
+  gps,
+  connected,
+}: {
+  gps: GpsReading | null | undefined;
+  connected: boolean;
+}) {
+  const live = connected && gps && gps.age_ms !== null && gps.age_ms < 1000;
+  const state =
+    !connected || !gps
+      ? '—'
+      : !gps.configured
+        ? 'Searching'
+        : !live
+          ? 'Stale'
+          : `${FIXES[gps.fix] ?? gps.fix}${gps.ok ? '' : ' (weak)'}`;
+  const speed = live ? Math.hypot(gps.velocity[0], gps.velocity[1]) : undefined;
+  return (
+    <section
+      aria-labelledby="gps-heading"
+      className="w-full max-w-md space-y-2 px-4 py-3"
+    >
+      <h2 id="gps-heading" className="font-semibold">
+        GPS
+      </h2>
+      <dl className="grid grid-cols-3 gap-4 tabular-nums">
+        <div>
+          <dt className="text-sm text-muted-foreground">Fix</dt>
+          <dd
+            className={`text-lg ${live && gps.ok ? 'text-green-700' : connected && gps ? 'text-red-700' : ''}`}
+          >
+            {state}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-sm text-muted-foreground">Satellites</dt>
+          <dd className="text-lg">{live ? gps.satellites : '—'}</dd>
+        </div>
+        <div>
+          <dt className="text-sm text-muted-foreground">Accuracy</dt>
+          <dd className="text-lg">
+            {live
+              ? `${gps.horizontal_accuracy.toFixed(1)} / ${gps.vertical_accuracy.toFixed(1)} m`
+              : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-sm text-muted-foreground">Ground speed</dt>
+          <dd className="text-lg">
+            {live && speed !== undefined
+              ? `${speed.toFixed(2)} ± ${gps.speed_accuracy.toFixed(2)} m/s`
+              : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-sm text-muted-foreground">Climb</dt>
+          <dd className="text-lg">
+            {live ? `${(-gps.velocity[2]).toFixed(2)} m/s` : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-sm text-muted-foreground">Altitude</dt>
+          <dd className="text-lg">
+            {live ? `${gps.height.toFixed(1)} m` : '—'}
+          </dd>
+        </div>
+        <div className="col-span-3">
+          <dt className="text-sm text-muted-foreground">Position</dt>
+          <dd className="text-lg">
+            {live
+              ? `${gps.latitude.toFixed(7)}, ${gps.longitude.toFixed(7)}`
+              : '—'}
+          </dd>
+        </div>
+      </dl>
+    </section>
+  );
+});

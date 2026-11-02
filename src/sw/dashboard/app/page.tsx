@@ -19,6 +19,7 @@ import type { PreviewTag } from '@/components/fpv-panel';
 import { Button } from '@/components/ui/button';
 import { ActuatorPanel } from '@/components/actuator-panel';
 import { ADCPanel } from '@/components/adc-panel';
+import { GpsPanel } from '@/components/gps-panel';
 import { ImuPanel } from '@/components/imu-panel';
 import { EspConnection, type DroneRequest } from '@/lib/esp-connection';
 import { createHistory } from '@/lib/history';
@@ -605,6 +606,7 @@ export default function Page() {
             time={reading?.time ?? 0}
             connected={status === 'connected'}
           />
+          <GpsPanel gps={reading?.gps} connected={status === 'connected'} />
         </div>
         <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
           {(['left', 'right'] as const).flatMap((side) =>

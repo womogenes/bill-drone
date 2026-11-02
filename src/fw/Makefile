@@ -3,7 +3,7 @@
 IDF_PATH ?= $(HOME)/esp/esp-idf
 IDF = bash -c 'source $(IDF_PATH)/export.sh >/dev/null && "$$@"' idf
 
-.PHONY: build deploy usb accel level camera-test camera-wifi camera-deploy
+.PHONY: build deploy usb accel level camera-test gps-test camera-wifi camera-deploy
 build:
 	$(IDF) idf.py -C drone build
 
@@ -39,3 +39,9 @@ camera-test:
 	cc -std=c11 -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -Idrone/main drone/test/camera_link_test.c -o drone/build/host/camera_link_test
 	drone/build/host/camera_link_test
 	uv run esp32cam/test/blackbox_test.py
+
+# Host test of the GPS's UBX parser and configuration request against pyubx2's frames.
+gps-test:
+	mkdir -p drone/build/host
+	cc -std=c11 -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -Idrone/main drone/test/gps_ubx_test.c -o drone/build/host/gps_ubx_test
+	drone/build/host/gps_ubx_test

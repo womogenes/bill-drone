@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "mbedtls/sha256.h"
+#include "gps.h"
 #include "runtime.h"
 #include "arming.h"
 #include "camera.h"
@@ -344,6 +345,28 @@ static void camera_status(Status *status, int64_t now) {
     status->camera_trusted = camera.trusted;
 }
 
+static void gps_status(Status *status, int64_t now) {
+    GpsStats gps;
+    gps_stats(&gps);
+    const UbxPvt *pvt = &gps.fix.pvt;
+    status->gps_messages = gps.messages;
+    status->gps_corrupt = gps.corrupt;
+    status->gps_skipped = gps.skipped;
+    status->gps_age_ms = gps.fix.received_us < 0 ? UINT32_MAX : (now - gps.fix.received_us) / 1000;
+    status->gps_itow_ms = pvt->itow_ms;
+    status->gps_fix = pvt->fix_type;
+    status->gps_flags = pvt->flags;
+    status->gps_satellites = pvt->satellites;
+    status->gps_configured = gps.configured;
+    status->gps_latitude = pvt->latitude;
+    status->gps_longitude = pvt->longitude;
+    status->gps_height_mm = pvt->height_mm;
+    memcpy(status->gps_velocity, pvt->velocity_mm_s, sizeof(status->gps_velocity));
+    status->gps_horizontal_accuracy_mm = pvt->horizontal_accuracy_mm;
+    status->gps_vertical_accuracy_mm = pvt->vertical_accuracy_mm;
+    status->gps_speed_accuracy = pvt->speed_accuracy_mm_s;
+}
+
 static void tick(void *arg) {
     portENTER_CRITICAL(&lock);
     bool stopping = stop_pending;
@@ -366,6 +389,7 @@ static void tick(void *arg) {
     status.settings_version = settings_version();
     status.flags |= settings_calibration_unsaved() << 1;
     camera_status(&status, now);
+    gps_status(&status, now);
     portENTER_CRITICAL(&lock);
     status.target_sequence = target_sequence;
     status.flags |= subscribed(now) << 5;

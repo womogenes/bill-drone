@@ -90,7 +90,27 @@ export type Targets = {
 
 export const FLIGHT_MODES = ['Manual', 'Hover', 'Landing', 'Landing fast'];
 
+// The drone's GPS (src/fw/controller/bridge.py decode_gps): degrees, metres above sea level, m/s north, east and down.
+export type GpsReading = {
+  messages: number;
+  corrupt: number;
+  configured: boolean;
+  age_ms: number | null;
+  // 0 none, 2 2D, 3 3D; ok: inside the module's accuracy masks.
+  fix: number;
+  ok: boolean;
+  satellites: number;
+  latitude: number;
+  longitude: number;
+  height: number;
+  velocity: [number, number, number];
+  horizontal_accuracy: number;
+  vertical_accuracy: number;
+  speed_accuracy: number;
+};
+
 export type Reading = {
+  gps?: GpsReading | null;
   logging?: {
     active: boolean;
     ready: boolean;

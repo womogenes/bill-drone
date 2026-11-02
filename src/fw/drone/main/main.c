@@ -1,4 +1,4 @@
-// The drone: settings from NVS, outputs at zero, the radio, control on core 1, then the camera receiver on core 0. This loop reads the load cell and battery every 50 ms and keeps the recording metadata current.
+// The drone: settings from NVS, outputs at zero, the radio, control on core 1, then the camera and GPS receivers on core 0. This loop reads the load cell and battery every 50 ms and keeps the recording metadata current.
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -10,6 +10,7 @@
 #include "nvs_flash.h"
 #include "camera.h"
 #include "flight_math.h"
+#include "gps.h"
 #include "runtime.h"
 #include "settings.h"
 
@@ -101,6 +102,7 @@ void app_main(void) {
     radio_start();
     flight_runtime_start();
     camera_start();
+    gps_start();
 
     gpio_config_t led = {.pin_bit_mask = 1ULL << LED, .mode = GPIO_MODE_OUTPUT};
     ESP_ERROR_CHECK(gpio_config(&led));

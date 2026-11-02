@@ -42,8 +42,13 @@ typedef struct __attribute__((packed)) {
         camera_rx_edges;
     uint32_t camera_sequence, camera_age_ms;
     uint8_t camera_valid, camera_trusted;
+    // The GPS (gps.h GpsStats): NAV-PVT messages, corrupt frames and skipped bytes; the newest solution's age in ms (0xffffffff before the first), GPS time of week (ms), fix type, flags, satellites and whether the module is configured; latitude and longitude (degrees times 1e7), height above sea level (mm), velocity north, east and down (mm/s) and the horizontal, vertical (mm) and speed (mm/s) accuracy estimates.
+    uint32_t gps_messages, gps_corrupt, gps_skipped, gps_age_ms, gps_itow_ms;
+    uint8_t gps_fix, gps_flags, gps_satellites, gps_configured;
+    int32_t gps_latitude, gps_longitude, gps_height_mm, gps_velocity[3];
+    uint32_t gps_horizontal_accuracy_mm, gps_vertical_accuracy_mm, gps_speed_accuracy;
 } Status;
-_Static_assert(sizeof(Status) == 169, "Status layout");
+_Static_assert(sizeof(Status) == 229, "Status layout");
 
 typedef struct {
     uint32_t session, started_us, samples, dropped, elapsed_us, pending;

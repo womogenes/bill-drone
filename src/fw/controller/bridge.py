@@ -38,7 +38,10 @@ RECORDINGS = Path(__file__).resolve().parents[2] / "sw/recordings"
 # drone/main/runtime.h Status, then its camera link fields (absent from firmware before the camera link).
 STATUS_FORMAT = "<4sIIHB3f3f3f2f2H4f2IiIIHHf"
 CAMERA_FORMAT = "<15I2B"
+# Then the GPS's (absent before the GPS driver): counters, the newest NAV-PVT and its age (ms, 0xffffffff before the first).
+GPS_FORMAT = "<5I4B6i3I"
 STATUS_SIZE = struct.calcsize(STATUS_FORMAT)
+CAMERA_SIZE = struct.calcsize(CAMERA_FORMAT)
 CAMERA_KEYS = (
     "packets", "frames", "poses", "flows", "corrupt", "repeats", "stale",
     "unsynced", "skipped_bytes", "overflows", "line_errors", "sync_edges", "rx_edges",
@@ -54,12 +57,14 @@ def decode_status(payload, settings):
     The dashboard's reading (sw/dashboard/lib/telemetry.ts Reading) from a status message.
     """
     magic, time_ms, target_sequence, flags, reason, *values = struct.unpack_from(STATUS_FORMAT, payload)
-    camera = None
-    if len(payload) == STATUS_SIZE + struct.calcsize(CAMERA_FORMAT):
+    camera = gps = None
+    if len(payload) >= STATUS_SIZE + CAMERA_SIZE:
         camera = dict(zip(CAMERA_KEYS, struct.unpack_from(CAMERA_FORMAT, payload, STATUS_SIZE)))
         # No frame yet: the age is meaningless.
         if camera["age_ms"] == 0xFFFFFFFF:
             camera["age_ms"] = None
+    if len(payload) == STATUS_SIZE + CAMERA_SIZE + struct.calcsize(GPS_FORMAT):
+        gps = decode_gps(struct.unpack_from(GPS_FORMAT, payload, STATUS_SIZE + CAMERA_SIZE))
     accel, gyro = values[0:3], values[3:6]
     roll, pitch, temperature, left_servo, right_servo, left_throttle, right_throttle = values[6:13]
     target_roll, target_pitch, target_yaw, base = values[13:17]
@@ -105,6 +110,24 @@ def decode_status(payload, settings):
             "dropped": dropped,
         },
         "camera": camera,
+        "gps": gps,
+    }
+
+
+def decode_gps(fields):
+    """
+    The status message's GPS fields (drone/main/runtime.h Status) in SI units: degrees, metres above sea level, m/s north, east and down.
+    """
+    messages, corrupt, skipped, age, itow, fix, flags, satellites, configured, lat, lon, height, *rest = fields
+    velocity, (horizontal, vertical, speed) = rest[:3], rest[3:]
+    return {
+        "messages": messages, "corrupt": corrupt, "skipped": skipped, "configured": bool(configured),
+        "age_ms": None if age == 0xFFFFFFFF else age, "itow_ms": itow,
+        # 0 none, 2 2D, 3 3D; ok is the module's gnssFixOK, inside its accuracy masks.
+        "fix": fix, "ok": bool(flags & 1), "satellites": satellites,
+        "latitude": lat / 1e7, "longitude": lon / 1e7, "height": height / 1000,
+        "velocity": [v / 1000 for v in velocity],
+        "horizontal_accuracy": horizontal / 1000, "vertical_accuracy": vertical / 1000, "speed_accuracy": speed / 1000,
     }
 
 
@@ -156,6 +179,13 @@ class Recorder:
 
     def event(self, message):
         self.events.write(json.dumps({**message, "received_at": now()}) + "\n")
+
+    def gps(self, message):
+        """
+        Each new GPS solution while a recording is open: {"type": "gps", "drone_ms": its arrival on the drone's esp_timer clock (the start record's started_ticks_us is on the same clock), ...}. They ride the status messages, which are not acknowledged, so one can be missing.
+        """
+        if self.events is not None:
+            self.event(message)
 
     def command(self, message):
         """
@@ -319,6 +349,8 @@ class Service:
         self.token = 0
         self.last_status = 0
         self.reading = None
+        # The newest GPS solution recorded (its time of week), so each goes into the recording once.
+        self.gps_itow = None
         self.settings = None
         self.settings_version = None
         self.sequence = int(time.time() * 1000) & 0xFFFFFFFF
@@ -558,6 +590,10 @@ class Service:
                 self.recorder.firmware = None
             self.session, self.token, self.last_status = session, token, time.monotonic()
             version, self.reading = decode_status(payload, self.settings)
+            gps = self.reading["gps"]
+            if gps and gps["age_ms"] is not None and gps["itow_ms"] != self.gps_itow:
+                self.gps_itow = gps["itow_ms"]
+                self.queue_record("gps", {"type": "gps", "drone_ms": self.reading["time"] - gps["age_ms"], **gps})
             self.reading["recorder"] = self.recorder.status()
             if (version != self.settings_version
                     and time.monotonic() >= self.settings_retry
