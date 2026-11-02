@@ -163,12 +163,12 @@ static Command flown;
 #define NUDGE_MAX 1.5f
 static float nudge[3];
 // Self-trim: through a hop, the attitude controller's total roll and pitch command (rad/s²) summed over steady samples (from TRIM_SETTLE s after collective reached integrate_throttle, body rates under TRIM_RATE, no test pattern, not landing: the floor's wash and the touchdown are not the airframe's trim), as sw/learn_bias.py does from the log. At the stop, with at least TRIM_SAMPLES of them, each bias moves auto_trim of the way to the mean, by at most TRIM_STEP; radio.c stores it once disarmed. So a moved battery costs one hop instead of a retune.
-// It also carries the camera hold's trim over: at a stop after a hold that flew on the tag, hover_trim_start moves auto_trim of the way to the trim the hold ended with.
+// The hold's own trim is not carried over (hover_trim_start stays as set): it learns its push in flight, and a carried one was the last flight's room, CoM or misfit. On 2026-11-01 a sideways 0.9 m/s², learned in a hover that kept losing the tag, rolled every later liftoff 5 degrees left; a forward one had pitched liftoffs nose-up the hour before.
 #define TRIM_SETTLE 1.0f
 #define TRIM_RATE (15 / DEG)
 #define TRIM_SAMPLES 100
 #define TRIM_STEP 3.0f
-static struct { float sum[2], bias[2], hover[2]; int count; bool ready, hover_ready; } trim;
+static struct { float sum[2], bias[2]; int count; bool ready; } trim;
 // The identification test pattern (P request, flight_runtime_pattern; kept in RAM only, so a restart clears it): piecewise-constant steps added to up to EXCITE_CHANNELS channels, played while collective is up from `after` seconds past collective first reaching integrate_throttle, `repeat` times (0 = until disarmed).
 // Channels: roll and pitch targets (degrees), yaw-rate target (degrees/s), collective (throttle), left and right servo tilt (degrees, positive forward), left and right motor (throttle). The targets and collective add before the controller, so the log's targets hold them; the servos and motors add after it, and the fit adds them back from the pattern (the recording's events) and the segment logged in Record flags.
 #define EXCITE_CHANNELS 8
@@ -218,13 +218,6 @@ static void write_servo(int side) {
 }
 
 static void stop_locked(int reason) {
-    if (state.enabled && command.auto_trim > 0 && hover.tracking && trim.count >= TRIM_SAMPLES) {
-        // Sideways only, as with roll_bias below: the forward trim is wherever the CoM sat this flight (a carried 0.48 m/s² with a carried pitch_bias of -6.6 pitched the nose up and sent the drone back at both liftoffs on 2026-11-01 23:29 UTC), so trim_start_x stays as set.
-        float start[2] = {command.hover.trim_start_x, command.hover.trim_start_y};
-        trim.hover[0] = start[0];
-        trim.hover[1] = limit(start[1] + command.auto_trim * (hover.carry[1] - start[1]), -command.hover.trim_max, command.hover.trim_max);
-        trim.hover_ready = true;
-    }
     if (state.enabled && trim.count >= TRIM_SAMPLES) {
         // Roll only: its trim is the motors' thrust split, the airframe's own. The pitch trim is wherever the CoM sat this flight, which the next need not share (the battery moves between flights, and slid within them on 2026-10-31, when a carried pitch_bias kicked the nose at the next liftoff); the controller finds it in flight instead (Controller tilt, the pitch integrator), and pitch_bias stays as set.
         float old[2] = {command.roll_bias, command.pitch_bias};
@@ -818,10 +811,6 @@ static bool take_pair(bool *ready, const float *pair, float *a, float *b) {
 
 bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias) {
     return take_pair(&trim.ready, trim.bias, roll_bias, pitch_bias);
-}
-
-bool flight_runtime_take_hover_trim(float *x, float *y) {
-    return take_pair(&trim.hover_ready, trim.hover, x, y);
 }
 
 bool flight_runtime_take_calibration(float *bias, float *pose_zero, float *sensor_frame) {

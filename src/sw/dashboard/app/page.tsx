@@ -52,8 +52,6 @@ const ZERO_TARGETS: Targets = {
 const NO_NUDGE: [number, number, number] = [0, 0, 0];
 // The drone accepts 1.5 m each way; the keys stop short of that.
 const NUDGE_MAX = 1;
-// A hover message this recent means a hold is being flown and recorded.
-const HOVER_FRESH_MS = 3000;
 // A steady rotor tilt beyond this (degrees, averaged over TILT_TAU_S seconds) means the CoM is well off centre or moving: by about 15-20 degrees the drone has no pitch authority left.
 const TILT_WARNING = 10;
 const TILT_TAU_S = 1;
@@ -587,10 +585,10 @@ export default function Page() {
               onStop={stopMotors}
             />
           )}
-          {hoverState &&
-            (reading?.time ?? 0) - hoverState.time < HOVER_FRESH_MS && (
-              <HoverPanel state={hoverState} history={hoverHistory.read} />
-            )}
+          {/* The last flight's map stays up after it ends, until the next flight's replaces it. */}
+          {hoverState && (
+            <HoverPanel state={hoverState} history={hoverHistory.read} />
+          )}
         </div>
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
           <FpvPanel
