@@ -1,7 +1,7 @@
 """
 Record the camera's tag-mode preview while the drone is armed: uv run -m sw.camera_record
 
-The preview (fw/esp32cam/src/web.h radioPreviewLoop: the 80x60 grayscale frame as JPEG, about 14 a second) comes over the camera's radio through the FPV receiver and the dashboard's /api/camera, which keeps it coming while this listens, without taking the camera out of tag mode. From arming until POST_ROLL_S after disarming each flight is saved under sw/recordings/video/ as <UTC start>.mjpeg (the JPEGs back to back), <UTC start>.csv (per frame: laptop time, capture and send time on the camera's clock in us) and <UTC start>.mp4 (by ffmpeg at the frames' measured rate, scaled up 4x). The UTC start lines up with the flight log of the same arming within a second or so.
+The preview (fw/esp32cam/src/web.h radioPreviewLoop: the 80x60 grayscale frame as JPEG, about 14 a second) comes over the camera's radio through the FPV receiver and the dashboard's /api/camera, which keeps it coming while this listens, without taking the camera out of tag mode. From arming until POST_ROLL_S after disarming each flight is saved under sw/recordings/video/ as <UTC start>.mjpeg (the JPEGs back to back), <UTC start>.csv (per frame: laptop time, capture and send time on the camera's clock in us) and <UTC start>.mp4 (by ffmpeg at the frames' measured rate, scaled up 4x and turned upright by the drone's hover_cam_roll, as the dashboard shows it; the MJPEG keeps the camera's own orientation). The UTC start lines up with the flight log of the same arming within a second or so.
 """
 
 import argparse
@@ -26,6 +26,30 @@ def armed(bridge):
         return None
 
 
+def camera_roll(bridge):
+    """
+    The camera's roll on its mount (hover_cam_roll, degrees; 180 when mounted upside down), 0 if the bridge does not say.
+    """
+    try:
+        with urllib.request.urlopen(bridge + "/settings", timeout=2) as reply:
+            body = json.load(reply)
+        return float(body.get("settings", body).get("hover_cam_roll", 0))
+    except Exception:
+        return 0.0
+
+
+def upright(roll):
+    """
+    The ffmpeg filters that turn the picture back by roll, as the dashboard's camera view does.
+    """
+    turn = round(roll) % 360
+    if turn == 0:
+        return []
+    if turn == 180:
+        return ["hflip", "vflip"]
+    return [f"rotate={-roll}*PI/180"]
+
+
 def frames(stream):
     """
     (capture_us, sent_us, jpeg) from the dashboard's multipart stream.
@@ -47,6 +71,7 @@ def frames(stream):
 
 def record(dashboard, bridge):
     started = datetime.now(timezone.utc)
+    roll = camera_roll(bridge)
     name = started.strftime("%Y-%m-%dT%H-%M-%SZ")
     VIDEO.mkdir(parents=True, exist_ok=True)
     mjpeg, index = VIDEO / f"{name}.mjpeg", VIDEO / f"{name}.csv"
@@ -72,7 +97,7 @@ def record(dashboard, bridge):
     if count > 1 and shutil.which("ffmpeg"):
         rate = max(1.0, count / seconds)
         subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-framerate", f"{rate:.2f}", "-f", "mjpeg", "-i", str(mjpeg),
-                        "-vf", "scale=iw*4:ih*4:flags=neighbor", "-pix_fmt", "yuv420p", str(VIDEO / f"{name}.mp4")], check=False)
+                        "-vf", ",".join(upright(roll) + ["scale=iw*4:ih*4:flags=neighbor"]), "-pix_fmt", "yuv420p", str(VIDEO / f"{name}.mp4")], check=False)
 
 
 def main():
