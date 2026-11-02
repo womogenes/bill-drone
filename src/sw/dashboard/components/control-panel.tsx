@@ -209,6 +209,22 @@ const gainSections: { title: string; needs?: string; fields: Field[] }[] = [
         min: -10,
       },
       { key: 'hover_drag_tau', label: 'Drag correction time (s)', min: 0.1 },
+      {
+        key: 'hover_speed_tilt',
+        label: 'Servo speed tilt (°/(m/s), 0 off)',
+        min: 0,
+      },
+      { key: 'hover_speed_pitch', label: 'Servo speed pitch share', min: -2 },
+      {
+        key: 'hover_speed_takeoff',
+        label: 'Servo speed takeoff offset (°)',
+        min: -10,
+      },
+      {
+        key: 'hover_speed_tau',
+        label: 'Servo speed correction time (s)',
+        min: 0.05,
+      },
       { key: 'hover_trim_tau', label: 'Trim build-up time (s)', min: 0.1 },
       { key: 'hover_trim_max', label: 'Trim limit (m/s²)', min: 0 },
     ],

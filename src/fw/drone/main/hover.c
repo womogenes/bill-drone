@@ -127,6 +127,10 @@
 // After a stick is let go the hold brakes for up to BRAKE_S (s), or until the speed estimate is under BRAKED (m/s), before it holds a place: the place is then where the drone stopped.
 #define BRAKE_S 2.0f
 #define BRAKED 0.15f
+// Speed from the servos (gains speed_tilt): the tilt and pitch are smoothed over SPEED_SMOOTH (s; 0.5 fitted best against the camera's speed, against 0.1-1), the offset is first the mean over the first SPEED_TAKEOFF_S airborne (plus speed_takeoff) and then follows the camera's speed over SPEED_LEARN (s) while it sees the tag.
+#define SPEED_SMOOTH 0.5f
+#define SPEED_TAKEOFF_S 2.0f
+#define SPEED_LEARN 5.0f
 
 static float clamp(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
@@ -392,6 +396,38 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         state->drag_offset[0] = clamp(state->drag_offset[0] + (measured[0] - forward) * dt / OFFSET_TAU, -MAX_OFFSET, MAX_OFFSET);
         state->drag_offset[1] = clamp(state->drag_offset[1] + (measured[1] - left) * dt / OFFSET_TAU, -MAX_OFFSET, MAX_OFFSET);
         state->place[0] = state->place[1] = 0;
+    }
+    // Speed from the servos: the thrust tilt the pitch loop holds against the forward speed's pitching moment. The rotor drag the drag model reads is a twentieth of what it assumes on this airframe (0.04/s measured), so without the tag the estimate barely saw the drone moving: on 2026-11-02 02:46 UTC it read under 0.2 m/s while the drone flew back about 3 m in 4.5 s, which this measure showed from liftoff.
+    state->speed = NAN;
+    if (g->speed_tilt > 0 && drag && (state->height >= AIRBORNE || state->force >= LIFTING * weight)) {
+        float smooth = 1 - expf(-dt / SPEED_SMOOTH), raw = drag->tilt - g->speed_pitch * pitch;
+        state->speed_raw = state->speed_time > 0 ? state->speed_raw + (raw - state->speed_raw) * smooth : raw;
+        float forward = state->velocity[0] * cy + state->velocity[1] * sy;
+        if (seeing && state->tracking) {
+            // The camera measures the speed: the rest of the tilt is the offset (CoM, servo zero).
+            float offset = state->speed_raw - g->speed_tilt * forward;
+            state->speed_offset = state->speed_ready ? state->speed_offset + (offset - state->speed_offset) * dt / SPEED_LEARN : offset;
+            state->speed_ready = true;
+        } else if (!state->speed_ready && state->speed_time < SPEED_TAKEOFF_S) {
+            state->speed_sum += raw;
+            if (state->speed_time + dt >= SPEED_TAKEOFF_S) {
+                state->speed_offset = state->speed_sum * dt / (state->speed_time + dt) + g->speed_takeoff;
+                state->speed_ready = true;
+            }
+        }
+        state->speed_time += dt;
+        if (state->speed_ready) {
+            state->speed = (state->speed_raw - state->speed_offset) / g->speed_tilt;
+            if (!seeing) {
+                float correction = (state->speed - forward) * (1 - expf(-dt / fmaxf(g->speed_tau, dt)));
+                state->velocity[0] += correction * cy;
+                state->velocity[1] += correction * sy;
+                for (int k = 0; k < HOVER_HISTORY; k++) {
+                    state->history[k][3] += correction * cy;
+                    state->history[k][4] += correction * sy;
+                }
+            }
+        }
     }
     state->height += state->climb_rate * dt;
     float smooth = 1 - expf(-dt / NUDGE_TAU), nudge[3] = {g->nudge_forward, g->nudge_left, g->nudge_up};

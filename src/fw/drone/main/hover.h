@@ -38,6 +38,8 @@ typedef struct {
     float trim_start_x, trim_start_y;
     // Optical flow without the tag (flight_rt.c flow_input): the scene's assumed distance along the camera's axis (m; 0 = off) turns the flow's translational rate into velocity across the camera, which pulls the estimate over flow_tau (s) and teaches the drag model its sideways offset (the wind, as the camera teaches it on the tag). Holding still needs only zero flow, so the distance sets the correction's strength, not where it settles.
     float flow_depth, flow_tau;
+    // Speed from the servos: forward airspeed pitches this airframe (rotor flapping), so the pitch loop holds it with a steady thrust tilt, tilt = speed_pitch * pitch + speed_tilt * forward speed + offset (fitted on the camera's speed over five tag hovers, 2026-10-31 and 11-01: speed_tilt 5.0 degrees per m/s, speed_pitch -0.54, the servo compensation's share; 0.19 m/s error on flights left out of the fit). speed_tilt (radians per m/s; 0 = off) turns it on; the offset (CoM and servo zero) is learned from the camera while it sees the tag, else from the first SPEED_TAKEOFF_S airborne plus speed_takeoff (radians: the climb reads that much lower); without the tag it pulls the forward velocity estimate over speed_tau (s).
+    float speed_tilt, speed_pitch, speed_takeoff, speed_tau;
     // Not settings: the laptop's nudge of the hold point (m; toward the tag, to the drone's left, and up), streamed with the targets (the dashboard's arrows and W/S in hover).
     float nudge_forward, nudge_left, nudge_up;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
@@ -106,6 +108,9 @@ typedef struct {
     int64_t flow_us;
     // Since a stick was let go, how long the hold may still take to brake (s; hover.c BRAKE_S, ended early once under BRAKED): meanwhile the place follows the drone, so it holds where it stops, not where the stick was let go.
     float braking;
+    // Speed from the servos (gains speed_tilt): the thrust tilt less speed_pitch times the pitch, smoothed (radians); its offset, and the sum and time of the takeoff window that first sets it; the forward speed it gives (m/s, NaN until the offset is known).
+    float speed_raw, speed_offset, speed_sum, speed_time, speed;
+    bool speed_ready;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).
