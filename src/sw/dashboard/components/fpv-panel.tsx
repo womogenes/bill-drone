@@ -26,11 +26,38 @@ function save(key: string, value: string) {
 }
 
 // Rendered in the browser only (the page loads it without server rendering), so the saved address is there from the start. Always streams, by the drone's hover_camera setting: the tracking preview (the flow's 80x60 reduction, tracking undisturbed, over the camera's network) or FPV, the camera's own 480x320 video over the radio to the FPV receiver or over its network, during which it does not track the tag, so camera hover has no sightings; it resumes tracking 3 s after FPV ends.
+// A preview frame's tag (X-Tag): the corners in the camera's 320x240 pixels and the tag centre in the camera frame (m; right, down, forward).
+export type PreviewTag = {
+  valid: boolean;
+  corners: [number, number][];
+  position: [number, number, number];
+};
+
+function parseTag(header: string): PreviewTag | null {
+  const match = /X-Tag: *(valid|tracked) ([^\r\n]+)/i.exec(header);
+  if (!match) return null;
+  const parts = match[2].trim().split(/\s+/);
+  const corners = parts
+    .slice(0, 4)
+    .map((pair) => pair.split(',').map(Number) as [number, number]);
+  const position = (parts[4] ?? '').split(',').map(Number);
+  if (corners.some((c) => c.some(Number.isNaN)) || position.length !== 3)
+    return null;
+  return {
+    valid: match[1].toLowerCase() === 'valid',
+    corners,
+    position: position as [number, number, number],
+  };
+}
+
 export function FpvPanel({
   free,
   onFree,
+  onTag,
   roll = 0,
 }: {
+  // Each shown tag-mode frame's tag, or null when it has none.
+  onTag?: (tag: PreviewTag | null) => void;
   // The camera's roll on its mount (the drone's hover_cam_roll, degrees): the picture is turned back by it, so it shows upright.
   roll?: number;
   // The drone's hover_camera setting turned around (undefined without a drone): every dashboard shows what the drone flies.
@@ -41,6 +68,10 @@ export function FpvPanel({
   const [host, setHost] = useState(() => saved(HOST_KEY) ?? '');
   const mode: Mode = free ? 'fpv' : 'tag';
   const canvas = useRef<HTMLCanvasElement>(null);
+  const onTagRef = useRef(onTag);
+  useEffect(() => {
+    onTagRef.current = onTag;
+  }, [onTag]);
   const [status, setStatus] = useState<{
     state: string;
     fps?: number;
@@ -82,22 +113,43 @@ export function FpvPanel({
   // FPV frames carry their capture time (X-Time, microseconds on the camera's clock): each is shown at that time, mapped to this clock by the smallest delay any frame has had (rising slowly, for clock drift), plus PLAYOUT_MS. Preview frames have none and are shown at once. The stream reconnects whenever it ends or fails.
   useEffect(() => {
     const closed = new AbortController();
-    const queue: { at: number; bitmap: ImageBitmap }[] = [];
+    const queue: {
+      at: number;
+      bitmap: ImageBitmap;
+      tag: PreviewTag | null;
+    }[] = [];
     let last: number | undefined;
     let capture = 0;
     let base = Infinity;
     let frame = 0;
     const render = () => {
       let shown: ImageBitmap | undefined;
+      let tag: PreviewTag | null = null;
       while (queue.length && queue[0].at <= performance.now()) {
         shown?.close();
-        shown = queue.shift()!.bitmap;
+        ({ bitmap: shown, tag } = queue.shift()!);
       }
       const target = canvas.current;
       if (shown && target) {
         target.width = shown.width;
         target.height = shown.height;
-        target.getContext('2d')!.drawImage(shown, 0, 0);
+        const context = target.getContext('2d')!;
+        context.drawImage(shown, 0, 0);
+        // The tag's outline, its corners scaled from the camera's 320x240 to this picture.
+        if (tag) {
+          const scale = shown.width / 320;
+          context.strokeStyle = '#22c55e';
+          context.lineWidth = Math.max(1, shown.width / 160);
+          context.beginPath();
+          tag.corners.forEach(([x, y], i) =>
+            i
+              ? context.lineTo(x * scale, y * scale)
+              : context.moveTo(x * scale, y * scale)
+          );
+          context.closePath();
+          context.stroke();
+        }
+        onTagRef.current?.(tag);
       }
       shown?.close();
       frame = requestAnimationFrame(render);
@@ -122,7 +174,11 @@ export function FpvPanel({
       ).catch(() => undefined);
       if (!bitmap || closed.signal.aborted) return bitmap?.close();
       const index = queue.findIndex((queued) => queued.at > at);
-      queue.splice(index < 0 ? queue.length : index, 0, { at, bitmap });
+      queue.splice(index < 0 ? queue.length : index, 0, {
+        at,
+        bitmap,
+        tag: parseTag(header),
+      });
       while (queue.length > 8) queue.shift()!.bitmap.close();
     };
     void (async () => {

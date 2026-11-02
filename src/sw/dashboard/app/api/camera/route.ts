@@ -106,6 +106,26 @@ async function runHub(hub: Hub, url: URL) {
 
 // FPV shards (fw/esp32cam/src/fpv.h) carry a 20-byte header (FPV2, frame number, shard index, shard count, data shards, the JPEG's length, capture and send times); any data of a frame's shards rebuild it (lib/fec.ts). With the receiver plugged in they arrive on its port as [length u16][rssi i8][chunk] at 1 Mbaud, or from the monitor-mode adapter as UDP datagrams, while a K V request every 500 ms keeps the camera sending over the radio; otherwise over UDP, kept coming by "FPVW" to the camera's port 5601. A frame still short of shards when a newer one starts is dropped.
 // op: V for FPV, P for tag mode's preview over the radio (tracking on).
+// A tag-mode preview frame ends in its tag (fw/esp32cam/src/web.h PreviewTag, 52 bytes: "TAGP", the state, three spare bytes, the four corners in 320x240 pixels and the tag centre in the camera frame in metres, little-endian floats), passed on as the X-Tag header the camera's own stream uses ("none", or "valid"/"tracked", the corners as x,y and the position as x,y,z).
+const PREVIEW_TAG_BYTES = 52;
+function splitTag(frame: Buffer) {
+  const at = frame.length - PREVIEW_TAG_BYTES;
+  if (at < 0 || frame.toString('latin1', at, at + 4) !== 'TAGP')
+    return { jpeg: frame, tag: undefined };
+  const state = frame[at + 4];
+  const value = (k: number) => frame.readFloatLE(at + 8 + 4 * k);
+  const corners = [0, 1, 2, 3]
+    .map((i) => `${value(2 * i).toFixed(1)},${value(2 * i + 1).toFixed(1)}`)
+    .join(' ');
+  const position = [8, 9, 10].map((k) => value(k).toFixed(3)).join(',');
+  return {
+    jpeg: frame.subarray(0, at),
+    tag: state
+      ? `${state === 2 ? 'valid' : 'tracked'} ${corners} ${position}`
+      : 'none',
+  };
+}
+
 async function runFpv(hub: Hub, op: 'V' | 'P') {
   let current = -1;
   let shards = new Map<number, Buffer>();
@@ -129,13 +149,14 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
     shards.set(index, message.subarray(20));
     if (shards.size < data) return;
     done = true;
-    const jpeg = decode(shards, data, length);
-    if (!jpeg) return;
+    const frameBytes = decode(shards, data, length);
+    if (!frameBytes) return;
     hub.received!++;
+    const { jpeg, tag } = splitTag(frameBytes);
     const part = new Uint8Array(
       Buffer.concat([
         Buffer.from(
-          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(12)} ${message.readUInt32LE(16)}\r\n\r\n`
+          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(12)} ${message.readUInt32LE(16)}\r\n${tag ? `X-Tag: ${tag}\r\n` : ''}\r\n`
         ),
         jpeg,
         Buffer.from('\r\n'),

@@ -20,8 +20,18 @@ struct PreviewFrame {
     uint8_t tag; // 0 none, 1 tracked, 2 tracked with a valid pose
     float corners[4][2];
     float position[3];
+    float tagPosition[3]; // the tag centre in the camera frame (m; right, down, forward)
     uint32_t captureUs; // the frame's capture start (camera clock)
 };
+// A radio preview frame's tag, sent after its JPEG so the dashboard can outline the tag on the picture and place it relative to the drone even disarmed (its /api/camera strips it off): the state as in PreviewFrame, the corners in full-resolution 320x240 pixels and the tag centre in the camera frame (m; right, down, forward).
+struct __attribute__((packed)) PreviewTag {
+    char magic[4] = {'T', 'A', 'G', 'P'};
+    uint8_t tag = 0;
+    uint8_t reserved[3] = {};
+    float corners[8] = {};
+    float position[3] = {};
+};
+static_assert(sizeof(PreviewTag) == 52, "Radio preview tag format changed");
 QueueHandle_t handoverQueue;
 SemaphoreHandle_t previewReady;
 PreviewFrame previewFrame; // the copy's tag; previewFrame.buffer is unused
@@ -115,10 +125,12 @@ void finishFrame(camera_fb_t *frame, bool found, const float corners[4][2], cons
     if (previewWanted) {
         previewWanted = false;
         const bool full = previewFull;
-        PreviewFrame handover = {full ? frame : nullptr, reduced, uint8_t(found ? (packet.valid ? 2 : 1) : 0), {}, {},
+        PreviewFrame handover = {full ? frame : nullptr, reduced, uint8_t(found ? (packet.valid ? 2 : 1) : 0), {}, {}, {},
                                  uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec)};
-        if (found)
+        if (found) {
             memcpy(handover.corners, corners, sizeof(handover.corners));
+            memcpy(handover.tagPosition, packet.tagPosition, sizeof(handover.tagPosition));
+        }
         memcpy(handover.position, packet.position, sizeof(handover.position));
         if (xQueueSend(handoverQueue, &handover, 0) == pdTRUE && full)
             return;
@@ -248,13 +260,19 @@ void radioPreviewLoop(void *) {
             previewWanted = true;
             continue;
         }
-        const uint32_t captureUs = previewFrame.captureUs;
+        const PreviewFrame frame = previewFrame;
         JpegOutput output = {0, false};
         const bool encoded = fmt2jpg_cb(previewReduced, sizeof(previewReduced), flow::width, flow::height, PIXFORMAT_GRAYSCALE, 75, appendJpeg, &output);
         // The copy is free again: the next frame's handover overlaps this one's sending.
         previewWanted = true;
-        if (encoded && !output.overflow)
-            fpv::broadcastFrame(previewJpeg + jpegOffset, output.length, captureUs);
+        if (encoded && !output.overflow && jpegOffset + output.length + sizeof(PreviewTag) <= previewJpegBytes) {
+            PreviewTag tag;
+            tag.tag = frame.tag;
+            memcpy(tag.corners, frame.corners, sizeof(tag.corners));
+            memcpy(tag.position, frame.tagPosition, sizeof(tag.position));
+            memcpy(previewJpeg + jpegOffset + output.length, &tag, sizeof(tag));
+            fpv::broadcastFrame(previewJpeg + jpegOffset, output.length + sizeof(tag), frame.captureUs);
+        }
         ++previewCount;
     }
 }

@@ -15,6 +15,7 @@ import Link from 'next/link';
 
 import { ControlPanel } from '@/components/control-panel';
 import { HoverPanel } from '@/components/hover-panel';
+import type { PreviewTag } from '@/components/fpv-panel';
 import { Button } from '@/components/ui/button';
 import { ActuatorPanel } from '@/components/actuator-panel';
 import { ADCPanel } from '@/components/adc-panel';
@@ -58,6 +59,39 @@ const TILT_WARNING = 10;
 const TILT_TAU_S = 1;
 
 // Updates the steady rotor tilt from a reading and returns it when it is beyond TILT_WARNING, else null; disarmed or without thrust it starts over.
+// The tag relative to the drone (forward, left, up; m) from a preview sighting in the camera frame (right, down, forward), through the camera's mounting (hover_cam_roll, hover_cam_pitch; degrees) as fw/drone/main/hover.c level() turns it, taking the drone as level, as it is on the ground.
+function cameraToBody(
+  [right0, down0, ahead]: [number, number, number],
+  rollDeg: number,
+  pitchDeg: number
+): [number, number, number] {
+  const roll = (rollDeg * Math.PI) / 180;
+  const pitch = (pitchDeg * Math.PI) / 180;
+  const right = Math.cos(roll) * right0 - Math.sin(roll) * down0;
+  const down = Math.sin(roll) * right0 + Math.cos(roll) * down0;
+  return [
+    down * Math.sin(pitch) + ahead * Math.cos(pitch),
+    -right,
+    ahead * Math.sin(pitch) - down * Math.cos(pitch),
+  ];
+}
+
+const noHistory = () => [];
+const EMPTY_SAMPLE: HoverSample = {
+  elapsed_us: 0,
+  mode: 0,
+  tracking: false,
+  tag: null,
+  tag_age_ms: null,
+  velocity: [0, 0],
+  height: 0,
+  height_target: 0,
+  range_target: null,
+  arc_deg: null,
+  time: 0,
+  session: 0,
+};
+
 // A pack under ARM_MIN_V, or one a disarmed drone is running down faster than DRAIN_V_PER_MIN (from the once-a-second history), else null.
 function batteryWarningFor(
   reading: Reading | null,
@@ -154,6 +188,12 @@ export default function Page() {
   const [tiltWarning, setTiltWarning] = useState<number | null>(null);
   const [batteryWarning, setBatteryWarning] = useState<string | null>(null);
   const [hoverState, setHoverState] = useState<HoverSample | null>(null);
+  // The camera's latest tag-mode preview frame's tag (null: no tag in it; undefined: no preview yet), for the map while disarmed.
+  const [previewTag, setPreviewTag] = useState<PreviewTag | null>();
+  const showPreviewTag = useCallback(
+    (tag: PreviewTag | null) => setPreviewTag(tag),
+    []
+  );
   const latestHover = useRef<HoverSample | null>(null);
   const [hoverHistory] = useState(() =>
     createHistory<HoverSample>(20_000, 1000)
@@ -411,6 +451,32 @@ export default function Page() {
 
   // A drone that disarms itself drops back to manual, so a later Enable never arms straight into hover.
   const armed = reading?.control?.enabled;
+  const control = reading?.control;
+  const cameraSample: HoverSample | null =
+    previewTag === undefined || !control
+      ? null
+      : {
+          elapsed_us: 0,
+          mode: 0,
+          tracking: false,
+          tag: previewTag
+            ? cameraToBody(
+                previewTag.position,
+                control.hover_cam_roll ?? 0,
+                control.hover_cam_pitch ?? 0
+              )
+            : null,
+          tag_age_ms: previewTag ? 0 : null,
+          velocity: [0, 0],
+          height: 0,
+          height_target: 0,
+          range_target: control.hover_distance ?? null,
+          arc_deg: null,
+          time: reading?.time ?? 0,
+          session: 0,
+        };
+  const mapState =
+    (armed && hoverState) || cameraSample || hoverState || EMPTY_SAMPLE;
   useEffect(() => {
     if (armed === false && targets.current.mode !== 0) setTargets({ mode: 0 });
   }, [armed, setTargets]);
@@ -617,10 +683,11 @@ export default function Page() {
               onStop={stopMotors}
             />
           )}
-          {/* The last flight's map stays up after it ends, until the next flight's replaces it. */}
-          {hoverState && (
-            <HoverPanel state={hoverState} history={hoverHistory.read} />
-          )}
+          {/* Always shown, so the layout stays put: armed, the flight's map; else the camera's latest sighting, the last flight's map, or an empty one. */}
+          <HoverPanel
+            state={mapState}
+            history={mapState === hoverState ? hoverHistory.read : noHistory}
+          />
         </div>
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
           <FpvPanel
@@ -629,6 +696,7 @@ export default function Page() {
             }
             onFree={(free) => sendControl({ hover_camera: free ? 0 : 1 })}
             roll={reading?.control?.hover_cam_roll}
+            onTag={showPreviewTag}
           />
         </div>
       </main>
