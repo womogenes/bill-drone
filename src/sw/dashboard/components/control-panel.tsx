@@ -53,19 +53,6 @@ export function typing(event: KeyboardEvent) {
       ))
   );
 }
-// Keyboard setpoint sizes are a local preference, not drone settings.
-const MANUAL_KEY = 'manual-inputs';
-const MANUAL_DEFAULT = { yaw: 20 };
-function readManual() {
-  try {
-    return {
-      ...MANUAL_DEFAULT,
-      ...JSON.parse(localStorage.getItem(MANUAL_KEY) ?? '{}'),
-    };
-  } catch {
-    return MANUAL_DEFAULT;
-  }
-}
 // Positive pitch is nose down, so the up arrow tilts forward; A and D roll, and the left and right arrows yaw (yawKeys).
 const tiltKeys = {
   ArrowUp: { axis: 'pitch', direction: 1 },
@@ -74,13 +61,9 @@ const tiltKeys = {
   KeyD: { axis: 'roll', direction: 1 },
 } as const;
 const yawKeys = ['ArrowLeft', 'ArrowRight'];
-// In hover and landing W and S raise and lower the hold point while held (m/s). The arrows and A and D tilt the drone directly, with or without the tag (fw/drone/main/hover.c stick): moving the hold point at 0.2 m/s instead could not bring back a drone drifting off (2026-11-02).
-const NUDGE_CLIMB = 0.3;
+// In hover and landing W and S raise and lower the hold point while held, at the drone's hover_climb_rate. The arrows and A and D tilt the drone directly, with or without the tag (fw/drone/main/hover.c stick): moving the hold point at 0.2 m/s instead could not bring back a drone drifting off (2026-11-02).
 const NUDGE_TICK_MS = 50;
-const nudgeKeys = {
-  KeyW: [0, 0, NUDGE_CLIMB],
-  KeyS: [0, 0, -NUDGE_CLIMB],
-} as const;
+const nudgeKeys = { KeyW: 1, KeyS: -1 } as const;
 
 function nudgeText([forward, left, up]: [number, number, number]) {
   const parts = [];
@@ -298,12 +281,13 @@ export const ControlPanel = memo(function ControlPanel({
   const setting = (key: string) =>
     (settings as unknown as Record<string, number | undefined>)[key];
   const [open, setOpen] = useState(false);
-  const [manual, setManual] = useState(MANUAL_DEFAULT);
-  const [manualDraft, setManualDraft] = useState(MANUAL_DEFAULT);
-  useEffect(() => setManual(readManual()), []);
-  // The arrows and A and D tilt as far as the hold itself may (hover_tilt): a per-browser step had been left at 5 degrees, and arrows asking for that could not bring back a drifting drone (2026-11-02).
-  const stickTilt = useRef(15);
-  stickTilt.current = setting('hover_tilt') ?? 15;
+  // Every key's size is a drone setting, so it can be tuned over the bridge like the rest: the arrows and A and D tilt as far as the hold itself may (hover_tilt; a per-browser step had been left at 5 degrees, too little to bring back a drifting drone, 2026-11-02), the left and right arrows turn at hover_yaw_rate and W and S climb at hover_climb_rate.
+  const keySizes = useRef({ tilt: 15, yaw: 30, climb: 0.3 });
+  keySizes.current = {
+    tilt: setting('hover_tilt') ?? 15,
+    yaw: setting('hover_yaw_rate') ?? 30,
+    climb: setting('hover_climb_rate') ?? 0.3,
+  };
   const throttle = useRef(settings.base_throttle);
   // Key handlers read the mode through a ref so a mode change doesn't re-register them and forget held keys.
   const modeRef = useRef(mode);
@@ -356,7 +340,7 @@ export const ControlPanel = memo(function ControlPanel({
 
     function changeYaw() {
       const yaw_rate =
-        manual.yaw *
+        keySizes.current.yaw *
         (Number(held.has('ArrowLeft')) - Number(held.has('ArrowRight')));
       setDraft((previous) => ({ ...previous, yaw_rate }));
       onChange({ yaw_rate });
@@ -370,22 +354,17 @@ export const ControlPanel = memo(function ControlPanel({
           (binding.axis === axis && held.has(key) ? binding.direction : 0),
         0
       );
-      const value = stickTilt.current * direction;
+      const value = keySizes.current.tilt * direction;
       setDraft((previous) => ({ ...previous, [axis]: value }));
       onChange({ [axis]: value });
     }
 
     function nudge() {
       const tick = NUDGE_TICK_MS / 1000;
-      let forward = 0;
-      let left = 0;
       let up = 0;
-      for (const code of nudging) {
-        forward += nudgeKeys[code][0] * tick;
-        left += nudgeKeys[code][1] * tick;
-        up += nudgeKeys[code][2] * tick;
-      }
-      if (forward || left || up) onNudge(forward, left, up);
+      for (const code of nudging)
+        up += nudgeKeys[code] * keySizes.current.climb * tick;
+      if (up) onNudge(0, 0, up);
     }
 
     function stopNudging() {
@@ -473,16 +452,7 @@ export const ControlPanel = memo(function ControlPanel({
       window.removeEventListener('keyup', keyup);
       window.removeEventListener('blur', blur);
     };
-  }, [
-    available,
-    settings.enabled,
-    open,
-    onChange,
-    onMode,
-    onNudge,
-    onStop,
-    manual,
-  ]);
+  }, [available, settings.enabled, open, onChange, onMode, onNudge, onStop]);
 
   // H (or T) works disarmed too: it arms like Enable, then hovers, taking off.
   useEffect(() => {
@@ -513,7 +483,6 @@ export const ControlPanel = memo(function ControlPanel({
           open={open}
           onOpenChange={(value) => {
             setOpen(value);
-            if (value) setManualDraft(manual);
             if (value)
               setGains(
                 Object.fromEntries(
@@ -555,11 +524,6 @@ export const ControlPanel = memo(function ControlPanel({
                     ])
                   )
                 );
-                const next = { yaw: Number(manualDraft.yaw) };
-                setManual(next);
-                try {
-                  localStorage.setItem(MANUAL_KEY, JSON.stringify(next));
-                } catch {}
                 setOpen(false);
               }}
             >
@@ -604,32 +568,6 @@ export const ControlPanel = memo(function ControlPanel({
                     </section>
                   ))}
               </div>
-              <section className="space-y-2 xl:w-1/3 xl:pr-6">
-                <h3 className="border-b pb-1 font-medium">
-                  Free flight inputs (this browser)
-                </h3>
-                <div className="space-y-2">
-                  <label className="flex items-center justify-between gap-3">
-                    Yaw rate (°/s)
-                    <Input
-                      className="w-32"
-                      aria-label="Yaw rate (°/s)"
-                      type="number"
-                      min={0}
-                      max={45}
-                      step="any"
-                      required
-                      value={manualDraft.yaw}
-                      onChange={(event) =>
-                        setManualDraft({
-                          ...manualDraft,
-                          yaw: Number(event.target.value),
-                        })
-                      }
-                    />
-                  </label>
-                </div>
-              </section>
               <Button
                 type="submit"
                 variant="outline"
