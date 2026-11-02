@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -264,18 +265,32 @@ static esp_err_t write_mpu(uint8_t reg, uint8_t value) {
 // The MPU6050's FIFO holds every 1 kHz sample (accelerometer then gyro, big-endian, FIFO_SAMPLE bytes), and each tick takes the mean of those since the last: one sample every 10 ms let the rotors' vibration near 100 Hz (5500-6600 rpm with the 10-inch props) alias to 0-10 Hz, where the height and attitude loops act; the 10 ms mean nulls 100 Hz and its multiples, and the gyro's mean is the rotation over the tick. More than FIFO_MOST samples (a missed tick, an overflow, startup) resets the FIFO, and the tick falls back to the single newest sample. Its reads may take two FreeRTOS ticks (20 ms): at the 100 Hz tick a shorter timeout rounds to none, and every read failed (2026-10-31).
 #define FIFO_SAMPLE 12
 #define FIFO_MOST 16
-static int read_fifo(int32_t sum[6]) {
+// A FIFO read cut short (an I2C timeout, a brownout) or an overflow that wraps mid-sample leaves the stream out of step with FIFO_SAMPLE, and every later read takes gyro bytes for the accelerometer's and back (2026-11-01 after a prop swap: accel ~0 g, gyro -125 deg/s, 1 g's counts). The newest FIFO sample must match the registers' sample to within FIFO_ACCEL_SLACK and FIFO_GYRO_SLACK counts (0.75 g, 100 deg/s: vibration between the two reads stays well under, any misaligned order is off by about 1 g); otherwise, and after a failed read or a partial sample, the FIFO is reset and the tick takes the registers' sample.
+#define FIFO_ACCEL_SLACK 12288
+#define FIFO_GYRO_SLACK 13100
+static int read_fifo(int32_t sum[6], const int16_t newest[7]) {
     uint8_t reg = 0x72, count[2];
     if (i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1, count, 2, pdMS_TO_TICKS(20)) != ESP_OK) return 0;
-    int samples = ((count[0] << 8) | count[1]) / FIFO_SAMPLE;
-    if (samples > FIFO_MOST) {
+    int bytes = (count[0] << 8) | count[1], samples = bytes / FIFO_SAMPLE;
+    if (samples > FIFO_MOST || bytes % FIFO_SAMPLE) {
         write_mpu(0x6a, 0x44);
         return 0;
     }
     if (!samples) return 0;
-    uint8_t data[FIFO_MOST * FIFO_SAMPLE];
+    static uint8_t data[FIFO_MOST * FIFO_SAMPLE];
     reg = 0x74;
-    if (i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1, data, samples * FIFO_SAMPLE, pdMS_TO_TICKS(20)) != ESP_OK) return 0;
+    if (i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1, data, samples * FIFO_SAMPLE, pdMS_TO_TICKS(20)) != ESP_OK) {
+        write_mpu(0x6a, 0x44);
+        return 0;
+    }
+    const uint8_t *last = data + (samples - 1) * FIFO_SAMPLE;
+    for (int i = 0; i < 6; i++) {
+        int value = (int16_t)((last[i * 2] << 8) | last[i * 2 + 1]);
+        if (abs(value - newest[i < 3 ? i : i + 1]) > (i < 3 ? FIFO_ACCEL_SLACK : FIFO_GYRO_SLACK)) {
+            write_mpu(0x6a, 0x44);
+            return 0;
+        }
+    }
     for (int k = 0; k < samples; k++)
         for (int i = 0; i < 6; i++) sum[i] += (int16_t)((data[k * FIFO_SAMPLE + i * 2] << 8) | data[k * FIFO_SAMPLE + i * 2 + 1]);
     return samples;
@@ -369,13 +384,15 @@ static void runtime_task(void *arg) {
     TickType_t period = configTICK_RATE_HZ / SAMPLE_HZ;
     uint64_t previous = 0;
     while (true) {
-        uint8_t reg = 0x3a, data[15];
+        uint8_t reg = 0x3a, data[15] = {0};
         esp_err_t result = sensor_configured
             ? i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1,
                                           data, sizeof(data), pdMS_TO_TICKS(10))
             : ESP_ERR_INVALID_STATE;
+        int16_t sensor[7], raw[7];
+        for (int i = 0; i < 7; i++) sensor[i] = (int16_t)((data[1 + i * 2] << 8) | data[2 + i * 2]);
         int32_t sum[6] = {0};
-        int samples = result == ESP_OK ? read_fifo(sum) : 0;
+        int samples = result == ESP_OK ? read_fifo(sum, sensor) : 0;
         uint64_t now = esp_timer_get_time();
         portENTER_CRITICAL(&lock);
         bool recording = log_active;
@@ -417,8 +434,6 @@ static void runtime_task(void *arg) {
             continue;
         }
 
-        int16_t sensor[7], raw[7];
-        for (int i = 0; i < 7; i++) sensor[i] = (int16_t)((data[1 + i * 2] << 8) | data[2 + i * 2]);
         // The tick's mean from the FIFO in place of the newest sample (the temperature stays the newest).
         if (samples) {
             for (int i = 0; i < 3; i++) {
@@ -1084,5 +1099,5 @@ void flight_runtime_start(void) {
     for (int side = 0; side < 2; side++) write_servo(side);
     running = true;
     portEXIT_CRITICAL(&lock);
-    if (xTaskCreatePinnedToCore(runtime_task, "flight", 4096, NULL, 5, NULL, 1) != pdPASS) abort();
+    if (xTaskCreatePinnedToCore(runtime_task, "flight", 8192, NULL, 5, NULL, 1) != pdPASS) abort();
 }
