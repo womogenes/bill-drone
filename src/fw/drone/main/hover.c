@@ -95,6 +95,10 @@
 #define LANDED_RAMP 0.25f
 #endif
 // Contact: a landing that hits harder than LAND_SHOCK (specific force along vertical, g), or tilts past LAND_TILT from level, stops the motors at once. With no legs the drone touches down on its body, and thrust above the first contact point levers it over (2026-10-28 05:01: 12 degrees nose-down at contact, 1.6 g and over its nose 0.15 s later). Hovering stays under 1.35 g; a tilt alone is no proof of contact (05:05 pitched to 15 degrees in the air at 0.7 m, and a cut there drops the drone), so LAND_TILT is only for a drone already going over.
+// The tilt cut applies only near the floor: under LAND_TILT_HEIGHT (m) by the height estimate, which reads 10-30 cm off there, or once a probe is feeling for it. On 2026-11-02 04:16 UTC a landing pressed at 0.9 m, mid-way through a 24-degree pitch swing, cut both motors 0.1 s later.
+#ifndef LAND_TILT_HEIGHT
+#define LAND_TILT_HEIGHT 0.3f
+#endif
 #ifndef LAND_TILT
 #define LAND_TILT (25.0f * 3.14159265f / 180)
 #endif
@@ -462,7 +466,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     float lean = fmaxf(0.5f, cosf(roll) * cosf(pitch));
     state->force = g->mass * (GRAVITY + up) / lean;
 
-    if (mode != HOVER_HOLD && (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT || vertical_g > LAND_SHOCK)) {
+    bool floor_near = state->probing || state->height < LAND_TILT_HEIGHT;
+    if (mode != HOVER_HOLD && ((floor_near && (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT)) || vertical_g > LAND_SHOCK)) {
         state->landed = true;
         state->force = 0;
         *output = (HoverOutput){.force = 0};
