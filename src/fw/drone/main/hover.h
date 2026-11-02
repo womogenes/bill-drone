@@ -42,6 +42,8 @@ typedef struct {
     float speed_tilt, speed_pitch, speed_takeoff, speed_tau;
     // The dashboard's arrows on the tag move the hold point at this speed (m/s); kept here so it is set like the rest. The hold flies at the point's speed (nudge_rate).
     float nudge_speed;
+    // The furthest from the picture's centre the hold's pitch may put the tag, as last seen (radians; 0 = no limit): the camera sees about 18 degrees either way and the body overshoots.
+    float view;
     // Not settings: the laptop's nudge of the hold point (m; toward the tag, to the drone's left, and up), streamed with the targets (the dashboard's arrows and W/S in hover).
     float nudge_forward, nudge_left, nudge_up;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.

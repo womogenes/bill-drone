@@ -15,9 +15,9 @@ DEFINES = os.environ.get("HOVER_DEFINES", "").split()
 LIBRARY = Path(__file__).with_name("libhover" + "".join("-" + define.replace("=", "_") for define in DEFINES) + ".so")
 HISTORY = 24
 HOLD, LAND, LAND_FAST = 1, 2, 3
-GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll")
+GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "view", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll")
 # Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_cam_roll, hover_drag_tilt) and the attitude controller's pitch_trim.
-ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "cam_roll", "drag_tilt", "pitch_trim", "speed_tilt", "speed_takeoff")
+ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "cam_roll", "drag_tilt", "pitch_trim", "speed_tilt", "speed_takeoff", "view")
 
 
 class Gains(ctypes.Structure):

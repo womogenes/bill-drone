@@ -629,5 +629,11 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     output->velocity[0] = state->velocity[0] * sy - state->velocity[1] * cy;
     output->velocity[1] = state->velocity[0] * cy + state->velocity[1] * sy;
     output->pitch = clamp(atanf(forward / GRAVITY) - g->thrust_tilt * state->thrust_tilt, -g->tilt, g->tilt);
+    // Keep the tag in view: leaning nose-down turns the camera down and moves the tag up the picture, so the pitch is limited to put the tag (as last seen, relative to level) no further than view from the picture's centre. On 2026-11-02 04:55 UTC a tag 9 degrees above level left the top of the camera's 18 degrees as the body pitched past 11 degrees, and the hold, blind, swung out of control.
+    if (g->view > 0 && state->have_pose) {
+        float elevation = atan2f(state->position[2], fmaxf(hypotf(state->position[0], state->position[1]), 0.1f));
+        float low = -g->view - elevation + g->cam_pitch, high = g->view - elevation + g->cam_pitch;
+        if (low < high) output->pitch = clamp(output->pitch, low, high);
+    }
     output->roll = clamp(atanf(-left / GRAVITY), -g->tilt, g->tilt);
 }
