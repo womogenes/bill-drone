@@ -23,7 +23,7 @@ import numpy as np
 from sw.fit import settings as recording_settings
 from sw.flight_log import read_flight
 from sw.sim import airframe as A
-from sw.sim.flight import MODEL, MODEL_TUNING_KEYS, THRUST_VOLTAGE, TUNING_LAYOUT, YAW_I, Controller, control_many, thrust_table
+from sw.sim.flight import MODEL, MODEL_TUNING_KEYS, PITCH_SPEED, THRUST_VOLTAGE, TUNING_LAYOUT, YAW_I, Controller, control_many, thrust_table
 
 DT = A.DT
 DEG = A.DEG
@@ -130,6 +130,14 @@ def excitation(record, path, keys=("left_servo", "right_servo", "left_motor", "r
     return out
 
 
+def body_velocity(record):
+    """The hover's velocity as the runtime hands it to the controller while tracking: body axes (rightward, forward) from the logged level-frame velocity (x forward, y left) and heading."""
+    yaw = np.radians(record["hover_yaw_deg"].to_numpy() if hasattr(record["hover_yaw_deg"], "to_numpy") else record["hover_yaw_deg"])
+    vx, vy = (np.nan_to_num(np.asarray(record[key], float)) for key in ("hover_vx_m_s", "hover_vy_m_s"))
+    cy, sy = np.cos(np.nan_to_num(yaw)), np.sin(np.nan_to_num(yaw))
+    return np.column_stack([vx * sy - vy * cy, vx * cy + vy * sy])
+
+
 def controller(record):
     """The flight's firmware controller, configured and reset, as the state and command buffers control_many takes."""
     c = Controller()
@@ -159,6 +167,10 @@ class Data:
         self.rate = self.pad(lambda r: np.column_stack([r["gx_deg_s"], r["gy_deg_s"], r["gz_deg_s"]]) * DEG)
         self.att = self.pad(lambda r: np.column_stack([r["roll_deg"], r["pitch_deg"]]) * DEG)
         self.vel = self.pad(lambda r: np.nan_to_num(np.column_stack([r["hover_vx_m_s"], r["hover_vy_m_s"]])))
+        # While the hover flies on the tag (flags bit 6) the runtime hands the controller the hover's velocity in body axes (rightward, forward; hover.c output velocity, rotated by the hover's heading) and the speed moment compensation acts on it (flight_rt.c); otherwise pitch_speed is 0 and the controller dead-reckons its own.
+        self.tracking = self.pad(lambda r: (r["flags"].astype(int) >> 6 & 1).astype(float))
+        self.body_vel = self.pad(lambda r: body_velocity(r))
+        self.pitch_speed = np.array([r["setting"].get("pitch_speed", 0.0) for r in records])
         self.voltage = self.pad(lambda r: np.where(r["battery_v"] > 5, r["battery_v"], self.reference(r)) / self.reference(r))
         self.targets = self.pad(lambda r: np.column_stack([r["base_throttle"] > 0, r["target_roll_deg"] * DEG, r["target_pitch_deg"] * DEG, r["target_yaw_deg_s"] * DEG, r["base_throttle"]]))
         self.scale = self.pad(self.thrust_scales)
@@ -223,6 +235,9 @@ class Data:
             commands[:, INDEX[key]] = self.targets[flights, k, j]
         commands[:, INDEX["left_thrust_scale"]] = self.scale[flights, k, 0]
         commands[:, INDEX["right_thrust_scale"]] = self.scale[flights, k, 1]
+        tracking = self.tracking[flights, k] > 0
+        commands[:, PITCH_SPEED] = np.where(tracking, self.pitch_speed[flights], 0.0)
+        states[tracking, 13:15] = self.body_vel[flights[tracking], k[tracking]]
         control_many(states, commands, self.table_rows)
         throttle = np.trunc(states[:, 2:4]).astype(float)
         tilt = np.column_stack([np.degrees(states[:, 4]) - self.trims[flights, 0], -(np.degrees(states[:, 5]) - self.trims[flights, 1])])

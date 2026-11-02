@@ -637,8 +637,9 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
     if (g->view > 0 && state->have_pose) {
         float elevation = atan2f(state->position[2], fmaxf(hypotf(state->position[0], state->position[1]), 0.1f));
         // The body flies at this pitch plus pitch_trim (the attitude controller adds it), and that is what turns the camera.
-        float low = -g->view - elevation + g->cam_pitch - g->pitch_trim, high = g->view - elevation + g->cam_pitch - g->pitch_trim;
-        if (low < high) output->pitch = clamp(output->pitch, low, high);
+        // It only holds back a lean that would lose the tag, never asks for one: level stays allowed. On 2026-11-02 08:04 UTC the liftoff's nose-up caught the tag 19 degrees above level from the floor, the band lay wholly nose-up, the pitch was pinned at -10.75 degrees, and the drone drove backward blind on that stale sighting.
+        float low = fminf(-g->view - elevation + g->cam_pitch - g->pitch_trim, 0), high = fmaxf(g->view - elevation + g->cam_pitch - g->pitch_trim, 0);
+        output->pitch = clamp(output->pitch, low, high);
     }
     output->roll = clamp(atanf(-left / GRAVITY), -g->tilt, g->tilt);
 }
