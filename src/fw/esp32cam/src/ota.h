@@ -87,7 +87,12 @@ inline void startWifi() {
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
     // One scan at boot picks the first listed network in range.
     const int found = wifiNetworks[0].ssid[0] ? WiFi.scanNetworks() : 0;
-#ifdef DEBUG_CONSOLE
+#if CONFIG_IDF_TARGET_ESP32S3
+    // On the S3's own USB, free of the drone link.
+    Serial.printf("wifi scan: %d networks\n", found);
+    for (int i = 0; i < found; ++i)
+        Serial.printf("  %s ch%d %d dBm\n", WiFi.SSID(i).c_str(), int(WiFi.channel(i)), int(WiFi.RSSI(i)));
+#elif defined(DEBUG_CONSOLE)
     printf("wifi scan: %d networks\n", found);
     for (int i = 0; i < found; ++i)
         printf("  %s ch%d %d dBm\n", WiFi.SSID(i).c_str(), int(WiFi.channel(i)), int(WiFi.RSSI(i)));

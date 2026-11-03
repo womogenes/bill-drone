@@ -70,10 +70,19 @@ void startLink() {
 
 // Wi-Fi, OTA and the control server share core 0 with the radio and the camera driver's copy task. Core 1 only captures and detects.
 void serviceTask(void *) {
-#ifdef DEBUG_CONSOLE
+#if defined(DEBUG_CONSOLE) || CONFIG_IDF_TARGET_ESP32S3
     uint32_t printed = 0;
 #endif
     while (true) {
+#if CONFIG_IDF_TARGET_ESP32S3
+        // The S3's own USB is free of the drone link: a status line every 2 s for a laptop on its USB-C.
+        if (Serial && millis() - printed >= 2000) {
+            printed = millis();
+            Serial.printf("status: wifi %d ip %s rssi %d camera %d error 0x%x frames %u linkSent %u linkReceived %u stalls %u heap %u psram %u\n", int(WiFi.status()),
+                          WiFi.localIP().toString().c_str(), int(WiFi.RSSI()), int(cameraReady), unsigned(startError), unsigned(sequence), unsigned(linkSent),
+                          unsigned(linkReceived), unsigned(stalls), unsigned(ESP.getFreeHeap()), unsigned(ESP.getFreePsram()));
+        }
+#endif
 #ifdef DEBUG_CONSOLE
         if (millis() - printed >= 2000) {
             printed = millis();
@@ -210,6 +219,9 @@ void loadExposureCap() {
 void setup() {
     memcpy(lastCrumbs, crumbs, sizeof(crumbs));
     memset(crumbs, 0, sizeof(crumbs));
+#if CONFIG_IDF_TARGET_ESP32S3
+    Serial.begin(115200);
+#endif
     // UART0 is the drone link from here on, so nothing else may write to it: log output goes to the /log ring and the ROM's printf to nowhere. Only the boot ROM and bootloader print, at 115200 before this, and the drone rejects that.
 #ifdef DEBUG_CONSOLE
     esp_log_level_set("*", ESP_LOG_INFO);
