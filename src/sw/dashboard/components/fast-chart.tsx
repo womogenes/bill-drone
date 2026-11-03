@@ -20,6 +20,7 @@ export function FastChart<T>({
   formatValue,
   gap,
   range,
+  minSpan,
   label,
   className = 'h-40',
 }: {
@@ -32,6 +33,8 @@ export function FastChart<T>({
   formatValue: (value: number) => string;
   gap?: (previous: T, next: T) => boolean;
   range?: readonly [number, number];
+  // The smallest span of the value axis, so sensor noise on a still drone stays flat instead of filling the chart.
+  minSpan?: number;
   label: string;
   // Sets the chart's height.
   className?: string;
@@ -51,6 +54,7 @@ export function FastChart<T>({
     formatValue,
     gap,
     range,
+    minSpan,
   });
   const redraw = useRef<() => void>(() => {});
 
@@ -76,6 +80,7 @@ export function FastChart<T>({
         formatValue,
         gap,
         range,
+        minSpan,
       } = current.current;
       const visible = history(start, end);
       const width = host.clientWidth;
@@ -116,14 +121,24 @@ export function FastChart<T>({
           low = -1;
           high = 1;
         }
+        if (minSpan && high - low < minSpan) {
+          const middle = (high + low) / 2;
+          low = middle - minSpan / 2;
+          high = middle + minSpan / 2;
+        }
         const padding =
           (high - low) * 0.08 || Math.max(Math.abs(low) * 0.05, 0.01);
         low -= padding;
         high += padding;
       }
+      // About one grid line per 32 px of plot, 2 to 5 of them.
+      const count = Math.max(
+        2,
+        Math.min(5, Math.floor((height - 44) / 32) + 1)
+      );
       const ticks = Array.from(
-        { length: 5 },
-        (_, index) => low + ((high - low) * index) / 4
+        { length: count },
+        (_, index) => low + ((high - low) * index) / (count - 1)
       );
       const left = Math.max(
         48,
@@ -278,9 +293,21 @@ export function FastChart<T>({
       formatValue,
       gap,
       range,
+      minSpan,
     };
     redraw.current();
-  }, [history, series, time, start, end, formatTime, formatValue, gap, range]);
+  }, [
+    history,
+    series,
+    time,
+    start,
+    end,
+    formatTime,
+    formatValue,
+    gap,
+    range,
+    minSpan,
+  ]);
 
   return (
     <div ref={container} className={`relative w-full ${className}`}>

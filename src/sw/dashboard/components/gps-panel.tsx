@@ -34,7 +34,7 @@ export const GpsPanel = memo(function GpsPanel({
   return (
     <section
       aria-labelledby="gps-heading"
-      className="w-full max-w-md space-y-2 px-4 py-3"
+      className="space-y-2 px-4 py-3"
     >
       <h2 id="gps-heading" className="font-semibold">
         GPS

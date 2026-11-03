@@ -64,7 +64,7 @@ export const ADCPanel = memo(function ADCPanel({
   return (
     <section
       aria-labelledby="adc-heading"
-      className="w-full max-w-md space-y-2 px-4 py-3"
+      className="space-y-2 px-4 py-3"
     >
       <div className="flex items-center gap-2">
         <h2 id="adc-heading" className="font-semibold">

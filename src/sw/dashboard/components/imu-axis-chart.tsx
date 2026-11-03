@@ -35,12 +35,14 @@ export const ImuAxisChart = memo(function ImuAxisChart({
   start,
   end,
   digits,
+  className,
 }: {
   history: (start: number, end: number) => ImuSample[];
   field: 'accel' | 'gyro';
   start: number;
   end: number;
   digits: number;
+  className?: string;
 }) {
   return (
     <FastChart
@@ -52,6 +54,9 @@ export const ImuAxisChart = memo(function ImuAxisChart({
       gap={gap}
       formatTime={relativeTime}
       formatValue={formats[digits]}
+      // A still drone's noise stays flat: 0.2 g and 4 degrees/s at least.
+      minSpan={field === 'accel' ? 0.2 : 4}
+      className={className}
       label={
         field === 'accel'
           ? 'Acceleration over time, X, Y and Z in g'

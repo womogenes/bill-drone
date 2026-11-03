@@ -9,7 +9,17 @@ import {
   useRef,
   useState,
 } from 'react';
-import { LoaderCircle, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import {
+  Activity,
+  BatteryMedium,
+  Disc,
+  LoaderCircle,
+  Plug,
+  RefreshCw,
+  Satellite,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 
@@ -17,6 +27,7 @@ import { ControlPanel } from '@/components/control-panel';
 import { HoverPanel } from '@/components/hover-panel';
 import type { PreviewTag } from '@/components/fpv-panel';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ActuatorPanel } from '@/components/actuator-panel';
 import { ADCPanel } from '@/components/adc-panel';
 import { GpsPanel } from '@/components/gps-panel';
@@ -570,33 +581,110 @@ export default function Page() {
   const connected = status === 'connected';
   return (
     <div className="flex flex-col lg:h-dvh">
-      <header className="flex h-16 shrink-0 items-center justify-between border-b px-6">
-        <div className="flex items-center gap-4">
-          <h1 className="text-lg font-semibold">Drone dashboard</h1>
-          <div className="flex gap-1" role="group" aria-label="View">
-            {([false, true] as const).map((choice) => (
-              <Button
-                key={String(choice)}
-                size="sm"
-                variant={bench === choice ? 'default' : 'outline'}
-                aria-pressed={bench === choice}
-                onClick={() => setBench(choice)}
-              >
-                {choice ? 'Bench' : 'Fly'}
-              </Button>
-            ))}
-          </div>
+      <header className="flex h-14 shrink-0 items-center gap-6 border-b px-6">
+        <h1 className="text-lg font-semibold">Drone dashboard</h1>
+        <Tabs
+          value={bench ? 'bench' : 'fly'}
+          onValueChange={(value) => setBench(value === 'bench')}
+        >
+          <TabsList>
+            <TabsTrigger value="fly">Fly</TabsTrigger>
+            <TabsTrigger value="bench">Bench</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        {/* What decides whether the drone can fly, as icons; the details are in each one's title. */}
+        <div className="flex items-center gap-5 text-sm tabular-nums">
+          <span
+            title={
+              volts === undefined
+                ? 'Battery'
+                : volts <= NO_PACK_V
+                  ? 'No pack: powered over USB'
+                  : `Battery ${volts.toFixed(2)} V`
+            }
+            className={`flex items-center gap-1.5 ${
+              connected &&
+              volts !== undefined &&
+              volts > NO_PACK_V &&
+              volts < ARM_MIN_V
+                ? 'text-red-700'
+                : 'text-muted-foreground'
+            }`}
+          >
+            {connected && volts !== undefined && volts <= NO_PACK_V ? (
+              <Plug aria-hidden="true" className="size-4" />
+            ) : (
+              <BatteryMedium aria-hidden="true" className="size-4" />
+            )}
+            {!connected || volts === undefined
+              ? '—'
+              : volts <= NO_PACK_V
+                ? 'USB'
+                : `${volts.toFixed(1)} V`}
+          </span>
+          <span
+            title={connected ? imuState : 'IMU'}
+            className={`flex items-center gap-1.5 ${
+              !connected
+                ? 'text-muted-foreground'
+                : imuState === 'IMU ready'
+                  ? 'text-green-700'
+                  : imuState === 'IMU calibrating'
+                    ? 'text-muted-foreground'
+                    : 'text-red-700'
+            }`}
+          >
+            <Activity aria-hidden="true" className="size-4" />
+            {connected ? imuState.replace('IMU ', '') : '—'}
+          </span>
+          <span
+            title={
+              gps?.ok && gps.fix >= 2 && gps.fix <= 4
+                ? `GPS ${gps.fix === 2 ? '2D' : '3D'} fix, ${gps.satellites} satellites, ${gps.horizontal_accuracy.toFixed(1)} m`
+                : gps?.configured
+                  ? 'GPS: no fix'
+                  : 'GPS: searching for the module'
+            }
+            className={`flex items-center gap-1.5 ${
+              connected && gps?.ok && gps.fix >= 2 && gps.fix <= 4
+                ? 'text-green-700'
+                : 'text-muted-foreground'
+            }`}
+          >
+            <Satellite aria-hidden="true" className="size-4" />
+            {connected && gps?.ok && gps.fix >= 2 && gps.fix <= 4
+              ? `${gps.satellites} · ${gps.horizontal_accuracy.toFixed(1)} m`
+              : '—'}
+          </span>
+          <span
+            title={recorderText}
+            className={`flex items-center gap-1.5 ${
+              recorder?.error || (reading?.logging?.dropped ?? 0) > 0
+                ? 'text-red-700'
+                : 'text-muted-foreground'
+            }`}
+          >
+            <Disc
+              aria-hidden="true"
+              className={`size-4 ${reading?.logging?.active ? 'fill-red-700 text-red-700' : ''}`}
+            />
+            {reading?.logging?.active
+              ? reading.logging.samples
+              : reading?.logging?.ready
+                ? 'ready'
+                : '—'}
+          </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-3">
           <Link href="/camera" className="text-sm underline">
             Camera
           </Link>
-          <span className="text-sm text-muted-foreground tabular-nums">
-            {SERVICE}
-          </span>
           {fps !== null && (
-            <span className="text-sm text-muted-foreground tabular-nums">
-              {Math.round(fps)} FPS
+            <span
+              className="text-sm text-muted-foreground tabular-nums"
+              title={`Telemetry from ${SERVICE}`}
+            >
+              {Math.round(fps)} Hz
             </span>
           )}
           <span
@@ -621,66 +709,20 @@ export default function Page() {
           </Button>
         </div>
       </header>
-      {/* What decides whether the drone can fly, in one line; warnings in red. */}
-      <div className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-1 border-b px-6 py-2 text-sm tabular-nums">
-        <span
-          className={
-            connected &&
-            volts !== undefined &&
-            volts > NO_PACK_V &&
-            volts < ARM_MIN_V
-              ? 'text-red-700'
-              : 'text-muted-foreground'
-          }
-        >
-          {!connected || volts === undefined
-            ? 'Battery —'
-            : volts <= NO_PACK_V
-              ? 'No pack (USB)'
-              : `Battery ${volts.toFixed(1)} V`}
-        </span>
-        <span
-          className={
-            connected &&
-            imuState !== 'IMU ready' &&
-            imuState !== 'IMU calibrating'
-              ? 'text-red-700'
-              : 'text-muted-foreground'
-          }
-        >
-          {connected ? imuState : 'IMU —'}
-        </span>
-        <span className="text-muted-foreground">
-          {!connected || !gps
-            ? 'GPS —'
-            : !gps.configured
-              ? 'GPS searching'
-              : gps.ok && gps.fix >= 2 && gps.fix <= 4
-                ? `GPS ${gps.fix === 2 ? '2D' : '3D'} · ${gps.satellites} satellites · ${gps.horizontal_accuracy.toFixed(1)} m`
-                : 'GPS no fix'}
-        </span>
-        <span
-          className={
-            recorder?.error || (reading?.logging?.dropped ?? 0) > 0
-              ? 'text-red-700'
-              : 'text-muted-foreground'
-          }
-        >
-          {recorderText}
-        </span>
-        {batteryWarning && (
-          <span className="font-medium text-red-700">{batteryWarning}</span>
-        )}
-        {tiltWarning !== null && (
-          <span className="font-medium text-red-700">
-            Rotors held {Math.abs(tiltWarning).toFixed(0)}°{' '}
-            {tiltWarning < 0
-              ? 'back: CoM forward of centre'
-              : 'forward: CoM behind centre'}{' '}
-            or moving. Land and check the battery.
-          </span>
-        )}
-      </div>
+      {(batteryWarning || tiltWarning !== null) && (
+        <div className="shrink-0 space-y-1 border-b px-6 py-2 font-medium text-red-700">
+          {batteryWarning && <p>{batteryWarning}</p>}
+          {tiltWarning !== null && (
+            <p>
+              Rotors held {Math.abs(tiltWarning).toFixed(0)}°{' '}
+              {tiltWarning < 0
+                ? 'back: CoM forward of centre'
+                : 'forward: CoM behind centre'}{' '}
+              or moving. Land and check the battery.
+            </p>
+          )}
+        </div>
+      )}
       {/* Fly: what you fly with (controls, then the drone's own readings), the camera, and where the drone is against the tag. Bench adds the servo and ESC panels. */}
       <main
         className={`grid divide-y divide-border lg:min-h-0 lg:flex-1 lg:grid-cols-[26rem_minmax(0,1fr)_minmax(0,1fr)] lg:divide-x lg:divide-y-0 lg:overflow-hidden`}
@@ -727,7 +769,6 @@ export default function Page() {
               connected={status === 'connected'}
             />
           </Suspense>
-          <GpsPanel gps={reading?.gps} connected={status === 'connected'} />
         </div>
         {bench && (
           <div className="order-last min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
@@ -782,13 +823,14 @@ export default function Page() {
         </div>
         {/* On the bench the servo and ESC panels take its place. */}
         <div
-          className={`min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain ${bench ? 'hidden' : ''}`}
+          className={`min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain ${bench ? 'hidden' : ''}`}
         >
           {/* Always shown, so the layout stays put: armed, the flight's map; else the camera's latest sighting, the last flight's map, or an empty one. */}
           <HoverPanel
             state={mapState}
             history={mapState === hoverState ? hoverHistory.read : noHistory}
           />
+          <GpsPanel gps={reading?.gps} connected={status === 'connected'} />
         </div>
       </main>
     </div>

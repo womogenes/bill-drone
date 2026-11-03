@@ -54,7 +54,7 @@ export const ActuatorPanel = memo(function ActuatorPanel({
   return (
     <section
       aria-labelledby={heading}
-      className="w-full max-w-md space-y-4 px-4 py-4"
+      className="space-y-4 px-4 py-4"
     >
       <div className="flex items-center gap-4">
         <h2 id={heading} className="font-semibold">

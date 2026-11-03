@@ -125,86 +125,63 @@ export function ImuPanel({
   }, [connected]);
   const end = Math.max(now, time);
   const online = connected && reading != null;
-  // The accelerometer and gyro axes, for diagnosis; flight needs only the attitude.
-  const [raw, setRaw] = useState(false);
 
+  const value = (number: number | undefined, digits: number) =>
+    online && number !== undefined ? signed(number, digits) : '—';
   return (
-    <section
-      aria-labelledby="imu-heading"
-      className="w-full max-w-md space-y-4 px-4 py-4"
-    >
+    <section aria-labelledby="imu-heading" className="space-y-3 px-4 py-4">
       <ImuHeader
         online={online}
         calibrating={reading?.calibrating ?? false}
         pending={calibrationPending}
         onCalibrate={onCalibrate}
       />
-      <div className="grid grid-cols-3 gap-4 tabular-nums">
-        <div>
-          <p className="text-muted-foreground">Roll</p>
-          <p className="mt-1 text-xl font-medium">
-            {online ? `${signed(reading.roll, 1)}°` : '—'}
-          </p>
+      <div className="space-y-1">
+        <div className="flex items-baseline gap-4 tabular-nums">
+          <h3 className="text-sm text-muted-foreground">Attitude</h3>
+          <span className="text-red-700">Roll {value(reading?.roll, 1)}°</span>
+          <span className="text-green-700">
+            Pitch {value(reading?.pitch, 1)}°
+          </span>
+          <span className="ml-auto text-sm text-muted-foreground">
+            {online ? `${reading.temperature.toFixed(1)} °C` : ''}
+          </span>
         </div>
-        <div>
-          <p className="text-muted-foreground">Pitch</p>
-          <p className="mt-1 text-xl font-medium">
-            {online ? `${signed(reading.pitch, 1)}°` : '—'}
-          </p>
-        </div>
-        <div>
-          <p className="text-muted-foreground">Temperature</p>
-          <p className="mt-1 text-xl font-medium">
-            {online ? `${reading.temperature.toFixed(1)} °C` : '—'}
-          </p>
-        </div>
+        <AttitudeChart history={history} end={end} className="h-32" />
       </div>
-      <AttitudeChart history={history} end={end} />
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          aria-pressed={raw}
-          onClick={() => setRaw(!raw)}
-        >
-          Raw axes
-        </Button>
-        {raw && <ImuRange seconds={seconds} />}
-      </div>
-      {raw &&
-        (
-          [
-            ['Acceleration', 'g', 'accel', 3],
-            ['Angular velocity', '°/s', 'gyro', 2],
-          ] as const
-        ).map(([label, unit, key, digits]) => (
-          <div key={key} className="space-y-2">
-            <h3 className="text-muted-foreground">
+      {(
+        [
+          ['Acceleration', 'g', 'accel', 3],
+          ['Angular velocity', '°/s', 'gyro', 2],
+        ] as const
+      ).map(([label, unit, key, digits]) => (
+        <div key={key} className="space-y-1">
+          <div className="flex items-baseline gap-4 tabular-nums">
+            <h3 className="text-sm text-muted-foreground">
               {label} ({unit})
             </h3>
-            <dl className="grid grid-cols-3 gap-4">
-              {['X', 'Y', 'Z'].map((axis, index) => (
-                <div key={axis}>
-                  <dt
-                    className={`text-sm ${['text-red-700', 'text-green-700', 'text-blue-700'][index]}`}
-                  >
-                    {axis}
-                  </dt>
-                  <dd className="mt-1 text-xl font-medium tabular-nums">
-                    {online ? signed(reading[key][index], digits) : '—'}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            <ImuAxisChart
-              history={history}
-              field={key}
-              start={end - seconds * 1000}
-              end={end}
-              digits={digits}
-            />
+            {['X', 'Y', 'Z'].map((axis, index) => (
+              <span
+                key={axis}
+                className={
+                  ['text-red-700', 'text-green-700', 'text-blue-700'][index]
+                }
+              >
+                {axis} {value(reading?.[key][index], digits)}
+              </span>
+            ))}
           </div>
-        ))}
+          <ImuAxisChart
+            history={history}
+            field={key}
+            start={end - seconds * 1000}
+            end={end}
+            digits={digits}
+            className="h-32"
+          />
+        </div>
+      ))}
+      <ImuRange seconds={seconds} />
     </section>
   );
 }
