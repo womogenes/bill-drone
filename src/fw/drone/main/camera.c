@@ -299,6 +299,10 @@ void camera_reset(bool download) {
     gpio_set_level(CAMERA_IO0, 1);
 }
 
+void camera_hold(bool off) {
+    gpio_set_level(CAMERA_EN, !off);
+}
+
 bool camera_probe_pin(int gpio, uint32_t ms) {
     // The drone's free pins only (not its servos, ESCs, I2C, camera link, GPS, load cell, LED or battery input).
     static const int free_pins[] = {4, 12, 15, 17, 21, 26};

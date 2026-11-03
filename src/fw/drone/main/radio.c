@@ -535,6 +535,12 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
             camera_restart_holding_io0(500);
             return NULL;
         }
+        // 4: hold the camera in reset (off) until 5 releases it or the drone restarts; anything else the reset pulse.
+        if (length >= 1 && (body[0] == 4 || body[0] == 5)) {
+            camera_hold(body[0] == 4);
+            *size = snprintf(text, REPLY - 5, "camera %s", body[0] == 4 ? "held in reset" : "released");
+            return NULL;
+        }
         camera_reset(length >= 1 && body[0] == 1);
         return NULL;
     }
