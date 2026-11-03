@@ -3,7 +3,7 @@
 IDF_PATH ?= $(HOME)/esp/esp-idf
 IDF = bash -c 'source $(IDF_PATH)/export.sh >/dev/null && "$$@"' idf
 
-.PHONY: build deploy usb accel level camera-test gps-test camera-wifi camera-deploy
+.PHONY: build deploy usb accel level camera-test gps-test camera-wifi camera-deploy camera-usb
 build:
 	$(IDF) idf.py -C drone build
 
@@ -18,8 +18,13 @@ usb: build
 
 # The camera through the drone's radio link and its wire to the camera: no Wi-Fi needed, the drone disarmed and running firmware with camera updates.
 camera-deploy:
-	uvx --from platformio==6.1.18 --with intelhex pio run -d esp32cam
-	uv run tools/ota_direct.py camera esp32cam/.pio/build/esp32cam/firmware.bin
+	uvx --from platformio==6.1.18 --with intelhex pio run -d esp32cam -e s3cam
+	uv run tools/ota_direct.py camera esp32cam/.pio/build/s3cam/firmware.bin
+
+# The S3 camera over its own USB-C, the first time or for recovery (the drone's 6 V off while USB is in).
+camera-usb:
+	$(if $(PORT),,$(error Set PORT to the camera's USB device, e.g. /dev/ttyACM0))
+	uvx --from platformio==6.1.18 --with intelhex pio run -d esp32cam -e s3cam -t upload --upload-port $(PORT)
 
 # The camera over Wi-Fi: finds it on any network this laptop is on, then builds and uploads.
 camera-wifi:

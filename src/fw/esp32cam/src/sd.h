@@ -30,7 +30,7 @@ volatile uint32_t framesQueued = 0, framesDropped = 0, fileNumber = 0, ringLowes
 volatile uint64_t bytesWritten = 0, cardBytes = 0, freeBytes = 0;
 constexpr char mountPoint[] = "/sdcard", directory[] = "/sdcard/blackbox";
 
-// Mounts the card in 1-bit SD mode on GPIO14 CLK, 15 CMD and 2 D0, if there is one. The card samples DAT3 at its first command and enters SPI mode if it is low; DAT3 is GPIO13, the sync line, so it is driven high until the card is up. Call before the sync line idles low; without a card or with an unreadable one the camera runs without a black box. The steps of esp_vfs_fat_sdmmc_mount, which would also link the SPI-mode card driver into the nearly full IRAM.
+// Mounts the card in 1-bit SD mode, if there is one (config.h has the pins). The card samples DAT3 at its first command and enters SPI mode if it is low; on the ESP32-CAM DAT3 is GPIO13, the sync line, so it is driven high until the card is up (the S3 board leaves DAT3 to the card's own pull-up). Call before the sync line idles low; without a card or with an unreadable one the camera runs without a black box. The steps of esp_vfs_fat_sdmmc_mount, which would also link the SPI-mode card driver into the nearly full IRAM.
 esp_err_t mountCard() {
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.flags = SDMMC_HOST_FLAG_1BIT;
@@ -38,6 +38,11 @@ esp_err_t mountCard() {
     sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
     slot.width = 1;
     slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+#ifdef SOC_SDMMC_USE_GPIO_MATRIX
+    slot.clk = gpio_num_t(config::sdClkPin);
+    slot.cmd = gpio_num_t(config::sdCmdPin);
+    slot.d0 = gpio_num_t(config::sdD0Pin);
+#endif
     esp_err_t result = sdmmc_host_init();
     if (result != ESP_OK)
         return result;
@@ -64,7 +69,7 @@ esp_err_t mountCard() {
 
 void mount() {
     pinMode(config::syncPin, OUTPUT);
-    digitalWrite(config::syncPin, HIGH);
+    digitalWrite(config::syncPin, config::sdDat3IsSync);
     const esp_err_t result = mountCard();
     digitalWrite(config::syncPin, LOW);
     if (result != ESP_OK) {

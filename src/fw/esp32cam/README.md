@@ -1,8 +1,24 @@
 # ESP32-CAM AprilTag pose
 
-One firmware handles onboard tag16h5 pose estimation, UART delivery to the drone, a microSD black box, Wi-Fi preview, FPV video, lens calibration, and passwordless OTA. It targets the AI Thinker ESP32-CAM with a driver-detected sensor (OV3660 on this board), 4 MB flash, and PSRAM. The drone's receiver is `fw/drone/main/camera.c`.
+One firmware handles onboard tag16h5 pose estimation, UART delivery to the drone, a microSD black box, Wi-Fi preview, FPV video, lens calibration, and passwordless OTA. Since 2026-11-02 the drone's camera is the NULLLAB ESP32S3-CAM (`s3cam`, the default build: ESP32-S3R8 with 8 MB octal PSRAM, 8 MB flash, OV3660; schematic at github.com/nulllaborg/esp32s3-cam); the AI Thinker ESP32-CAM (`esp32cam`, same OV3660 sensor) still builds. `src/config.h` and `setup()` hold each board's pins. The drone's receiver is `fw/drone/main/camera.c`.
 
 ## Wiring
+
+NULLLAB ESP32S3-CAM:
+
+| Signal | S3 camera | Main ESP32 | Direction |
+|---|---:|---:|---|
+| CAM TX → main RX | GPIO43 (U0TXD, J5-6) | GPIO34 | CAM → main |
+| main TX → CAM RX | GPIO44 (U0RXD, J5-7) | GPIO27 | Main → CAM (requests, firmware updates) |
+| SYNC | GPIO14 (J4-7) | GPIO13 | CAM → main |
+| EN (reset) | EN (J5-8) | GPIO26 through 1 kΩ, open drain | Main → CAM |
+| BOOT | GPIO0 (J4-8) | GPIO4 through 1 kΩ, open drain | Main → CAM |
+| VCC | 5V (J4-1) | 6 V | |
+| GND | GND (J4-2) | GND | |
+
+The board's 5V input reaches its XC6220 3.3 V regulator (6.0 V operating, 6.5 V absolute) through a Schottky diode, so the drone's 6 V is within its rating. The sensor's power-down and reset are not GPIOs on this board. GPIO3 drives the flash LEDs and is held low; the microSD runs in 1-bit mode on GPIO39 CLK, 38 CMD and 40 D0. The USB-C port is the S3's own USB (serial and JTAG), not a USB-serial chip on UART0, so the drone link and the USB port do not share pins.
+
+AI Thinker ESP32-CAM (the earlier camera):
 
 | Signal | ESP32-CAM | Main ESP32 | Direction |
 |---|---:|---:|---|
@@ -21,10 +37,12 @@ Copy `src/wifi.example.h` to git-ignored `src/wifi.h` and list the networks it m
 
 ```sh
 uvx --from platformio==6.1.18 --with intelhex pio run -d fw/esp32cam
-uvx --from platformio==6.1.18 --with intelhex pio run -d fw/esp32cam -t upload --upload-port /dev/ttyUSB_CAM
+uvx --from platformio==6.1.18 --with intelhex pio run -d fw/esp32cam -t upload --upload-port /dev/ttyACM0
 ```
 
-For serial flashing, ground camera GPIO0 and reset, with the microSD card removed (its pull-up on GPIO2 blocks the ROM's download mode) and the drone link unplugged from GPIO1/3 (the programmer uses the same pins); release GPIO0 and reset afterwards. USB numbers move and the two adapters share a USB serial number, so identify the board first: the CAM has MAC `58:2A:BD:79:2B:9C`. After the first wired flash, check that the board boots with a card inserted: on some ESP32-CAM boards a card pulls GPIO12 high, which selects 1.8 V flash and stops the boot (the permanent fix is `espefuse.py set_flash_voltage 3.3V`).
+The S3 board flashes through its own USB-C (`make camera-usb PORT=/dev/ttyACM0` from `src/fw`); the USB port enters download mode by itself. Turn the drone's 6 V off while its USB is plugged in: the schematic does not show whether the header's 5V pin and USB VBUS are joined, and if they are the drone's 6 V would feed the laptop's port.
+
+On the ESP32-CAM, for serial flashing, ground camera GPIO0 and reset, with the microSD card removed (its pull-up on GPIO2 blocks the ROM's download mode) and the drone link unplugged from GPIO1/3 (the programmer uses the same pins); release GPIO0 and reset afterwards. USB numbers move and the two adapters share a USB serial number, so identify the board first: the CAM has MAC `58:2A:BD:79:2B:9C`. After the first wired flash, check that the board boots with a card inserted: on some ESP32-CAM boards a card pulls GPIO12 high, which selects 1.8 V flash and stops the boot (the permanent fix is `espefuse.py set_flash_voltage 3.3V`).
 
 Later updates need no cable. `make camera-deploy` (from `src/fw`) builds and sends the image through the laptop service, the drone's radio and its wire to the camera's RX: the drone forwards each request (`K`, `fw/drone/main/radio.c`) and the camera (`src/update.h`) writes 4 KB sectors to its spare OTA slot, checking each one's hash and reading it back, then selects the slot (which checks the whole image) and restarts; about a minute, with the drone disarmed and running firmware that has the `K` request. The camera stops at the first sector and restarts on its own if the update is abandoned for 30 s. Over Wi-Fi, `make camera-wifi` finds the camera on any network the laptop is on (`bill-esp32cam.local`, else a scan of each local subnet) and uploads to it. The flash holds two 1.25 MiB OTA slots. An update pauses processing and reboots the CAM, so update while the flight controller is disarmed.
 

@@ -11,8 +11,17 @@ float fx = 369.494757463f, fy = 370.922837184f, cx = 160.420727397f, cy = 110.83
 // OpenCV Brown-Conrady coefficients: k1, k2, p1, p2, k3.
 float distortion[5] = {-0.031215286f, 0.896256747f, 0.000000000f, 0.000000000f, 0.000000000f};
 
-// Link to the drone: UART0 (the USB-serial pins, GPIO1 TX and GPIO3 RX) at linkBaud, 8N1, and syncPin pulsed high for syncPulseUs as each packet is queued, so the drone can date it. GPIO14, 15 and 2 are the microSD slot in 1-bit mode; GPIO12 (a boot strap that must stay low) is unconnected and GPIO4 (the flash LED) is held low.
+// Link to the drone: UART0 at linkBaud, 8N1, and syncPin pulsed high for syncPulseUs as each packet is queued, so the drone can date it; the flash LED is held low.
+#if CONFIG_IDF_TARGET_ESP32S3
+// NULLLAB ESP32S3-CAM (github.com/nulllaborg/esp32s3-cam, from 2026-11-02): UART0's own pins GPIO43 TX and 44 RX (header J5), sync on GPIO14 (J4), the flash LEDs on GPIO3, the microSD in 1-bit mode on GPIO39 CLK, 38 CMD and 40 D0 (DAT3 unconnected). The USB-C port is the chip's own USB, so UART0 has no USB-serial chip on it.
+constexpr int linkTxPin = 43, linkRxPin = 44, syncPin = 14, flashLedPin = 3;
+constexpr int sdClkPin = 39, sdCmdPin = 38, sdD0Pin = 40;
+constexpr bool sdDat3IsSync = false;
+#else
+// AI Thinker ESP32-CAM: the USB-serial pins GPIO1 TX and GPIO3 RX, GPIO4 the flash LED. GPIO14, 15 and 2 are the microSD slot in 1-bit mode (fixed pins) and its DAT3 is the sync line; GPIO12 (a boot strap that must stay low) is unconnected.
 constexpr int linkTxPin = 1, linkRxPin = 3, syncPin = 13, flashLedPin = 4;
+constexpr bool sdDat3IsSync = true;
+#endif
 constexpr unsigned long linkBaud = 2000000;
 constexpr unsigned syncPulseUs = 20;
 // Black box on the microSD card (sd.h): a ring in PSRAM fed by the detector and written in staging-sized pieces from DMA-capable internal RAM, the tag crop's side, how often a frame also carries the whole 320x240 image (0 never), and the size at which a file is closed and the next one started (FAT32 files stop at 4 GiB).

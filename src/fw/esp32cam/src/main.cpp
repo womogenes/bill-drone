@@ -5,7 +5,7 @@
 #include "driver/gpio.h"
 #include "driver/uart.h"
 #include "esp_rom_sys.h"
-#include "soc/gpio_struct.h"
+#include "soc/gpio_reg.h"
 #include "tag16h5.h"
 #include "pose.h"
 #include "track.h"
@@ -39,7 +39,7 @@ int maxExposureLines = config::vts - 4;
 RTC_NOINIT_ATTR uint32_t crumbs[3];
 uint32_t lastCrumbs[3];
 
-// The drone link on UART0. The receive side (GPIO3) carries firmware updates from the drone (update.h); its buffer holds a whole sector's request. The transmit buffer holds a few packets; publish() never queues behind an unsent one.
+// The drone link on UART0 (config::linkTxPin and linkRxPin). The receive side carries firmware updates from the drone (update.h); its buffer holds a whole sector's request. The transmit buffer holds a few packets; publish() never queues behind an unsent one.
 constexpr uart_port_t linkPort = UART_NUM_0;
 constexpr int linkTxBytes = 1024, linkRxBytes = 6144;
 portMUX_TYPE syncLock = portMUX_INITIALIZER_UNLOCKED;
@@ -229,13 +229,33 @@ void setup() {
         fpv::start();
     assert(psramFound());
     heap_caps_malloc_extmem_enable(4096);
-    // Mounting holds the sync line high (the card's DAT3) and leaves it low.
+    // Mounting leaves the sync line low (on the ESP32-CAM, the card's DAT3, held high until the card is up).
     blackbox::mount();
     loadCalibration();
     loadExposureCap();
 
-    // AI Thinker ESP32-CAM pinout; the camera driver identifies the sensor.
+    // The camera driver identifies the sensor.
     camera_config_t &camera = cameraConfig;
+#if CONFIG_IDF_TARGET_ESP32S3
+    // NULLLAB ESP32S3-CAM: the sensor's power-down is tied on through 1 kohm and its reset is an RC on the board, so neither is a pin.
+    camera.pin_pwdn = -1;
+    camera.pin_reset = -1;
+    camera.pin_xclk = 15;
+    camera.pin_sccb_sda = 4;
+    camera.pin_sccb_scl = 5;
+    camera.pin_d0 = 11;
+    camera.pin_d1 = 9;
+    camera.pin_d2 = 8;
+    camera.pin_d3 = 10;
+    camera.pin_d4 = 12;
+    camera.pin_d5 = 18;
+    camera.pin_d6 = 17;
+    camera.pin_d7 = 16;
+    camera.pin_vsync = 6;
+    camera.pin_href = 7;
+    camera.pin_pclk = 13;
+#else
+    // AI Thinker ESP32-CAM.
     camera.pin_pwdn = 32;
     camera.pin_reset = -1;
     camera.pin_xclk = 0;
@@ -252,6 +272,7 @@ void setup() {
     camera.pin_vsync = 25;
     camera.pin_href = 23;
     camera.pin_pclk = 22;
+#endif
     camera.xclk_freq_hz = 20000000;
     camera.ledc_timer = LEDC_TIMER_0;
     camera.ledc_channel = LEDC_CHANNEL_0;
@@ -291,7 +312,7 @@ void publish(PosePacket &packet) {
     portENTER_CRITICAL(&syncLock);
     const uint32_t now = uint32_t(esp_timer_get_time());
     if (clear)
-        GPIO.out_w1ts = 1u << config::syncPin;
+        REG_WRITE(GPIO_OUT_W1TS_REG, 1u << config::syncPin);
     portEXIT_CRITICAL(&syncLock);
     packet.ageUs = now - packet.captureUs;
     if (packet.ageUs > config::maxAgeUs)
@@ -315,7 +336,7 @@ void publish(PosePacket &packet) {
     ++linkSent;
     while (uint32_t(esp_timer_get_time()) - now < config::syncPulseUs) {
     }
-    GPIO.out_w1tc = 1u << config::syncPin;
+    REG_WRITE(GPIO_OUT_W1TC_REG, 1u << config::syncPin);
 }
 
 // Restarts the camera in the mode wanted (fpvActive).
@@ -325,10 +346,12 @@ void restartCamera() {
     fpv::useLargeParity(false);
     lastStartMs = millis();
     for (int attempt = 0; attempt < 3 && !cameraReady; ++attempt) {
-        // After a failed start the sensor is held in power-down (GPIO32) for a second before the next try. A sensor that stopped answering its probe on 2026-10-30 recovered only from a power cycle; whether power-down clears that state is untested.
+        // After a failed start the sensor is held in power-down (where the board has the pin) for a second before the next try. A sensor that stopped answering its probe on 2026-10-30 recovered only from a power cycle; whether power-down clears that state is untested.
         if (startError != ESP_OK) {
-            pinMode(cameraConfig.pin_pwdn, OUTPUT);
-            digitalWrite(cameraConfig.pin_pwdn, HIGH);
+            if (cameraConfig.pin_pwdn >= 0) {
+                pinMode(cameraConfig.pin_pwdn, OUTPUT);
+                digitalWrite(cameraConfig.pin_pwdn, HIGH);
+            }
             delay(1000);
             // A JPEG start that the sensor refused (ESP_FAIL, its settings not taken) kept failing until a grayscale start had set it up again (2026-10-30), so one goes first.
             if (fpvActive && startCamera(false))

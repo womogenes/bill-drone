@@ -9,6 +9,7 @@
 #include "driver/gpio.h"
 #include "driver/pulse_cnt.h"
 #include "driver/uart.h"
+#include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "camera.h"
@@ -178,7 +179,11 @@ void camera_start(void) {
     ESP_ERROR_CHECK(pcnt_new_unit(&unit, &rx_counter));
     pcnt_chan_config_t edges_on_rx = {.edge_gpio_num = RX, .level_gpio_num = -1};
     pcnt_channel_handle_t channel;
+    // The channel asks for a pull-up, which GPIO34 does not have: the GPIO driver's error about it, at every boot, is quieted.
+    esp_log_level_t gpio_level = esp_log_level_get("gpio");
+    esp_log_level_set("gpio", ESP_LOG_NONE);
     ESP_ERROR_CHECK(pcnt_new_channel(rx_counter, &edges_on_rx, &channel));
+    esp_log_level_set("gpio", gpio_level);
     ESP_ERROR_CHECK(pcnt_channel_set_edge_action(channel, PCNT_CHANNEL_EDGE_ACTION_HOLD, PCNT_CHANNEL_EDGE_ACTION_INCREASE));
     ESP_ERROR_CHECK(pcnt_unit_add_watch_point(rx_counter, 30000));
     ESP_ERROR_CHECK(pcnt_unit_enable(rx_counter));
@@ -213,7 +218,8 @@ void camera_stats(CameraStats *stats_out) {
     stats_out->sync_edges = edges;
     portEXIT_CRITICAL(&lock);
     int rx_edges = 0;
-    pcnt_unit_get_count(rx_counter, &rx_edges);
+    // The radio's status task starts before camera_start makes the counter.
+    if (rx_counter) pcnt_unit_get_count(rx_counter, &rx_edges);
     stats_out->rx_edges = rx_edges;
 }
 
