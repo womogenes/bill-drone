@@ -271,7 +271,7 @@ export function FpvPanel({
       <canvas
         ref={canvas}
         aria-label={mode === 'fpv' ? 'Live camera video' : 'Tracking preview'}
-        className="aspect-[3/2] max-h-[70vh] w-full bg-black object-contain"
+        className="aspect-[3/2] max-h-[calc(100dvh-10rem)] w-full bg-black object-contain"
       />
     </section>
   );

@@ -681,62 +681,11 @@ export default function Page() {
           </span>
         )}
       </div>
+      {/* Fly: what you fly with (controls, then the drone's own readings), the camera, and where the drone is against the tag. Bench adds the servo and ESC panels. */}
       <main
-        className={`grid divide-y divide-border lg:min-h-0 lg:flex-1 lg:divide-x lg:divide-y-0 lg:overflow-hidden ${bench ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}
+        className={`grid divide-y divide-border lg:min-h-0 lg:flex-1 lg:grid-cols-[26rem_minmax(0,1fr)_minmax(0,1fr)] lg:divide-x lg:divide-y-0 lg:overflow-hidden`}
       >
         <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
-          <Suspense>
-            <ImuPanel
-              reading={reading?.imu}
-              history={history.read}
-              time={reading?.time ?? 0}
-              onCalibrate={calibrateImu}
-              calibrationPending={calibrationPending}
-              connected={status === 'connected'}
-            />
-          </Suspense>
-          <ADCPanel
-            raw={reading?.adc_raw}
-            voltage={reading?.adc_voltage}
-            ema={reading?.voltage_ema}
-            history={voltageHistory.read}
-            hourHistory={voltageHourHistory.read}
-            time={reading?.time ?? 0}
-            connected={status === 'connected'}
-          />
-          <GpsPanel gps={reading?.gps} connected={status === 'connected'} />
-        </div>
-        {bench && (
-          <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
-            {(['left', 'right'] as const).flatMap((side) =>
-              (['servo', 'throttle'] as const).map((kind) => (
-                <ActuatorPanel
-                  key={`${side}-${kind}-${status}-${stopEpoch}-${reading?.control?.enabled}`}
-                  side={side}
-                  kind={kind}
-                  locked={reading?.control?.enabled}
-                  value={
-                    kind === 'servo'
-                      ? reading?.actuators &&
-                        Math.round(reading.actuators[side].servo_angle * 10) /
-                          10
-                      : reading?.actuators?.[side].throttle
-                  }
-                  connected={status === 'connected'}
-                  onChange={sendActuator}
-                  onZero={zeroServo}
-                  zeroDisabled={
-                    !!(
-                      reading?.actuators?.left.throttle ||
-                      reading?.actuators?.right.throttle
-                    )
-                  }
-                />
-              ))
-            )}
-          </div>
-        )}
-        <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
           {reading?.control && (
             <ControlPanel
               key={`${status}-${stopEpoch}-${reading.control.enabled}`}
@@ -768,12 +717,59 @@ export default function Page() {
               }}
             />
           )}
-          {/* Always shown, so the layout stays put: armed, the flight's map; else the camera's latest sighting, the last flight's map, or an empty one. */}
-          <HoverPanel
-            state={mapState}
-            history={mapState === hoverState ? hoverHistory.read : noHistory}
-          />
+          <Suspense>
+            <ImuPanel
+              reading={reading?.imu}
+              history={history.read}
+              time={reading?.time ?? 0}
+              onCalibrate={calibrateImu}
+              calibrationPending={calibrationPending}
+              connected={status === 'connected'}
+            />
+          </Suspense>
+          <GpsPanel gps={reading?.gps} connected={status === 'connected'} />
         </div>
+        {bench && (
+          <div className="order-last min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
+            <ADCPanel
+              raw={reading?.adc_raw}
+              voltage={reading?.adc_voltage}
+              ema={reading?.voltage_ema}
+              history={voltageHistory.read}
+              hourHistory={voltageHourHistory.read}
+              time={reading?.time ?? 0}
+              connected={status === 'connected'}
+            />
+            <div className="grid grid-cols-2 divide-x divide-border [&>*:nth-child(-n+2)]:border-b">
+              {(['servo', 'throttle'] as const).flatMap((kind) =>
+                (['left', 'right'] as const).map((side) => (
+                  <ActuatorPanel
+                    key={`${side}-${kind}-${status}-${stopEpoch}-${reading?.control?.enabled}`}
+                    side={side}
+                    kind={kind}
+                    locked={reading?.control?.enabled}
+                    value={
+                      kind === 'servo'
+                        ? reading?.actuators &&
+                          Math.round(reading.actuators[side].servo_angle * 10) /
+                            10
+                        : reading?.actuators?.[side].throttle
+                    }
+                    connected={status === 'connected'}
+                    onChange={sendActuator}
+                    onZero={zeroServo}
+                    zeroDisabled={
+                      !!(
+                        reading?.actuators?.left.throttle ||
+                        reading?.actuators?.right.throttle
+                      )
+                    }
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        )}
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
           <FpvPanel
             free={
@@ -782,6 +778,16 @@ export default function Page() {
             onFree={(free) => sendControl({ hover_camera: free ? 0 : 1 })}
             roll={reading?.control?.hover_cam_roll}
             onTag={showPreviewTag}
+          />
+        </div>
+        {/* On the bench the servo and ESC panels take its place. */}
+        <div
+          className={`min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain ${bench ? 'hidden' : ''}`}
+        >
+          {/* Always shown, so the layout stays put: armed, the flight's map; else the camera's latest sighting, the last flight's map, or an empty one. */}
+          <HoverPanel
+            state={mapState}
+            history={mapState === hoverState ? hoverHistory.read : noHistory}
           />
         </div>
       </main>

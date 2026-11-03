@@ -3,7 +3,7 @@
 import { THROTTLE_MAX } from '@/lib/telemetry';
 
 import { memo, useState } from 'react';
-import { Plug, RotateCcw, Square, Unplug } from 'lucide-react';
+import { RotateCcw, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import type { Side } from '@/lib/telemetry';
@@ -50,7 +50,6 @@ export const ActuatorPanel = memo(function ActuatorPanel({
     onChange(kind, side, value);
   }
   const disabled = !connected || angle === undefined;
-  const StatusIcon = disabled ? Unplug : Plug;
 
   return (
     <section
@@ -61,17 +60,11 @@ export const ActuatorPanel = memo(function ActuatorPanel({
         <h2 id={heading} className="font-semibold">
           {title}
         </h2>
-        <span
-          role="status"
-          className={`flex items-center gap-2 text-sm ${disabled ? 'text-red-700' : 'text-green-700'}`}
-        >
-          <StatusIcon aria-hidden="true" className="size-4" />
-          {disabled ? 'Offline' : 'Online'}
-        </span>
         <div className="ml-auto flex items-center gap-2">
           {isServo && (
             <Button
               variant="outline"
+              size="sm"
               className="cursor-pointer"
               aria-label={`Set ${title} zero`}
               disabled={disabled || locked || zeroDisabled || dragging}
