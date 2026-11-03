@@ -88,8 +88,11 @@ inline void startWifi() {
     // One scan at boot picks the first listed network in range.
     const int found = wifiNetworks[0].ssid[0] ? WiFi.scanNetworks() : 0;
 #if CONFIG_IDF_TARGET_ESP32S3
-    // On the S3's own USB, free of the drone link.
-    Serial.printf("wifi scan: %d networks\n", found);
+    // On the S3's own USB, free of the drone link. With no networks listed there is no scan: the radio parks for FPV.
+    if (!wifiNetworks[0].ssid[0])
+        Serial.printf("wifi: no networks listed, radio parked on channel %u for FPV\n", unsigned(radioChannel));
+    else
+        Serial.printf("wifi scan: %d networks\n", found);
     for (int i = 0; i < found; ++i)
         Serial.printf("  %s ch%d %d dBm\n", WiFi.SSID(i).c_str(), int(WiFi.channel(i)), int(WiFi.RSSI(i)));
 #elif defined(DEBUG_CONSOLE)
