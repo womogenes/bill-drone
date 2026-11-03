@@ -11,7 +11,7 @@
 
 #define PORT UART_NUM_1
 #define RX 23
-#define TX 17
+#define TX 5
 #define GPS_BAUD 115200
 // A fresh M10 talks 38400 (Beitian ships some at 9600 or 115200); 115200 first, for a module that kept its baud across a drone restart.
 static const uint32_t bauds[] = {115200, 38400, 9600, 230400};
