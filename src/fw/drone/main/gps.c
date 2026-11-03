@@ -4,12 +4,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 #include "driver/uart.h"
 #include "esp_timer.h"
 #include "gps.h"
 
 #define PORT UART_NUM_1
-#define RX 39
+#define RX 23
 #define TX 17
 #define GPS_BAUD 115200
 // A fresh M10 talks 38400 (Beitian ships some at 9600 or 115200); 115200 first, for a module that kept its baud across a drone restart.
@@ -108,8 +109,9 @@ void gps_start(void) {
                           .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT};
     ESP_ERROR_CHECK(uart_driver_install(PORT, 1024, 0, 16, &events, 0));
     ESP_ERROR_CHECK(uart_param_config(PORT, &link));
-    // GPIO39 has no pull-up; without a module the line floats and the parser skips the noise.
+    // The pull-up holds the line idle (high) without a module.
     ESP_ERROR_CHECK(uart_set_pin(PORT, TX, RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    gpio_set_pull_mode(RX, GPIO_PULLUP_ONLY);
     if (xTaskCreatePinnedToCore(gps_task, "gps", 3072, NULL, 3, NULL, 0) != pdPASS) abort();
 }
 

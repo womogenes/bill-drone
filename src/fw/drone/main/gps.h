@@ -19,7 +19,7 @@ typedef struct {
     GpsFix fix;
 } GpsStats;
 
-// Beitian BE-220 (u-blox M10) on UART1: its TX into GPIO39 (input only), its RX from GPIO17. The task finds the module's baud, sets 115200 with NAV-PVT only at 10 Hz in the airborne (4 g) model, and searches again after 3 s without a solution. Call from a core-0 task.
+// Beitian BE-220 (u-blox M10) on UART1: its TX into GPIO23, its RX from GPIO17 (both on the board's right side, 2026-11-02). The task finds the module's baud, sets 115200 with NAV-PVT only at 10 Hz in the airborne (4 g) model, and searches again after 3 s without a solution. Call from a core-0 task.
 void gps_start(void);
 // The newest fix if it is at most max_age_us old.
 bool gps_fix(GpsFix *fix, uint32_t max_age_us);

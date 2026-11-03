@@ -294,8 +294,8 @@ void camera_reset(bool download) {
 }
 
 bool camera_probe_pin(int gpio, uint32_t ms) {
-    // The drone's free pins only (not its servos, ESCs, I2C, camera link, load cell, LED or battery input).
-    static const int free_pins[] = {4, 5, 12, 15, 17, 21, 23, 26};
+    // The drone's free pins only (not its servos, ESCs, I2C, camera link, GPS, load cell, LED or battery input).
+    static const int free_pins[] = {4, 5, 12, 15, 21, 26};
     bool allowed = false;
     for (size_t i = 0; i < sizeof(free_pins) / sizeof(free_pins[0]); i++) allowed |= free_pins[i] == gpio;
     if (!allowed) return false;
