@@ -190,6 +190,8 @@ export default function Page() {
   const steadyTilt = useRef<{ time: number; tilt: number } | null>(null);
   const [tiltWarning, setTiltWarning] = useState<number | null>(null);
   const [batteryWarning, setBatteryWarning] = useState<string | null>(null);
+  // Bench: the servo and ESC panels, for setup and tests; flight leaves them out.
+  const [bench, setBench] = useState(false);
   const [hoverState, setHoverState] = useState<HoverSample | null>(null);
   // The camera's latest tag-mode preview frame's tag (null: no tag in it; undefined: no preview yet), for the map while disarmed.
   const [previewTag, setPreviewTag] = useState<PreviewTag | null>();
@@ -547,10 +549,44 @@ export default function Page() {
 
   const { label, icon: StatusIcon, color } = statuses[status];
 
+  const volts = reading?.voltage_ema;
+  const imuState = !reading?.imu
+    ? 'IMU offline'
+    : reading.imu.calibrating
+      ? 'IMU calibrating'
+      : reading.imu.calibrated
+        ? 'IMU ready'
+        : 'IMU calibration';
+  const gps = reading?.gps;
+  const recorderText =
+    recorder?.error ??
+    (reading?.logging?.active
+      ? `Recording · ${reading.logging.samples} samples · ${reading.logging.dropped} dropped`
+      : reading?.logging?.ready
+        ? recorder?.file
+          ? `Saved ${recorder.file}`
+          : 'Recorder ready'
+        : 'Recorder connecting');
+  const connected = status === 'connected';
   return (
-    <>
-      <header className="flex h-16 items-center justify-between border-b px-6">
-        <h1 className="text-lg font-semibold">Drone dashboard</h1>
+    <div className="flex flex-col lg:h-dvh">
+      <header className="flex h-16 shrink-0 items-center justify-between border-b px-6">
+        <div className="flex items-center gap-4">
+          <h1 className="text-lg font-semibold">Drone dashboard</h1>
+          <div className="flex gap-1" role="group" aria-label="View">
+            {([false, true] as const).map((choice) => (
+              <Button
+                key={String(choice)}
+                size="sm"
+                variant={bench === choice ? 'default' : 'outline'}
+                aria-pressed={bench === choice}
+                onClick={() => setBench(choice)}
+              >
+                {choice ? 'Bench' : 'Fly'}
+              </Button>
+            ))}
+          </div>
+        </div>
         <div className="flex items-center gap-3">
           <Link href="/camera" className="text-sm underline">
             Camera
@@ -585,7 +621,69 @@ export default function Page() {
           </Button>
         </div>
       </header>
-      <main className="grid min-h-[calc(100dvh-4rem)] divide-y divide-border lg:h-[calc(100dvh-4rem)] lg:grid-cols-4 lg:divide-x lg:divide-y-0 lg:overflow-hidden">
+      {/* What decides whether the drone can fly, in one line; warnings in red. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-1 border-b px-6 py-2 text-sm tabular-nums">
+        <span
+          className={
+            connected &&
+            volts !== undefined &&
+            volts > NO_PACK_V &&
+            volts < ARM_MIN_V
+              ? 'text-red-700'
+              : 'text-muted-foreground'
+          }
+        >
+          {!connected || volts === undefined
+            ? 'Battery —'
+            : volts <= NO_PACK_V
+              ? 'No pack (USB)'
+              : `Battery ${volts.toFixed(1)} V`}
+        </span>
+        <span
+          className={
+            connected &&
+            imuState !== 'IMU ready' &&
+            imuState !== 'IMU calibrating'
+              ? 'text-red-700'
+              : 'text-muted-foreground'
+          }
+        >
+          {connected ? imuState : 'IMU —'}
+        </span>
+        <span className="text-muted-foreground">
+          {!connected || !gps
+            ? 'GPS —'
+            : !gps.configured
+              ? 'GPS searching'
+              : gps.ok && gps.fix >= 2 && gps.fix <= 4
+                ? `GPS ${gps.fix === 2 ? '2D' : '3D'} · ${gps.satellites} satellites · ${gps.horizontal_accuracy.toFixed(1)} m`
+                : 'GPS no fix'}
+        </span>
+        <span
+          className={
+            recorder?.error || (reading?.logging?.dropped ?? 0) > 0
+              ? 'text-red-700'
+              : 'text-muted-foreground'
+          }
+        >
+          {recorderText}
+        </span>
+        {batteryWarning && (
+          <span className="font-medium text-red-700">{batteryWarning}</span>
+        )}
+        {tiltWarning !== null && (
+          <span className="font-medium text-red-700">
+            Rotors held {Math.abs(tiltWarning).toFixed(0)}°{' '}
+            {tiltWarning < 0
+              ? 'back: CoM forward of centre'
+              : 'forward: CoM behind centre'}{' '}
+            or moving. Land and check the battery.
+          </span>
+        )}
+      </div>
+      <main
+        className={`grid divide-y divide-border lg:min-h-0 lg:flex-1 lg:divide-x lg:divide-y-0 lg:overflow-hidden ${bench ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}
+      >
         <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
           <Suspense>
             <ImuPanel
@@ -608,60 +706,37 @@ export default function Page() {
           />
           <GpsPanel gps={reading?.gps} connected={status === 'connected'} />
         </div>
-        <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
-          {(['left', 'right'] as const).flatMap((side) =>
-            (['servo', 'throttle'] as const).map((kind) => (
-              <ActuatorPanel
-                key={`${side}-${kind}-${status}-${stopEpoch}-${reading?.control?.enabled}`}
-                side={side}
-                kind={kind}
-                locked={reading?.control?.enabled}
-                value={
-                  kind === 'servo'
-                    ? reading?.actuators &&
-                      Math.round(reading.actuators[side].servo_angle * 10) / 10
-                    : reading?.actuators?.[side].throttle
-                }
-                connected={status === 'connected'}
-                onChange={sendActuator}
-                onZero={zeroServo}
-                zeroDisabled={
-                  !!(
-                    reading?.actuators?.left.throttle ||
-                    reading?.actuators?.right.throttle
-                  )
-                }
-              />
-            ))
-          )}
-        </div>
+        {bench && (
+          <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
+            {(['left', 'right'] as const).flatMap((side) =>
+              (['servo', 'throttle'] as const).map((kind) => (
+                <ActuatorPanel
+                  key={`${side}-${kind}-${status}-${stopEpoch}-${reading?.control?.enabled}`}
+                  side={side}
+                  kind={kind}
+                  locked={reading?.control?.enabled}
+                  value={
+                    kind === 'servo'
+                      ? reading?.actuators &&
+                        Math.round(reading.actuators[side].servo_angle * 10) /
+                          10
+                      : reading?.actuators?.[side].throttle
+                  }
+                  connected={status === 'connected'}
+                  onChange={sendActuator}
+                  onZero={zeroServo}
+                  zeroDisabled={
+                    !!(
+                      reading?.actuators?.left.throttle ||
+                      reading?.actuators?.right.throttle
+                    )
+                  }
+                />
+              ))
+            )}
+          </div>
+        )}
         <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
-          {batteryWarning && (
-            <p className="px-4 pt-4 font-medium text-red-700">
-              {batteryWarning}
-            </p>
-          )}
-          {tiltWarning !== null && (
-            <p className="px-4 pt-4 font-medium text-red-700">
-              Rotors held {Math.abs(tiltWarning).toFixed(0)}°{' '}
-              {tiltWarning < 0
-                ? 'back: CoM forward of centre'
-                : 'forward: CoM behind centre'}{' '}
-              or moving. Land and check the battery.
-            </p>
-          )}
-          <p
-            className={`px-4 pt-4 tabular-nums ${recorder?.error || (reading?.logging?.dropped ?? 0) > 0 ? 'text-red-700' : 'text-muted-foreground'}`}
-          >
-            {recorder?.error ??
-              (reading?.logging?.active
-                ? `Recording · ${reading.logging.samples} samples · ${reading.logging.dropped} dropped`
-                : reading?.logging?.ready
-                  ? recorder?.file
-                    ? `Saved ${recorder.file}`
-                    : 'Recorder ready'
-                  : 'Recorder connecting')}
-          </p>
           {reading?.control && (
             <ControlPanel
               key={`${status}-${stopEpoch}-${reading.control.enabled}`}
@@ -710,6 +785,6 @@ export default function Page() {
           />
         </div>
       </main>
-    </>
+    </div>
   );
 }
