@@ -11,9 +11,15 @@
 namespace fpv {
 constexpr uint16_t port = 5601;
 constexpr size_t chunkBytes = 1400;
-// Raw frames: broadcast action frames with this BSSID (fpv_rx filters on it), FPV's sent at rate (MCS3, 26 Mbps) and tag mode's small preview at previewRate (MCS0, 6.5 Mbps), which has the airtime to spare.
+// Raw frames: broadcast action frames with this BSSID (fpv_rx filters on it), FPV's sent at rate and tag mode's small preview at previewRate, which has the airtime to spare.
 constexpr uint8_t bssid[6] = {'F', 'P', 'V', 'R', 'A', 'W'};
+#if CONFIG_IDF_TARGET_ESP32S3
+// The S3 (Arduino-ESP32 2.0.17) reports raw frames at the 802.11n MCS rates as sent but none reach the air; the legacy rates go out whole (2026-11-03, an ESP32 sniffer on channel 11 heard 193-200 of 200 at 1 to 54 Mbps and 0-1 of 200 at MCS0, 3 and 7). 24 and 6 Mbps stand in for MCS3's 26 and MCS0's 6.5.
+constexpr wifi_phy_rate_t rate = WIFI_PHY_RATE_24M, previewRate = WIFI_PHY_RATE_6M;
+#else
+// MCS3 (26 Mbps) and MCS0 (6.5 Mbps).
 constexpr wifi_phy_rate_t rate = WIFI_PHY_RATE_MCS3_LGI, previewRate = WIFI_PHY_RATE_MCS0_LGI;
+#endif
 // The 802.11 header, then the action frame's category and a marker, ahead of each chunk.
 constexpr size_t macHeader = 28;
 constexpr uint8_t actionBody[4] = {127, 'F', 'P', 'V'};
@@ -89,8 +95,13 @@ inline bool shareRadio() {
     return true;
 }
 
+// A PHY rate every raw frame uses instead of its own (the drone's K Q, update.h), for testing receivers; WIFI_PHY_RATE_MAX for none. Not kept across restarts.
+wifi_phy_rate_t rateOverride = WIFI_PHY_RATE_MAX;
+
 // One chunk (at datagram + macHeader) as a raw frame; a full transmit queue gets a moment to drain.
 inline void broadcast(size_t length, wifi_phy_rate_t phyRate = rate) {
+    if (rateOverride != WIFI_PHY_RATE_MAX)
+        phyRate = rateOverride;
     // A vendor-specific action frame (category 127) from the station, joined or parked (ota.h): the access point refused data frames or accepted and never sent them, and a station joined to nothing sent no data frames. The third address is the BSSID fpv_rx looks for.
     const wifi_interface_t ifx = WIFI_IF_STA;
     if (rateSet != phyRate && esp_wifi_config_80211_tx_rate(ifx, phyRate) == ESP_OK)

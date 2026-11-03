@@ -16,6 +16,7 @@ extern esp_err_t rawError;
 extern uint32_t rawSent;
 extern float radioBudget;
 extern volatile uint32_t previewRadioMs;
+extern wifi_phy_rate_t rateOverride;
 extern int nativeLines, frameLines;
 }
 extern char logRing[2048];
@@ -103,6 +104,13 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
     }
     if (op == 'A') {
         startAp();
+        return nullptr;
+    }
+    if (op == 'Q') {
+        // A PHY rate (wifi_phy_rate_t) for every raw frame until the camera restarts, or 0xff for each frame's own; replies with the rate, frames sent and the last send's error.
+        if (length < 1 || (body[0] != 0xff && body[0] >= WIFI_PHY_RATE_MAX)) return "Rate: a wifi_phy_rate_t, or 0xff for none";
+        fpv::rateOverride = body[0] == 0xff ? WIFI_PHY_RATE_MAX : wifi_phy_rate_t(body[0]);
+        snprintf(text, size, "rate 0x%02x sent %u error %s", unsigned(fpv::rateOverride), unsigned(fpv::rawSent), esp_err_to_name(fpv::rawError));
         return nullptr;
     }
     if (op == 'P') {
