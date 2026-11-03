@@ -140,6 +140,8 @@ export function FpvPanel({
         const cos = Math.abs(Math.cos(turn)), sin = Math.abs(Math.sin(turn));
         target.width = Math.round(shown.width * cos + shown.height * sin);
         target.height = Math.round(shown.width * sin + shown.height * cos);
+        // The element takes the turned picture's shape across the panel's width, so it fills it without bars (up to max-h).
+        target.style.aspectRatio = `${target.width} / ${target.height}`;
         const context = target.getContext('2d')!;
         context.translate(target.width / 2, target.height / 2);
         context.rotate(turn);
@@ -269,7 +271,7 @@ export function FpvPanel({
       <canvas
         ref={canvas}
         aria-label={mode === 'fpv' ? 'Live camera video' : 'Tracking preview'}
-        className="aspect-[3/2] w-full bg-black object-contain"
+        className="aspect-[3/2] max-h-[70vh] w-full bg-black object-contain"
       />
     </section>
   );
