@@ -207,10 +207,10 @@ static float nudge[3];
 #define TRIM_STEP 3.0f
 static struct { float sum[2], bias[2]; int count; bool ready; } trim;
 // The identification test pattern (P request, flight_runtime_pattern; kept in RAM only, so a restart clears it): piecewise-constant steps added to up to EXCITE_CHANNELS channels, played while collective is up from `after` seconds past collective first reaching integrate_throttle, `repeat` times (0 = until disarmed).
-// Channels: roll and pitch targets (degrees), yaw-rate target (degrees/s), collective (throttle), left and right servo tilt (degrees, positive forward), left and right motor (throttle). The targets and collective add before the controller, so the log's targets hold them; the servos and motors add after it, and the fit adds them back from the pattern (the recording's events) and the segment logged in Record flags.
-#define EXCITE_CHANNELS 8
+// Channels: roll and pitch targets (degrees), yaw-rate target (degrees/s), collective (throttle), left and right servo tilt (degrees, positive forward), left and right motor (throttle), and the hover hold point's speed toward the tag and to the drone's left (m/s). The targets and collective add before the controller, so the log's targets hold them; the servos and motors add after it, and the fit adds them back from the pattern (the recording's events) and the segment logged in Record flags. The hold point's speed moves it as a held arrow does (on top of the laptop's nudge, within NUDGE_MAX), so a pattern can fly steady speeds for the speed moment's fit.
+#define EXCITE_CHANNELS 10
 #define EXCITE_SEGMENTS 224
-static const float excite_limit[EXCITE_CHANNELS] = {10, 10, 60, 150, 8, 8, 150, 150};
+static const float excite_limit[EXCITE_CHANNELS] = {10, 10, 60, 150, 8, 8, 150, 150, 1, 1};
 typedef struct {
     uint16_t ticks;
     int16_t value[EXCITE_CHANNELS];
@@ -222,6 +222,8 @@ static struct {
     // Playback: the segment, ticks into it and whole passes so far; this tick's segment and whether it played.
     int index, tick, played, now;
     bool active;
+    // How far the hold-point channels have moved the hold point (m; toward the tag, left).
+    float hold[2];
 } excite;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -237,6 +239,12 @@ static bool quiet(void) { return !state.enabled && !spinning(); }
 static void rewind_pattern(void) {
     excite.index = excite.tick = excite.played = excite.now = 0;
     excite.active = false;
+    excite.hold[0] = excite.hold[1] = 0;
+}
+
+// The hold-point nudge hover flies (m; toward the tag, left, up): the laptop's and the test pattern's.
+static float held_nudge(int axis) {
+    return nudge[axis] + (axis < 2 ? excite.hold[axis] : 0);
 }
 
 // ESC calibration (flight_runtime_esc_calibration): 0 off, 1 the top of the range (ESC_TOP_US), 2 its bottom (1000 us), on both ESCs while disarmed, until ESC_CALIBRATION_US after it began. Teaching the ESCs this range is what makes the thrust table's throttles mean the same thrust on both, flight to flight.
@@ -404,9 +412,9 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->climb = scaled(hover.climb_rate, 1000);
     record->height_target = scaled(hover.target, 1000);
     // The targets as nudged (hover.c): the range to hold and the place on the circle.
-    float range = hover.setpoint - nudge[0];
+    float range = hover.setpoint - held_nudge(0);
     record->range_target = scaled(range, 1000);
-    record->arc = scaled((hover.arc - (range > 0.1f ? nudge[1] / range : 0)) * DEG, 100);
+    record->arc = scaled((hover.arc - (range > 0.1f ? held_nudge(1) / range : 0)) * DEG, 100);
     record->yaw = scaled(hover.yaw * DEG, 100);
 }
 
@@ -553,9 +561,10 @@ static void runtime_task(void *arg) {
                 HoverGains gains = command.hover;
                 if (!command.hover_camera) gains.center = 0;
                 gains.pitch_trim = command.pitch_trim;
-                gains.nudge_forward = nudge[0];
-                gains.nudge_left = nudge[1];
-                gains.nudge_up = nudge[2];
+                // The pattern's hold-point speed takes effect a tick late: it plays after hover, with the rest of the pattern.
+                gains.nudge_forward = held_nudge(0);
+                gains.nudge_left = held_nudge(1);
+                gains.nudge_up = held_nudge(2);
                 // Without the tag the laptop's tilt (the arrows, A and D) flies the drone directly (on the tag they move the hold point instead); a link-loss landing ignores what the lost laptop last sent.
                 gains.stick_pitch = command.hover_camera || link_landing ? 0 : command.target_pitch;
                 gains.stick_roll = command.hover_camera || link_landing ? 0 : command.target_roll;
@@ -602,6 +611,7 @@ static void runtime_task(void *arg) {
                 scaled.target_pitch += add[1] / DEG;
                 scaled.target_yaw += add[2] / DEG;
                 scaled.base = fmaxf(scaled.base + add[3], 0);
+                for (int i = 0; i < 2; i++) excite.hold[i] = limit(excite.hold[i] + add[8 + i] / SAMPLE_HZ, -NUDGE_MAX, NUDGE_MAX);
             }
             if (!tracking) scaled.pitch_speed = 0;
             flown = scaled;
@@ -997,21 +1007,23 @@ const char *flight_runtime_servo_test(float amp, int cycles) {
     return idle ? NULL : "Disarm and zero throttle first";
 }
 
-// A test pattern (see excite): float32 after (s), uint8 repeat (0 = until disarmed), uint8 mask of the channels given, uint16 segment count, then per segment uint16 ticks (control samples) and an int16 value (hundredths of the channel's unit) for each channel in mask, all little-endian. A count of 0 clears it. Only while disarmed.
+// A test pattern (see excite): float32 after (s), uint8 repeat (0 = until disarmed), uint16 mask of the channels given, uint16 segment count, then per segment uint16 ticks (control samples) and an int16 value (hundredths of the channel's unit) for each channel in mask, all little-endian. A count of 0 clears it. Only while disarmed.
 const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *text, size_t size) {
-    if (length < 8) return "Expected after, repeat, mask and count";
+    if (length < 9) return "Expected after, repeat, mask and count";
     float after;
-    uint16_t count;
+    uint16_t count, mask;
     memcpy(&after, body, 4);
-    int repeat = body[4], mask = body[5];
-    memcpy(&count, body + 6, 2);
+    int repeat = body[4];
+    memcpy(&mask, body + 5, 2);
+    memcpy(&count, body + 7, 2);
+    if (mask >> EXCITE_CHANNELS) return "Unknown channel in mask";
     int channels = __builtin_popcount(mask);
     if (!(after >= 0 && after <= 60)) return "after must be 0-60 s";
     if (count > EXCITE_SEGMENTS) return "Too many segments";
-    if (length != 8 + (size_t)count * (2 + 2 * channels)) return "Length does not match mask and count";
+    if (length != 9 + (size_t)count * (2 + 2 * channels)) return "Length does not match mask and count";
     static ExciteSegment staged[EXCITE_SEGMENTS];
     memset(staged, 0, sizeof(staged));
-    const uint8_t *p = body + 8;
+    const uint8_t *p = body + 9;
     float seconds = 0;
     for (int s = 0; s < count; s++) {
         memcpy(&staged[s].ticks, p, 2);

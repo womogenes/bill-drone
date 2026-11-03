@@ -144,7 +144,7 @@ def encode_pattern(pattern):
     used = [name for name in PATTERN_CHANNELS if any(segment.get(name) for segment in segments)]
     mask = sum(1 << PATTERN_CHANNELS.index(name) for name in used)
     after, repeat = float(pattern.get("after", 2.0)), int(pattern.get("repeat", 0))
-    body = struct.pack("<fBBH", after, repeat, mask, len(segments))
+    body = struct.pack("<fBHH", after, repeat, mask, len(segments))
     recorded = []
     for segment in segments:
         ticks, values = int(segment["ticks"]), [round(segment.get(name, 0) * 100) for name in used]

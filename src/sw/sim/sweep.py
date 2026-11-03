@@ -13,6 +13,8 @@ from sw.sim.flight import MODEL, PITCH_SPEED, YAW_I, Attitude, Controller, throt
 
 MASS = 0.940  # kg, the final assembly with the printed deck and IMU bracket (Bill's estimate, 2026-10-24)
 DT = 0.01
+# The hold-point nudge's limit each way (m; fw/drone/main/flight_rt.c NUDGE_MAX).
+NUDGE_MAX = 1.5
 # Physics substeps per control step: the foot contacts' friction is stiff, and at 10 a gripping contact chatters (the sampled gyro and accelerometer read tens of deg/s and 2-3 g at rest). Clear of the floor the rigid body and actuators need far fewer.
 SUB = 40
 AIR_SUB = 4
@@ -98,7 +100,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     With hover and plant["land_at"], the hover loop is switched to its landing (HOVER_LAND, or HOVER_LAND_FAST with plant["land_fast"]) that many seconds after liftoff, as the dashboard's L does; the result then also holds when it came down and how.
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py, at the geometry they name), sw/sim/airframe.py supplies the motors, servos and angular accelerations and the body's inertia instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
-    With hover and plant["excite"] (a test pattern as a recording's "pattern" event, sw/excite.py: {"after", "repeat", "segments"}), its roll and pitch steps add to the hover's attitude targets from "after" seconds past collective first reaching integrate_throttle, "repeat" times (0 = until the end), as flight_rt.c excite does; its other channels are ignored.
+    With hover and plant["excite"] (a test pattern as a recording's "pattern" event, sw/excite.py: {"after", "repeat", "segments"}), its roll and pitch steps add to the hover's attitude targets and its forward and left speeds move the hold point (on top of plant["nudge"], within NUDGE_MAX) from "after" seconds past collective first reaching integrate_throttle, "repeat" times (0 = until the end), as flight_rt.c excite does; its other channels are ignored.
     GPS (fw/drone/main/flight_rt.c gps_input): plant["gps"] = {"rate" (Hz), "latency" (s, measurement to arrival; the firmware assumes 0.06), "velocity_noise" and "vertical_noise" (m/s RMS, white), "position_noise" (m RMS) wandering over "position_tau" (s), "heading": where the world's forward axis (the drone's nose at takeoff) points, degrees clockwise from north} gives the hover each fix once; settings hover_gps_tau (and hover_gps_heading, the drone's belief about that heading) turn it on.
     Optical flow (fw/drone/main/flight_rt.c flow_input): plant["flow"] = {"depth": the scene's true distance along the camera (m), "noise_px": per-frame shift noise (full-resolution px), "fps", "latency" (s), "max_px": the largest shift per frame and axis the camera's block search finds (full-resolution px; fw/esp32cam/src/flow.h reach, about 14; none by default)} gives the hover the camera's flow, the mean image motion over each frame interval with the mean measured gyro over it taken out as the firmware does; a frame whose shift exceeds max_px on either axis gives none; settings hover_flow_depth and hover_flow_tau turn it on.
     IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "flight_accel_bias" (g, along body up) on it only while the motors are commanded (vibration rectification and the like, which the resting calibration of the vertical specific force cannot learn), "vibration" (g RMS, white, while the motors are commanded; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air. The air: "wind_mean" (m/s; world forward, left) blowing steadily, plus turbulence of "wind" (m/s RMS per horizontal axis) and "wind_vertical" (m/s RMS up) with time constants "wind_tau" and "wind_vertical_tau" (s, the latter defaulting to the former; outdoors about the turbulence length scale over the mean wind: near the ground about 15 m horizontally and the height vertically, MIL-F-8785C); the airframe's speed terms (its forward and sideways speed moments and drag) and the bluff-body drag go by the airspeed, and "vertical_drag" (1/s) pulls the vertical velocity toward the air's (the rotors' thrust change with their inflow: about g / (2 v_induced), 0.7/s for these rotors at hover; 0 by default, as the indoor calibrations had it); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white, periodic and ramping (sw/sim/disturbance.py); with "sensed_disturbances" the accelerometer feels their forces.
@@ -233,10 +235,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         gps_plant, gps_fixes, gps_capture, gps_rng = plant.get("gps"), deque(), 0.0, random.Random(seed + 6000)
         gps_error = [0.0, 0.0, 0.0]
         seen, ranges = [], []
-    # The test pattern's roll and pitch per control tick, and the step collective first reached integrate_throttle.
+    # The test pattern's roll, pitch and hold-point speeds per control tick, the step collective first reached integrate_throttle, and how far the pattern has moved the hold point (m; toward the tag, left).
     excite = plant.get("excite") if hover else None
-    pattern = [(segment.get("roll", 0.0), segment.get("pitch", 0.0)) for segment in excite["segments"] for _ in range(segment["ticks"])] if excite else []
-    integrating, excited = None, 0.0
+    pattern = [tuple(segment.get(key, 0.0) for key in ("roll", "pitch", "forward", "left")) for segment in excite["segments"] for _ in range(segment["ticks"])] if excite else []
+    integrating, excited, excite_hold = None, 0.0, [0.0, 0.0]
     for step in range(int(seconds / DT)):
         now = step * DT
         if armed and step == armed and not hover:
@@ -352,6 +354,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     start, stick_pitch, stick_roll, length = plant["stick"]
                     held = lifted is not None and start <= now - lifted < start + length
                     outer.gains.stick_pitch, outer.gains.stick_roll = (math.radians(stick_pitch), math.radians(stick_roll)) if held else (0.0, 0.0)
+                if pattern:
+                    # As flight_rt.c: on top of the laptop's nudge, a tick late.
+                    outer.gains.nudge_forward = (outer.gains.nudge_forward if nudge else 0.0) + excite_hold[0]
+                    outer.gains.nudge_left = (outer.gains.nudge_left if nudge else 0.0) + excite_hold[1]
                 mode = HOLD if land_at is None or lifted is None or now - lifted < land_at else LAND_FAST if land_fast else LAND
                 out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag, flow, gps)
                 settings["base_throttle"] = min(HOVER_THROTTLE, throttle(out.force / 2 / math.cos(trim))) if out.force > 0 else 0
@@ -365,6 +371,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                         excited = pattern[tick % len(pattern)][0]
                         settings["roll"] += excited
                         settings["pitch"] += pattern[tick % len(pattern)][1]
+                        excite_hold = [min(max(held + speed * DT, -NUDGE_MAX), NUDGE_MAX) for held, speed in zip(excite_hold, pattern[tick % len(pattern)][2:])]
                 configure()
                 # As flight_rt.c: the speed moment compensation only while the hold flies on the tag, whose velocity it takes.
                 controller.command[PITCH_SPEED] = settings.get("pitch_speed", 0.0) if out.tracking else 0.0

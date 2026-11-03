@@ -4,10 +4,11 @@ Identification test patterns for the drone (fw/drone/main/flight_rt.c excite), l
   prbs     each channel steps between ±amplitude on its own random bits, redrawn every --hold seconds, for --seconds
   doublet  each channel +amplitude for --width seconds, then -amplitude for --width, then zero for --rest
   chirp    each channel a ±amplitude square wave sweeping --low to --high Hz over --seconds
+  speed    the hover hold point at --forward (and --left) m/s for --width seconds, still for --rest, back for --width, still for --rest: steady speeds out and back for the speed moment (sw/sim/speed_hold.py), e.g. speed --forward 0.5 --width 3 --rest 3 --repeat 3
   file     a pattern JSON file as POST /pattern takes it ({"after", "repeat", "segments": [{"ticks", "<channel>": value}]})
   clear    remove the pattern
 
-Channels (fw/controller/log_format.py PATTERN_CHANNELS): --roll, --pitch (target, degrees), --yaw (yaw-rate target, degrees/s), --base (collective, throttle), --left-servo, --right-servo (degrees, positive forward), --left-motor, --right-motor (throttle).
+Channels (fw/controller/log_format.py PATTERN_CHANNELS): --roll, --pitch (target, degrees), --yaw (yaw-rate target, degrees/s), --base (collective, throttle), --left-servo, --right-servo (degrees, positive forward), --left-motor, --right-motor (throttle), --forward, --left (the hover hold point's speed toward the tag and to the drone's left, m/s; on top of the dashboard's nudge, within its 1.5 m).
 The pattern starts --after seconds past collective first reaching integrate_throttle and plays --repeat times (0 = until disarmed). It lasts until the drone restarts; disarm first. --dry prints it without sending.
 Patterns are plain lists of segments, so other shapes are a few lines with segments() and send() from Python.
 """
@@ -50,6 +51,11 @@ def doublet(amplitudes, width, rest):
     return out + ([{"ticks": round(rest * SAMPLE_HZ)}] if rest > 0 else [])
 
 
+def speed(amplitudes, width, rest):
+    ticks, still = max(1, round(width * SAMPLE_HZ)), [{"ticks": round(rest * SAMPLE_HZ)}] if rest > 0 else []
+    return segments([amplitudes], ticks) + still + segments([{key: -a for key, a in amplitudes.items()}], ticks) + still
+
+
 def chirp(amplitudes, low, high, seconds):
     n = round(seconds * SAMPLE_HZ)
     # The sweep's phase (cycles) at each tick, exponential in frequency.
@@ -69,7 +75,7 @@ def send(pattern, url=URL):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("kind", choices=("prbs", "doublet", "chirp", "file", "clear"))
+    parser.add_argument("kind", choices=("prbs", "doublet", "chirp", "speed", "file", "clear"))
     parser.add_argument("path", nargs="?", type=Path, help="the pattern file, for file")
     for name in PATTERN_CHANNELS:
         parser.add_argument("--" + name.replace("_", "-"), type=float, default=0.0)
@@ -86,12 +92,15 @@ def main():
     parser.add_argument("--url", default=URL)
     args = parser.parse_args()
     amplitudes = {name: getattr(args, name) for name in PATTERN_CHANNELS if getattr(args, name)}
-    if args.kind in ("prbs", "doublet", "chirp") and not amplitudes:
+    if args.kind == "speed" and set(amplitudes) - {"forward", "left"}:
+        parser.error("speed moves only the hold point: --forward and --left")
+    if args.kind in ("prbs", "doublet", "chirp", "speed") and not amplitudes:
         parser.error("give at least one channel amplitude")
     if args.kind == "file":
         pattern = json.loads(args.path.read_text())
     else:
         built = {"prbs": lambda: prbs(amplitudes, args.hold, args.seconds, args.seed), "doublet": lambda: doublet(amplitudes, args.width, args.rest),
+                 "speed": lambda: speed(amplitudes, args.width, args.rest),
                  "chirp": lambda: chirp(amplitudes, args.low, args.high, args.seconds), "clear": lambda: []}[args.kind]()
         pattern = {"after": args.after, "repeat": args.repeat, "segments": built}
     print(f"{len(pattern['segments'])} segments, {sum(s['ticks'] for s in pattern['segments']) / SAMPLE_HZ:.2f} s", file=sys.stderr)
