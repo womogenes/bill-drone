@@ -1,0 +1,7 @@
+// Lets willi start, stop and restart the bill-drone services (bill-drone-*.service, bill-fpv-*.service) without a password prompt; nothing else changes. Install once: sudo install -m 644 src/sw/bill-drone.polkit.rules /etc/polkit-1/rules.d/50-bill-drone.rules
+polkit.addRule(function (action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "willi") {
+        var unit = action.lookup("unit");
+        if (unit && /^bill-(drone|fpv)-[a-z-]+\.service$/.test(unit)) return polkit.Result.YES;
+    }
+});
