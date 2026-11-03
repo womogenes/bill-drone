@@ -4,7 +4,7 @@ Identification test patterns for the drone (fw/drone/main/flight_rt.c excite), l
   prbs     each channel steps between ±amplitude on its own random bits, redrawn every --hold seconds, for --seconds
   doublet  each channel +amplitude for --width seconds, then -amplitude for --width, then zero for --rest
   chirp    each channel a ±amplitude square wave sweeping --low to --high Hz over --seconds
-  speed    the hover hold point at --forward (and --left) m/s for --width seconds, still for --rest, back for --width, still for --rest: steady speeds out and back for the speed moment (sw/sim/speed_hold.py), e.g. speed --forward 0.5 --width 3 --rest 3 --repeat 3
+  speed    the hover hold point at --forward (and --left) m/s for --width seconds, still for --rest, back for --width, still for --rest: steady speeds out and back for the speed moment (sw/sim/speed_hold.py), e.g. speed --forward -0.5 --width 3 --rest 3 --repeat 3 (away from the tag first: 1.5 m toward it from 2.25 m loses the tag in the sim, 8 of 12 runs)
   file     a pattern JSON file as POST /pattern takes it ({"after", "repeat", "segments": [{"ticks", "<channel>": value}]})
   clear    remove the pattern
 
