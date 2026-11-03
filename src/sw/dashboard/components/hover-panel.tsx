@@ -47,10 +47,10 @@ export const HoverPanel = memo(function HoverPanel({
     !state.tag || state.tag_age_ms === null || state.tag_age_ms > STALE_MS;
   const drone = lastSeen ? aligned(lastSeen) : null;
   const range = state.range_target;
+  // Horizontal distance to the tag, as the hold measures it.
+  const distance = state.tag ? Math.hypot(state.tag[0], state.tag[1]) : null;
   const distanceError =
-    state.tag && range !== null
-      ? Math.hypot(state.tag[0], state.tag[1]) - range
-      : null;
+    distance !== null && range !== null ? distance - range : null;
   const sidewaysError = state.tag && drone ? drone[1] : null;
 
   const points = trail.map((sample) => {
@@ -98,6 +98,12 @@ export const HoverPanel = memo(function HoverPanel({
         Tag position
       </h2>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
+        <dt className="text-muted-foreground">Distance</dt>
+        <dd>
+          {distance === null
+            ? '—'
+            : `${distance.toFixed(2)} m${range !== null ? ` (hold ${range.toFixed(2)} m)` : ''}`}
+        </dd>
         <dt className="text-muted-foreground">Distance error</dt>
         <dd>
           {distanceError === null
