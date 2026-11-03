@@ -108,6 +108,25 @@ static uint32_t next_sequence(void) {
     return value;
 }
 
+// The radio quiet test (request M): nothing is transmitted until this time (esp_timer µs), while the GPS is polled for its RF health and satellites, so their readings with the drone's transmitter silent can be compared.
+static volatile int64_t quiet_until;
+
+static void quiet_task(void *arg) {
+    int seconds = (int)(intptr_t)arg;
+    // MON-RF and NAV-SAT polls: a UBX frame with an empty payload each.
+    uint8_t polls[2][8] = {{UBX_SYNC1, UBX_SYNC2, 0x0a, 0x38}, {UBX_SYNC1, UBX_SYNC2, 0x01, 0x35}};
+    for (int i = 0; i < 2; i++) ubx_checksum(polls[i] + 2, 4, &polls[i][6], &polls[i][7]);
+    // Time for this request's reply to leave first.
+    vTaskDelay(pdMS_TO_TICKS(300));
+    quiet_until = esp_timer_get_time() + seconds * 1000000LL;
+    for (int s = 0; s < seconds; s++) {
+        gps_send(polls[0], 8);
+        if (s % 2 == 0) gps_send(polls[1], 8);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    vTaskDelete(NULL);
+}
+
 // Never waits: ESP-NOW keeps at most WINDOW frames queued, and a refused frame is the caller's to retry or drop.
 static bool transmit(uint8_t channel, uint32_t number, const uint8_t *data, size_t length, uint8_t index, uint8_t count) {
     uint8_t packet[HEADER + PAYLOAD];
@@ -120,6 +139,7 @@ static bool transmit(uint8_t channel, uint32_t number, const uint8_t *data, size
     packet[16] = index;
     packet[17] = count;
     memcpy(packet + HEADER, data, length);
+    if (esp_timer_get_time() < quiet_until) return false;
     portENTER_CRITICAL(&lock);
     bool open = inflight < WINDOW;
     if (open) inflight++;
@@ -447,7 +467,7 @@ static const char *change_settings(const int *indices, const float *values, int 
     return NULL;
 }
 
-// Requests: A arm, O record while disarmed (1) or stop recording (0), U raw bytes to the camera's wire (recovery), J reset the camera (1: into download mode), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update), N the GPS tunnel (gps_send, gps_take). Fills reply after the id and status bytes; returns an error or NULL.
+// Requests: A arm, O record while disarmed (1) or stop recording (0), U raw bytes to the camera's wire (recovery), J reset the camera (1: into download mode), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update), M the radio quiet test, N the GPS tunnel (gps_send, gps_take). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -552,6 +572,14 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         uint16_t wait = body[4] | body[5] << 8;
         if (baud < 9600 || baud > 2000000 || wait > 3000) return "Raw camera request out of range";
         *size = camera_raw(baud, body + 6, length - 6, wait, (uint8_t *)text, REPLY - 5);
+        return NULL;
+    }
+    if (op == 'M') {
+        // The radio quiet test: seconds (1-15) without transmitting, only disarmed, the GPS's MON-RF every second and NAV-SAT every other into the tunnel (take them with N after).
+        if (!flight_runtime_idle()) return "Disarm and zero throttle first";
+        if (length < 1 || body[0] < 1 || body[0] > 15) return "Seconds 1-15";
+        if (xTaskCreatePinnedToCore(quiet_task, "quiet", 3072, (void *)(intptr_t)body[0], 2, NULL, 0) != pdPASS) return "No memory for the quiet test";
+        *size = snprintf(text, REPLY - 5, "quiet for %d s", body[0]);
         return NULL;
     }
     if (op == 'N') {
