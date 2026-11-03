@@ -9,7 +9,8 @@
 
 #define UBX_SYNC1 0xb5
 #define UBX_SYNC2 0x62
-#define UBX_MOST 100
+// The longest payload kept: NAV-SAT is 8 + 12 bytes per satellite, about 600 for 50.
+#define UBX_MOST 1024
 #define UBX_NAV 0x01
 #define UBX_NAV_PVT 0x07
 #define UBX_PVT_SIZE 92

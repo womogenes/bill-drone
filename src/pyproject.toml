@@ -9,6 +9,7 @@ dependencies = [
     "opencv-python>=5.0.0.93",
     "pandas>=3.0.6",
     "pyserial>=3.5",
+    "pyubx2>=1.4.1",
     "requests>=2.34.2",
     "websocket-client>=1.9.2",
 ]

@@ -24,5 +24,8 @@ void gps_start(void);
 // The newest fix if it is at most max_age_us old.
 bool gps_fix(GpsFix *fix, uint32_t max_age_us);
 void gps_stats(GpsStats *stats);
+// The tunnel for exploring the module from the laptop (the drone's N request): gps_send writes raw bytes to the module (UBX polls and configuration); gps_take copies out the UBX frames other than NAV-PVT received since the last take, whole, as the module sent them, and returns their length (frames that did not fit the 4 KB buffer are dropped and counted in *dropped).
+void gps_send(const uint8_t *bytes, size_t length);
+size_t gps_take(uint8_t *out, size_t size, uint32_t *dropped);
 
 #endif

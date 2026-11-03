@@ -447,7 +447,7 @@ static const char *change_settings(const int *indices, const float *values, int 
     return NULL;
 }
 
-// Requests: A arm, O record while disarmed (1) or stop recording (0), U raw bytes to the camera's wire (recovery), J reset the camera (1: into download mode), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update). Fills reply after the id and status bytes; returns an error or NULL.
+// Requests: A arm, O record while disarmed (1) or stop recording (0), U raw bytes to the camera's wire (recovery), J reset the camera (1: into download mode), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update), N the GPS tunnel (gps_send, gps_take). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -546,6 +546,16 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         uint16_t wait = body[4] | body[5] << 8;
         if (baud < 9600 || baud > 2000000 || wait > 3000) return "Raw camera request out of range";
         *size = camera_raw(baud, body + 6, length - 6, wait, (uint8_t *)text, REPLY - 5);
+        return NULL;
+    }
+    if (op == 'N') {
+        // The GPS tunnel: the body's bytes go to the module (only disarmed: a configuration could change what the hover's fusion gets), and the reply is the frames other than NAV-PVT received since the last N, after a u32 count of frames dropped for want of room.
+        if (length && !flight_runtime_idle()) return "Disarm and zero throttle first";
+        if (length) gps_send(body, length);
+        uint32_t dropped;
+        size_t taken = gps_take((uint8_t *)text + 4, REPLY - 9, &dropped);
+        memcpy(text, &dropped, 4);
+        *size = 4 + taken;
         return NULL;
     }
     if (op == 'A') {

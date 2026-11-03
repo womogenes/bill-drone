@@ -31,6 +31,35 @@ static const UbxSetting configuration[] = {
 static QueueHandle_t events;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static GpsStats stats = {.fix = {.received_us = -1}};
+// The tunnel's frames waiting for gps_take, whole frames only.
+#define TUNNEL 4096
+static uint8_t tunnel[TUNNEL];
+static size_t tunnel_length;
+static uint32_t tunnel_dropped;
+
+// A frame other than NAV-PVT, rebuilt as the module sent it, for gps_take.
+static void keep(const UbxFrame *frame) {
+    size_t length = frame->length + 8;
+    portENTER_CRITICAL(&lock);
+    if (tunnel_length + length > TUNNEL) {
+        tunnel_dropped++;
+    } else {
+        uint8_t *p = tunnel + tunnel_length;
+        p[0] = UBX_SYNC1;
+        p[1] = UBX_SYNC2;
+        p[2] = frame->message_class;
+        p[3] = frame->id;
+        p[4] = frame->length & 0xff;
+        p[5] = frame->length >> 8;
+        memcpy(p + 6, frame->payload, frame->length);
+        uint8_t a = 0, b = 0;
+        ubx_checksum(p + 2, frame->length + 4, &a, &b);
+        p[6 + frame->length] = a;
+        p[7 + frame->length] = b;
+        tunnel_length += length;
+    }
+    portEXIT_CRITICAL(&lock);
+}
 
 // Waits up to wait_ms for the driver's next event (the line idle for about a byte after a burst, so within a millisecond of a frame's end) and parses what is buffered; returns whether a NAV-PVT came.
 static bool receive(UbxParser *parser, uint32_t wait_ms) {
@@ -45,13 +74,14 @@ static bool receive(UbxParser *parser, uint32_t wait_ms) {
     bool solution = false;
     const uint8_t *data = bytes;
     size_t length = n;
-    UbxFrame frame;
+    static UbxFrame frame;
     while (true) {
         uint32_t skipped = parser->skipped, corrupt = parser->corrupt;
         bool complete = ubx_parse(parser, &data, &length, &frame);
         int64_t now = esp_timer_get_time();
         UbxPvt pvt;
         bool decoded = complete && ubx_pvt(&frame, &pvt);
+        if (complete && !decoded) keep(&frame);
         portENTER_CRITICAL(&lock);
         stats.skipped += parser->skipped - skipped;
         stats.corrupt += parser->corrupt - corrupt;
@@ -112,7 +142,28 @@ void gps_start(void) {
     // The pull-up holds the line idle (high) without a module.
     ESP_ERROR_CHECK(uart_set_pin(PORT, TX, RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     gpio_set_pull_mode(RX, GPIO_PULLUP_ONLY);
-    if (xTaskCreatePinnedToCore(gps_task, "gps", 3072, NULL, 3, NULL, 0) != pdPASS) abort();
+    if (xTaskCreatePinnedToCore(gps_task, "gps", 4096, NULL, 3, NULL, 0) != pdPASS) abort();
+}
+
+void gps_send(const uint8_t *bytes, size_t length) {
+    uart_write_bytes(PORT, bytes, length);
+}
+
+size_t gps_take(uint8_t *out, size_t size, uint32_t *dropped) {
+    portENTER_CRITICAL(&lock);
+    // Whole frames only: as many from the front as fit.
+    size_t taken = 0;
+    while (taken + 6 <= tunnel_length) {
+        size_t length = (tunnel[taken + 4] | tunnel[taken + 5] << 8) + 8;
+        if (taken + length > size) break;
+        taken += length;
+    }
+    memcpy(out, tunnel, taken);
+    memmove(tunnel, tunnel + taken, tunnel_length - taken);
+    tunnel_length -= taken;
+    *dropped = tunnel_dropped;
+    portEXIT_CRITICAL(&lock);
+    return taken;
 }
 
 bool gps_fix(GpsFix *fix, uint32_t max_age_us) {

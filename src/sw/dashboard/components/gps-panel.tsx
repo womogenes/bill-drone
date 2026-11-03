@@ -28,7 +28,9 @@ export const GpsPanel = memo(function GpsPanel({
         : !live
           ? 'Stale'
           : `${FIXES[gps.fix] ?? gps.fix}${gps.ok ? '' : ' (weak)'}`;
-  const speed = live ? Math.hypot(gps.velocity[0], gps.velocity[1]) : undefined;
+  // Without a fix the module still sends its filter's placeholders (accuracy 4294967 m, a position anywhere): shown only once it has a 2D or 3D fix it trusts.
+  const solved = live && gps.ok && gps.fix >= 2 && gps.fix <= 4;
+  const speed = solved ? Math.hypot(gps.velocity[0], gps.velocity[1]) : undefined;
   return (
     <section
       aria-labelledby="gps-heading"
@@ -53,7 +55,7 @@ export const GpsPanel = memo(function GpsPanel({
         <div>
           <dt className="text-sm text-muted-foreground">Accuracy</dt>
           <dd className="text-lg">
-            {live
+            {solved
               ? `${gps.horizontal_accuracy.toFixed(1)} / ${gps.vertical_accuracy.toFixed(1)} m`
               : '—'}
           </dd>
@@ -61,7 +63,7 @@ export const GpsPanel = memo(function GpsPanel({
         <div>
           <dt className="text-sm text-muted-foreground">Ground speed</dt>
           <dd className="text-lg">
-            {live && speed !== undefined
+            {solved && speed !== undefined
               ? `${speed.toFixed(2)} ± ${gps.speed_accuracy.toFixed(2)} m/s`
               : '—'}
           </dd>
@@ -69,19 +71,19 @@ export const GpsPanel = memo(function GpsPanel({
         <div>
           <dt className="text-sm text-muted-foreground">Climb</dt>
           <dd className="text-lg">
-            {live ? `${(-gps.velocity[2]).toFixed(2)} m/s` : '—'}
+            {solved ? `${(-gps.velocity[2]).toFixed(2)} m/s` : '—'}
           </dd>
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Altitude</dt>
           <dd className="text-lg">
-            {live ? `${gps.height.toFixed(1)} m` : '—'}
+            {solved ? `${gps.height.toFixed(1)} m` : '—'}
           </dd>
         </div>
         <div className="col-span-3">
           <dt className="text-sm text-muted-foreground">Position</dt>
           <dd className="text-lg">
-            {live
+            {solved
               ? `${gps.latitude.toFixed(7)}, ${gps.longitude.toFixed(7)}`
               : '—'}
           </dd>

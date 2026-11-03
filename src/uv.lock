@@ -1073,6 +1073,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pynmeagps"
+version = "1.1.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/46/f6d970b530c53bef253bc919efeaadca786997d65fd391aff26d5075a65d/pynmeagps-1.1.8.tar.gz", hash = "sha256:d1a6b61d73497d9b6de4dda972011006c939a68f10173724124ed32864273ca2", size = 100121, upload-time = "2026-10-19T07:20:24.01Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cf/d0/085781e13600ae69deb28233d289746444d08465b323a0b79bbc45e725ec/pynmeagps-1.1.8-py3-none-any.whl", hash = "sha256:8c529f28ffcc39257277c89b1b0dce6b20d54dd89181da9c81911886d580b779", size = 64677, upload-time = "2026-10-19T07:20:22.595Z" },
+]
+
+[[package]]
 name = "pyopengl"
 version = "3.1.10"
 source = { registry = "https://pypi.org/simple" }
@@ -1088,6 +1097,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e4/11/b213bebff182584360cb8d17c72c1677fec5c5c228de439e63bcf8ab1c8f/pyparsing-3.3.3.tar.gz", hash = "sha256:928ae7e20211f3b6f3915a72f06a0cfd29ab9d24279dd6346b6b1a7146397d36", size = 1050487, upload-time = "2026-09-20T20:59:05.609Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/38/bb/d215ee7c73b61497b28a5503f9f53523f294fcc936762b7caf90e0c1c2b5/pyparsing-3.3.3-py3-none-any.whl", hash = "sha256:ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4", size = 126420, upload-time = "2026-09-20T20:59:04.025Z" },
+]
+
+[[package]]
+name = "pyrtcm"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pynmeagps" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f4/a9/14004faf62f859de7425e98dcab8a1c08b3c4cdcfaa33f3475403b118491/pyrtcm-1.2.1.tar.gz", hash = "sha256:3777be3f6b45fb6f3774ca26d36aa8a2f41eaac8a58f72f670df455974688f8c", size = 101332, upload-time = "2026-10-19T07:34:30.394Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d3/33/dcb9798233aac0a00418178870c74484172c9289328972622d14304613b0/pyrtcm-1.2.1-py3-none-any.whl", hash = "sha256:24aaeb568e76a5af5ee877a031a7c39547dba773bcf79b93a25a08eef7b68b6a", size = 43245, upload-time = "2026-10-19T07:34:28.108Z" },
 ]
 
 [[package]]
@@ -1109,6 +1130,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
+]
+
+[[package]]
+name = "pyubx2"
+version = "1.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pynmeagps" },
+    { name = "pyrtcm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ba/a0/cb5788e73d1a9d140a3b59b3e6f6f6d4d498b6f5663308c40576398ca0b9/pyubx2-1.4.1.tar.gz", hash = "sha256:4651875b39675c2a840b416d538eab3f43ac3cbc7a7bfb1a3035c48236df1e82", size = 179245, upload-time = "2026-10-29T08:39:22.239Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0a/dd/7fec4e17afd4e057a7061d5163873ec7d74f8e09d2d4d84f15abb68740d0/pyubx2-1.4.1-py3-none-any.whl", hash = "sha256:ccf0c20a5769cb650bf5fe97ac0fd62726936927adf2bb6118879d8e380efc63", size = 79525, upload-time = "2026-10-29T08:39:20.595Z" },
 ]
 
 [[package]]
@@ -1194,6 +1228,7 @@ dependencies = [
     { name = "opencv-python" },
     { name = "pandas" },
     { name = "pyserial" },
+    { name = "pyubx2" },
     { name = "requests" },
     { name = "websocket-client" },
 ]
@@ -1206,6 +1241,7 @@ requires-dist = [
     { name = "opencv-python", specifier = ">=5.0.0.93" },
     { name = "pandas", specifier = ">=3.0.6" },
     { name = "pyserial", specifier = ">=3.5" },
+    { name = "pyubx2", specifier = ">=1.4.1" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "websocket-client", specifier = ">=1.9.2" },
 ]
