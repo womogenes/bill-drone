@@ -18,16 +18,15 @@ Start the [laptop service](HOST.md) after installation. The controller exposes n
 
 ## Pairing
 
-Both endpoints use fixed station MAC addresses and channel 6:
+Each drone and its controller are a line in `../pairs.h` (their station MACs). At boot each board looks up its own MAC there and talks only to its partner, so the same images serve every pair; a board that is not listed stops at boot and prints its MAC on USB. The drone's MAC is also its ID in every recording (the start record's `drone`). Both ends use channel 6:
 
 | Setting | Source |
 | --- | --- |
-| Drone station MAC | `native/main/relay.c`: `drone_mac` |
-| Controller station MAC | `../drone/main/radio.c`: `peer` |
+| Drone and controller MACs | `../pairs.h` |
 | Controller radio channel | `native/main/relay.c`: `CHANNEL` |
 | Drone radio channel | `../drone/main/radio.c`: `WIFI_CHANNEL` |
 
-Replacing either board requires updating its peer's MAC and rebuilding that peer's firmware. Keep the channels equal. Inspect a replacement ESP's MAC with `esptool read-mac` while its serial port is free.
+A new or replaced board needs its line in `../pairs.h` and both boards' firmware rebuilt and flashed. Keep the channels equal. Inspect a board's MAC with `esptool read-mac` while its serial port is free. `find_port.py` finds any listed controller.
 
 ## Transport
 

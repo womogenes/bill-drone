@@ -99,10 +99,10 @@ def forces(params, records):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recordings", nargs="+")
-    parser.add_argument("--airframe", type=Path, help="default: the newest sw/sim/models/airframe_*.json")
+    parser.add_argument("--airframe", type=Path, help="default: the recordings' drone's newest sw/sim/models/airframe_*.json")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
-    saved = json.loads((args.airframe or sorted(MODELS.glob("airframe_2*.json"))[-1]).read_text())
+    saved = json.loads((args.airframe or A.newest_model(A.flown_by(N.paths(args.recordings))) or parser.error("no saved airframe model of this drone: pass --airframe")).read_text())
     params = A.complete(saved)
     N.GEOM = A.geometry_of(saved)
     records = [r for r in (N.load(p, 3.0) for p in N.paths(args.recordings)) if r]

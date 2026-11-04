@@ -2,7 +2,7 @@
 The airframe's attitude dynamics as identified from flight logs (sw/sim/identify_airframe.py), shared by the identification (vectorised over many prediction lanes), the hover simulation (sw/sim/sweep.py, one lane through Airframe) and the full-attitude sim (sw/sim/rigid.py, ported to rigid_step.c).
 
 The geometry is an explicit input (models/geometry_<day>.json; metres from the tube midpoint, body x forward, y left, z up; kg and kg·m²): mass, com, arm (the motor axes' |y|), pivot_z (the tilt axes), rotor_z (the prop plane at zero tilt), the body's roll, pitch and yaw inertia about the CoM, and each motor assembly's mass, CoM distance above its pivot and inertia about its tilt axis. Every body term is a torque from a fitted coefficient and the geometry, divided by the geometry's inertia, so a chassis change (battery, CoM, arm, pivot height, motor mass, legs) reaches the dynamics through the geometry alone: derive_geometry builds one from a parts list, cad_geometry from bicopter.xml's parts, and shifted applies CAD differences to a reference. The fitted coefficients are meant not to change with the geometry:
-- motors: dead time, then a first-order lag on the thrust (the thrust table, times battery voltage over thrust_voltage to voltage_power; the right motor can differ in dead time, lag and gain). The "right" motor terms belong to the ESC that sat on the right until the 2026-10-29 06:45 UTC swap: lanes with p["swapped"] set (flights after it) give them to the left motor. A motor started from standstill makes no thrust for motor_start after its throttle turns positive (the ESC's start-up; the takeoffs show it, the airborne fit cannot). The level is pinned to the weight (each flight's trim: its airborne median table thrust times thrust level carries mass × g), and differential_slope is the share of a differential throttle step's table thrust the motors deliver (roll authority; the common part follows the table; from 2026-10-29b it is held at 1, which the ±1.5-3° PRBS flights measure, instead of fitted);
+- motors: dead time, then a first-order lag on the thrust (the thrust table, times battery voltage over thrust_voltage to voltage_power; the right motor can differ in dead time, lag and gain). The "right" terms are the right motor's. A motor started from standstill makes no thrust for motor_start after its throttle turns positive (the ESC's start-up; the takeoffs show it, the airborne fit cannot). The level is pinned to the weight (each flight's trim: its airborne median table thrust times thrust level carries mass × g), and differential_slope is the share of a differential throttle step's table thrust the motors deliver (roll authority; the common part follows the table; from 2026-10-29b it is held at 1, which the ±1.5-3° PRBS flights measure, instead of fitted);
 - servos: dead time, then a second-order position loop (servo_wn, servo_zeta) whose horn speed is limited to servo_slew; the horn drives the motor assembly through a link with play, as torques on the assembly's effective inertia (its CAD inertia about the tilt axis, its mass × CoM offset × pivot height, and servo_inertia, the servo's reflected rotor): link_k (N·m/rad), link_c (N·m·s/rad), a forward band preload (N·m) less band_k per radian of tilt. What the link does to the assembly it does the other way to the body;
 - props: prop_torque (m: reaction torque per newton along each tilted shaft, opposite spins, so it acts in yaw and, tilted, in roll), prop_momentum (N·m·s per √N, for the gyroscopic roll torque of the props as they tilt);
 - rotors: inflow_damping (s/m: roll damping as thrust lost per newton per m/s of axial inflow at the arm), edgewise_damping (s/m: the H-force per newton per m/s, for pitch at the rotors' height above the CoM and yaw at the arm);
@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sw.flight_log import FIRST_DRONE, drone
 from sw.sim.flight import THRUST_TABLE
 
 DT = 0.01
@@ -48,22 +49,32 @@ KEYS = list(PARAMS)
 OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start")
 # The running time (s) of a motor that has long been spinning.
 RUNNING = 10.0
-# The ESCs were swapped between the motors at this time (UTC, as recordings are named): the ESC on the right before it, whose terms are the "right" motor terms, drives the left motor after it.
-ESC_SWAP = "2026-10-29T06-45"
+def flown_by(recordings):
+    """The one physical drone that flew all of the recordings (sw/flight_log.py drone); stops with what is wrong when they are from several or one does not say."""
+    drones = {}
+    for path in recordings:
+        drones.setdefault(drone(path), []).append(Path(path).name[:19])
+    if None in drones:
+        raise SystemExit(f"Recordings without a drone ID: {', '.join(drones[None])}")
+    if len(drones) > 1:
+        raise SystemExit("Recordings from several drones, fit them separately: " + "; ".join(f"{key}: {len(names)}" for key, names in drones.items()))
+    return next(iter(drones), FIRST_DRONE)
 
 
-def swapped(name):
-    """Whether a recording (its path or name, starting with its UTC time) was flown with the ESCs swapped (see ESC_SWAP)."""
-    return Path(name).name[:16] >= ESC_SWAP
+def newest_model(of_drone):
+    """The newest saved airframe model (models/airframe_<day>*.json) of a drone (its "drone"; models saved without one are the first drone's), or None."""
+    for path in sorted(MODELS.glob("airframe_2*.json"), reverse=True):
+        if json.loads(path.read_text()).get("drone", FIRST_DRONE) == of_drone:
+            return path
+    return None
 
 
 def motor_terms(p, n):
-    """Each lane's motor dead times, lags and static thrust gains [lane, side], the right ESC's terms on the left motor where p["swapped"] (per lane, default none)."""
+    """Each lane's motor dead times, lags and static thrust gains [lane, side]."""
     delay = np.array([p["motor_delay"], p["right_motor_delay"]], float)
     tau = np.array([p["motor_tau"], p["right_motor_tau"]], float)
     gain = np.array([1.0, p["right_thrust_gain"]])
-    flip = np.broadcast_to(np.asarray(p.get("swapped", 0.0), float), (n,))[:, None] > 0
-    return tuple(np.where(flip, v[::-1], v) for v in (np.tile(delay, (n, 1)), np.tile(tau, (n, 1)), np.tile(gain, (n, 1))))
+    return tuple(np.tile(v, (n, 1)) for v in (delay, tau, gain))
 
 
 def load_geometry(name=GEOMETRY_FILE):
@@ -317,8 +328,8 @@ class Airframe:
     """One lane for the simulation: keeps its own command history, and takes the body state from the simulation each tick."""
 
     def __init__(self, params, history=64, geometry=None):
-        # tilt_gain (default 1) scales the tilt's pitch torque, for robustness studies; swapped (default off) flies the ESCs as after the 2026-10-29 swap.
-        self.p = complete(params) | {"tilt_gain": params.get("tilt_gain", 1.0), "swapped": float(params.get("swapped", 0.0))}
+        # tilt_gain (default 1) scales the tilt's pitch torque, for robustness studies.
+        self.p = complete(params) | {"tilt_gain": params.get("tilt_gain", 1.0)}
         self.geometry = geometry or geometry_of(params)
         level, mean = hover_trim(params, self.geometry)
         self.trim = (np.array([level]), mean[None])

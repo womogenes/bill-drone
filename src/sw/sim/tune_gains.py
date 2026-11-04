@@ -81,7 +81,7 @@ def rms(values):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recording", type=Path, help="a flight whose settings to start from (.bin or .jsonl)")
-    parser.add_argument("--airframe", type=Path, help="default: the newest sw/sim/models/airframe_*.json")
+    parser.add_argument("--airframe", type=Path, help="default: the recordings' drone's newest sw/sim/models/airframe_*.json")
     parser.add_argument("--range", type=float, default=8.0, help="search each gain from its flown value over this to times this")
     parser.add_argument("--generations", type=int, default=50)
     parser.add_argument("--workers", type=int, default=os.cpu_count())
@@ -90,7 +90,7 @@ def main():
     args = parser.parse_args()
     import cma
 
-    airframe = json.loads((args.airframe or sorted(MODELS.glob("airframe_2*.json"))[-1]).read_text())
+    airframe = json.loads((args.airframe or A.newest_model(A.flown_by([args.recording.with_suffix(".bin")])) or parser.error("no saved airframe model of this drone: pass --airframe")).read_text())
     plants = {name + extra: IDENTIFIED_ESC | {"airframe": airframe | change, "disturbances": IDENTIFIED_ESC["disturbances"] + [{"channel": c, "kind": "constant", "value": v} for c, v in zip(("forward", "left"), push) if v]}
               for name, change in variants(airframe).items() for extra, push in PUSHES.items() if name == "nominal" or not extra}
     base = recording_settings(args.recording.with_suffix(".jsonl"))

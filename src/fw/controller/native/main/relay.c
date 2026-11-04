@@ -11,6 +11,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "nvs_flash.h"
+#include "../../../pairs.h"
 
 #define CHANNEL 6
 #define PACKET_MAX 250
@@ -22,7 +23,8 @@
 #define LED 2
 #define HEARD_US 2000000
 
-static const uint8_t drone_mac[6] = {0x20, 0x50, 0x0d, 0x8b, 0x7e, 0x68};
+// The paired drone's station MAC (fw/pairs.h).
+static uint8_t drone_mac[6];
 
 typedef struct {
     uint8_t length;
@@ -255,6 +257,8 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_now_init());
     ESP_ERROR_CHECK(esp_now_register_send_cb(sent));
     ESP_ERROR_CHECK(esp_now_register_recv_cb(received));
+    uint8_t own[6];
+    pair_find(false, own, drone_mac);
     esp_now_peer_info_t peer = {.channel = 0, .ifidx = WIFI_IF_STA, .encrypt = false};
     memcpy(peer.peer_addr, drone_mac, 6);
     ESP_ERROR_CHECK(esp_now_add_peer(&peer));

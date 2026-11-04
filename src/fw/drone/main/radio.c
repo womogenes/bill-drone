@@ -19,9 +19,10 @@
 #include "runtime.h"
 #include "arming.h"
 #include "camera.h"
+#include "../../pairs.h"
 
-// The controller's station MAC; the drone answers nothing else.
-static const uint8_t peer[ESP_NOW_ETH_ALEN] = {0x04, 0xb2, 0x47, 0x54, 0x80, 0x4c};
+// The paired controller's station MAC (fw/pairs.h); the drone answers nothing else. own is this drone's, its ID.
+static uint8_t peer[ESP_NOW_ETH_ALEN], own[ESP_NOW_ETH_ALEN];
 #define WIFI_CHANNEL 6
 
 #define HEADER 18
@@ -619,8 +620,8 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         describe(running_sha, sizeof(running_sha), running);
         describe(target_sha, sizeof(target_sha), target);
         // reset is esp_reset_reason_t: 1 power-on, 3 software, 4 panic, 5-7 watchdogs, 9 brownout.
-        *size = snprintf(text, REPLY - 5, "{\"running\":\"%s\",\"target\":%s%s%s,\"size\":%lu,\"running_sha\":%s,\"target_sha\":%s,\"reset\":%d}",
-                         running->label, target ? "\"" : "", target ? target->label : "null", target ? "\"" : "",
+        *size = snprintf(text, REPLY - 5, "{\"drone\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"running\":\"%s\",\"target\":%s%s%s,\"size\":%lu,\"running_sha\":%s,\"target_sha\":%s,\"reset\":%d}",
+                         own[0], own[1], own[2], own[3], own[4], own[5], running->label, target ? "\"" : "", target ? target->label : "null", target ? "\"" : "",
                          target ? (unsigned long)target->size : 0UL, running_sha, target_sha, esp_reset_reason());
         return NULL;
     }
@@ -744,6 +745,7 @@ static void update_loop(void *arg) {
 }
 
 void radio_start(void) {
+    pair_find(true, own, peer);
     esp_now_peer_info_t peer_info = {.ifidx = WIFI_IF_STA};
     memcpy(peer_info.peer_addr, peer, sizeof(peer));
     session = esp_random() | 1;

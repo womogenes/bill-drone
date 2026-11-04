@@ -173,6 +173,8 @@ class Recorder:
         self.pattern = None
         # The image the drone runs (its I reply: slot, ELF SHA-256 prefix, reset reason), asked once per drone boot and written into every recording's start record, so each flight says which firmware flew it.
         self.firmware = None
+        # The physical drone, its station MAC (fw/pairs.h; the I reply's "drone"), from the same reply into the same start record.
+        self.drone = None
 
     def status(self):
         return {"file": self.file, "bytes": self.bytes, "writing": self.data is not None, "error": self.error}
@@ -240,7 +242,7 @@ class Recorder:
         self.data, self.events = open(f"{stem}.bin", "xb"), open(f"{stem}.jsonl", "x")
         self.file, self.bytes, self.session, self.next_sequence, self.error = f"{stem.name}.bin", 0, session, None, None
         # The first line describes the whole recording.
-        self.event({**(self.metadata or {}), "type": "start", "session": session, "firmware": self.firmware, **start})
+        self.event({**(self.metadata or {}), "type": "start", "session": session, "drone": self.drone, "firmware": self.firmware, **start})
         if self.pattern:
             self.event({"type": "pattern", **self.pattern})
 
@@ -481,6 +483,7 @@ class Service:
         try:
             info = json.loads(await self.request(b"I"))
             self.recorder.firmware = {key: info.get(key) for key in ("running", "running_sha", "reset")}
+            self.recorder.drone = info.get("drone")
             self.firmware_session = session
         except (RuntimeError, TimeoutError, ValueError) as error:
             self.firmware_retry = time.monotonic() + 1

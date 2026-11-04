@@ -4,7 +4,7 @@
  "right_motor_delay": 0.010553,
  "motor_tau": 0.036134,
  "right_motor_tau": 0.036134,
- "right_thrust_gain": 0.981882,
+ "right_thrust_gain": 1.018452,
  "voltage_power": 1.6,
  "differential_slope": 1.0,
  "servo_delay": 0.041334,
@@ -49,10 +49,10 @@
  "pitch_push_sd": 0.0,
  "yaw_push_sd": 0.0,
  "geometry": "geometry_2026-10-29_10in.json",
- "thrust_level": 1.3921,
+ "thrust_level": 1.3669,
  "hover_thrust": [
-  3.3202,
-  3.315
+  3.3815,
+  3.3762
  ],
  "motor_start": 0.16,
  "rotor_drag": [

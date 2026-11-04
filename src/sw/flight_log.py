@@ -46,6 +46,21 @@ def hover_values(flags, values):
     ]
 
 
+# The first drone's ID (its station MAC, fw/pairs.h): recordings made before the start records carried one (UTC names before IDS_FROM) are all from it.
+FIRST_DRONE = "20:50:0d:8b:7e:68"
+IDS_FROM = "2026-11-04"
+
+
+def drone(path):
+    """The physical drone a recording was flown by (its station MAC), from its start record; None when a later recording does not say."""
+    path = Path(path)
+    for line in path.with_suffix(".jsonl").read_text().splitlines():
+        event = json.loads(line)
+        if event["type"] == "start":
+            return event.get("drone") or (FIRST_DRONE if path.name < IDS_FROM else None)
+    return FIRST_DRONE if path.name < IDS_FROM else None
+
+
 def read_flight(path):
     # The start line, plus the drone's metadata when it arrived after the session started.
     metadata = {}
