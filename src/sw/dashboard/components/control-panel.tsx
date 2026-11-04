@@ -251,6 +251,7 @@ export const ControlPanel = memo(function ControlPanel({
   recorderError,
   imu,
   status,
+  arming,
   connected,
   mode,
   nudge,
@@ -267,6 +268,7 @@ export const ControlPanel = memo(function ControlPanel({
   recorderError?: string;
   imu: 'offline' | 'calibrating' | 'uncalibrated' | 'calibrated';
   status: Reading['control_status'];
+  arming: boolean;
   connected: boolean;
   mode: number;
   nudge: [number, number, number];
@@ -483,7 +485,7 @@ export const ControlPanel = memo(function ControlPanel({
     };
   }, [available, settings.enabled, open, onChange, onMode, onNudge, onStop]);
 
-  // H (or T) works disarmed too: it arms like Enable, then hovers, taking off.
+  // H (or T) takes off once Enable has armed the drone; disarmed, it does nothing.
   useEffect(() => {
     if (!available || open) return;
     function keydown(event: KeyboardEvent) {
@@ -492,12 +494,12 @@ export const ControlPanel = memo(function ControlPanel({
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat) return;
-      if (!settings.enabled && !ready) return;
+      if (!settings.enabled) return;
       onHover();
     }
     window.addEventListener('keydown', keydown, true);
     return () => window.removeEventListener('keydown', keydown, true);
-  }, [available, ready, settings.enabled, open, onHover]);
+  }, [available, settings.enabled, open, onHover]);
 
   return (
     <section
@@ -619,8 +621,8 @@ export const ControlPanel = memo(function ControlPanel({
           {FLIGHT_MODES[mode] ?? `Mode ${mode}`}
         </span>
         <Button
-          variant={settings.enabled ? 'destructive' : 'outline'}
-          disabled={!connected || (!settings.enabled && !ready)}
+          variant={settings.enabled || arming ? 'destructive' : 'outline'}
+          disabled={!connected || arming || (!settings.enabled && !ready)}
           aria-pressed={settings.enabled}
           onClick={() =>
             settings.enabled
@@ -634,7 +636,7 @@ export const ControlPanel = memo(function ControlPanel({
                 })
           }
         >
-          {settings.enabled ? 'Disable' : 'Enable'}
+          {settings.enabled ? 'Disable' : arming ? 'Arming…' : 'Enable'}
         </Button>
         <Button
           variant="outline"
