@@ -619,7 +619,7 @@ export const ControlPanel = memo(function ControlPanel({
           {FLIGHT_MODES[mode] ?? `Mode ${mode}`}
         </span>
         <Button
-          variant="outline"
+          variant={settings.enabled ? 'destructive' : 'outline'}
           disabled={!connected || (!settings.enabled && !ready)}
           aria-pressed={settings.enabled}
           onClick={() =>
