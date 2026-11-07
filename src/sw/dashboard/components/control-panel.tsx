@@ -253,6 +253,7 @@ export const ControlPanel = memo(function ControlPanel({
   recorderError,
   imu,
   status,
+  arming,
   connected,
   mode,
   nudge,
@@ -269,6 +270,7 @@ export const ControlPanel = memo(function ControlPanel({
   recorderError?: string;
   imu: 'offline' | 'calibrating' | 'uncalibrated' | 'calibrated';
   status: Reading['control_status'];
+  arming: boolean;
   connected: boolean;
   mode: number;
   nudge: [number, number, number];
@@ -485,7 +487,7 @@ export const ControlPanel = memo(function ControlPanel({
     };
   }, [available, settings.enabled, open, onChange, onMode, onNudge, onStop]);
 
-  // H (or T) works disarmed too: it arms like Enable, then hovers, taking off.
+  // H (or T) takes off once Enable has armed the drone; disarmed, it does nothing.
   useEffect(() => {
     if (!available || open) return;
     function keydown(event: KeyboardEvent) {
@@ -494,12 +496,12 @@ export const ControlPanel = memo(function ControlPanel({
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat) return;
-      if (!settings.enabled && !ready) return;
+      if (!settings.enabled) return;
       onHover();
     }
     window.addEventListener('keydown', keydown, true);
     return () => window.removeEventListener('keydown', keydown, true);
-  }, [available, ready, settings.enabled, open, onHover]);
+  }, [available, settings.enabled, open, onHover]);
 
   // The gamepad flies like the keys, polled every GAMEPAD_TICK_MS: the left stick tilts in proportion up to hover_tilt (without the tag) or moves the hold point at hover_nudge_speed (on it), the right stick climbs at hover_climb_rate and yaws at hover_yaw_rate, A hovers and B lands (held: fast), all only once the drone is enabled on the dashboard; both bumpers stop the motors at any time. A lost gamepad zeroes its tilt and yaw and the hold carries on.
   const enabledRef = useRef(settings.enabled);
@@ -720,8 +722,8 @@ export const ControlPanel = memo(function ControlPanel({
           {FLIGHT_MODES[mode] ?? `Mode ${mode}`}
         </span>
         <Button
-          variant="outline"
-          disabled={!connected || (!settings.enabled && !ready)}
+          variant={settings.enabled || arming ? 'destructive' : 'outline'}
+          disabled={!connected || arming || (!settings.enabled && !ready)}
           aria-pressed={settings.enabled}
           onClick={() =>
             settings.enabled
@@ -735,7 +737,7 @@ export const ControlPanel = memo(function ControlPanel({
                 })
           }
         >
-          {settings.enabled ? 'Disable' : 'Enable'}
+          {settings.enabled ? 'Disable' : arming ? 'Arming…' : 'Enable'}
         </Button>
         <Button
           variant="outline"

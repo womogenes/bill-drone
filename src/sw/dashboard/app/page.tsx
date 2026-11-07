@@ -195,6 +195,8 @@ export default function Page() {
   const [reading, setReading] = useState<Reading | null>(null);
   const [requestError, setRequestError] = useState('');
   const [calibrationPending, setCalibrationPending] = useState(false);
+  // Set as an arm request goes out, before the drone's reply and the reading that confirms it.
+  const [arming, setArming] = useState(false);
   // The drone's refusal of the last ESC calibration stage, if any.
   const [escError, setEscError] = useState<string | null>(null);
   const latestReading = useRef<Reading | null>(null);
@@ -245,8 +247,6 @@ export default function Page() {
   const targets = useRef<Targets>(ZERO_TARGETS);
   const [mode, setModeState] = useState(0);
   const [nudge, setNudgeState] = useState(NO_NUDGE);
-  // H while disarmed arms first and enters hover only once the arm request succeeds.
-  const hoverPending = useRef(false);
 
   const setTargets = useCallback((update: Partial<Targets>) => {
     // Hover entered from manual holds where the drone is, so a nudge never carries over between hops.
@@ -272,11 +272,11 @@ export default function Page() {
     targets.current = ZERO_TARGETS;
     setModeState(0);
     setNudgeState(NO_NUDGE);
-    hoverPending.current = false;
     setStatus('connecting');
     setReading(null);
     setRequestError('');
     setCalibrationPending(false);
+    setArming(false);
     latestReading.current = null;
     latestHover.current = null;
     setHoverState(null);
@@ -301,11 +301,8 @@ export default function Page() {
         if (socket.current !== ws) return;
         if (message.type === 'result') {
           if (message.request === 'calibrate') setCalibrationPending(false);
+          if (message.request === 'arm' && message.error) setArming(false);
           if (message.request === 'esc') setEscError(message.error);
-          if (message.request === 'arm' && hoverPending.current) {
-            hoverPending.current = false;
-            if (!message.error) setTargets({ mode: 1 });
-          }
           if (message.request === 'zero' && !message.error) {
             // The drone has captured the old angle and holds it until this zero target arrives.
             const servo = [...targets.current.servo] as [number, number];
@@ -355,6 +352,7 @@ export default function Page() {
           voltage_ema: lastVoltage?.ema,
         };
         publishReading();
+        if (data.control?.enabled) setArming(false);
         if (data.imu == null) return;
         history.append({
           ...data.imu,
@@ -420,7 +418,7 @@ export default function Page() {
   }, [request]);
 
   const stopMotors = useCallback(() => {
-    hoverPending.current = false;
+    setArming(false);
     setTargets(ZERO_TARGETS);
     setStopEpoch((previous) => previous + 1);
     request({ type: 'stop' });
@@ -438,7 +436,10 @@ export default function Page() {
         else tuning[key] = Number(value);
       }
       setTargets(setpoints);
-      if (enabled === true) request({ type: 'arm' });
+      if (enabled === true) {
+        setArming(true);
+        request({ type: 'arm' });
+      }
       if (enabled === false) stopMotors();
       if (Object.keys(tuning).length)
         request({ type: 'tune', settings: tuning });
@@ -451,21 +452,10 @@ export default function Page() {
     [setTargets]
   );
 
-  // Arming needs zero base throttle, as with Enable, so hover starts from the ground with base throttle 0.
+  // Only Enable arms: hover takes off from an armed drone and does nothing to a disarmed one.
   const hover = useCallback(() => {
-    if (latestReading.current?.control?.enabled) {
-      setTargets({ mode: 1 });
-      return;
-    }
-    hoverPending.current = true;
-    sendControl({
-      enabled: true,
-      base_throttle: 0,
-      roll: 0,
-      pitch: 0,
-      yaw_rate: 0,
-    });
-  }, [sendControl, setTargets]);
+    if (latestReading.current?.control?.enabled) setTargets({ mode: 1 });
+  }, [setTargets]);
 
   // A drone that disarms itself drops back to manual, so a later Enable never arms straight into hover.
   const armed = reading?.control?.enabled;
@@ -582,6 +572,9 @@ export default function Page() {
   const connected = status === 'connected';
   return (
     <div className="flex flex-col lg:h-dvh">
+      {(arming || armed) && (
+        <div className="pointer-events-none fixed inset-0 z-50 border-4 border-destructive" />
+      )}
       <header className="flex h-14 shrink-0 items-center gap-6 border-b px-6">
         <h1 className="text-lg font-semibold">Drone dashboard</h1>
         <Tabs
@@ -736,6 +729,7 @@ export default function Page() {
               recorderReady={!!reading.logging?.ready}
               recorderError={recorder?.error ?? undefined}
               status={controlStatus}
+              arming={arming}
               connected={status === 'connected'}
               imu={
                 !reading.imu

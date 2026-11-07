@@ -419,7 +419,7 @@ class Service:
                 return
             await asyncio.sleep(0.004)
 
-    async def request(self, op, body=b"", timeout=2):
+    async def request(self, op, body=b"", timeout=6):
         """
         Send an id-tagged request until the drone answers; it replays its reply to a repeated id.
         """
