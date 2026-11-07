@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Kbd, KbdGroup } from '@/components/ui/kbd';
 import { EscCalibration } from '@/components/esc-calibration';
+import { BUTTONS, firstPad, stick } from '@/components/gamepad';
 import {
   Dialog,
   DialogContent,
@@ -62,6 +63,7 @@ const tiltKeys = {
 const yawKeys = ['ArrowLeft', 'ArrowRight'];
 // In hover and landing W and S raise and lower the hold point while held, at the drone's hover_climb_rate. On the tag the arrows and A and D move it too (toward the tag and to the drone's left: [forward, left]), at hover_nudge_speed, and the map shows it as the target; without the tag they tilt the drone directly (fw/drone/main/hover.c stick).
 const NUDGE_TICK_MS = 50;
+const GAMEPAD_TICK_MS = 50;
 const nudgeKeys = { KeyW: 1, KeyS: -1 } as const;
 const moveKeys = {
   ArrowUp: [1, 0],
@@ -498,6 +500,105 @@ export const ControlPanel = memo(function ControlPanel({
     window.addEventListener('keydown', keydown, true);
     return () => window.removeEventListener('keydown', keydown, true);
   }, [available, ready, settings.enabled, open, onHover]);
+
+  // The gamepad flies like the keys, polled every GAMEPAD_TICK_MS: the left stick tilts in proportion up to hover_tilt (without the tag) or moves the hold point at hover_nudge_speed (on it), the right stick climbs at hover_climb_rate and yaws at hover_yaw_rate, A hovers and B lands (held: fast), all only once the drone is enabled on the dashboard; both bumpers stop the motors at any time. A lost gamepad zeroes its tilt and yaw and the hold carries on.
+  const enabledRef = useRef(settings.enabled);
+  enabledRef.current = settings.enabled;
+  useEffect(() => {
+    if (!available || open) return;
+    const zero = { roll: 0, pitch: 0, yaw_rate: 0 };
+    let sent = { ...zero };
+    let was = { a: false, b: false, stop: false };
+    let landSince = 0;
+
+    function setMode(next: number) {
+      modeRef.current = next;
+      onMode(next);
+    }
+
+    function send(next: typeof zero) {
+      const changed = Object.fromEntries(
+        Object.entries(next).filter(
+          ([key, value]) => value !== sent[key as keyof typeof zero]
+        )
+      );
+      if (!Object.keys(changed).length) return;
+      sent = next;
+      setDraft((previous) => ({ ...previous, ...changed }));
+      onChange(changed);
+    }
+
+    function tick() {
+      const pad = firstPad();
+      if (!pad || pad.mapping !== 'standard') {
+        if (enabledRef.current) send(zero);
+        was = { a: false, b: false, stop: false };
+        landSince = 0;
+        return;
+      }
+      const pressed = (index: number) => !!pad.buttons[index]?.pressed;
+      const now = {
+        a: pressed(BUTTONS.a),
+        b: pressed(BUTTONS.b),
+        stop: pressed(BUTTONS.leftBumper) && pressed(BUTTONS.rightBumper),
+      };
+      const before = was;
+      was = now;
+      if (now.stop) {
+        if (!before.stop) onStop();
+        // Stopping zeroes the dashboard's targets.
+        sent = { ...zero };
+        landSince = 0;
+        return;
+      }
+      if (!enabledRef.current) return;
+
+      if (now.a && !before.a) onHover();
+      if (
+        now.b &&
+        !before.b &&
+        !(modeRef.current === MANUAL && throttle.current <= 0)
+      ) {
+        setMode(LAND);
+        landSince = Date.now();
+      }
+      if (
+        now.b &&
+        landSince &&
+        Date.now() - landSince > LAND_FAST_MS &&
+        modeRef.current === LAND
+      )
+        setMode(LAND_FAST);
+      if (!now.b && before.b) {
+        landSince = 0;
+        if (modeRef.current === LAND_FAST) setMode(LAND);
+      }
+
+      const [leftX, leftY, rightX, rightY] = [0, 1, 2, 3].map((index) =>
+        stick(pad.axes[index] ?? 0)
+      );
+      const round = (value: number) => Math.round(value * 2) / 2 || 0;
+      const sizes = keySizes.current;
+      const hovering = modeRef.current !== MANUAL;
+      const yaw_rate = round(-rightX * sizes.yaw);
+      if (hovering && freeRef.current)
+        send({
+          roll: round(leftX * sizes.tilt),
+          pitch: round(-leftY * sizes.tilt),
+          yaw_rate,
+        });
+      else send({ roll: 0, pitch: 0, yaw_rate });
+      if (!hovering) return;
+      const seconds = GAMEPAD_TICK_MS / 1000;
+      const forward = freeRef.current ? 0 : -leftY * sizes.move * seconds;
+      const left = freeRef.current ? 0 : -leftX * sizes.move * seconds;
+      const up = -rightY * sizes.climb * seconds;
+      if (forward || left || up) onNudge(forward, left, up);
+    }
+
+    const timer = setInterval(tick, GAMEPAD_TICK_MS);
+    return () => clearInterval(timer);
+  }, [available, open, onChange, onMode, onNudge, onStop, onHover]);
 
   return (
     <section

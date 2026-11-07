@@ -23,6 +23,7 @@ import {
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 
+import { GamepadView } from '@/components/gamepad';
 import { ControlPanel } from '@/components/control-panel';
 import { HoverPanel } from '@/components/hover-panel';
 import type { PreviewTag } from '@/components/fpv-panel';
@@ -759,6 +760,10 @@ export default function Page() {
               }}
             />
           )}
+          {/* Drawn whether or not the drone is connected, so the controller can be checked on its own. */}
+          <section className="px-4 py-3" aria-label="Controller">
+            <GamepadView />
+          </section>
           <Suspense>
             <ImuPanel
               reading={reading?.imu}
