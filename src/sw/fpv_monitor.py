@@ -3,7 +3,7 @@ FPV over the radio received by a USB Wi-Fi adapter in monitor mode (a TP-Link Ar
 
 sudo python3 src/sw/fpv_monitor.py [--interface wlan1] [--channel 11]   (or the bill-fpv-monitor service, src/sw/fpv-monitor.service)
 
-Needs root, so it does as little as it can and the dashboard server (sw/dashboard/app/api/camera/route.ts) does the rest: it turns the interface into a monitor on the channel the camera parks on (fw/esp32cam/src/ota.h radioChannel), with NetworkManager told to leave it alone, and passes every camera shard it hears (broadcast vendor action frames with BSSID FPVRAW, fw/esp32cam/src/fpv.h) to 127.0.0.1:5602 as FPVC, the signal (dBm, signed byte) and the shard from its FPV2 header; FPVM every 500 ms says the monitor is running, which turns the dashboard's FPV to the radio.
+Needs root, so it does as little as it can and the dashboard server (sw/dashboard/app/api/camera/route.ts) does the rest: it turns the interface into a monitor on the channel the camera parks on (fw/esp32cam/src/ota.h radioChannel), with NetworkManager told to leave it alone, and passes every camera shard it hears (broadcast vendor action frames with BSSID FPVRAW, fw/esp32cam/src/fpv.h) to 127.0.0.1:5602 as FPVC, the signal (dBm, signed byte), the sending camera's MAC (6 bytes; every camera sends with the same BSSID, so the dashboard keeps only its own drone's camera's) and the shard from its FPV2 header; FPVM every 500 ms says the monitor is running, which turns the dashboard's FPV to the radio.
 """
 
 import argparse
@@ -96,7 +96,7 @@ def main():
                 print(f"camera found on channel {channel}", flush=True)
             heard = time.monotonic()
             found, searching = channel, 0
-            out.sendto(b"FPVC" + struct.pack("b", signal) + chunk, DASHBOARD)
+            out.sendto(b"FPVC" + struct.pack("b", signal) + frame[10:16] + chunk, DASHBOARD)
 
 
 if __name__ == "__main__":

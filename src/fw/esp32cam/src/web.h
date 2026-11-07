@@ -329,13 +329,13 @@ void startPreview() {
                            uint32_t(esp_timer_get_time()) - lastPose.captureUs <= config::maxAgeUs;
         snprintf(
             body, sizeof(body),
-            "{\"camera\":\"%s\",\"calibrated\":%s,\"tag_id\":%d,\"tag_size_mm\":%.3f,\"capture_count\":%u,\"pose_"
+            "{\"name\":\"%s\",\"camera\":\"%s\",\"calibrated\":%s,\"tag_id\":%d,\"tag_size_mm\":%.3f,\"capture_count\":%u,\"pose_"
             "count\":%u,\"tracked_count\":%u,\"detected_count\":%u,\"preview_count\":%u,\"detect_us\":%u,\"frame_us\":%u,\"age_us\":%u,\"frame_age_us\":%u,\"valid\":%s,"
             "\"position_m\":[%.4f,%.4f,%.4f],\"margin\":%.1f,\"reprojection_px\":%.3f,\"internal_min\":%u,\"uptime_ms\":%u,\"reset\":%d,"
             "\"flow_px\":[%.3f,%.3f],\"flow_inliers\":%u,\"flow_residual_px\":%.3f,\"short_frames\":%u,\"stalls\":%u,\"recoveries\":%u,"
             "\"last_crumbs\":[%u,%u,%u],\"gain\":%.2f,\"exposure_lines\":%d,\"frame_lines\":%d,\"driver_priority\":[%u,%u],"
             "\"link_sent\":%u,\"link_dropped\":%u,\"link_rx_bytes\":%u,",
-            cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", calibrated() ? "true" : "false", finder.id, config::tagSizeM * 1000,
+            cameraName, cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", calibrated() ? "true" : "false", finder.id, config::tagSizeM * 1000,
             unsigned(captureCount), unsigned(poseCount), unsigned(trackedCount), unsigned(detectedCount),
             unsigned(previewCount), unsigned(detectUs),
             unsigned(frameUs), unsigned(lastPose.ageUs), unsigned(readoutAgeUs), valid ? "true" : "false", lastPose.position[0],

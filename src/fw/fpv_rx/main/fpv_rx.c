@@ -1,4 +1,4 @@
-// FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB at 1 Mbaud (this board's CP2102 stops there, about 98 KB/s of chunks) as [length u16][rssi i8][chunk], the shard starting with its FPV2 header. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
+// FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB at 1 Mbaud (this board's CP2102 stops there, about 98 KB/s of chunks) as [length u16][rssi i8][chunk], the shard starting with its FPV2 header. Every camera sends with the same BSSID and its own MAC as the frame's sender, so once the laptop names its camera (FPVF and the six bytes of its MAC, written to this port) only that camera's frames pass and steady the channel search; until then every camera's do. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
 #include <string.h>
 #include "driver/uart.h"
 #include "esp_timer.h"
@@ -18,6 +18,8 @@
 // The camera sends broadcast action frames with this BSSID.
 static const uint8_t bssid[6] = {'F', 'P', 'V', 'R', 'A', 'W'};
 static RingbufHandle_t chunks;
+static uint8_t camera[6];
+static volatile bool chosen;
 static volatile int64_t heard_us;
 static uint16_t admitted;
 
@@ -26,6 +28,7 @@ static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     const uint8_t *frame = packet->payload;
     const int length = (int)packet->rx_ctrl.sig_len - HEADER - 4 - FCS;
     if (type != WIFI_PKT_MGMT || length < 20 || memcmp(frame + 16, bssid, 6) || memcmp(frame + HEADER, ACTION, 4) || memcmp(frame + HEADER + 4, "FPV2", 4)) return;
+    if (chosen && memcmp(frame + 10, camera, 6)) return;
     heard_us = esp_timer_get_time();
     // The camera sends each frame as shards, any data of which rebuild it (fw/esp32cam/src/fec.h): the first that arrives admits the frame only if the buffer has room for that many, and the first data distinct shards go on. With the USB side behind, whole frames are dropped rather than shards of many.
     const uint8_t *chunk = frame + HEADER + 4;
@@ -63,6 +66,22 @@ static void forward(void *unused) {
     }
 }
 
+// The laptop's choice of camera: FPVF and its MAC, looked for anywhere in what arrives.
+static void choose(void *unused) {
+    uint8_t got[10];
+    int have = 0;
+    for (;;) {
+        if (uart_read_bytes(UART_NUM_0, got + have, 1, portMAX_DELAY) != 1) continue;
+        ++have;
+        // Not the start of a command: drop bytes from the front until what is left could be.
+        while (have && memcmp(got, "FPVF", have < 4 ? have : 4)) memmove(got, got + 1, --have);
+        if (have < 10) continue;
+        memcpy(camera, got + 4, 6);
+        chosen = true;
+        have = 0;
+    }
+}
+
 void app_main(void) {
     // A byte buffer, whose free size is all of its free space: a no-split buffer reports only the largest contiguous piece, which near its end refused frames that would have fitted.
     chunks = xRingbufferCreate(32 * 1024, RINGBUF_TYPE_BYTEBUF);
@@ -71,6 +90,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart));
     ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0, 1, 3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     xTaskCreatePinnedToCore(forward, "forward", 4096, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(choose, "choose", 2048, NULL, 4, NULL, 1);
 
     ESP_ERROR_CHECK(nvs_flash_init());
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();

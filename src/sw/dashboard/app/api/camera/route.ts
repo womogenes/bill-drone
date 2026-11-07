@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from 'node:child_process';
 import dgram from 'node:dgram';
-import { constants, existsSync, openSync } from 'node:fs';
+import { closeSync, constants, existsSync, openSync, writeSync } from 'node:fs';
 import tty from 'node:tty';
 import { resolve } from 'node:path';
 import { decode } from '@/lib/fec';
@@ -173,6 +173,10 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
   const radio = receiver();
   if (radioUp()) {
     radio.listeners.add(chunk);
+    // A camera without the N request (before 2026-11-06) is not told apart.
+    cameraRequest('N')
+      .then((text) => radio.choose(text.split(' ')[0]))
+      .catch(() => {});
     let asking = false;
     keepalive = () => {
       if (asking) return;
@@ -286,8 +290,10 @@ termios.tcsetattr(fd, termios.TCSANOW, a)
 termios.tcflow(fd, termios.TCOON)`;
 // chunks: every one heard, for the status.
 // copies: every chunk copy heard, chunks: the first of each, signal: the monitor's last (dBm), for the status.
+// choose: takes only this camera's shards from now on (its MAC, as K N reports it).
 type Receiver = {
   listeners: Set<(chunk: Buffer) => void>;
+  choose: (mac: string) => void;
   heard: number;
   copies: number;
   chunks: number;
@@ -297,7 +303,31 @@ const store = globalThis as { fpvReceiver?: Receiver };
 
 function receiver() {
   if (store.fpvReceiver) return store.fpvReceiver;
+  // The camera whose shards go on: every camera sends with the same BSSID and its own MAC as the sender (fw/esp32cam/src/fpv.h), so with two drones about each dashboard takes its own drone's camera's. The monitor passes each shard's sender and they are dropped here; the ESP32 receiver is told (FPVF and the MAC) and drops them itself. Until the camera has answered, every camera's shards go on.
+  let camera: Buffer | undefined;
+  const tell = () => {
+    if (!camera || !portPath) return;
+    try {
+      const fd = openSync(
+        portPath,
+        constants.O_WRONLY | constants.O_NOCTTY | constants.O_NONBLOCK
+      );
+      try {
+        writeSync(fd, Buffer.concat([Buffer.from('FPVF'), camera]));
+      } finally {
+        closeSync(fd);
+      }
+    } catch (error) {
+      console.error(`FPV receiver ${portPath}: ${error}`);
+    }
+  };
   const opened: Receiver = {
+    choose: (mac) => {
+      const chosen = Buffer.from(mac.replace(/:/g, ''), 'hex');
+      if (chosen.length !== 6 || camera?.equals(chosen)) return;
+      camera = chosen;
+      tell();
+    },
     listeners: new Set(),
     heard: 0,
     copies: 0,
@@ -318,17 +348,20 @@ function receiver() {
   monitor.on('message', (message) => {
     opened.heard = Date.now();
     if (message.toString('latin1', 0, 4) !== 'FPVC') return;
+    if (camera && !message.subarray(5, 11).equals(camera)) return;
     opened.signal = message.readInt8(4);
-    deliver(message.subarray(5));
+    deliver(message.subarray(11));
   });
   monitor.on('error', () => {});
   monitor.bind(5602, '127.0.0.1');
   // The port is opened again, with its settings, after an error or 5 s without a whole shard: the bridge's service finds the controller by asking each USB board for its MAC (fw/controller/find_port.py), which resets the receiver and leaves its port at the bootloader's baud, and an error ended the old stream for good.
   let port: tty.ReadStream | undefined;
+  let portPath: string | undefined;
   let heard = 0;
   const open = () => {
     port?.destroy();
     port = undefined;
+    portPath = undefined;
     for (const path of RECEIVERS.filter((path) => existsSync(path))) {
       try {
         // Not stty: it applies settings only once the output has drained, and a port left at its defaults echoes the receiver's bytes back while a 0x13 among them (XOFF) holds the output, so it waited forever and froze the server (2026-10-31). This flushes and applies at once, and the timeout bounds it anyway.
@@ -336,12 +369,15 @@ function receiver() {
         port = new tty.ReadStream(
           openSync(path, constants.O_RDONLY | constants.O_NOCTTY)
         );
+        portPath = path;
         break;
       } catch (error) {
         console.error(`FPV receiver ${path}: ${error}`);
       }
     }
     if (!port) return;
+    // The receiver forgets its camera when it restarts, which the port's reopening follows.
+    tell();
     heard = Date.now();
     let buffer = Buffer.alloc(0);
     port.on('data', (data: Buffer) => {

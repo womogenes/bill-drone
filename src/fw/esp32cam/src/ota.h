@@ -2,6 +2,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <ArduinoOTA.h>
+#include "esp_mac.h"
 #include "esp_wifi.h"
 #include "esp_camera.h"
 extern bool cameraReady;
@@ -41,6 +42,26 @@ bool apStarted = false, parked = false;
 
 inline bool wifiConfigured() { return wifiNetworks[0].ssid[0] || apSsid[0]; }
 
+// Each camera's name, by its station MAC: its host name on Wi-Fi (NAME.local, and for OTA), so two drones' cameras on one network are told apart. An unlisted camera is esp32cam- and its MAC's last three bytes. Its FPV raw frames carry the same MAC as their sender (fpv.h), which the receivers filter on.
+struct CameraName {
+    uint8_t mac[6];
+    const char *name;
+};
+constexpr CameraName cameraNames[] = {
+    {{0x28, 0x84, 0x85, 0x5a, 0xdb, 0x28}, "bill-esp32cam"},
+    {{0x28, 0x84, 0x85, 0x5a, 0xdd, 0xe8}, "michael-drone"},
+};
+uint8_t cameraMac[6];
+char cameraName[32];
+
+inline void findCameraName() {
+    esp_read_mac(cameraMac, ESP_MAC_WIFI_STA);
+    snprintf(cameraName, sizeof(cameraName), "esp32cam-%02x%02x%02x", cameraMac[3], cameraMac[4], cameraMac[5]);
+    for (const CameraName &known : cameraNames)
+        if (!memcmp(known.mac, cameraMac, 6))
+            snprintf(cameraName, sizeof(cameraName), "%s", known.name);
+}
+
 // The network joined, the access point or the parked station, its address, and the camera's state, as the drone's K S request reports them (update.h).
 inline void wifiState(char *text, size_t size) {
     uint8_t channel = 0;
@@ -76,11 +97,12 @@ inline void startAp() {
 
 inline void startWifi() {
     loadRadio();
+    findCameraName();
     // Nothing is printed: UART0 is the drone link. Without wifi.h there is no Wi-Fi and no OTA.
     if (!wifiConfigured())
         return;
     WiFi.mode(WIFI_STA);
-    WiFi.setHostname("bill-esp32cam");
+    WiFi.setHostname(cameraName);
     WiFi.setAutoReconnect(true);
     WiFi.setSleep(false);
     // Full transmit power (about 20 dBm) draws current bursts that browned this board out on its 3.3 V regulator (2026-10-26, "Brownout detector was triggered" at Wi-Fi start); 8.5 dBm keeps the bursts smaller and still links at about -46 dBm received indoors.
@@ -109,7 +131,7 @@ inline void startWifi() {
         WiFi.begin(wifiChosen->ssid, wifiChosen->password);
     else
         park();
-    ArduinoOTA.setHostname("bill-esp32cam");
+    ArduinoOTA.setHostname(cameraName);
     // No OTA password, as requested. Wi-Fi credentials are separate.
     ArduinoOTA.setTimeout(10000);
     ArduinoOTA.onStart([]() {

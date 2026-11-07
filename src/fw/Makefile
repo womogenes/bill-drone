@@ -28,7 +28,7 @@ camera-usb:
 
 # The camera over Wi-Fi: finds it on any network this laptop is on, then builds and uploads.
 camera-wifi:
-	uv run tools/camera_wifi_ota.py
+	uv run tools/camera_wifi_ota.py $(if $(NAME),--name $(NAME))
 
 # Accelerometer calibration: hold the disarmed drone still in about ten orientations.
 accel:
