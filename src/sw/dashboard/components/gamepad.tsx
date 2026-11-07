@@ -2,7 +2,7 @@
 
 import { memo, useEffect, useRef, useState } from 'react';
 
-// The browser's standard gamepad layout (https://w3c.github.io/gamepad/#remapping): the 8BitDo Ultimate 2 Wireless over Bluetooth reports it.
+// The browser's standard gamepad layout (https://w3c.github.io/gamepad/#remapping), which readPad reports.
 export const BUTTONS = {
   a: 0,
   b: 1,
@@ -24,12 +24,22 @@ export const BUTTONS = {
 } as const;
 const DEADZONE = 0.15;
 
-// The first connected gamepad, or null; Chrome reports gamepads only to a focused, visible page, and only after a button press since the page loaded.
-export function firstPad() {
-  return (
-    navigator.getGamepads?.().find((pad): pad is Gamepad => !!pad?.connected) ??
-    null
-  );
+type Pad = { name: string | null; buttons: number[]; axes: number[] };
+let latest: Pad | null = null;
+let heard = 0;
+let source: EventSource | undefined;
+
+// The gamepad as the dashboard's server reads it on this laptop (app/api/gamepad/route.ts), in the standard layout whatever the browser and whether or not the tab is focused: button values by standard index and the sticks' axes (left x, y, right x, y), or null with none connected or the stream silent for 2 s.
+export function readPad() {
+  if (!source && typeof EventSource !== 'undefined') {
+    source = new EventSource('/api/gamepad');
+    source.onmessage = (event) => {
+      latest = JSON.parse(event.data);
+      heard = Date.now();
+    };
+  }
+  if (!latest?.name || Date.now() - heard > 2000) return null;
+  return { id: latest.name, buttons: latest.buttons, axes: latest.axes };
 }
 
 // A stick axis with the deadzone removed and the rest rescaled to -1..1.
@@ -58,18 +68,16 @@ export const GamepadView = memo(function GamepadView() {
     let shown: string | null = null;
     function draw() {
       frame = requestAnimationFrame(draw);
-      const pad = firstPad();
-      const id = pad
-        ? `${pad.id}${pad.mapping === 'standard' ? '' : ' (not standard layout)'}`
-        : null;
+      const pad = readPad();
+      const id = pad?.id ?? null;
       if (id !== shown) {
         shown = id;
         setName(id);
       }
       const root = svg.current;
       if (!root) return;
-      const buttons = pad?.buttons.map((button) => button.value) ?? [];
-      const axes = pad?.axes.slice(0, 4) ?? [];
+      const buttons = pad?.buttons ?? [];
+      const axes = pad?.axes ?? [];
       const state = `${buttons.map((value) => value.toFixed(2))}|${axes.map((value) => value.toFixed(2))}`;
       if (state === last) return;
       last = state;

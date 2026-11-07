@@ -301,7 +301,11 @@ export default function Page() {
         if (socket.current !== ws) return;
         if (message.type === 'result') {
           if (message.request === 'calibrate') setCalibrationPending(false);
-          if (message.request === 'arm' && message.error) setArming(false);
+          // A refused arm ends Arming… now; an accepted one when the drone reports itself enabled, or a moment later if it stopped again at once (its reason then shows under the controls).
+          if (message.request === 'arm') {
+            if (message.error) setArming(false);
+            else setTimeout(() => setArming(false), 3000);
+          }
           if (message.request === 'esc') setEscError(message.error);
           if (message.request === 'zero' && !message.error) {
             // The drone has captured the old angle and holds it until this zero target arrives.
@@ -648,7 +652,7 @@ export default function Page() {
             }`}
           >
             <Satellite aria-hidden="true" className="size-4" />
-            <span className="min-w-[9ch]">
+            <span className="min-w-[8ch]">
               {connected && gps?.ok && gps.fix >= 2 && gps.fix <= 4
                 ? `${gps.satellites} · ${gps.horizontal_accuracy.toFixed(1)} m`
                 : '—'}

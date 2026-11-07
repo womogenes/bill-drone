@@ -126,11 +126,11 @@ export function ImuPanel({
   const end = Math.max(now, time);
   const online = connected && reading != null;
 
-  // Each value keeps the width of its widest reading (sign, three integer digits, the decimals), so the labels beside it don't move as it changes.
-  const value = (number: number | undefined, digits: number) => (
+  // Each value keeps the width of its widest reading, so the labels beside it don't move as it changes: in tabular nums every digit is 1ch, and the sign and point together about another.
+  const value = (number: number | undefined, digits: number, whole: number) => (
     <span
       className="inline-block text-right"
-      style={{ width: `${5 + digits}ch` }}
+      style={{ width: `${whole + digits + 1}ch` }}
     >
       {online && number !== undefined ? signed(number, digits) : '—'}
     </span>
@@ -145,10 +145,14 @@ export function ImuPanel({
       />
       <div className="space-y-1">
         <div className="flex items-baseline gap-4 tabular-nums">
-          <h3 className="text-sm text-muted-foreground">Attitude</h3>
-          <span className="text-red-700">Roll {value(reading?.roll, 1)}°</span>
+          <h3 className="text-sm whitespace-nowrap text-muted-foreground">
+            Attitude
+          </h3>
+          <span className="text-red-700">
+            Roll {value(reading?.roll, 1, 3)}°
+          </span>
           <span className="text-green-700">
-            Pitch {value(reading?.pitch, 1)}°
+            Pitch {value(reading?.pitch, 1, 2)}°
           </span>
           <span className="ml-auto text-sm text-muted-foreground">
             {online ? `${reading.temperature.toFixed(1)} °C` : ''}
@@ -158,13 +162,13 @@ export function ImuPanel({
       </div>
       {(
         [
-          ['Acceleration', 'g', 'accel', 3],
-          ['Angular velocity', '°/s', 'gyro', 2],
+          ['Acceleration', 'g', 'accel', 3, 1],
+          ['Gyro', '°/s', 'gyro', 2, 3],
         ] as const
-      ).map(([label, unit, key, digits]) => (
+      ).map(([label, unit, key, digits, whole]) => (
         <div key={key} className="space-y-1">
           <div className="flex items-baseline gap-4 tabular-nums">
-            <h3 className="text-sm text-muted-foreground">
+            <h3 className="text-sm whitespace-nowrap text-muted-foreground">
               {label} ({unit})
             </h3>
             {['X', 'Y', 'Z'].map((axis, index) => (
@@ -174,7 +178,7 @@ export function ImuPanel({
                   ['text-red-700', 'text-green-700', 'text-blue-700'][index]
                 }
               >
-                {axis} {value(reading?.[key][index], digits)}
+                {axis} {value(reading?.[key][index], digits, whole)}
               </span>
             ))}
           </div>

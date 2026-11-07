@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Kbd, KbdGroup } from '@/components/ui/kbd';
 import { EscCalibration } from '@/components/esc-calibration';
-import { BUTTONS, firstPad, stick } from '@/components/gamepad';
+import { BUTTONS, readPad, stick } from '@/components/gamepad';
 import {
   Dialog,
   DialogContent,
@@ -531,14 +531,14 @@ export const ControlPanel = memo(function ControlPanel({
     }
 
     function tick() {
-      const pad = firstPad();
-      if (!pad || pad.mapping !== 'standard') {
+      const pad = readPad();
+      if (!pad) {
         if (enabledRef.current) send(zero);
         was = { a: false, b: false, stop: false };
         landSince = 0;
         return;
       }
-      const pressed = (index: number) => !!pad.buttons[index]?.pressed;
+      const pressed = (index: number) => (pad.buttons[index] ?? 0) > 0.5;
       const now = {
         a: pressed(BUTTONS.a),
         b: pressed(BUTTONS.b),
