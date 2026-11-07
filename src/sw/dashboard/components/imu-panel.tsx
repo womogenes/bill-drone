@@ -126,8 +126,15 @@ export function ImuPanel({
   const end = Math.max(now, time);
   const online = connected && reading != null;
 
-  const value = (number: number | undefined, digits: number) =>
-    online && number !== undefined ? signed(number, digits) : '—';
+  // Each value keeps the width of its widest reading (sign, three integer digits, the decimals), so the labels beside it don't move as it changes.
+  const value = (number: number | undefined, digits: number) => (
+    <span
+      className="inline-block text-right"
+      style={{ width: `${5 + digits}ch` }}
+    >
+      {online && number !== undefined ? signed(number, digits) : '—'}
+    </span>
+  );
   return (
     <section aria-labelledby="imu-heading" className="space-y-3 px-4 py-4">
       <ImuHeader

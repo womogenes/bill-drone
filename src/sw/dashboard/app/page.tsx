@@ -610,11 +610,13 @@ export default function Page() {
             ) : (
               <BatteryMedium aria-hidden="true" className="size-4" />
             )}
-            {!connected || volts === undefined
-              ? '—'
-              : volts <= NO_PACK_V
-                ? 'USB'
-                : `${volts.toFixed(1)} V`}
+            <span className="min-w-[5ch]">
+              {!connected || volts === undefined
+                ? '—'
+                : volts <= NO_PACK_V
+                  ? 'USB'
+                  : `${volts.toFixed(1)} V`}
+            </span>
           </span>
           <span
             title={connected ? imuState : 'IMU'}
@@ -646,9 +648,11 @@ export default function Page() {
             }`}
           >
             <Satellite aria-hidden="true" className="size-4" />
-            {connected && gps?.ok && gps.fix >= 2 && gps.fix <= 4
-              ? `${gps.satellites} · ${gps.horizontal_accuracy.toFixed(1)} m`
-              : '—'}
+            <span className="min-w-[9ch]">
+              {connected && gps?.ok && gps.fix >= 2 && gps.fix <= 4
+                ? `${gps.satellites} · ${gps.horizontal_accuracy.toFixed(1)} m`
+                : '—'}
+            </span>
           </span>
           <span
             title={recorderText}
@@ -675,7 +679,7 @@ export default function Page() {
           </Link>
           {fps !== null && (
             <span
-              className="text-sm text-muted-foreground tabular-nums"
+              className="min-w-[6ch] text-right text-sm text-muted-foreground tabular-nums"
               title={`Telemetry from ${SERVICE}`}
             >
               {Math.round(fps)} Hz

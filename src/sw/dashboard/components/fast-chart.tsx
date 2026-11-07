@@ -66,6 +66,8 @@ export function FastChart<T>({
     let frame = 0;
     let colors: string[] = [];
     let font = '';
+    // The plot's left edge only moves out, so changing tick labels don't shift the trace back and forth.
+    let gutter = 48;
     let styleDirty = true;
 
     function draw() {
@@ -140,12 +142,13 @@ export function FastChart<T>({
         { length: count },
         (_, index) => low + ((high - low) * index) / (count - 1)
       );
-      const left = Math.max(
-        48,
+      gutter = Math.max(
+        gutter,
         ...ticks.map(
           (value) => context.measureText(formatValue(value)).width + 12
         )
       );
+      const left = gutter;
       const right = width - 12;
       const top = 8;
       const bottom = height - 36;
