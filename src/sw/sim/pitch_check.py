@@ -50,7 +50,7 @@ def measure(pitch, rate):
 
 
 def real(path):
-    """The recording's airborne pitch and pitch rate (from the identification's liftoff to its end of the airborne window), its resting pitch and its test pattern."""
+    """The recording's airborne pitch and pitch rate (from the identification's liftoff to its end of the airborne window), its resting pitch, its test pattern and the tag's distance at the first sighting (the hold's range target starts there; the settings' hover_distance when it never saw the tag)."""
     from sw.sim.identify_airframe import load
     record = load(path, 0.3)
     if record is None:
@@ -59,32 +59,40 @@ def real(path):
     on = int(np.flatnonzero(record["base_throttle"] > 0)[0])
     events = path.with_suffix(".jsonl")
     patterns = [e for e in map(json.loads, events.read_text().splitlines()) if e.get("type") == "pattern"] if events.exists() else []
-    return {"pitch": record["pitch_deg"][lift:end], "rate": record["gy_deg_s"][lift:end], "rest": float(np.median(record["pitch_deg"][max(0, on - 30):on])), "pattern": patterns[-1] if patterns else None}
+    x, y = record["hover_x_m"], record["hover_y_m"]
+    seen = np.flatnonzero(np.isfinite(x) & ((record["flags"].astype(int) >> 6 & 1) > 0))
+    tag = float(np.hypot(x[seen[0]], y[seen[0]])) if len(seen) else record["setting"].get("hover_distance", 2.0)
+    return {"pitch": record["pitch_deg"][lift:end], "rate": record["gy_deg_s"][lift:end], "rest": float(np.median(record["pitch_deg"][max(0, on - 30):on])), "pattern": patterns[-1] if patterns else None, "tag": tag}
 
 
-def simulate(job):
-    """One sim run of a hop: the measures over seconds from liftoff, and when it was lost (None if not)."""
+def fly(settings, airframe, rest, pattern, tag, seconds, seed):
+    """The hover sim (sweep.CURRENT, airframe swapped in without its steady pushes when given) flying a hop from the resting pitch with the test pattern, the tag ahead at that distance: its pitch (deg) and filtered gyro pitch rate (deg/s, as the drone logs it) from liftoff for seconds, and when it was lost after liftoff (None if not), or None without a liftoff."""
     from sw.sim.sweep import CURRENT, run
-    settings, airframe, rest, pattern, seconds, seed = job
     plant = CURRENT | {"ground_pitch": rest}
     if airframe is not None:
         plant["airframe"] = airframe | {f"{axis}_push": 0.0 for axis in ("roll", "pitch", "yaw")}
-    # The tag where the hold wants to be, so the hop starts on its range as the real ones roughly did.
-    plant["camera"] = dict(plant["camera"]) | {"tag": (settings.get("hover_distance", 2.0), 0.0, 0.45)}
+    plant["camera"] = dict(plant["camera"]) | {"tag": (tag, 0.0, 0.45)}
     if pattern:
         plant["excite"] = pattern
     log = []
     result = run(settings, plant, seconds=seconds + 1.5, seed=seed, log=log, hover=True)
     t = np.array([e[0] for e in log])
     pitch = np.degrees([e[2][1] for e in log])
-    # The body's own pitch rate, as the logged gyro measures it (the filtered gyro the controller reads).
     rate = np.degrees([e[11][1] for e in log])
-    # Liftoff as the identification finds it in a recording is near enough the sim's own for these measures.
     lifted = result.get("liftoff_s") or next((t[k] for k in range(len(t)) if log[k][1][2] > 0.01), None)
     if lifted is None:
         return None
     keep = (t >= lifted) & (t <= lifted + seconds)
-    return measure(pitch[keep], rate[keep]) | {"lost_s": None if result["stable"] else float(result["fail_s"] - lifted)}
+    return pitch[keep], rate[keep], None if result["stable"] else float(result["fail_s"] - lifted)
+
+
+def simulate(job):
+    """One sim run of a hop: the measures, and when it was lost (None if not)."""
+    flown = fly(*job)
+    if flown is None:
+        return None
+    pitch, rate, lost = flown
+    return measure(pitch, rate) | {"lost_s": lost}
 
 
 def main():
@@ -100,7 +108,7 @@ def main():
     overrides = {key: float(value) for key, value in (item.split("=") for item in args.set.split(",") if item)}
     hops = [(path, r) for path in args.recordings if (r := real(path)) is not None]
     span = lambda r: args.seconds or max(3.0, len(r["pitch"]) / FS)
-    jobs = [(recording_settings(path) | overrides, airframe, r["rest"], r["pattern"], span(r), seed) for path, r in hops for seed in range(args.seeds)]
+    jobs = [(recording_settings(path) | overrides, airframe, r["rest"], r["pattern"], r["tag"], span(r), seed) for path, r in hops for seed in range(args.seeds)]
     with Pool(min(args.workers, len(jobs))) as pool:
         runs = pool.map(simulate, jobs)
     for i, (path, r) in enumerate(hops):
