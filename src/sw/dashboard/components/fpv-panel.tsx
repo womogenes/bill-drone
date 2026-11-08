@@ -153,6 +153,9 @@ export function FpvPanel({
         const context = target.getContext('2d')!;
         context.imageSmoothingEnabled = true;
         context.imageSmoothingQuality = 'high';
+        // A blur of about one source pixel hides the small JPEG's block edges and ringing, which smoothing alone only enlarges.
+        context.filter =
+          zoom > 2 ? `blur(${(zoom * 0.6).toFixed(1)}px)` : 'none';
         context.translate(target.width / 2, target.height / 2);
         context.scale(zoom, zoom);
         context.rotate(turn);
@@ -160,6 +163,7 @@ export function FpvPanel({
         context.drawImage(shown, 0, 0);
         // The tag's outline, its corners scaled from the camera's 320x240 to this picture.
         if (tag) {
+          context.filter = 'none';
           const scale = shown.width / 320;
           context.strokeStyle = '#22c55e';
           context.lineWidth = Math.max(1, shown.width / 160);
