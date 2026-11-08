@@ -107,6 +107,8 @@
 #endif
 // The descent command ramps in over LAND_EASE (s), so pressing land does not step collective down.
 #define LAND_EASE 0.5f
+// Held L (HOVER_LAND_FAST) descends this many times hover_land_rate: 2 m/s at the 1 m/s set on 2026-11-08 (was 3x of 0.2). Faster is not safer: about 1 kg on two 10-inch rotors has an induced velocity near 6.4 m/s, and a straight descent beyond roughly a quarter of it (1.5-2 m/s) enters the vortex ring state, where lift and control drop out unpredictably.
+#define LAND_FAST_FACTOR 2
 // Above this nudge speed (m/s) the hold point counts as moving.
 #ifndef NUDGE_MOVING
 #define NUDGE_MOVING 0.02f
@@ -555,7 +557,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->target += clamp(goal - state->target, -g->climb_rate * dt, g->climb_rate * dt);
         command = clamp(g->kz * (state->target - state->height) + (state->tracking || state->dragging ? state->nudge_rate[2] : 0), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
     } else {
-        float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? 3 : 1);
+        float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? LAND_FAST_FACTOR : 1);
         command = fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
         state->target = state->height;
     }
@@ -588,7 +590,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->probing = false;
     } else {
         // The vertical speed the accelerometer gains this tick, against the hold's specific force.
-        float rate = g->land_rate * (mode == HOVER_LAND_FAST ? 3 : 1), gained = (vertical_g - state->hold_g) * GRAVITY * dt;
+        float rate = g->land_rate * (mode == HOVER_LAND_FAST ? LAND_FAST_FACTOR : 1), gained = (vertical_g - state->hold_g) * GRAVITY * dt;
         if (state->land_time == 0) state->land_height = state->height;
         state->land_time += dt;
         // Only once the descent command has eased in: before that the drone is not meant to be moving yet.
