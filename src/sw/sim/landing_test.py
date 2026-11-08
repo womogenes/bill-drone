@@ -1,6 +1,6 @@
 """
 Hover landings for the touchdown detector (fw/drone/main/hover.c), in the simulator and replayed from recordings.
-uv run -m sw.sim.landing_test [--runs 200] [--source path/to/hover.c] [--defines "PROBE_RATE=1.0f ..."] flies randomized landings: each takes off on IDENTIFIED_ESC with the 2026-10-29 07:20 camera-hover settings, holds at a random tag height, then lands at a random land_rate (0.05-0.2 m/s) with the hover_mass setting off by up to ±20 % from what the plant needs, the plant's mass off by up to ±10 %, the pack at 16.7 V, 14.3 V or sagging from one to the other over the flight (through the firmware's voltage compensation against the airframe's fitted voltage power, which leaves up to 18 % more thrust per table newton on the low pack), a small level-reference error and accelerometer bias, and the camera's height drifting by up to ±0.3 m over the descent (the drone's attitude error at the tag's 2 m range). --no-camera lands without the tag, --gust adds rougher air. It reports any touchdown declared in the air, how long after the body first touched the floor the landing ended (by the detector, or by the tilt and shock cut), the contact speed and the tilt through the touchdown.
+uv run -m sw.sim.landing_test [--runs 200] [--source path/to/hover.c] [--defines "PROBE_RATE=1.0f ..."] flies randomized landings: each takes off on IDENTIFIED_ESC with the 2026-10-29 07:20 camera-hover settings, holds at a random tag height, then lands at a random land_rate (0.05-0.2 m/s) with the hover_mass setting off by up to ±20 % from what the plant needs, the plant's mass off by up to ±10 %, the pack at 16.7 V, 14.3 V or sagging from one to the other over the flight (through the firmware's voltage compensation against the airframe's fitted voltage power, which leaves up to 18 % more thrust per table newton on the low pack), a small level-reference error and accelerometer bias, and the camera's height drifting by up to ±0.3 m over the descent (the drone's attitude error at the tag's 2 m range). --no-camera lands without the tag (--baro with the barometer feeding the height), --gust adds rougher air. It reports any touchdown declared in the air, how long after the body first touched the floor the landing ended (by the detector, or by the tilt and shock cut), the contact speed and the tilt through the touchdown.
 uv run -m sw.sim.landing_test --replay sw/recordings/<flight>.bin [--contact s] replays a recorded landing through hover.c with the recorded estimates, specific force and attitude forced in each tick. Before the contact time given (or throughout without one) the drone is taken to be in the air: thrust the new code flies below the recorded one shows in the specific force as that difference, lagged by the motors, over the weight. After it the floor holds the drone and the recorded specific force stands. It prints when probes start and what they find, and when touchdown comes.
 --source flies another copy of hover.c (its own hover.h beside it gives the state layout), so versions can be compared without touching the one other simulations use.
 """
@@ -91,14 +91,14 @@ def install(source, defines):
             self.landing_us = None
             self.off = 0.0
 
-        def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None, gps=None):
+        def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None, gps=None, baro=None):
             # The camera's height error near the floor (the drone's attitude error times the 2 m range): from the landing's start the tag's apparent height drifts by height_error (m, positive reads the drone low) over the time the descent should take.
             if mode != hover.HOLD and self.landing_us is None:
                 self.landing_us, self.descent = now_us, max(0.5, self.state.height / self.gains.land_rate)
             if pose and self.landing_us is not None:
                 share = min(1.0, (now_us - self.landing_us) / 1e6 / self.descent)
                 pose.tag[1] += Recorded.height_error * share
-            out = super().update(mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps)
+            out = super().update(mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps, baro)
             state = self.state
             self.off = self.off + dt if state.landed and out.force <= 0 else 0
             if self.off > 1.0:
@@ -158,9 +158,11 @@ def fly(case, source=None, defines=()):
     settings |= {"hover_land_rate": case["land_rate"], "hover_mass": SIM_MASS * case["plant_mass"] / factor * case["mass_error"], "hover_ceiling": 1.2}
     if not case.get("camera", True):
         settings["hover_camera"] = 0
+    if case.get("baro"):
+        settings["hover_baro_tau"] = 1.0
     settings |= case.get("settings", {})
     plant = sweep.IDENTIFIED_ESC | {"land_at": case["land_at"], "mass": sweep.IDENTIFIED_ESC["mass"] * case["plant_mass"], "level_error": case["level_error"], "accel_bias": case["accel_bias"],
-                                    **({"gust": case["gust"], "roll_gust": case["gust"]} if case.get("gust") else {}),
+                                    **({"gust": case["gust"], "roll_gust": case["gust"]} if case.get("gust") else {}), **({"baro": sweep.BARO} if case.get("baro") else {}),
                                     "camera": sweep.IDENTIFIED_ESC["camera"] | {"tag": (2.0, 0.1, case["tag_height"]), "fov": FOV}}
     expected = case["tag_height"] / case["land_rate"]
     seconds = 1.5 + case["land_at"] + 2 * expected + 6
@@ -291,7 +293,7 @@ def replay(recording, contact=None, source=None, defines=()):
     for i in range(len(t)):
         if mode[i] == 0:
             if not engaged:
-                hover.library.hover_rest(ctypes.byref(state), float(vertical[i]), False, 0.01)
+                hover.library.hover_rest(ctypes.byref(state), float(vertical[i]), False, 0.01, None)
                 continue
             break
         engaged = True
@@ -311,7 +313,7 @@ def replay(recording, contact=None, source=None, defines=()):
         weight = state.hold_force if getattr(state, "hold_force", 0) > 0 else gains.mass * 9.81
         before = (state.landed, getattr(state, "probing", False))
         hover.library.hover_update(ctypes.byref(state), ctypes.byref(gains), int(mode[i]), None, int(t[i] * 1e6) + 1000000, 0.01, float(roll[i]), float(pitch[i]), 0.0,
-                                   float(vertical[i]) + difference / weight, state.force if state.engaged else float(force[i]), None, None, None, ctypes.byref(out))
+                                   float(vertical[i]) + difference / weight, state.force if state.engaged else float(force[i]), None, None, None, None, ctypes.byref(out))
         if not landing:
             # The hold as flown: its thrust (and the integral that gives it, so the landing starts from it), which the new code's references learn from.
             lean = max(0.5, math.cos(roll[i]) * math.cos(pitch[i]))
@@ -350,13 +352,14 @@ def main():
     parser.add_argument("--no-camera", action="store_true", help="never see the tag (hover_camera 0): height from the IMU alone, as a landing outdoors after a lost link")
     parser.add_argument("--set", nargs="*", default=[], help="settings to override, name=value")
     parser.add_argument("--gust", type=float, default=0, help="random pitch and roll disturbance (rad/s² RMS) on top of the room's; indoors fitted 0.49 and 0.89")
+    parser.add_argument("--baro", action="store_true", help="the barometer (sweep.BARO) feeding the height without the tag, at hover_baro_tau 1 s unless --set gives another")
     args = parser.parse_args()
     defines = args.defines.split()
     if args.replay:
         replay(args.replay, args.contact, args.source, defines)
         return
     overrides = {name: float(value) for name, value in (pair.split("=") for pair in args.set)}
-    cases = [draw(args.seed + i) | {"camera": not args.no_camera, "gust": args.gust, "settings": overrides} for i in range(args.runs)]
+    cases = [draw(args.seed + i) | {"camera": not args.no_camera, "baro": args.baro, "gust": args.gust, "settings": overrides} for i in range(args.runs)]
     with ProcessPoolExecutor(args.workers) as pool:
         results = list(pool.map(fly, cases, [args.source] * len(cases), [defines] * len(cases)))
     if args.save:

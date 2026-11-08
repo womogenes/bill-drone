@@ -1,7 +1,7 @@
 'use client';
 
 import { memo } from 'react';
-import type { GpsReading } from '@/lib/telemetry';
+import type { BaroReading, GpsReading } from '@/lib/telemetry';
 
 const FIXES: Record<number, string> = {
   0: 'No fix',
@@ -14,9 +14,11 @@ const FIXES: Record<number, string> = {
 
 export const GpsPanel = memo(function GpsPanel({
   gps,
+  baro,
   connected,
 }: {
   gps: GpsReading | null | undefined;
+  baro?: BaroReading | null;
   connected: boolean;
 }) {
   const live = connected && gps && gps.age_ms !== null && gps.age_ms < 1000;
@@ -86,6 +88,18 @@ export const GpsPanel = memo(function GpsPanel({
             {solved
               ? `${gps.latitude.toFixed(7)}, ${gps.longitude.toFixed(7)}`
               : '—'}
+          </dd>
+        </div>
+        <div className="col-span-3">
+          <dt className="text-sm text-muted-foreground">Barometer</dt>
+          <dd className="text-lg">
+            {!connected || !baro
+              ? '—'
+              : !baro.found
+                ? 'Not found'
+                : baro.altitude === null
+                  ? 'Stale'
+                  : `${baro.altitude.toFixed(1)} m pressure altitude`}
           </dd>
         </div>
       </dl>

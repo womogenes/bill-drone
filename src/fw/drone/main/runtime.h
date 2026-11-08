@@ -47,8 +47,11 @@ typedef struct __attribute__((packed)) {
     uint8_t gps_fix, gps_flags, gps_satellites, gps_configured;
     int32_t gps_latitude, gps_longitude, gps_height_mm, gps_velocity[3];
     uint32_t gps_horizontal_accuracy_mm, gps_vertical_accuracy_mm, gps_speed_accuracy;
+    // The barometer (baro.h BaroStats), in the one payload's last three bytes: the newest reading's pressure altitude in the standard atmosphere (dm), and flags: 1 the chip answered, 2 a reading in the last 200 ms, 4 at address 0x77 (SDO high).
+    int16_t baro_altitude_dm;
+    uint8_t baro_flags;
 } Status;
-_Static_assert(sizeof(Status) == 229, "Status layout");
+_Static_assert(sizeof(Status) == 232, "Status layout");
 
 typedef struct {
     uint32_t session, started_us, samples, dropped, elapsed_us, pending;
@@ -58,7 +61,7 @@ typedef struct {
 } LogState;
 
 // One binary flight-log record (controller/log_format.py SAMPLE_FORMAT), and the longest metadata JSON: the settings plus 1 KB for the header and thrust table.
-#define RECORD_SIZE 80
+#define RECORD_SIZE 84
 #define META (SETTINGS_JSON_SIZE + 1024)
 
 // Outputs at zero throttle and servos at their offsets; before the radio, so a stop always has outputs to stop.

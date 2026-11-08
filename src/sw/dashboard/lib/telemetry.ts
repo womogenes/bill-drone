@@ -109,8 +109,17 @@ export type GpsReading = {
   speed_accuracy: number;
 };
 
+// The drone's barometer (src/fw/controller/bridge.py decode_status): its I2C address once found, and the pressure altitude in the standard atmosphere (m, 0.1 m steps; null without a fresh reading).
+export type BaroReading = {
+  found: boolean;
+  fresh: boolean;
+  address: number | null;
+  altitude: number | null;
+};
+
 export type Reading = {
   gps?: GpsReading | null;
+  baro?: BaroReading | null;
   logging?: {
     active: boolean;
     ready: boolean;

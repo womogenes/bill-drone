@@ -1,4 +1,4 @@
-// The drone: settings from NVS, outputs at zero, the radio, control on core 1, then the camera and GPS receivers on core 0. This loop reads the load cell and battery every 50 ms and keeps the recording metadata current.
+// The drone: settings from NVS, outputs at zero, the radio, control on core 1, then the camera and GPS receivers and the barometer on core 0. This loop reads the load cell and battery every 50 ms and keeps the recording metadata current.
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -8,6 +8,7 @@
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
+#include "baro.h"
 #include "camera.h"
 #include "flight_math.h"
 #include "gps.h"
@@ -79,7 +80,7 @@ static size_t metadata(void) {
     char settings[SETTINGS_JSON_SIZE];
     if (!settings_json(settings, sizeof(settings))) abort();
     size_t at = snprintf(meta, META,
-                         "{\"type\":\"metadata\",\"version\":1,\"sample_format\":\"<II7h2h2H2h3hHHHH3hH12h\",\"record_size\":%d,"
+                         "{\"type\":\"metadata\",\"version\":1,\"sample_format\":\"<II7h2h2H2h3hHHHH3hH12hi\",\"record_size\":%d,"
                          "\"target_hz\":%d,\"batch_ms\":%d,\"imu_dlpf\":%d,\"pwm_hz\":{\"servo\":%d,\"esc\":%d},"
                          "\"control_core\":1,\"network_core\":0,\"sensor_axis\":[%d,%d,%d],\"sensor_to_body\":[%d,%d,%d],"
                          "\"servo_offsets\":{\"left\":%.9g,\"right\":%.9g},\"settings\":%s,\"thrust_table\":[",
@@ -103,6 +104,7 @@ void app_main(void) {
     flight_runtime_start();
     camera_start();
     gps_start();
+    baro_start();
 
     gpio_config_t led = {.pin_bit_mask = 1ULL << LED, .mode = GPIO_MODE_OUTPUT};
     ESP_ERROR_CHECK(gpio_config(&led));

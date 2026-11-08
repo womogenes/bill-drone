@@ -12,7 +12,8 @@ from pathlib import Path
 SOURCE = Path(__file__).resolve().parents[2] / "fw/drone/main/flight_math.c"
 MANY = Path(__file__).with_name("flight_many.c")
 LIBRARY = Path(__file__).with_name("flight_math.so")
-if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime for path in (SOURCE, SOURCE.with_suffix(".h"), MANY)):
+# flight_math.h embeds hover.h HoverGains in Command, so a change to either moves the fields after it.
+if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime for path in (SOURCE, SOURCE.with_suffix(".h"), SOURCE.with_name("hover.h"), MANY)):
     subprocess.run(["cc", "-O2", "-fPIC", "-shared", "-I", str(SOURCE.parent), str(MANY), "-o", str(LIBRARY), "-lm"], check=True)
 library = ctypes.CDLL(str(LIBRARY))
 library.flight_attitude.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -109,8 +110,8 @@ THRUST_VOLTAGE = MODEL_OFFSET + len(MODEL_KEYS)
 YAW_I = THRUST_VOLTAGE + 1
 # The speed moment compensation (rad/s² per m/s, 0 = off; flight_math.c), runtime-only after yaw_i.
 PITCH_SPEED = YAW_I + 1
-# The pitch damping's rate low-pass time constant (s, 0 = raw rate; flight_math.c), the last runtime-only field: after pitch_speed come the 47 hover gains (sw/sim/hover.py GAIN_KEYS; not imported here, since importing hover.py compiles hover.c), hover_camera and auto_trim.
-DAMPING_TAU = PITCH_SPEED + 1 + 47 + 2
+# The pitch damping's rate low-pass time constant (s, 0 = raw rate; flight_math.c), the last runtime-only field: after pitch_speed come the 48 hover gains (sw/sim/hover.py GAIN_KEYS; not imported here, since importing hover.py compiles hover.c), hover_camera and auto_trim.
+DAMPING_TAU = PITCH_SPEED + 1 + 48 + 2
 
 
 class Attitude:
