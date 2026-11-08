@@ -137,13 +137,24 @@ export function FpvPanel({
       if (shown && target) {
         // The picture turned back by the mount's roll, drawn into a canvas sized to the turned picture, so a quarter-turned camera's portrait picture fits the panel (object-contain) instead of overflowing it.
         const turn = (-rollRef.current * Math.PI) / 180;
-        const cos = Math.abs(Math.cos(turn)), sin = Math.abs(Math.sin(turn));
-        target.width = Math.round(shown.width * cos + shown.height * sin);
-        target.height = Math.round(shown.width * sin + shown.height * cos);
+        const cos = Math.abs(Math.cos(turn)),
+          sin = Math.abs(Math.sin(turn));
+        const width = shown.width * cos + shown.height * sin;
+        const height = shown.width * sin + shown.height * cos;
         // The element takes the turned picture's shape across the panel's width, so it fills it without bars (up to max-h).
-        target.style.aspectRatio = `${target.width} / ${target.height}`;
+        target.style.aspectRatio = `${Math.round(width)} / ${Math.round(height)}`;
+        // Drawn at the element's own pixel size with smoothing, so the small preview (80x60) is scaled smoothly here rather than stretched blocky by the browser.
+        const zoom = Math.max(
+          1,
+          (target.clientWidth * devicePixelRatio) / width
+        );
+        target.width = Math.round(width * zoom);
+        target.height = Math.round(height * zoom);
         const context = target.getContext('2d')!;
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
         context.translate(target.width / 2, target.height / 2);
+        context.scale(zoom, zoom);
         context.rotate(turn);
         context.translate(-shown.width / 2, -shown.height / 2);
         context.drawImage(shown, 0, 0);
@@ -223,10 +234,7 @@ export function FpvPanel({
   }, [free, onFree]);
 
   return (
-    <section
-      aria-labelledby="camera-heading"
-      className="space-y-2 px-4 py-3"
-    >
+    <section aria-labelledby="camera-heading" className="space-y-2 px-4 py-3">
       <div className="flex items-center gap-2">
         <h2 id="camera-heading" className="font-semibold">
           Camera
