@@ -143,19 +143,14 @@ export function FpvPanel({
         const height = shown.width * sin + shown.height * cos;
         // The element takes the turned picture's shape across the panel's width, so it fills it without bars (up to max-h).
         target.style.aspectRatio = `${Math.round(width)} / ${Math.round(height)}`;
-        // Drawn at the element's own pixel size with smoothing, so the small preview (80x60) is scaled smoothly here rather than stretched blocky by the browser.
-        const zoom = Math.max(
-          1,
-          (target.clientWidth * devicePixelRatio) / width
-        );
-        target.width = Math.round(width * zoom);
-        target.height = Math.round(height * zoom);
+        // The canvas holds exactly the element's device pixels and the picture is scaled into it here, with smoothing: a buffer of another size is resampled again by the browser, which aliased.
+        const box = target.getBoundingClientRect();
+        target.width = Math.max(1, Math.round(box.width * devicePixelRatio));
+        target.height = Math.max(1, Math.round(box.height * devicePixelRatio));
+        const zoom = Math.min(target.width / width, target.height / height);
         const context = target.getContext('2d')!;
         context.imageSmoothingEnabled = true;
         context.imageSmoothingQuality = 'high';
-        // A blur of about one source pixel hides the small JPEG's block edges and ringing, which smoothing alone only enlarges.
-        context.filter =
-          zoom > 2 ? `blur(${(zoom * 0.6).toFixed(1)}px)` : 'none';
         context.translate(target.width / 2, target.height / 2);
         context.scale(zoom, zoom);
         context.rotate(turn);
@@ -163,7 +158,6 @@ export function FpvPanel({
         context.drawImage(shown, 0, 0);
         // The tag's outline, its corners scaled from the camera's 320x240 to this picture.
         if (tag) {
-          context.filter = 'none';
           const scale = shown.width / 320;
           context.strokeStyle = '#22c55e';
           context.lineWidth = Math.max(1, shown.width / 160);
