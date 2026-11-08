@@ -59,6 +59,7 @@ def main():
     parser.add_argument("recordings", nargs="+")
     parser.add_argument("--models", nargs="+", required=True)
     parser.add_argument("--shortest", type=float, default=0.5)
+    parser.add_argument("--velocity", choices=("logged", "tag"), default="tag", help="the logged hover velocity everywhere, or only where the tag measured it (identify_airframe.Data)")
     args = parser.parse_args()
     records = [r for r in (I.load(p, args.shortest) for p in I.paths(args.recordings)) if r]
     print(f"{len(records)} flights: " + ", ".join(r["name"] for r in records), flush=True)
@@ -67,7 +68,7 @@ def main():
         params = A.complete(loaded)
         geometry = A.load_geometry(loaded.get("geometry") or A.GEOMETRY_FILE)
         ground = loaded.get("ground_by")
-        data = I.Data(records, ground)
+        data = I.Data(records, ground, args.velocity)
         params["right_thrust_gain"] = I.thrust_split(records)
         base = {key: params[key] for key in A.KEYS}
         I.initialise(data, [], base, geometry=geometry)
