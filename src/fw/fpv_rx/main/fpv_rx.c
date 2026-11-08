@@ -1,5 +1,6 @@
 // FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB at 1 Mbaud (this board's CP2102 stops there, about 98 KB/s of chunks) as [length u16][rssi i8][chunk], the shard starting with its FPV2 header. Every camera sends with the same BSSID and its own MAC as the frame's sender, so once the laptop names its camera (FPVF and the six bytes of its MAC, written to this port) only that camera's frames pass and steady the channel search; until then every camera's do. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
 #include <string.h>
+#include "driver/gpio.h"
 #include "driver/uart.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -14,6 +15,7 @@
 #define SEARCH_US 150000
 #define LOST_US 1000000
 #define CHUNK 1400 // the camera's largest chunk payload
+#define LED GPIO_NUM_2 // the board's blue LED
 
 // The camera sends broadcast action frames with this BSSID.
 static const uint8_t bssid[6] = {'F', 'P', 'V', 'R', 'A', 'W'};
@@ -66,6 +68,16 @@ static void forward(void *unused) {
     }
 }
 
+// The LED: solid while a camera's chunks arrive (within LOST_US), blinking at 1 Hz while none do.
+static void blink(void *unused) {
+    gpio_reset_pin(LED);
+    gpio_set_direction(LED, GPIO_MODE_OUTPUT);
+    for (bool lit = false;; vTaskDelay(pdMS_TO_TICKS(500))) {
+        lit = esp_timer_get_time() - heard_us < LOST_US || !lit;
+        gpio_set_level(LED, lit);
+    }
+}
+
 // The laptop's choice of camera: FPVF and its MAC, looked for anywhere in what arrives.
 static void choose(void *unused) {
     uint8_t got[10];
@@ -91,6 +103,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0, 1, 3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     xTaskCreatePinnedToCore(forward, "forward", 4096, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(choose, "choose", 2048, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(blink, "blink", 2048, NULL, 1, NULL, 1);
 
     ESP_ERROR_CHECK(nvs_flash_init());
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
