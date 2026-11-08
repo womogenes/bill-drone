@@ -42,7 +42,7 @@ MODELS = Path(__file__).with_name("models")
 SOURCE = Path(__file__).with_name("rigid_step.c")
 LIBRARY = Path(__file__).with_name("rigid_step.so")
 # The scalar parameters in rigid_step.c's Params order (airframe parameters, then the geometry's constants as airframe.resolve gives them, then the thrust trim, then this sim's constants, then HULL).
-C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_k", "link_c", "left_play", "right_play", "left_band", "right_band", "band_k", "right_gain", "prop_torque", "prop_momentum", "inflow_damping", "edgewise_damping", "wash", "pitch_wake", "wake_tau", "roll_pendulum", "pitch_pendulum", "roll_from_yaw", "yaw_from_roll", "vx_pitch", "vx_drag", "vy_roll", "vy_drag", "tilt_push", "motor_start")
+C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_k", "link_c", "left_play", "right_play", "left_band", "right_band", "band_k", "right_gain", "prop_torque", "prop_momentum", "inflow_damping", "edgewise_damping", "wash", "pitch_wake", "wake_tau", "roll_pendulum", "pitch_pendulum", "roll_from_yaw", "yaw_from_roll", "vx_pitch", "vx_drag", "vy_roll", "vy_drag", "tilt_push", "motor_start", "servo_compliance")
 C_GEOMETRY = ("Ixx", "Iyy", "Izz", "arm", "cx", "cy", "tilt_arm", "hr", "hx", "hy", "J")
 loaded = None
 

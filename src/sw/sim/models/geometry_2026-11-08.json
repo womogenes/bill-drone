@@ -1,0 +1,18 @@
+{
+ "source": "geometry_2026-10-29_10in.json with 52 g more at the CoM (2026-11-08): drone 1 as flown on 2026-11-02 and 2026-11-08 (10-inch props, camera, GPS, no legs) weighs about 1.0 kg by the user's account, and the airborne table thrust per flight is 9-13% above 2026-10-29 08:15's; where the added parts sit was not measured, so the CoM and inertias are unchanged and the fit's pitch authority (wash_z) and com_x absorb the difference",
+ "mass": 1.0,
+ "com": [
+  -0.0021,
+  -0.0007,
+  0.014472
+ ],
+ "arm": 0.172,
+ "pivot_z": 0.0372,
+ "rotor_z": 0.094,
+ "roll_inertia": 0.012028,
+ "pitch_inertia": 0.002213,
+ "yaw_inertia": 0.01088,
+ "assembly_mass": 0.089809,
+ "assembly_com": 0.032913,
+ "assembly_inertia": 0.00014311
+}
