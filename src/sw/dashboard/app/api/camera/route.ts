@@ -236,7 +236,7 @@ function joinHub(host: string, path: string, signal: AbortSignal) {
 }
 
 // Requests to the camera through the drone's wire to it, over the bridge's update socket, one short connection each so tools/ota_direct.py can still take the socket: K S reports the camera's network, address, channel and state ("joined miso 192.168.86.248 ch6 running ...", "ap bill-fpv 192.168.4.1 ch11 ...", "radio - 0.0.0.0 ch11 fpv ..."), K V asks for FPV over the radio (with the receiver's byte budget).
-// A drone without a camera (or with one off) holds its single request slot for 2 s on each camera request, and drops every request that arrives meanwhile: the FPV view's keepalive every 500 ms left drone 2 without a camera answering "No reply" to arming and tuning (2026-11-07). So after a camera request fails, camera requests fail at once for CAMERA_BACKOFF_MS.
+// A drone without a camera (or with one off) holds its single request slot for 2 s on each camera request, and drops every request that arrives meanwhile: the FPV view's keepalive every 500 ms left drone 2 without a camera answering "No reply" to arming and tuning (2026-11-07). So after the drone answers that its camera did not, camera requests fail at once for CAMERA_BACKOFF_MS.
 const CAMERA_BACKOFF_MS = 10000;
 let cameraFailed: { error: Error; time: number } | undefined;
 
@@ -249,7 +249,9 @@ function cameraRequest(op: string, body: number[] = []): Promise<string> {
       return text;
     },
     (error: Error) => {
-      cameraFailed = { error, time: Date.now() };
+      // Only the drone's own answer that its camera is silent: a lost radio packet is retried at the next call as usual.
+      if (error.message === 'The camera did not answer')
+        cameraFailed = { error, time: Date.now() };
       throw error;
     }
   );
