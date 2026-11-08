@@ -55,7 +55,8 @@ class State(ctypes.Structure):
         ("push", ctypes.c_float * 2), ("carry", ctypes.c_float * 2), ("flow_bias", ctypes.c_float), ("flow_us", ctypes.c_int64), ("braking", ctypes.c_float)] + [
         (name, ctypes.c_float) for name in ("speed_raw", "speed_offset", "speed_sum", "speed_time", "speed")] + [("speed_ready", ctypes.c_bool)] + [("reacquired_us", ctypes.c_int64)] + [
         ("inertial", ctypes.c_float * 2), ("track", ctypes.c_float * 2), ("gps_us", ctypes.c_int64), ("heading", ctypes.c_float), ("turn", ctypes.c_float * 2),
-        ("turn_weight", ctypes.c_float), ("gps_velocity", ctypes.c_float * 2), ("gps_inertial", ctypes.c_float * 2), ("origin", ctypes.c_float * 3)]
+        ("turn_weight", ctypes.c_float), ("gps_velocity", ctypes.c_float * 2), ("gps_inertial", ctypes.c_float * 2), ("origin", ctypes.c_float * 3),
+        ("rest", ctypes.c_float * 2), ("lifted", ctypes.c_float)]
 
 
 class Output(ctypes.Structure):

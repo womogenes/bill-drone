@@ -122,6 +122,10 @@
 #define MIN_HEIGHT 0.2f
 // With the drag model the velocity counts from when the collective carries this share of the weight, before the height does: the IMU height crosses AIRBORNE about half a second after the feet leave the floor, and on 2026-10-31 a takeoff from the drone's 5° nose-up rest was moving back at 0.8 m/s by then, unseen and so never braked. Below it the feet hold the drone and the velocity is zero.
 #define LIFTING 0.8f
+// Takeoff from wherever the drone rests: it has no legs, and its body sits several degrees off level (3-8 degrees nose-down on 2026-11-07). While the floor holds it the attitude targets are the resting attitude, so the servos do not tilt the thrust against the floor, and from liftoff they ease to the hold's own over TAKEOFF_EASE_S (s). Levelling at once from an 8 degree nose-down rest kicked the pitch at 45 degrees/s at liftoff (2026-11-08 00:39 UTC), and the hold, blind before the tag, answered it with a 10 degree lean back. Liftoff is the height estimate passing LIFTED_HEIGHT (m), 0.25-0.4 s after the motors start in that day's hops (the collective is at hover thrust from the first tick, so it cannot tell), or TAKEOFF_WAIT_S (s) after engaging, whichever comes first.
+#define TAKEOFF_EASE_S 0.6f
+#define LIFTED_HEIGHT 0.005f
+#define TAKEOFF_WAIT_S 1.5f
 // Rotor drag: the servos' dead time beyond the tick the runtime's tilt is already late by (us; sw/sim/sweep.py FITTED has 70 ms), how slowly the camera teaches the drag model its offset (s), and that offset's limit (m/s).
 #define SERVO_DELAY_US 60000
 #define OFFSET_TAU 5.0f
@@ -336,13 +340,17 @@ static void take_gps(HoverState *state, const HoverGains *g, const HoverGps *fix
     }
 }
 
-void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverPose *pose, int64_t now_us, float dt,
-                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
-                  const HoverGps *gps, HoverOutput *output) {
+static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPose *pose, int64_t now_us, float dt,
+                 float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
+                 const HoverGps *gps, HoverOutput *output) {
     float weight = g->mass * GRAVITY;
     bool dragging = g->drag > 0 && drag;
     if (!state->engaged) {
         state->engaged = true;
+        bool grounded = force < 0.5f * weight;
+        state->rest[0] = grounded ? roll : 0;
+        state->rest[1] = grounded ? pitch : 0;
+        state->lifted = grounded ? -TAKEOFF_WAIT_S : 0;
         state->flow_bias = 0;
         state->flow_us = 0;
         state->gps_us = 0;
@@ -732,4 +740,17 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         output->pitch = clamp(output->pitch, low, high);
     }
     output->roll = clamp(atanf(-left / GRAVITY), -g->tilt, g->tilt);
+}
+
+void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverPose *pose, int64_t now_us, float dt,
+                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
+                  const HoverGps *gps, HoverOutput *output) {
+    hold(state, g, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps, output);
+    if (state->landed || state->lifted >= TAKEOFF_EASE_S) return;
+    // Negative while on the floor, counting up to the wait; zero from liftoff, counting the ease.
+    state->lifted = state->lifted < 0 && state->height >= LIFTED_HEIGHT ? 0 : state->lifted + dt;
+    // The share of the resting attitude still in the targets: all of it on the floor, fading to none over the ease.
+    float share = state->lifted < 0 ? 1 : fmaxf(0, 1 - state->lifted / TAKEOFF_EASE_S);
+    output->roll += share * (state->rest[0] - output->roll);
+    output->pitch += share * (state->rest[1] - output->pitch);
 }

@@ -130,6 +130,8 @@ typedef struct {
     // GPS (take_gps): the newest fix's capture time (us, 0 before the first since engaging); the hold frame's heading (radians clockwise from north) and the evidence for it, the sum of inertial velocity changes times the GPS's conjugate (m²/s², a complex number as x, y) and its magnitude sum, both fading; the previous fix's velocity (m/s; north, east) and inertial velocity; the first fix's position less the dead reckoning then (m; north, east, up).
     int64_t gps_us;
     float heading, turn[2], turn_weight, gps_velocity[2], gps_inertial[2], origin[3];
+    // Takeoff (hover.c TAKEOFF_EASE_S): the attitude the drone rested at when the hover engaged on the ground (radians; roll, pitch; zero when engaged in the air), and the time since liftoff (s; negative before it, counting up from -TAKEOFF_WAIT_S).
+    float rest[2], lifted;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).
