@@ -11,7 +11,8 @@ typedef struct { float ax, ay, az, gx, gy, gz, dt, gravity_tau; } Motion;
 // comp_dir/comp_ref: each servo's last commanded direction (+1, -1, or 0 before it moved) and its extreme since. airborne counts seconds since collective first reached integrate_throttle (0 before); setpoint_* is the ramped roll/pitch target (with trim); velocity is the dead-reckoned (rightward, forward) velocity in m/s from g * tan(tilt).
 // upright: 1 from arming at a tilted rest until the drone first comes level; meanwhile the servos also tilt back by most of the pitch from level, so the thrust points up, easing off as the nose comes up (flight_math.c).
 // yaw_i: the yaw-rate integrator (rad/s²), trimming out steady twist such as the motors' reaction torque at unequal throttles.
-typedef struct { float roll_i, pitch_i, left, right, left_angle, right_angle, comp_dir[2], comp_ref[2], airborne, setpoint_roll, setpoint_pitch, velocity[2], upright, yaw_i; } Controller;
+// damped_gy: the pitch rate the pitch damping acts on, low-passed over pitch_damping_tau.
+typedef struct { float roll_i, pitch_i, left, right, left_angle, right_angle, comp_dir[2], comp_ref[2], airborne, setpoint_roll, setpoint_pitch, velocity[2], upright, yaw_i, damped_gy; } Controller;
 typedef struct {
     float arm, pivot_height, com_x;
     float roll_inertia, pitch_inertia, yaw_inertia, reaction_torque_ratio;
@@ -46,6 +47,8 @@ typedef struct {
     float hover_camera;
     // Self-trim (flight_rt.c trim): the fraction of the way roll_bias and pitch_bias move toward a hop's steady command at each stop (0 = off). Runtime-only.
     float auto_trim;
+    // Time constant of the low-pass on the pitch rate the pitch damping acts on (s, 0 = the raw rate; flight_math.c). Runtime-only, last.
+    float pitch_damping_tau;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.

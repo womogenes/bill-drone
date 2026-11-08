@@ -109,6 +109,8 @@ THRUST_VOLTAGE = MODEL_OFFSET + len(MODEL_KEYS)
 YAW_I = THRUST_VOLTAGE + 1
 # The speed moment compensation (rad/s² per m/s, 0 = off; flight_math.c), runtime-only after yaw_i.
 PITCH_SPEED = YAW_I + 1
+# The pitch damping's rate low-pass time constant (s, 0 = raw rate; flight_math.c), the last runtime-only field: after pitch_speed come the 47 hover gains (sw/sim/hover.py GAIN_KEYS; not imported here, since importing hover.py compiles hover.c), hover_camera and auto_trim.
+DAMPING_TAU = PITCH_SPEED + 1 + 47 + 2
 
 
 class Attitude:
@@ -123,8 +125,8 @@ class Attitude:
 
 class Controller:
     def __init__(self, model=MODEL):
-        # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, the takeoff setpoint state, then the upright-takeoff flag.
-        self.state = array("f", [0.0] * 17)
+        # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, the takeoff setpoint state, the upright-takeoff flag, the yaw integrator and the damping's filtered pitch rate.
+        self.state = array("f", [0.0] * 18)
         # Motion (6 floats), tuning (TUNING_LAYOUT), then model parameters.
         # Runtime-only Command fields after the model (thrust_voltage at THRUST_VOLTAGE, yaw_i at YAW_I, hover) start at zero: off unless the caller sets them.
         self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS] + [0.0] * 64)
@@ -140,6 +142,8 @@ class Controller:
         struct.pack_into("<2f", self.state, 0, roll, 0.0)
         # No upright takeoff: free flight starts in the air, and a liftoff arms first, where the native flight_reset sets the flag from the resting attitude.
         self.state[15] = 0.0
+        # The damping's filtered pitch rate starts at the current rate, as flight_reset does.
+        self.state[17] = self.command[3]
 
     def configure(self, settings):
         # Setpoints and the enable flag are native-owned on the drone; missing ones are zero.
@@ -150,6 +154,7 @@ class Controller:
         struct.pack_into("<%df" % len(TUNING_LAYOUT), self.command, 24, *values)
         for key in MODEL_TUNING_KEYS:
             self.command[MODEL_OFFSET + MODEL_KEYS.index(key)] = settings[key]
+        self.command[DAMPING_TAU] = settings.get("pitch_damping_tau", 0.0)
 
     def update(self, attitude, gyro, dt):
         struct.pack_into("<6f", self.command, 0, *attitude, *gyro, dt)

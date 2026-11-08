@@ -79,6 +79,7 @@ void flight_reset(Controller *state, const Command *c) {
     state->setpoint_pitch = c->pitch;
     state->velocity[0] = state->velocity[1] = 0;
     state->yaw_i = 0;
+    state->damped_gy = c->gy;
     // Tilt from true level, not from pitch_trim: the upright takeoff points the thrust straight up on the ground, while the trim is the attitude to fly at.
     state->upright = fabsf(c->pitch - c->target_pitch) > UPRIGHT_START;
 }
@@ -165,7 +166,10 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     float pitch_bias = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit) * clamp(state->airborne / PITCH_BIAS_RAMP, 0, 1);
     // Speed moment (pitch_speed, 0 = off): forward speed pitches this airframe nose-up (the rotors flap back; on the hover sim's model a backward drift likewise kept the nose falling through the braking tilt, as at 2026-11-02 04:55 UTC). The torque builds with the speed, so it lags the tilt that made it by the speed's own time constant, and the attitude loop meets it only as error; cancelled here from the forward velocity. flight_rt.c sets pitch_speed only while the hover flies on the tag, when velocity is the hover's measured one, not the g tan(pitch) dead reckoning above. With 0 the torque is exactly as before.
     float speed_torque = c->pitch_speed * state->velocity[1];
-    float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * c->gy + speed_torque);
+    // The pitch damping acts on the rate low-passed over pitch_damping_tau: above pitch_damping 6 the raw rate's damping drove a 2.6-2.8 Hz shake (2026-11-02 04:36 UTC, pitch rate 67 deg/s RMS there at pitch_damping 8), where the servo's lag and the assembly's rising tilt authority leave the loop without phase, while the 0.6-0.9 Hz swing of the 2026-11-08 hops wants more damping than 6 gives. The filter gives up damping above its corner to keep it below.
+    float smooth = c->pitch_damping_tau > 0 ? c->dt / (c->pitch_damping_tau + c->dt) : 1;
+    state->damped_gy += (c->gy - state->damped_gy) * smooth;
+    float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * state->damped_gy + speed_torque);
     float yaw_torque = model->yaw_inertia * (c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias + state->yaw_i);
 
     float left_vertical = fmaxf(0, (force + roll_torque / model->arm) / 2);
