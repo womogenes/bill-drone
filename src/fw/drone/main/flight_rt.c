@@ -26,10 +26,12 @@
 #define MPU 0x68
 // Motor watchdog: the laptop's targets must keep arriving.
 #define HEARTBEAT_MS 500
-// A flight that loses the laptop lands itself, in any mode, instead of stopping the motors in the air (2026-10-29 07:28 dropped from 0.4 m): the landing needs nothing from the laptop. The controller's airborne time, not the hover's height estimate (outdoors, without the tag, only the IMU's), says it is flying. When the laptop returns it keeps landing until the laptop asks to fly: hover, or manual collective at liftoff (integrate_throttle); a reconnecting dashboard's zero collective does not end it. The watchdog still stops a flight not yet off the ground, and a link-loss landing that has not touched down within LINK_LAND_S (s, 12 m at the default 0.2 m/s).
+// A flight that loses the laptop lands itself, in any mode, instead of stopping the motors in the air (2026-10-29 07:28 dropped from 0.4 m): the landing needs nothing from the laptop. The controller's airborne time, not the hover's height estimate (outdoors, without the tag, only the IMU's), says it is flying. When the laptop returns it keeps landing until the laptop asks to fly: hover, or manual collective at liftoff (integrate_throttle); a reconnecting dashboard's zero collective does not end it. The watchdog still stops a flight not yet off the ground, and a link-loss landing that has not touched down within LINK_LAND_S (s; 60 m at LINK_LAND_RATE).
 #define LINK_LAND_S 60.0f
 // Without the tag the landing holds its velocity on the rotor-drag model (hover.h drag, in 1/s), at least this much: with nothing damping the drift, a no-tag landing tipped over in 18 of 48 simulated runs, with the drag model at 1 in 2 (sw/sim/landing_test.py --no-camera, 2026-10-30).
 #define LINK_LAND_DRAG 1.0f
+// The link-loss landing descends at least this fast (m/s), whatever hover_land_rate (the pilot's L) is: down in seconds instead of a minute, so it drifts less sideways, and without the tag or a barometer the climb-rate estimate can be 0.3 m/s off (it read level while the drone rose 6 m in 16 s on 2026-11-08 01:56 UTC), which at 0.2 m/s could leave the drone climbing. 1 m/s at touchdown is about a 5 cm drop.
+#define LINK_LAND_RATE 1.0f
 // Tolerate one missed control tick; a second consecutive miss stops the motors.
 #define MAX_SAMPLE_MS (2500 / SAMPLE_HZ)
 // Degrees.
@@ -569,6 +571,7 @@ static void runtime_task(void *arg) {
                 gains.stick_pitch = command.hover_camera || link_landing ? 0 : command.target_pitch;
                 gains.stick_roll = command.hover_camera || link_landing ? 0 : command.target_roll;
                 if (link_landing && !hover.tracking) gains.drag = fmaxf(gains.drag, LINK_LAND_DRAG);
+                if (link_landing) gains.land_rate = fmaxf(gains.land_rate, LINK_LAND_RATE);
                 HoverOutput out;
                 // Heading rate about vertical from the body rates (positive left).
                 float heading_rate = (state.gyro[1] * sinf(pose.roll) + state.gyro[2] * cosf(pose.roll)) / cosf(pose.pitch);
