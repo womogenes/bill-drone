@@ -53,23 +53,23 @@ export function typing(event: KeyboardEvent) {
       ))
   );
 }
-// Positive pitch is nose down, so the up arrow tilts forward; A and D roll, and the left and right arrows yaw (yawKeys).
+// Mode 2, like the gamepad: the arrows tilt (positive pitch is nose down, so the up arrow tilts forward), and W and S climb and A and D yaw (yawKeys).
 const tiltKeys = {
   ArrowUp: { axis: 'pitch', direction: 1 },
   ArrowDown: { axis: 'pitch', direction: -1 },
-  KeyA: { axis: 'roll', direction: -1 },
-  KeyD: { axis: 'roll', direction: 1 },
+  ArrowLeft: { axis: 'roll', direction: -1 },
+  ArrowRight: { axis: 'roll', direction: 1 },
 } as const;
-const yawKeys = ['ArrowLeft', 'ArrowRight'];
-// In hover and landing W and S raise and lower the hold point while held, at the drone's hover_climb_rate. On the tag the arrows and A and D move it too (toward the tag and to the drone's left: [forward, left]), at hover_nudge_speed, and the map shows it as the target; without the tag they tilt the drone directly (fw/drone/main/hover.c stick).
+const yawKeys = ['KeyA', 'KeyD'];
+// In hover and landing W and S raise and lower the hold point while held, at the drone's hover_climb_rate. On the tag the arrows move it too (toward the tag and to the drone's left: [forward, left]), at hover_nudge_speed, and the map shows it as the target; without the tag they tilt the drone directly (fw/drone/main/hover.c stick).
 const NUDGE_TICK_MS = 50;
 const GAMEPAD_TICK_MS = 50;
 const nudgeKeys = { KeyW: 1, KeyS: -1 } as const;
 const moveKeys = {
   ArrowUp: [1, 0],
   ArrowDown: [-1, 0],
-  KeyA: [0, 1],
-  KeyD: [0, -1],
+  ArrowLeft: [0, 1],
+  ArrowRight: [0, -1],
 } as const;
 
 function nudgeText([forward, left, up]: [number, number, number]) {
@@ -304,7 +304,7 @@ export const ControlPanel = memo(function ControlPanel({
   const setting = (key: string) =>
     (settings as unknown as Record<string, number | undefined>)[key];
   const [open, setOpen] = useState(false);
-  // Every key's size is a drone setting, so it can be tuned over the bridge like the rest: the arrows and A and D tilt as far as the hold itself may (hover_tilt; a per-browser step had been left at 5 degrees, too little to bring back a drifting drone, 2026-11-02), on the tag they move the hold point at hover_nudge_speed, the left and right arrows turn at hover_yaw_rate and W and S climb at hover_climb_rate.
+  // Every key's size is a drone setting, so it can be tuned over the bridge like the rest: the arrows tilt as far as the hold itself may (hover_tilt; a per-browser step had been left at 5 degrees, too little to bring back a drifting drone, 2026-11-02), on the tag they move the hold point at hover_nudge_speed, A and D turn at hover_yaw_rate and W and S climb at hover_climb_rate.
   const keySizes = useRef({ tilt: 15, yaw: 30, climb: 0.3, move: 0.5 });
   keySizes.current = {
     tilt: setting('hover_tilt') ?? 15,
@@ -359,7 +359,7 @@ export const ControlPanel = memo(function ControlPanel({
     function changeYaw() {
       const yaw_rate =
         keySizes.current.yaw *
-        (Number(held.has('ArrowLeft')) - Number(held.has('ArrowRight')));
+        (Number(held.has('KeyA')) - Number(held.has('KeyD')));
       setDraft((previous) => ({ ...previous, yaw_rate }));
       onChange({ yaw_rate });
     }
@@ -420,7 +420,7 @@ export const ControlPanel = memo(function ControlPanel({
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat || held.has(event.code)) return;
-      // There is no manual flight: outside hover only L and yaw act. In hover W and S, and on the tag the arrows and A and D, move the hold point while held, and are not held flight keys, so their keyup and a blur leave hover alone; without the tag the arrows and A and D are held tilt.
+      // There is no manual flight: outside hover only L and yaw act. In hover W and S, and on the tag the arrows, move the hold point while held, and are not held flight keys, so their keyup and a blur leave hover alone; without the tag the arrows are held tilt.
       const hovering = modeRef.current !== MANUAL;
       if (!hovering && (event.code in nudgeKeys || event.code in tiltKeys))
         return;
@@ -472,7 +472,7 @@ export const ControlPanel = memo(function ControlPanel({
       }
       changeYaw();
       changeTilt('ArrowUp');
-      changeTilt('KeyA');
+      changeTilt('ArrowLeft');
     }
 
     window.addEventListener('keydown', keydown, true);
@@ -503,7 +503,7 @@ export const ControlPanel = memo(function ControlPanel({
     return () => window.removeEventListener('keydown', keydown, true);
   }, [available, settings.enabled, open, onHover]);
 
-  // The gamepad flies like the keys, polled every GAMEPAD_TICK_MS: the left stick tilts in proportion up to hover_tilt (without the tag) or moves the hold point at hover_nudge_speed (on it), the right stick climbs at hover_climb_rate and yaws at hover_yaw_rate, A hovers and B lands (held: fast), all only once the drone is enabled on the dashboard; both bumpers stop the motors at any time. A lost gamepad zeroes its tilt and yaw and the hold carries on.
+  // The gamepad flies like the keys, polled every GAMEPAD_TICK_MS: in Mode 2 the right stick tilts in proportion up to hover_tilt (without the tag) or moves the hold point at hover_nudge_speed (on it), the left stick climbs at hover_climb_rate and yaws at hover_yaw_rate, A hovers and B lands (held: fast), all only once the drone is enabled on the dashboard; both bumpers stop the motors at any time. A lost gamepad zeroes its tilt and yaw and the hold carries on.
   const enabledRef = useRef(settings.enabled);
   enabledRef.current = settings.enabled;
   useEffect(() => {
@@ -576,25 +576,26 @@ export const ControlPanel = memo(function ControlPanel({
         if (modeRef.current === LAND_FAST) setMode(LAND);
       }
 
-      const [leftX, leftY, rightX, rightY] = [0, 1, 2, 3].map((index) =>
+      // Mode 2, as on RC transmitters: the left stick climbs and yaws, the right stick tilts.
+      const [yawX, climbY, tiltX, tiltY] = [0, 1, 2, 3].map((index) =>
         stick(pad.axes[index] ?? 0)
       );
       const round = (value: number) => Math.round(value * 2) / 2 || 0;
       const sizes = keySizes.current;
       const hovering = modeRef.current !== MANUAL;
-      const yaw_rate = round(-rightX * sizes.yaw);
+      const yaw_rate = round(-yawX * sizes.yaw);
       if (hovering && freeRef.current)
         send({
-          roll: round(leftX * sizes.tilt),
-          pitch: round(-leftY * sizes.tilt),
+          roll: round(tiltX * sizes.tilt),
+          pitch: round(-tiltY * sizes.tilt),
           yaw_rate,
         });
       else send({ roll: 0, pitch: 0, yaw_rate });
       if (!hovering) return;
       const seconds = GAMEPAD_TICK_MS / 1000;
-      const forward = freeRef.current ? 0 : -leftY * sizes.move * seconds;
-      const left = freeRef.current ? 0 : -leftX * sizes.move * seconds;
-      const up = -rightY * sizes.climb * seconds;
+      const forward = freeRef.current ? 0 : -tiltY * sizes.move * seconds;
+      const left = freeRef.current ? 0 : -tiltX * sizes.move * seconds;
+      const up = -climbY * sizes.climb * seconds;
       if (forward || left || up) onNudge(forward, left, up);
     }
 
@@ -753,13 +754,13 @@ export const ControlPanel = memo(function ControlPanel({
           { keys: ['T', 'H'], label: 'Take off' },
           { keys: ['L'], label: 'Land (hold: fast)' },
           { keys: ['W', 'S'], label: 'Up / down' },
-          { keys: ['ArrowLeft', 'ArrowRight'], label: 'Yaw' },
+          { keys: ['A', 'D'], label: 'Yaw' },
           {
             keys: ['ArrowUp', 'ArrowDown'],
             label: free ? 'Tilt fwd / back' : 'Target closer / farther',
           },
           {
-            keys: ['A', 'D'],
+            keys: ['ArrowLeft', 'ArrowRight'],
             label: free ? 'Tilt left / right' : 'Target left / right',
           },
           { keys: ['F'], label: free ? 'Switch to tag' : 'Switch to free' },

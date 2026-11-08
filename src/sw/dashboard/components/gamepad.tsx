@@ -254,8 +254,8 @@ export const GamepadView = memo(function GamepadView() {
         </p>
         <dl className="grid grid-cols-[auto_1fr] gap-x-2 text-xs">
           {[
-            ['L stick', 'Tilt'],
-            ['R stick', 'Climb / yaw'],
+            ['L stick', 'Climb / yaw'],
+            ['R stick', 'Tilt'],
             ['A · B', 'Hold · land'],
             ['LB+RB', 'Stop'],
           ].map(([control, action]) => (
