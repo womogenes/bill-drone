@@ -350,10 +350,12 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                         limit = plant["nudge_wrap"]
                         outer.gains.nudge_forward, outer.gains.nudge_left = [(value + limit) % (2 * limit) - limit for value in (outer.gains.nudge_forward, outer.gains.nudge_left)]
                 if plant.get("stick"):
-                    # (start s after liftoff, pitch and roll in degrees, seconds): the laptop's tilt held without the tag, as the dashboard's arrows and A and D send it.
-                    start, stick_pitch, stick_roll, length = plant["stick"]
-                    held = lifted is not None and start <= now - lifted < start + length
-                    outer.gains.stick_pitch, outer.gains.stick_roll = (math.radians(stick_pitch), math.radians(stick_roll)) if held else (0.0, 0.0)
+                    # (start s after liftoff, pitch and roll in degrees, seconds), or a list of them for a pilot's sequence: the laptop's tilt held without the tag, as the dashboard's arrows and the gamepad's right stick send it.
+                    sticks = plant["stick"] if isinstance(plant["stick"][0], (list, tuple)) else [plant["stick"]]
+                    outer.gains.stick_pitch, outer.gains.stick_roll = 0.0, 0.0
+                    for start, stick_pitch, stick_roll, length in sticks:
+                        if lifted is not None and start <= now - lifted < start + length:
+                            outer.gains.stick_pitch, outer.gains.stick_roll = math.radians(stick_pitch), math.radians(stick_roll)
                 if pattern:
                     # As flight_rt.c: on top of the laptop's nudge, a tick late.
                     outer.gains.nudge_forward = (outer.gains.nudge_forward if nudge else 0.0) + excite_hold[0]

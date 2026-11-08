@@ -1,11 +1,11 @@
 """
-Outdoor hovers in the hover sim, without the tag: uv run -m sw.sim.outdoor [--runs 48] [--winds 0,2,4,6] [--seconds 40] [--gps] [--flow LOW,HIGH] [--set name=value,...] [--settings recording] [--airframe models/airframe_<day>.json] [--nominal] [--workers N]
+Outdoor hovers in the hover sim, without the tag: uv run -m sw.sim.outdoor [--runs 48] [--winds 0,2,4,6] [--seconds 40] [--gps] [--flow LOW,HIGH] [--set name=value,...] [--settings recording] [--airframe models/airframe_<day>.json] [--nominal] [--sticks 'start,pitch,roll,seconds;...'] [--flyaway m] [--workers N]
 
 Each run takes off in Free mode (hover_camera 0) on a recording's settings (default: the newest 9-inch tag hover), on the 9-inch airframe as calibrated to its closed-loop hovers (calibrate_sim), climbs to --climb and holds for --seconds in the open air: a mean wind of the given speed from a random direction, with turbulence after MIL-F-8785C's low-altitude Dryden scales at the hover height (horizontal RMS 0.2 of the mean wind over 15 m, vertical 0.1 over the height; plus 0.1 m/s of still-air gusts) and the rotors' inflow damping the vertical airspeed. The room's torque drifts stay (the airframe's own noise); its force drifts, the room's recirculation, are replaced by the wind. With --gps the drone's GPS (sweep.run plant["gps"]: 10 Hz, 0.05 m/s velocity noise, 0.7 m of wandering position error) feeds the hold, its heading belief off by up to ±30 degrees. With --flow the forward camera's optical flow feeds it too (sweep.run plant["flow"]), the scene at a distance drawn per run that the drone only guesses (hover_flow_depth).
 
 Indoors nothing measured the airframe above about 0.5 m/s of airspeed, so every run also draws the terms that matter there from wide ranges (unless --nominal): the forward speed's pitching moment ×0.5-3 of the airframe's (the rotors flapping back, linear in airspeed as fitted), the sideways one ×0.5-2, rotor drag 0.04-0.4/s forward and 0.1-0.4/s sideways, the tilt's pitch authority ×0.8-1.2, the thrust level ±8 %, the servos' dead time and response ±25 %, the GPS latency 40-120 ms (the firmware assumes 60).
 
-It prints, per wind: how many runs lost attitude (past 45 degrees), touched down unasked or flew off (beyond 10 m), and over the rest the median and 90th percentile of the horizontal distance from the takeoff point and of the height error over the hold, the worst tilt, and the pitch RMS.
+It prints, per wind: how many runs lost attitude (past 45 degrees), touched down unasked or flew off (beyond 10 m), and over the rest the median and 90th percentile of the horizontal distance from the takeoff point and of the height error over the hold, the worst tilt, the pitch RMS and the pitch's RMS in the swing band (0.4-1.6 Hz, as pitch_check measures the swing).
 """
 
 import argparse
@@ -20,6 +20,7 @@ import numpy as np
 
 from sw.fit import settings as recording_settings
 from sw.sim import airframe as A
+from sw.sim.pitch_check import SWING, band
 from sw.sim.sweep import CURRENT, run
 
 MODELS = Path(__file__).with_name("models")
@@ -36,7 +37,7 @@ def loguniform(rng, low, high):
     return math.exp(rng.uniform(math.log(low), math.log(high)))
 
 
-def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwind=False, flow=None):
+def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwind=False, flow=None, speed_draw=(0.5, 3.0)):
     """The outdoor plant for one run: the airframe with its uncertain terms drawn, the wind and the GPS."""
     rng = random.Random(seed)
     p = dict(airframe) | {f"{axis}_push": 0.0 for axis in ("roll", "pitch", "yaw")}
@@ -45,7 +46,7 @@ def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwin
     full = A.complete(p)
     draws = {"speed_moment": 1.0, "side_moment": 1.0, "drag": (0.04, 0.1), "tilt": 1.0, "thrust": 1.0, "servo": 1.0, "latency": 0.06}
     if not nominal:
-        draws = {"speed_moment": loguniform(rng, 0.5, 3.0), "side_moment": loguniform(rng, 0.5, 2.0), "drag": (loguniform(rng, 0.04, 0.4), loguniform(rng, 0.1, 0.4)),
+        draws = {"speed_moment": loguniform(rng, *speed_draw), "side_moment": loguniform(rng, 0.5, 2.0), "drag": (loguniform(rng, 0.04, 0.4), loguniform(rng, 0.1, 0.4)),
                  "tilt": rng.uniform(0.8, 1.2), "thrust": rng.uniform(0.92, 1.08), "servo": rng.uniform(0.75, 1.25), "latency": rng.uniform(0.04, 0.12)}
     p["drag_z_x"] = cz + (full["drag_z_x"] - cz) * draws["speed_moment"]
     p["drag_z_y"] = cz + (full["drag_z_y"] - cz) * draws["side_moment"]
@@ -76,7 +77,7 @@ def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwin
 
 def fly(job):
     airframe, disturbances, flown, wind, seed, args = job
-    p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind, args.flow)
+    p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind, args.flow, args.speed_draw)
     s = dict(flown)
     if args.preload:
         # The wind's expected nose-up moment at liftoff, cancelled by pitch_bias (rad/s², ramped in once airborne): preload per m/s of the wind.
@@ -84,6 +85,8 @@ def fly(job):
     if args.gps:
         # The drone's belief about where its nose points at takeoff: the truth give or take 30 degrees (a phone compass and eyeballing).
         s["hover_gps_heading"] = p["gps"]["heading"] + random.Random(seed + 1).uniform(-30, 30)
+    if args.sticks:
+        p["stick"] = [(SETTLE + start, pitch, roll, length) for start, pitch, roll, length in args.sticks]
     log = []
     result = run(s, p, seconds=args.seconds + SETTLE, seed=seed, log=log, hover=True)
     out = {"wind": wind, "seed": seed, "draws": draws}
@@ -99,11 +102,16 @@ def fly(job):
     distance = np.hypot(position[hold, 0], position[hold, 1])
     if result.get("touched") is not None:
         return out | {"fate": "touched", "at": result["touched"]}
-    if distance.max() > FLYAWAY:
-        return out | {"fate": "flew off", "at": float(t[hold][np.argmax(distance > FLYAWAY)])}
+    if distance.max() > args.flyaway:
+        return out | {"fate": "flew off", "at": float(t[hold][np.argmax(distance > args.flyaway)])}
     height = position[hold, 2] - position[0, 2] - s["hover_climb"]
-    return out | {"fate": "held", "distance": float(np.median(distance)), "distance_max": float(distance.max()), "height": float(np.sqrt(np.mean(height ** 2))),
-                  "tilt": float(np.abs(angles[hold]).max()), "pitch_rms": float(np.std(angles[hold, 1]))}
+    held = {"fate": "held", "distance": float(np.median(distance)), "distance_max": float(distance.max()), "height": float(np.sqrt(np.mean(height ** 2))),
+            "tilt": float(np.abs(angles[hold]).max()), "pitch_rms": float(np.std(angles[hold, 1])), "swing_band": float(np.sqrt(np.mean(band(angles[:, 1], *SWING)[hold] ** 2)))}
+    if args.sticks:
+        # After each stick is let go: the pitch's peak to peak from 0.3 s to 3 s after (the hold braking, and any swing it leaves).
+        swings = [float(np.ptp(angles[(t > start + length + 0.3) & (t < start + length + 3.0), 1])) for start, _, _, length in args.sticks if ((t > start + length + 0.3) & (t < start + length + 3.0)).any()]
+        held["swing"] = max(swings) if swings else 0.0
+    return out | held
 
 
 def main():
@@ -123,6 +131,9 @@ def main():
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--flow", type=lambda text: tuple(float(v) for v in text.split(",")), help="the camera's flow, the scene LOW,HIGH m away (drawn log-uniform per run); hover_flow_depth (--set) is the drone's guess")
     parser.add_argument("--out", type=Path, help="write every run's result as JSON")
+    parser.add_argument("--sticks", type=lambda text: [tuple(float(v) for v in item.split(",")) for item in text.split(";")], help="a pilot's stick sequence during the hold: start s after settling, pitch and roll degrees, seconds held; ';' between sticks (e.g. '5,10,0,2;12,-10,0,2'); adds each run's largest pitch peak to peak 0.3-3 s after a stick is let go")
+    parser.add_argument("--flyaway", type=float, default=FLYAWAY, help="m from takeoff that counts as flown off")
+    parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=(0.5, 3.0), help="range the forward speed moment is drawn in, times the airframe's (log-uniform; default 0.5,3 from before any flight measured it; models fitted to the outdoor flights warrant narrower)")
     args = parser.parse_args()
     airframe = json.loads(args.airframe.read_text())
     flown = recording_settings(next(RECORDINGS.glob(args.settings + "*.bin"))) | {"hover_camera": 0, "hover_center": 0, "hover_climb": args.climb, "hover_ceiling": args.climb}
@@ -142,7 +153,9 @@ def main():
         line = f"wind {wind:3.0f} m/s: held {len(held)}/{len(runs)}" + "".join(f", {f} {n}" for f, n in fates.items() if n)
         if held:
             q = lambda key, pct: np.percentile([r[key] for r in held], pct)
-            line += f" | distance median {q('distance', 50):.2f} m (p90 {q('distance', 90):.2f}, worst max {max(r['distance_max'] for r in held):.1f}), height rms {q('height', 50):.2f} m (p90 {q('height', 90):.2f}), tilt max {q('tilt', 50):.1f}° (p90 {q('tilt', 90):.1f}), pitch rms {q('pitch_rms', 50):.1f}°"
+            line += f" | distance median {q('distance', 50):.2f} m (p90 {q('distance', 90):.2f}, worst max {max(r['distance_max'] for r in held):.1f}), height rms {q('height', 50):.2f} m (p90 {q('height', 90):.2f}), tilt max {q('tilt', 50):.1f}° (p90 {q('tilt', 90):.1f}), pitch rms {q('pitch_rms', 50):.1f}°, swing band (0.4-1.6 Hz) rms {q('swing_band', 50):.1f}° (p90 {q('swing_band', 90):.1f})"
+            if args.sticks:
+                line += f", swing after release {q('swing', 50):.1f}° (p90 {q('swing', 90):.1f})"
         print(line, flush=True)
         failed = [r for r in runs if r["fate"] != "held"]
         if failed:

@@ -154,7 +154,7 @@ def controller(record):
 class Data:
     """The recordings as padded arrays [flight, sample, ...]: the logged signals, the controller's references and voltage-compensated thrust scales, and every sample's replayed controller state."""
 
-    def __init__(self, records, ground=None):
+    def __init__(self, records, ground=None, velocity="logged"):
         self.records = records
         tables = {id(r["table"]) for r in records}
         assert len(tables) == 1, "these flights were flown with different thrust tables (the 2026-10-28 ESC recalibration); fit them separately"
@@ -169,6 +169,9 @@ class Data:
         self.vel = self.pad(lambda r: np.nan_to_num(np.column_stack([r["hover_vx_m_s"], r["hover_vy_m_s"]])))
         # While the hover flies on the tag (flags bit 6) the runtime hands the controller the hover's velocity in body axes (rightward, forward; hover.c output velocity, rotated by the hover's heading) and the speed moment compensation acts on it (flight_rt.c); otherwise pitch_speed is 0 and the controller dead-reckons its own.
         self.tracking = self.pad(lambda r: (r["flags"].astype(int) >> 6 & 1).astype(float))
+        if velocity == "tag":
+            # Only the tag measures velocity: elsewhere (Free mode, outdoors without a GPS fix) the logged hover velocity is the IMU's dead reckoning, which drifted to -3.5 m/s on 2026-11-08 01:54 UTC while the attitude implies under 1 m/s. Zero marks it missing: the airframe then carries its own velocity from attitude and tilt (teacher, predict).
+            self.vel = self.vel * (self.tracking[..., None] > 0)
         self.body_vel = self.pad(lambda r: body_velocity(r))
         self.pitch_speed = np.array([r["setting"].get("pitch_speed", 0.0) for r in records])
         self.voltage = self.pad(lambda r: np.where(r["battery_v"] > 5, r["battery_v"], self.reference(r)) / self.reference(r))
@@ -323,7 +326,9 @@ def predict(p, data, flights, horizons, stride, closed=True, taught=None):
     state = A.State(len(F))
     for key in keep:
         setattr(state, key, keep[key][J, S0].copy())
-    state.rate, state.att, state.vel = data.rate[F, S0].copy(), data.att[F, S0].copy(), data.vel[F, S0].copy()
+    state.rate, state.att = data.rate[F, S0].copy(), data.att[F, S0].copy()
+    # A logged velocity of zero is missing (as in teacher): the lane starts from the airframe's own.
+    state.vel = np.where(data.vel[F, S0] != 0, data.vel[F, S0], state.vel)
     throttle, command, voltage = data.throttle[F].copy(), data.command[F].copy(), data.voltage[F]
     states, commands = data.states[F, S0].copy(), data.commands[F].copy()
     rates = np.zeros((max(horizons), len(F), 3))
