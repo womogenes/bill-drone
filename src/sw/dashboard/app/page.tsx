@@ -661,7 +661,9 @@ export default function Page() {
           <span
             title={recorderText}
             className={`flex items-center gap-1.5 ${
-              recorder?.error || (reading?.logging?.dropped ?? 0) > 0
+              // Dropped records warn only while that flight records: the count stays until the next flight starts.
+              recorder?.error ||
+              (reading?.logging?.active && reading.logging.dropped > 0)
                 ? 'text-red-700'
                 : 'text-muted-foreground'
             }`}
