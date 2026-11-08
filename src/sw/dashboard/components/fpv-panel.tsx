@@ -143,14 +143,13 @@ export function FpvPanel({
         const height = shown.width * sin + shown.height * cos;
         // The element takes the turned picture's shape across the panel's width, so it fills it without bars (up to max-h).
         target.style.aspectRatio = `${Math.round(width)} / ${Math.round(height)}`;
-        // The canvas holds exactly the element's device pixels and the picture is scaled into it here, with smoothing: a buffer of another size is resampled again by the browser, which aliased.
+        // The canvas holds exactly the element's device pixels and the picture is scaled into it here without smoothing, so each camera pixel shows as a crisp square; a buffer of another size would be resampled (blurred) again by the browser.
         const box = target.getBoundingClientRect();
         target.width = Math.max(1, Math.round(box.width * devicePixelRatio));
         target.height = Math.max(1, Math.round(box.height * devicePixelRatio));
         const zoom = Math.min(target.width / width, target.height / height);
         const context = target.getContext('2d')!;
-        context.imageSmoothingEnabled = true;
-        context.imageSmoothingQuality = 'high';
+        context.imageSmoothingEnabled = false;
         context.translate(target.width / 2, target.height / 2);
         context.scale(zoom, zoom);
         context.rotate(turn);
