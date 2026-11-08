@@ -1,0 +1,18 @@
+{
+ "source": "geometry_2026-10-29_10in.json for drone 1 as flown on 2026-11-08 (10-inch props, S3 camera and BE-220 GPS, no legs): 1.05 kg (it weighed 1.02 kg on 2026-11-01 before the GPS and S3 camera; its airborne table thrust per g on 2026-11-08 is 3% above 2026-11-02's), the added mass at the CoM, and the pitch inertia doubled (0.004426 kg m^2): held out between the indoor hops and the outdoor flights of 2026-11-08, the attitude prediction is best at 2x the CAD-derived pitch inertia (1.5x on the 2026-11-02 flights, before the GPS on its raised mount and the S3 camera at the nose), and at 1.5x the hover sim swings at the 2026-11-02 hovers' 0.8 Hz with their damping ratio (models/NOTES.md 2026-11-08 night). Not measured: a pendulum test should replace it.",
+ "mass": 1.05,
+ "com": [
+  -0.0021,
+  -0.0007,
+  0.014472
+ ],
+ "arm": 0.172,
+ "pivot_z": 0.0372,
+ "rotor_z": 0.094,
+ "roll_inertia": 0.012028,
+ "pitch_inertia": 0.004426,
+ "yaw_inertia": 0.01088,
+ "assembly_mass": 0.089809,
+ "assembly_com": 0.032913,
+ "assembly_inertia": 0.00014311
+}
