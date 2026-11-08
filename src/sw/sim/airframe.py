@@ -3,7 +3,7 @@ The airframe's attitude dynamics as identified from flight logs (sw/sim/identify
 
 The geometry is an explicit input (models/geometry_<day>.json; metres from the tube midpoint, body x forward, y left, z up; kg and kg·m²): mass, com, arm (the motor axes' |y|), pivot_z (the tilt axes), rotor_z (the prop plane at zero tilt), the body's roll, pitch and yaw inertia about the CoM, and each motor assembly's mass, CoM distance above its pivot and inertia about its tilt axis. Every body term is a torque from a fitted coefficient and the geometry, divided by the geometry's inertia, so a chassis change (battery, CoM, arm, pivot height, motor mass, legs) reaches the dynamics through the geometry alone: derive_geometry builds one from a parts list, cad_geometry from bicopter.xml's parts, and shifted applies CAD differences to a reference. The fitted coefficients are meant not to change with the geometry:
 - motors: dead time, then a first-order lag on the thrust (the thrust table, times battery voltage over thrust_voltage to voltage_power; the right motor can differ in dead time, lag and gain). The "right" terms are the right motor's. A motor started from standstill makes no thrust for motor_start after its throttle turns positive (the ESC's start-up; the takeoffs show it, the airborne fit cannot). The level is pinned to the weight (each flight's trim: its airborne median table thrust times thrust level carries mass × g), and differential_slope is the share of a differential throttle step's table thrust the motors deliver (roll authority; the common part follows the table; from 2026-10-29b it is held at 1, which the ±1.5-3° PRBS flights measure, instead of fitted);
-- servos: dead time, then a second-order position loop (servo_wn, servo_zeta) whose horn speed is limited to servo_slew; the horn drives the motor assembly through a link with play, as torques on the assembly's effective inertia (its CAD inertia about the tilt axis, its mass × CoM offset × pivot height, and servo_inertia, the servo's reflected rotor): link_k (N·m/rad), link_c (N·m·s/rad), a forward band preload (N·m) less band_k per radian of tilt. What the link does to the assembly it does the other way to the body;
+- servos: dead time, then a second-order position loop (servo_wn, servo_zeta) whose horn speed is limited to servo_slew and which yields to the link's load by servo_compliance (rad per N·m: the horn's static deflection under load, the servo's finite stiffness; 0 is a horn that holds its position whatever the load, as every model before 2026-11-08); the horn drives the motor assembly through a link with play, as torques on the assembly's effective inertia (its CAD inertia about the tilt axis, its mass × CoM offset × pivot height, and servo_inertia, the servo's reflected rotor): link_k (N·m/rad), link_c (N·m·s/rad), a forward band preload (N·m) less band_k per radian of tilt. What the link does to the assembly it does the other way to the body;
 - props: prop_torque (m: reaction torque per newton along each tilted shaft, opposite spins, so it acts in yaw and, tilted, in roll), prop_momentum (N·m·s per √N, for the gyroscopic roll torque of the props as they tilt);
 - rotors: inflow_damping (s/m: roll damping as thrust lost per newton per m/s of axial inflow at the arm), edgewise_damping (s/m: the H-force per newton per m/s, for pitch at the rotors' height above the CoM and yaw at the arm);
 - the slipstream: a share wash of the tilted thrust's horizontal force is cancelled by its slipstream on the airframe, acting at wash_z above the tube, so yaw tilt authority is 1 - wash of the geometric, the pitch tilt torque is (pivot height - wash × (wash_z - CoM height)) × T sin(tilt), and a tilt pushes the drone forward tilt_push as hard as the same body pitch (1 - wash in models saved without it; the camera measures about 0.66); a share pitch_wake of that torque builds up with lag wake_tau (the tilt is less effective held than swung);
@@ -34,7 +34,7 @@ PARAMS = {
     "motor_delay": (0.0, 0.12, 0.07), "right_motor_delay": (0.0, 0.12, 0.07), "motor_tau": (0.002, 0.15, 0.005), "right_motor_tau": (0.002, 0.15, 0.005),
     "right_thrust_gain": (0.5, 1.5, 1.0), "voltage_power": (0.0, 3.0, 0.5), "differential_slope": (0.05, 3.0, 1.0), "motor_start": (0.0, 0.5, 0.0),
     "servo_delay": (0.0, 0.1, 0.02), "right_servo_delay": (0.0, 0.1, 0.02), "servo_wn": (8.0, 150.0, 31.0), "right_servo_wn": (8.0, 150.0, 31.0), "servo_zeta": (0.1, 2.0, 0.85), "servo_slew": (100.0, 3000.0, 300.0),
-    "link_k": (0.01, 50.0, 2.0), "link_c": (0.0, 0.5, 0.03), "servo_inertia": (0.0, 0.005, 0.0004),
+    "link_k": (0.01, 50.0, 2.0), "link_c": (0.0, 0.5, 0.03), "servo_inertia": (0.0, 0.005, 0.0004), "servo_compliance": (0.0, 2.0, 0.0),
     "left_play": (0.0, 3.0, 0.6), "right_play": (0.0, 3.0, 0.6), "left_band": (-0.3, 0.3, 0.015), "right_band": (-0.3, 0.3, 0.015), "band_k": (-0.05, 0.05, 0.0), "right_gain": (0.6, 1.4, 1.0),
     "prop_torque": (-0.05, 0.05, -0.015), "prop_momentum": (-0.05, 0.05, 0.003),
     "inflow_damping": (-2.0, 5.0, 0.2), "edgewise_damping": (-2.0, 5.0, 0.05),
@@ -46,7 +46,7 @@ PARAMS = {
 }
 KEYS = list(PARAMS)
 # Terms a parameter set may leave out (they then stay off).
-OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start")
+OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance")
 # The running time (s) of a motor that has long been spinning.
 RUNNING = 10.0
 def flown_by(recordings):
@@ -284,8 +284,13 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
     q = rate[:, 1].copy()
     pitch = att[:, 1].copy()
     pitch_sum = np.zeros(n)
+    # The servo's own stiffness (2026-11-08): the horn's loop sees the link's spring and damper torque as a load, so under the assembly's inertia and the body's swing it deflects by servo_compliance per N·m. On the 2026-11-02 chirps the real servo-to-pitch response rises to 1.3x the geometric at 2-3 Hz, which a horn that holds its position whatever the load cannot do.
+    give = w2 * p.get("servo_compliance", 0.0) * J
     for _ in range(SUB):
-        state.hvel = np.clip(state.hvel + (w2 * (goal - state.horn) - z2 * state.hvel) * h, -p["servo_slew"], p["servo_slew"])
+        gap = state.horn - state.tilt
+        gap = np.sign(gap) * np.maximum(np.abs(gap) - half, 0)
+        load = c2 * gap + cz * (state.hvel - state.tvel) * (gap != 0)
+        state.hvel = np.clip(state.hvel + (w2 * (goal - state.horn) - z2 * state.hvel - give * load) * h, -p["servo_slew"], p["servo_slew"])
         state.horn = state.horn + state.hvel * h
         gap = state.horn - state.tilt
         gap = np.sign(gap) * np.maximum(np.abs(gap) - half, 0)

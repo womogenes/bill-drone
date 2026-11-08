@@ -20,7 +20,7 @@ typedef struct {
     double link_k, link_c, left_play, right_play, left_band, right_band, band_k, right_gain;
     double prop_torque, prop_momentum, inflow_damping, edgewise_damping, wash, pitch_wake, wake_tau;
     double roll_pendulum, pitch_pendulum, roll_from_yaw, yaw_from_roll;
-    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start;
+    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance;
     double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, J;
     double level, mean_left, mean_right;
     double mass, throttle_max, servo_limit, ground_k, ground_c, friction, air_drag, tilt_share;
@@ -107,6 +107,8 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
     const double w2[2] = {wn[0] * wn[0], wn[1] * wn[1]}, z2[2] = {2 * p->servo_zeta * wn[0], 2 * p->servo_zeta * wn[1]};
     const double c2 = p->link_k / p->J, cz = p->link_c / p->J, band_k = p->band_k / p->J, ratio = p->J / p->Iyy;
     const double half[2] = {p->left_play / 2, p->right_play / 2}, band[2] = {p->left_band / p->J / DEG, p->right_band / p->J / DEG};
+    // The servo yields to the link's load by servo_compliance (airframe.py step).
+    const double give[2] = {w2[0] * p->servo_compliance * p->J, w2[1] * p->servo_compliance * p->J};
     const double mean[2] = {p->mean_left, p->mean_right};
     const double h = DT / SUB;
     const double wake_keep = exp(-DT / p->wake_tau);
@@ -185,7 +187,10 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         for (int sub = 0; sub < SUB; sub++) {
             double link[2];
             for (int s = 0; s < 2; s++) {
-                st_hvel[s] = clip(st_hvel[s] + (w2[s] * (goal[s] - st_horn[s]) - z2[s] * st_hvel[s]) * h, -p->servo_slew, p->servo_slew);
+                double before = st_horn[s] - st_tilt[s];
+                before = sign(before) * fmax(fabs(before) - half[s], 0);
+                double load = c2 * before + cz * (st_hvel[s] - st_tvel[s]) * (before != 0 ? 1.0 : 0.0);
+                st_hvel[s] = clip(st_hvel[s] + (w2[s] * (goal[s] - st_horn[s]) - z2[s] * st_hvel[s] - give[s] * load) * h, -p->servo_slew, p->servo_slew);
                 st_horn[s] = st_horn[s] + st_hvel[s] * h;
                 double gap = st_horn[s] - st_tilt[s];
                 gap = sign(gap) * fmax(fabs(gap) - half[s], 0);
