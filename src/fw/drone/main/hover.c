@@ -568,7 +568,10 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     state->force = g->mass * (GRAVITY + up) / lean;
 
     bool floor_near = state->probing || state->height < LAND_TILT_HEIGHT;
-    if (mode != HOVER_HOLD && ((floor_near && (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT)) || vertical_g > LAND_SHOCK)) {
+    // A jolt is a touchdown only if it lasts two ticks: on 2026-11-08 01:54 UTC one reading of 1.5 g (a tick that fell back to a single raw IMU sample, rotor vibration and all, 7 ms off the 10 ms rhythm) cut the motors 0.8 m up, 0.37 s into a landing; the averaged readings in that flight never passed 1.38 g.
+    bool jolted = vertical_g > LAND_SHOCK && state->shocked;
+    state->shocked = vertical_g > LAND_SHOCK;
+    if (mode != HOVER_HOLD && ((floor_near && (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT)) || jolted)) {
         state->landed = true;
         state->force = 0;
         *output = (HoverOutput){.force = 0};
