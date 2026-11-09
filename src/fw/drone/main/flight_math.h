@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 
+#include "guard.h"
 #include "hover.h"
 
 // Angles/rates are radians. Shared by the drone and the host simulation (sw/sim/flight.py).
@@ -53,6 +54,8 @@ typedef struct {
     float roll_target_rate;
     // The radio settings (settings.def radio_rate, radio_power, radio_follow), read by radio.c alone through the settings store. Runtime-only, last.
     float radio_rate, radio_power, radio_follow;
+    // The fly-away failsafe and the test pattern's limits (guard.h). Runtime-only, last.
+    GuardGains guard;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.

@@ -2,10 +2,11 @@
 
 // Each FLG1 batch: magic, session, record count, record size (log_format.py HEADER_FORMAT "<4sIHH").
 const HEADER_SIZE = 12;
-// The record sizes log_format.py FORMATS knows: the 48-byte base record, plus the hover state (80), plus the barometer (84).
+// The record sizes log_format.py FORMATS knows: the 48-byte base record, plus the hover state (80), plus the barometer (84), plus the guards' word (86: fly-away failsafe phase and pattern stop, fw/drone/main/guard.h).
 const BASE_SIZE = 48;
 const HOVER_SIZE = 80;
-const RECORD_SIZE = 84;
+const BARO_SIZE = 84;
+const RECORD_SIZE = 86;
 const MAX_BATCH = 8;
 const BARO_NONE = -(2 ** 31);
 // The drone's esp_timer microseconds in the start record wrap at 2^32.
@@ -304,7 +305,7 @@ function decodeRecords(bin: Uint8Array, session: number) {
     if (
       magic !== 'FLG1' ||
       batchSession !== session ||
-      ![BASE_SIZE, HOVER_SIZE, RECORD_SIZE].includes(size) ||
+      ![BASE_SIZE, HOVER_SIZE, BARO_SIZE, RECORD_SIZE].includes(size) ||
       count < 1 ||
       count > MAX_BATCH
     )
@@ -427,7 +428,7 @@ export function analyzeFlight(
       velocityX[index] = int16(56) / 1000;
       velocityY[index] = int16(58) / 1000;
     }
-    if (sizes[index] >= RECORD_SIZE) {
+    if (sizes[index] >= BARO_SIZE) {
       const value = view.getInt32(at + 80, true);
       if (value !== BARO_NONE) baro[index] = value / 1000;
     }

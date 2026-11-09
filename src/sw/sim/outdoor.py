@@ -1,11 +1,13 @@
 """
 Outdoor hovers in the hover sim, without the tag: uv run -m sw.sim.outdoor [--runs 48] [--winds 0,2,4,6] [--seconds 40] [--gps] [--baro [TAU]] [--flow LOW,HIGH] [--set name=value,...] [--settings recording] [--airframe models/airframe_<day>.json] [--nominal] [--sticks 'start,pitch,roll,seconds;...'] [--flyaway m] [--workers N]
 
-Each run takes off in Free mode (hover_camera 0) on a recording's settings (default: the newest 9-inch tag hover), on the 9-inch airframe as calibrated to its closed-loop hovers (calibrate_sim), climbs to --climb and holds for --seconds in the open air: a mean wind of the given speed from a random direction, with turbulence after MIL-F-8785C's low-altitude Dryden scales at the hover height (horizontal RMS 0.2 of the mean wind over 15 m, vertical 0.1 over the height; plus 0.1 m/s of still-air gusts) and the rotors' inflow damping the vertical airspeed. The room's torque drifts stay (the airframe's own noise); its force drifts, the room's recirculation, are replaced by the wind. With --gps the drone's GPS (sweep.run plant["gps"]: 10 Hz, 0.05 m/s velocity noise, 0.7 m of wandering position error) feeds the hold, its heading belief off by up to ±30 degrees. With --baro the barometer (BARO: 0.2 m of noise, 0.3 m of drift over a minute, rotor wash near the floor) feeds the height at hover_baro_tau TAU (default 1 s), which also caps the hold at hover_ceiling (here --climb). With --flow the forward camera's optical flow feeds it too (sweep.run plant["flow"]), the scene at a distance drawn per run that the drone only guesses (hover_flow_depth).
+Each run takes off in Free mode (hover_camera 0) on a recording's settings (default: the newest 9-inch tag hover), on the 9-inch airframe as calibrated to its closed-loop hovers (calibrate_sim), climbs to --climb and holds for --seconds in the open air: a mean wind of the given speed from a random direction, with turbulence after MIL-F-8785C's low-altitude Dryden scales at the hover height (horizontal RMS 0.2 of the mean wind over 15 m, vertical 0.1 over the height; plus 0.1 m/s of still-air gusts) and the rotors' inflow damping the vertical airspeed. The room's torque drifts stay (the airframe's own noise); its force drifts, the room's recirculation, are replaced by the wind. With --gps the drone's GPS (sweep.run plant["gps"]: 10 Hz, 0.05 m/s velocity noise (--gps-noise), 0.7 m of wandering position error) feeds the hold, its heading belief (hover_gps_heading) off by up to ±30 degrees (--heading-error); held runs also report the hold frame's heading error at the end and when hover.c pinned the heading from the GPS (versions with that gate). With --baro the barometer (BARO: 0.2 m of noise, 0.3 m of drift over a minute, rotor wash near the floor) feeds the height at hover_baro_tau TAU (default 1 s), which also caps the hold at hover_ceiling (here --climb). With --flow the forward camera's optical flow feeds it too (sweep.run plant["flow"]), the scene at a distance drawn per run that the drone only guesses (hover_flow_depth).
 
 Indoors nothing measured the airframe above about 0.5 m/s of airspeed, so every run also draws the terms that matter there from wide ranges (unless --nominal): the forward speed's pitching moment ×0.5-3 of the airframe's (the rotors flapping back, linear in airspeed as fitted), the sideways one ×0.5-2, rotor drag 0.03-0.15/s forward and 0.1-0.25/s sideways (from 2026-11-09 the GPS measures 0.04-0.08 forward from the accelerometer, 0.13-0.19 with the attitude, and 0.12-0.22 sideways; before then 0.04-0.4 and 0.1-0.4 were drawn), the tilt's pitch authority ×0.8-1.2, the thrust level ±8 %, the servos' dead time and response ±25 %, the GPS latency 40-120 ms (the firmware assumes 60).
 
-It prints, per wind: how many runs lost attitude (past 45 degrees), touched down unasked or flew off (beyond 10 m), and over the rest the median and 90th percentile of the horizontal distance from the takeoff point and of the height error over the hold, the worst tilt, the pitch RMS and the pitch's RMS in the swing band (0.4-1.6 Hz, as pitch_check measures the swing). With --sticks also the pitch's swing after each release and the braking: peak ground speed, and the time and distance from release until under STOPPED.
+The firmware's fly-away failsafe (fw/drone/main/guard.c; on at settings.def's defaults, off with --set failsafe_speed=0,failsafe_distance=0) flies with the hover. A run it lands counts as "failsafe landed" rather than touched down.
+
+It prints, per wind: how many runs lost attitude (past 45 degrees), touched down unasked, were landed by the failsafe or flew off (beyond 10 m), and over the rest the median and 90th percentile of the horizontal distance from the takeoff point and of the height error over the hold, the worst tilt, the pitch RMS and the pitch's RMS in the swing band (0.4-1.6 Hz, as pitch_check measures the swing). With --sticks also the pitch's swing after each release and the braking: peak ground speed, and the time and distance from release until under STOPPED.
 """
 
 import argparse
@@ -46,7 +48,7 @@ def loguniform(rng, low, high):
     return math.exp(rng.uniform(math.log(low), math.log(high)))
 
 
-def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwind=False, flow=None, baro=False, speed_draw=(0.5, 3.0)):
+def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwind=False, flow=None, baro=False, speed_draw=(0.5, 3.0), gps_noise=None):
     """The outdoor plant for one run: the airframe with its uncertain terms drawn, the wind and the GPS."""
     rng = random.Random(seed)
     p = dict(airframe) | {f"{axis}_push": 0.0 for axis in ("roll", "pitch", "yaw")}
@@ -80,7 +82,7 @@ def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwin
         # The forward camera's scene: trees, buildings or open field, its distance unknown to the drone (hover_flow_depth is its guess), drawn per run with more pixel noise than indoors (grass and leaves moving, the sky's low texture).
         out["flow"] = {"depth": loguniform(random.Random(seed + 7000), *flow), "noise_px": 0.6, "fps": 28.0, "latency": 0.045, "max_px": 14.0}
     if gps:
-        out["gps"] = GPS | {"latency": draws["latency"], "heading": rng.uniform(-180, 180)}
+        out["gps"] = GPS | {"latency": draws["latency"], "heading": rng.uniform(-180, 180)} | ({"velocity_noise": gps_noise} if gps_noise else {})
     if baro:
         out["baro"] = BARO
     return out, draws
@@ -92,26 +94,33 @@ def fly(job):
         from sw.sim.landing_test import install
 
         install(args.source, args.defines.split())
-    p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind, args.flow, args.baro, args.speed_draw)
+    p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind, args.flow, args.baro, args.speed_draw, args.gps_noise)
     s = dict(flown)
     if args.preload:
         # The wind's expected nose-up moment at liftoff, cancelled by pitch_bias (rad/s², ramped in once airborne): preload per m/s of the wind.
         s["pitch_bias"] = args.preload * wind
     if args.gps:
-        # The drone's belief about where its nose points at takeoff: the truth give or take 30 degrees (a phone compass and eyeballing).
-        s["hover_gps_heading"] = p["gps"]["heading"] + random.Random(seed + 1).uniform(-30, 30)
+        # The drone's belief about where its nose points at takeoff: the truth give or take --heading-error degrees (30: a phone compass and eyeballing; 180: hover_gps_heading left at 0 whichever way the nose points).
+        s["hover_gps_heading"] = p["gps"]["heading"] + random.Random(seed + 1).uniform(-args.heading_error, args.heading_error)
     if args.sticks:
         p["stick"] = [(SETTLE + start, pitch, roll, length) for start, pitch, roll, length in args.sticks]
     log = []
     result = run(s, p, seconds=args.seconds + SETTLE, seed=seed, log=log, hover=True)
     out = {"wind": wind, "seed": seed, "draws": draws}
+    lifted = result.get("liftoff_s")
+    if lifted is not None and log:
+        t = np.array([e[0] for e in log]) - lifted
+        position = np.array([e[1] for e in log])
+        # The failsafe (guard.c): its phase changes, and where it first fired the true speed and distance from takeoff (a false alarm fires on a drone that is neither fast nor far).
+        failsafe = [(time, phase) for time, phase in result.get("failsafe", []) if time >= 0]
+        out |= {"failsafe": failsafe, "max_distance": float(np.hypot(position[t > 0, 0], position[t > 0, 1]).max())}
+        if failsafe:
+            k = min(np.searchsorted(t, failsafe[0][0]), len(t) - 2)
+            out |= {"fired_speed": float(np.hypot(*(position[k + 1, :2] - position[k, :2])) / (t[k + 1] - t[k])), "fired_distance": float(np.hypot(*position[k, :2]))}
     if not result["stable"]:
         return out | {"fate": "lost", "at": result["fail_s"]}
-    lifted = result.get("liftoff_s")
     if lifted is None:
         return out | {"fate": "no liftoff"}
-    t = np.array([e[0] for e in log]) - lifted
-    position = np.array([e[1] for e in log])
     angles = np.degrees([e[2][:2] for e in log])
     peak = position[(t >= 0) & (t < TAKEOFF_S), 2].max()
     out["overshoot"] = float(peak - position[0, 2] - s["hover_climb"])
@@ -121,10 +130,23 @@ def fly(job):
     hold = t > SETTLE
     distance = np.hypot(position[hold, 0], position[hold, 1])
     if result.get("touched") is not None:
-        return out | {"fate": "touched", "at": result["touched"]}
+        landed = any(phase == "land" for _, phase in out.get("failsafe", []))
+        return out | {"fate": "failsafe landed" if landed else "touched", "at": result["touched"], "landed_distance": float(np.hypot(*position[-1, :2]))}
     if distance.max() > args.flyaway:
         return out | {"fate": "flew off", "at": float(t[hold][np.argmax(distance > args.flyaway)])}
     height = position[hold, 2] - position[0, 2] - s["hover_climb"]
+    if args.gps:
+        # The hold frame's heading error at the end (degrees): its x axis points along the world's forward axis (the GPS heading, clockwise from north) turned left by the true yaw less the hover's gyro yaw. And when hover.c first pinned the heading (s after liftoff; NaN if never or if it never waited, as before the gate).
+        heading, yaw, _, _ = log[-1][13]
+        error = math.degrees(math.remainder(heading - math.radians(p["gps"]["heading"]) + (log[-1][2][2] - yaw), 2 * math.pi))
+        flags = [bool(e[13][2]) for e in log]
+        pinned = float(t[flags.index(True)]) if True in flags and not all(flags) else math.nan
+        out |= {"heading_error": abs(error), "pinned": pinned}
+        # The calibration pulses (hover_gps_calibrate, hover.c CALIBRATE_AFTER_S): how far the drone went from where they began until 2 s after their last tick (m; NaN without any).
+        pulsing = np.flatnonzero([e[13][3] > 2.0 for e in log])
+        if len(pulsing):
+            span = slice(pulsing[0], min(pulsing[-1] + 200, len(log)))
+            out["calibrate_distance"] = float(np.hypot(*(position[span, :2] - position[pulsing[0], :2]).T).max())
     held = {"fate": "held", "distance": float(np.median(distance)), "distance_max": float(distance.max()), "height": float(np.sqrt(np.mean(height ** 2))),
             "tilt": float(np.abs(angles[hold]).max()), "pitch_rms": float(np.std(angles[hold, 1])), "swing_band": float(np.sqrt(np.mean(band(angles[:, 1], *SWING)[hold] ** 2)))}
     if args.sticks:
@@ -153,6 +175,8 @@ def main():
     parser.add_argument("--seconds", type=float, default=40.0, help="hold after settling")
     parser.add_argument("--climb", type=float, default=1.5, help="hold height above the takeoff point (m)")
     parser.add_argument("--gps", action="store_true")
+    parser.add_argument("--heading-error", type=float, default=30.0, help="with --gps: hover_gps_heading off the truth by up to this (degrees, uniform)")
+    parser.add_argument("--gps-noise", type=float, help="with --gps: the GPS velocity noise (m/s RMS; default GPS's 0.05)")
     parser.add_argument("--baro", type=float, nargs="?", const=1.0, default=0.0, help="the barometer (BARO) feeding the height at hover_baro_tau of this (s; 1 without a value)")
     parser.add_argument("--headwind", action="store_true", help="take off facing the wind (±20 degrees) instead of at a random heading")
     parser.add_argument("--preload", type=float, default=0.0, help="pitch_bias per m/s of wind (rad/s² per m/s), for headwind takeoffs")
@@ -185,7 +209,7 @@ def main():
     print(f"{args.airframe.name} with {args.disturbances.name}, settings {args.settings}{' + ' + args.set if args.set else ''}, {'GPS' if args.gps else 'no GPS'}, {f'baro at {args.baro:g} s' if args.baro else 'no baro'}, {'nominal' if args.nominal else 'drawn'} plant, {args.runs} runs per wind, {args.seconds:.0f} s hold at {args.climb} m")
     for wind in winds:
         runs = [r for r in results if r["wind"] == wind]
-        fates = {f: sum(r["fate"] == f for r in runs) for f in ("lost", "touched", "flew off", "no liftoff")}
+        fates = {f: sum(r["fate"] == f for r in runs) for f in ("lost", "touched", "failsafe landed", "flew off", "no liftoff")}
         held = [r for r in runs if r["fate"] == "held"]
         line = f"wind {wind:3.0f} m/s: held {len(held)}/{len(runs)}" + "".join(f", {f} {n}" for f, n in fates.items() if n)
         if held:
@@ -203,7 +227,24 @@ def main():
             line += f" | takeoff overshoot median {np.median(overshoot):.2f} m (p90 {np.percentile(overshoot, 90):.2f}, max {max(overshoot):.2f})"
             settled = [r["overshoot_settled"] for r in runs if "overshoot_settled" in r]
             line += f", over the settled height median {np.median(settled):.2f} m (p90 {np.percentile(settled, 90):.2f}, max {max(settled):.2f})"
+        if args.gps and held:
+            errors = [r["heading_error"] for r in held]
+            pinned = [r["pinned"] for r in held if not math.isnan(r["pinned"])]
+            line += f", end heading error median {np.median(errors):.0f}° (p90 {np.percentile(errors, 90):.0f})"
+            if pinned:
+                line += f", pinned in {len(pinned)}/{len(held)} at median {np.median(pinned):.1f} s (p90 {np.percentile(pinned, 90):.1f})"
+            moved = [r["calibrate_distance"] for r in held if "calibrate_distance" in r]
+            if moved:
+                line += f", calibration pulses in {len(moved)} moved it {np.median(moved):.2f} m (p90 {np.percentile(moved, 90):.2f})"
         print(line, flush=True)
+        fired = [r for r in runs if r.get("failsafe")]
+        if fired:
+            # The failsafe: how many runs it fired in, by what it reached, the true speed and distance where it fired, and the furthest any run got.
+            reached = {phase: sum(any(p == phase for _, p in r["failsafe"]) for r in fired) for phase in ("hold", "land")}
+            print(f"    failsafe fired in {len(fired)}/{len(runs)} (held after braking {reached['hold']}, landed {reached['land']}), first at {np.median([r['failsafe'][0][0] for r in fired]):.1f} s median, true speed there {np.median([r['fired_speed'] for r in fired]):.1f} m/s median (min {min(r['fired_speed'] for r in fired):.1f}), distance {np.median([r['fired_distance'] for r in fired]):.1f} m median", flush=True)
+        if any("max_distance" in r for r in runs):
+            far = [r["max_distance"] for r in runs if "max_distance" in r]
+            print(f"    furthest from takeoff over the run: median {np.median(far):.1f} m, p90 {np.percentile(far, 90):.1f}, worst {max(far):.1f}", flush=True)
         failed = [r for r in runs if r["fate"] != "held"]
         if failed:
             # Which drawn terms the failures had, against all runs: a failure that follows one term names what to measure.

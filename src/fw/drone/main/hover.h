@@ -44,7 +44,7 @@ typedef struct {
     float nudge_speed;
     // The furthest from the picture's centre the hold's pitch may put the tag, as last seen (radians; 0 = no limit): the camera sees about 18 degrees either way and the body overshoots.
     float view;
-    // GPS without the tag (hover.c take_gps): its velocity pulls the estimate over gps_tau (s; 0 = off), its position the hold's place over gps_place_tau and its height the height over gps_height_tau (s; 0 = not used); gps_heading is where the drone's nose points at engage (radians clockwise from true north), which turns north and east into the hold's frame until the flight's own accelerations against the GPS's refine it.
+    // GPS without the tag (hover.c take_gps): its velocity pulls the estimate over gps_tau (s; 0 = off), its position the hold's place over gps_place_tau and its height the height over gps_height_tau (s; 0 = not used); gps_heading is the first guess at where the drone's nose points at engage (radians clockwise from true north): the hold takes the GPS's velocity and position only once the flight's own accelerations against the GPS's have pinned the heading (hover.c HEADING_SURE), so the guess no longer steers anything. Firmware before that (2026-11-09, 4320732 and earlier) trusted it from the first fix and rarely corrected it: there point the nose at it (0 = north) for takeoff.
     float gps_tau, gps_place_tau, gps_height_tau, gps_heading;
     // Barometer without the tag (hover.c take_baro): its height above the ground it read with the motors off pulls the height and climb rate over baro_tau (s; 0 = off, the IMU's height alone as before). On, the hold also never asks for more height than ceiling, so a height above it descends.
     float baro_tau;
@@ -56,6 +56,8 @@ typedef struct {
     float stick_pitch, stick_roll;
     // Thrust direction (hover.c THRUST_DIRECTION_TAU): the share of the motors' mean forward tilt that moves the drone as the same body pitch does (0 = off; the airframe model's tilt_push is 0.66). On, the hold's tilt (within tilt) aims the thrust, body pitch plus this share of the tilt the servos reached, and a slow correction finds the body pitch that gives it (within THRUST_BODY_MAX), in place of thrust_tilt's take on the pitch asked for: at 4 m/s on 2026-11-09 05:55 UTC the forward speed's nose-up moment held the motors 27 degrees forward, so the -15 degree body pitch asked for braked with a near vertical thrust. Last, so copies of hover.c from before it keep their layout (sw/sim/landing_test.py --source).
     float thrust_direction;
+    // GPS heading calibration (hover.c CALIBRATE_S): the tilt of the pulses the hold flies while the GPS's heading is not yet pinned (radians; 0 = off): forward and back, then left and back, a pulse pair moving the simulated drone about 0.15 m at 5 degrees. The liftoff alone usually pins the heading (2-13 s after engaging on the 2026-11-09 replays, 2.6 s median in the simulator); the pulses are for a takeoff too gentle to.
+    float gps_calibrate;
 } HoverGains;
 
 // One camera sighting: the tag centre in the camera frame (m; right, down, forward), the wall's normal into it in the camera frame when the camera settled the tag's tilt (zero otherwise), and its capture time.
@@ -137,7 +139,7 @@ typedef struct {
     int64_t reacquired_us;
     // The horizontal acceleration measured (the specific force turned level) integrated since engaging, uncorrected (m/s; yaw-turned frame): its changes against the GPS's velocity changes give the heading. The dead-reckoned position the GPS corrects (m; yaw-turned frame, from the first fix).
     float inertial[2], track[2];
-    // GPS (take_gps): the newest fix's capture time (us, 0 before the first since engaging); the hold frame's heading (radians clockwise from north) and the evidence for it, the sum of inertial velocity changes times the GPS's conjugate (m²/s², a complex number as x, y) and its magnitude sum, both fading; the previous fix's velocity (m/s; north, east) and inertial velocity; the first fix's position less the dead reckoning then (m; north, east, up).
+    // GPS (take_gps): the newest fix's capture time (us, 0 before the first since engaging); the hold frame's heading (radians clockwise from north) and the evidence for it, the sum of inertial velocity changes times the GPS's conjugate (m²/s², a complex number as x, y) and the sum of their squared magnitudes (m⁴/s⁴), both fading; the previous block's mean GPS velocity (m/s; north, east) and inertial velocity; the first fix's position (m; north, east, and up less the height then).
     int64_t gps_us;
     float heading, turn[2], turn_weight, gps_velocity[2], gps_inertial[2], origin[3];
     // Takeoff (hover.c TAKEOFF_EASE_S): the attitude the drone rested at when the hover engaged on the ground (radians; roll, pitch; zero when engaged in the air), and the time since liftoff (s; negative before it, counting up from -TAKEOFF_WAIT_S).
@@ -158,6 +160,17 @@ typedef struct {
     float flown_pitch, direction;
     // Whether this landing's climb rate has yet been under half its descent rate (hover.c: until then a slow climb rate is no stall).
     bool descended;
+    // GPS heading (take_gps): the current block's sums of the GPS velocity (north, east) and inertial velocity (x, y) over its fixes and their count, its first fix's capture time and the previous block's middle (us, 0 for none); the heading evidence's standard deviation (radians); whether the heading is pinned (the GPS steers the hold only then); the time the calibration pulses have run (s).
+    float heading_sum[4];
+    int heading_count;
+    int64_t heading_start_us, heading_block_us;
+    float turn_square[2], heading_sigma;
+    bool aligned;
+    float calibrate_time;
+    // The dead reckoning at the first fix (m; yaw-turned frame), where origin's position sits.
+    float anchor[2];
+    // The heading evidence's inertial changes' squared magnitudes summed (m²/s², fading as turn_weight), for its noise floor.
+    float heading_inertial;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

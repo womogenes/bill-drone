@@ -170,11 +170,26 @@
 #define REACQUIRE_EASE_US 1000000
 // GPS (take_gps): a fix older than this no longer stands in for the drag model and the speed from the servos (both read airspeed, which outdoors is not the ground speed the hold needs).
 #define GPS_STALE_US 500000
-// The heading's evidence fades over HEADING_TAU (s); it moves the heading (over HEADING_PULL, s) once the faded sum of |inertial change| |GPS change| passes HEADING_EVIDENCE (m²/s²) and the changes agree in direction (the evidence's magnitude at least HEADING_COHERENCE of that sum).
+// The heading's evidence: the GPS velocity and the inertial velocity are averaged over blocks of fixes spanning HEADING_BLOCK_US, and each block's change from the previous one (inertial times the GPS's conjugate) is summed, fading over HEADING_TAU (s; the gyro heading drifts under 10 degrees a minute, sw/sim/gps_truth.py). Fix-to-fix changes (0.1 s) were mostly GPS noise: on 2026-11-09 06:34 UTC the evidence pointed within 10 degrees of the truth from 15 s on, but their magnitudes' agreement stayed at 0.34-0.54, under the 0.6 that gate needed, so the heading never left its first guess (off 49 degrees all flight; 05:45, 05:52, 06:14, 06:33, 06:38 alike, sw/sim/heading_replay.py). A gap longer than HEADING_GAP_US starts the blocks over.
+#define HEADING_BLOCK_US 400000
+#define HEADING_GAP_US 500000
 #define HEADING_TAU 30.0f
-#define HEADING_PULL 3.0f
-#define HEADING_EVIDENCE 0.3f
-#define HEADING_COHERENCE 0.6f
+// The evidence's standard deviation (radians): the root of the products' summed squared scatter across its direction, but at least what GPS velocity changes HEADING_NOISE (m/s per axis) off would scatter them, over the sum's magnitude. Under HEADING_SURE, with the sum worth at least HEADING_BLOCKS products of its average size, the heading is pinned (taken outright the first time, then followed over HEADING_PULL, s) and the GPS steers the hold; over HEADING_LOST it lets go again. Counting the whole magnitudes as noise (the root of half their squares over the sum) pinned all ten 2026-11-09 flights within 2 degrees of the truth, but only at 21-42 s; the scatter alone with 4 products' worth, at 4-18 s, but in sw/sim/outdoor.py a liftoff kick's two or three large changes then outweighed everything after, and a drone drifting off at 1.8 m/s without the GPS waited 6 s. With the floor at 0.15 m/s the simulator's pins came later (median 5.5 s) and 28 of 96 still-air runs flew off before or around them; at 0.08, 2.6 s and 1 (the replays pin alike at either).
+#ifndef HEADING_SURE
+#define HEADING_SURE (10.0f * 3.14159265f / 180)
+#endif
+#define HEADING_LOST (25.0f * 3.14159265f / 180)
+#define HEADING_PULL 1.0f
+#ifndef HEADING_BLOCKS
+#define HEADING_BLOCKS 2.0f
+#endif
+#ifndef HEADING_NOISE
+#define HEADING_NOISE 0.08f
+#endif
+// Heading calibration pulses (gains gps_calibrate): after CALIBRATE_AFTER_S (s) of hold without a pinned heading, slots of CALIBRATE_S (s): tilt forward, back, rest, left, right, rest, at most CALIBRATE_CYCLES times; a pulse pair under way is finished once the heading is pinned. In sw/sim/outdoor.py (2026-11-09) one pair moved the drone 0.14-0.18 m at 5 degrees (0.08-0.09 at 3), but four cycles never pinned 0.65-1.3 m, as the hold has no position to return to before the GPS steers it.
+#define CALIBRATE_AFTER_S 2.0f
+#define CALIBRATE_S 0.5f
+#define CALIBRATE_CYCLES 2
 // Barometer (take_baro): the ground's pressure altitude is smoothed over BARO_GROUND_TAU (s) while the motors are off. Readings are not used until BARO_SETTLE_S (s) after liftoff, while the rotors' wash and ground effect change fastest. Near the floor they stay in: weighting them out under half a metre left the hold to the IMU there, and in the sim an accelerometer reading high then held drones on the floor that thought they were climbing, and low holds stalled (sw/sim/outdoor.py and landing_test.py --baro, 2026-11-08). Measured on 2026-11-09 against the accelerometer (sw/sim/baro_floor.py): with the motors spinning on the floor it reads -0.13 to +0.14 m (no steady wash), in the first 0.4 s after liftoff 0.3-2.9 m off either way, and in a landing's last 0.3 s a median 0.27 m above the floor it then rests on, small beside the floor's own move of -0.48 to +0.64 m over a flight. Touchdown goes by the accelerometer, and blind the height starts no probe (BLIND_FELT). A reading older than BARO_STALE_US no longer stands in for the climb rate's leak.
 #define BARO_GROUND_TAU 1.0f
 #ifndef BARO_SETTLE_S
@@ -336,56 +351,101 @@ static void take_flow(HoverState *state, const HoverGains *g, const HoverFlow *f
     }
 }
 
+// The heading from the GPS: the inertial velocity (the measured acceleration integrated in the hold's frame) and the GPS's (north, east) change alike up to the turn between the frames, so each block's change of the one times the other's conjugate points at the heading.
+static void learn_heading(HoverState *state, const HoverGps *fix, const float *then) {
+    if (!state->gps_us || fix->capture_us - state->gps_us > HEADING_GAP_US) {
+        state->heading_count = 0;
+        state->heading_block_us = 0;
+    }
+    if (!state->heading_count) {
+        memset(state->heading_sum, 0, sizeof(state->heading_sum));
+        state->heading_start_us = fix->capture_us;
+    }
+    float values[4] = {fix->velocity[0], fix->velocity[1], then[6], then[7]};
+    for (int i = 0; i < 4; i++) state->heading_sum[i] += values[i];
+    state->heading_count++;
+    if (fix->capture_us - state->heading_start_us < HEADING_BLOCK_US) return;
+    float mean[4];
+    for (int i = 0; i < 4; i++) mean[i] = state->heading_sum[i] / state->heading_count;
+    int64_t middle = (state->heading_start_us + fix->capture_us) / 2;
+    if (state->heading_block_us) {
+        // Inertial change times the GPS change's conjugate, the GPS's as north - i east: their product's angle is the heading.
+        float ax = mean[2] - state->gps_inertial[0], ay = mean[3] - state->gps_inertial[1];
+        float cn = mean[0] - state->gps_velocity[0], ce = -(mean[1] - state->gps_velocity[1]);
+        float x = ax * cn + ay * ce, y = ay * cn - ax * ce;
+        float span = (middle - state->heading_block_us) / 1e6f, keep = expf(-span / HEADING_TAU);
+        state->turn[0] = state->turn[0] * keep + x;
+        state->turn[1] = state->turn[1] * keep + y;
+        state->turn_weight = state->turn_weight * keep * keep + x * x + y * y;
+        state->turn_square[0] = state->turn_square[0] * keep * keep + x * x - y * y;
+        state->turn_square[1] = state->turn_square[1] * keep * keep + 2 * x * y;
+        float size = hypotf(state->turn[0], state->turn[1]), evidence = atan2f(state->turn[1], state->turn[0]);
+        // The products' scatter across the evidence's direction: half of (|p|² less the real part of p² turned back by twice its angle).
+        state->heading_inertial = state->heading_inertial * keep * keep + ax * ax + ay * ay;
+        float across = 0.5f * (state->turn_weight - (state->turn_square[0] * cosf(2 * evidence) + state->turn_square[1] * sinf(2 * evidence)));
+        across = fmaxf(across, HEADING_NOISE * HEADING_NOISE * state->heading_inertial);
+        state->heading_sigma = size > 0 ? fminf(sqrtf(fmaxf(across, 0)) / size, 3.14159265f) : 3.14159265f;
+        // As many products as the evidence is worth: a lone block or two scatter little by chance.
+        bool enough = size * size >= HEADING_BLOCKS * state->turn_weight;
+        if (!state->aligned && enough && state->heading_sigma < HEADING_SURE) {
+            state->heading = evidence;
+            state->aligned = true;
+        } else if (state->aligned && state->heading_sigma > HEADING_LOST) {
+            state->aligned = false;
+        } else if (state->aligned) {
+            state->heading = wrap(state->heading + wrap(evidence - state->heading) * (1 - expf(-span / HEADING_PULL)));
+        }
+    }
+    state->gps_velocity[0] = mean[0];
+    state->gps_velocity[1] = mean[1];
+    state->gps_inertial[0] = mean[2];
+    state->gps_inertial[1] = mean[3];
+    state->heading_block_us = middle;
+    state->heading_count = 0;
+}
+
 // GPS without the tag: its velocity (turned into the hold's frame by the heading) corrects the estimate as it was at the fix's capture, and the past since, over gps_tau; a steady disagreement is the measured acceleration's bias, which it learns (critically damped, as the drag model's). Its velocity changes against the inertial ones give the heading. Its position moves the dead reckoning and the hold's place with it over gps_place_tau, and its climb rate (and height, with gps_height_tau) the vertical as the flow does.
+// The horizontal parts wait for the heading to be pinned: turned by a wrong one the GPS's correction and the hold's braking point partly sideways (2026-11-09 06:33-06:38 UTC flew 49-57 degrees off all flight, and 06:38 drifted wildly in under 0.35 m/s of wind), so until then the hold runs on the drag model and the servos' speed as it does without the GPS.
 static void take_gps(HoverState *state, const HoverGains *g, const HoverGps *fix, int64_t now_us, float cy, float sy, float dt) {
     bool first = !state->gps_us || fix->capture_us <= state->gps_us;
     float span = first ? dt : fminf((fix->capture_us - state->gps_us) / 1e6f, 0.5f);
     const float *then = state->history[recorded(state, fix->capture_us)];
-    if (!first) {
-        // Inertial change times the GPS change's conjugate, the GPS's as north - i east: their product's angle is the heading.
-        float ax = then[6] - state->gps_inertial[0], ay = then[7] - state->gps_inertial[1];
-        float cn = fix->velocity[0] - state->gps_velocity[0], ce = -(fix->velocity[1] - state->gps_velocity[1]);
-        float keep = expf(-span / HEADING_TAU);
-        state->turn[0] = state->turn[0] * keep + ax * cn + ay * ce;
-        state->turn[1] = state->turn[1] * keep + ay * cn - ax * ce;
-        state->turn_weight = state->turn_weight * keep + hypotf(ax, ay) * hypotf(cn, ce);
-        if (state->turn_weight > HEADING_EVIDENCE && hypotf(state->turn[0], state->turn[1]) > HEADING_COHERENCE * state->turn_weight)
-            state->heading = wrap(state->heading + wrap(atan2f(state->turn[1], state->turn[0]) - state->heading) * (1 - expf(-span / HEADING_PULL)));
-    }
-    state->gps_velocity[0] = fix->velocity[0];
-    state->gps_velocity[1] = fix->velocity[1];
-    state->gps_inertial[0] = then[6];
-    state->gps_inertial[1] = then[7];
+    if (fix->capture_us > state->gps_us) learn_heading(state, fix, then);
     state->gps_us = fix->capture_us;
     // North and east into the hold's frame: x + i y = (north - i east) e^(i heading).
     float ch = cosf(state->heading), sh = sinf(state->heading);
     float tau = fmaxf(g->gps_tau, span), pull = 1 - expf(-span / tau);
-    float error[2] = {fix->velocity[0] * ch + fix->velocity[1] * sh - then[3], fix->velocity[0] * sh - fix->velocity[1] * ch - then[4]};
-    for (int i = 0; i < 2; i++) {
-        state->velocity[i] += error[i] * pull;
-        for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3 + i] += error[i] * pull;
-    }
-    // The bias is in body axes, where the drag model keeps it (a steady level-reference or mounting error turns with the drone).
     float learn = span / (4 * tau * tau);
-    state->drag_bias[0] = clamp(state->drag_bias[0] - (error[0] * cy + error[1] * sy) * learn, -MAX_BIAS, MAX_BIAS);
-    state->drag_bias[1] = clamp(state->drag_bias[1] - (-error[0] * sy + error[1] * cy) * learn, -MAX_BIAS, MAX_BIAS);
+    if (state->aligned) {
+        float error[2] = {fix->velocity[0] * ch + fix->velocity[1] * sh - then[3], fix->velocity[0] * sh - fix->velocity[1] * ch - then[4]};
+        for (int i = 0; i < 2; i++) {
+            state->velocity[i] += error[i] * pull;
+            for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3 + i] += error[i] * pull;
+        }
+        // The bias is in body axes, where the drag model keeps it (a steady level-reference or mounting error turns with the drone).
+        state->drag_bias[0] = clamp(state->drag_bias[0] - (error[0] * cy + error[1] * sy) * learn, -MAX_BIAS, MAX_BIAS);
+        state->drag_bias[1] = clamp(state->drag_bias[1] - (-error[0] * sy + error[1] * cy) * learn, -MAX_BIAS, MAX_BIAS);
+    }
     bool barometric = g->baro_tau > 0 && state->baro_used && state->baro_us && now_us - state->baro_us <= BARO_STALE_US;
     if (state->lifted >= TAKEOFF_GPS_S && !barometric) {
         float climb_error = fix->velocity[2] - state->climb_rate;
         state->climb_rate += climb_error * pull;
         state->flow_bias = clamp(state->flow_bias - climb_error * learn, -MAX_BIAS, MAX_BIAS);
     }
-    // Position: the first fix ties the GPS to the dead reckoning; later ones correct it (back-dated by the fix's age) and move the place, which is relative to the hold point, by the same amount.
+    // Position: the first fix ties the GPS to the dead reckoning (its position and the dead reckoning's then, turned by the heading of each later fix, so a heading pinned later still measures from where the GPS was first taken: tying again at the pinning kept the drift flown before it, 2.6-3.4 m median in sw/sim/outdoor.py); later ones correct it (back-dated by the fix's age) and move the place, which is relative to the hold point, by the same amount.
     float age = clamp((now_us - fix->capture_us) / 1e6f, 0, 0.5f);
     if (first) {
-        state->origin[0] = fix->position[0] - (state->track[0] * ch + state->track[1] * sh);
-        state->origin[1] = fix->position[1] - (state->track[0] * sh - state->track[1] * ch);
+        state->origin[0] = fix->position[0];
+        state->origin[1] = fix->position[1];
         state->origin[2] = fix->position[2] - state->height;
+        state->anchor[0] = state->track[0];
+        state->anchor[1] = state->track[1];
     } else {
         float n = fix->position[0] - state->origin[0], e = fix->position[1] - state->origin[1];
-        if (g->gps_place_tau > 0) {
+        if (g->gps_place_tau > 0 && state->aligned) {
             float place_pull = 1 - expf(-span / fmaxf(g->gps_place_tau, span));
-            float shift[2] = {(n * ch + e * sh - (state->track[0] - state->velocity[0] * age)) * place_pull, (n * sh - e * ch - (state->track[1] - state->velocity[1] * age)) * place_pull};
+            float x = n * ch + e * sh + state->anchor[0], y = n * sh - e * ch + state->anchor[1];
+            float shift[2] = {(x - (state->track[0] - state->velocity[0] * age)) * place_pull, (y - (state->track[1] - state->velocity[1] * age)) * place_pull};
             for (int i = 0; i < 2; i++) {
                 state->track[i] += shift[i];
                 state->place[i] += shift[i];
@@ -421,6 +481,30 @@ static void take_baro(HoverState *state, const HoverGains *g, const HoverBaro *b
     state->flow_bias = clamp(state->flow_bias - error * span / (tau * tau * tau), -MAX_BIAS, MAX_BIAS);
 }
 
+// Heading calibration (gains gps_calibrate): while the GPS is on and fresh but the heading not yet pinned, hands-off in hold, the hold flies pulses of a known tilt so the accelerometer and the GPS both see a clean velocity change. The pulses are added to the hold's tilt, which brakes the speed they build (at most g tan(tilt) CALIBRATE_S, 0.43 m/s at 5 degrees): aiming the hold's damping at that speed as well doubled the tilt (11-13 degrees beyond the hold's at 5) and, never pinned, moved the simulated drone 1.1-1.3 m median over four cycles (sw/sim/outdoor.py, 2026-11-09). Without them the 2026-11-09 flights replayed pin it 2-13 s after engaging (the liftoff alone usually does it; a still hover can take 10 s and more, sw/sim/heading_replay.py), and until then the hold has no GPS.
+static void calibrate(HoverState *state, const HoverGains *g, int mode, int64_t now_us, float dt, bool stick, float *forward, float *left) {
+    bool fresh = state->gps_us && now_us - state->gps_us <= GPS_STALE_US;
+    if (g->gps_calibrate <= 0 || g->gps_tau <= 0 || !fresh || mode != HOVER_HOLD || state->height < AIRBORNE) return;
+    // The pilot flying: the pulses wait until the hold is hands-off again for CALIBRATE_AFTER_S.
+    if (stick || state->braking > 0) {
+        state->calibrate_time = 0;
+        return;
+    }
+    float phase = state->calibrate_time - CALIBRATE_AFTER_S;
+    int slot = phase >= 0 ? (int)(phase / CALIBRATE_S) : -1;
+    // Pinned: finish the pulse pair under way, then stop (and start the wait over, should the heading be lost again).
+    if (state->aligned && (slot < 0 || slot % 3 == 2)) {
+        state->calibrate_time = 0;
+        return;
+    }
+    if (slot >= 6 * CALIBRATE_CYCLES) return;
+    state->calibrate_time += dt;
+    if (slot < 0 || slot % 3 == 2) return;
+    float push = GRAVITY * tanf(g->gps_calibrate), extra = slot % 3 == 0 ? push : -push;
+    if (slot % 6 < 3) *forward += extra;
+    else *left += extra;
+}
+
 static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPose *pose, int64_t now_us, float dt,
                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
                  const HoverGps *gps, const HoverBaro *baro, HoverOutput *output) {
@@ -436,7 +520,12 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->flow_us = 0;
         state->gps_us = 0;
         state->heading = g->gps_heading;
-        state->turn[0] = state->turn[1] = state->turn_weight = 0;
+        state->turn[0] = state->turn[1] = state->turn_weight = state->turn_square[0] = state->turn_square[1] = state->heading_inertial = 0;
+        state->heading_count = 0;
+        state->heading_block_us = 0;
+        state->heading_sigma = 3.14159265f;
+        state->aligned = false;
+        state->calibrate_time = 0;
         state->inertial[0] = state->inertial[1] = state->track[0] = state->track[1] = 0;
         state->baro_us = 0;
         state->baro_wait = grounded ? BARO_SETTLE_S : 0;
@@ -520,8 +609,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
 
     // Rotor drag: the body's horizontal specific force less the thrust vector's forward part (at the tilt the servos have reached) is -drag times the airspeed. It is noisy (vibration, the pitch loop's servo motion), so it pulls the estimate slowly, and the past with it, as the camera's correction does; a steady disagreement is the integrated acceleration's bias, which it learns (a critically damped second-order filter, settling over a few drag_tau). The camera, when it sees the tag, measures the velocity itself: then the disagreement is the drag model's own offset (servo zero, accelerometer bias, mounting) instead, which it teaches below.
     bool seeing = state->have_pose && now_us - state->seen_us <= LOST_US;
-    // A fresh GPS fix measures the ground speed: it then stands in for the drag model's and the servos' airspeed readings.
-    bool located = g->gps_tau > 0 && state->gps_us && now_us - state->gps_us <= GPS_STALE_US && !seeing;
+    // A fresh GPS fix measures the ground speed: once the heading is pinned it stands in for the drag model's and the servos' airspeed readings.
+    bool located = g->gps_tau > 0 && state->gps_us && now_us - state->gps_us <= GPS_STALE_US && !seeing && state->aligned;
     float measured[2] = {0, 0};
     state->dragging = dragging && state->height >= AIRBORNE;
     if (state->dragging) {
@@ -578,7 +667,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     if (flow && !seeing && g->flow_depth > 0 && state->engaged) take_flow(state, g, flow, cy, sy, dt, state->dragging);
     if (gps && !seeing && g->gps_tau > 0) {
         take_gps(state, g, gps, now_us, cy, sy, dt);
-        located = true;
+        located = state->aligned;
     }
     if (state->lifted >= 0) state->baro_wait = fmaxf(0, state->baro_wait - dt);
     if (baro && !seeing && g->baro_tau > 0) take_baro(state, g, baro, now_us);
@@ -776,6 +865,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         }
         forward = state->trim[0] + ax * cy + ay * sy;
         left = state->trim[1] - ax * sy + ay * cy;
+        if (dragging) calibrate(state, g, mode, now_us, dt, stick, &forward, &left);
         if (dragging && g->stick_pitch) forward = GRAVITY * tanf(g->stick_pitch);
         if (dragging && g->stick_roll) left = -GRAVITY * tanf(g->stick_roll);
     } else {

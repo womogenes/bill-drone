@@ -20,6 +20,8 @@ HOVER_COLUMNS = [
 ]
 # The barometer's pressure altitude in the standard atmosphere (m; only its changes are height) and whether there was a reading in the last 100 ms (the altitude is NaN without one, and in recordings from before the barometer).
 BARO_COLUMNS = ["baro_altitude_m", "baro_valid"]
+# The guards (fw/drone/main/guard.h): the fly-away failsafe's phase (0 off, 1 brake, 2 hold, 3 land; log_format FAILSAFE_PHASES), whether distance set it off, and why the test pattern stopped (0 it did not, 1 distance, 2 tag lost, 3 tilt, 4 stick; PATTERN_STOPS); NaN in recordings from before them.
+GUARD_COLUMNS = ["failsafe", "failsafe_far", "pattern_stop"]
 NAN = float("nan")
 
 
@@ -98,6 +100,7 @@ def read_flight(path):
                     base, control_us, flags, voltage_mv / 1000,
                     *hover_values(flags, fields[22:38]),
                     *((fields[38] / 1000, True) if len(fields) > 38 and fields[38] != BARO_NONE else (NAN, False)),
+                    *((fields[39] & 3, fields[39] >> 2 & 1, fields[39] >> 3 & 7) if len(fields) > 39 else (NAN, NAN, NAN)),
                 ])
             if len(payload) != count * size:
                 truncated = True
@@ -107,7 +110,7 @@ def read_flight(path):
         "session", "sequence", "esp_time_us", "ax_g", "ay_g", "az_g", "gx_deg_s", "gy_deg_s", "gz_deg_s", "temperature_c",
         "roll_deg", "pitch_deg", "left_throttle", "right_throttle", "left_servo_deg", "right_servo_deg",
         "target_roll_deg", "target_pitch_deg", "target_yaw_deg_s", "base_throttle", "control_us", "flags", "battery_v",
-        *HOVER_COLUMNS, *BARO_COLUMNS,
+        *HOVER_COLUMNS, *BARO_COLUMNS, *GUARD_COLUMNS,
     ]
     data = pd.DataFrame(rows, columns=columns).drop_duplicates(["session", "sequence"])
     return data, truncated
