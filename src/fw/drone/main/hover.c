@@ -102,6 +102,17 @@
 #ifndef LAND_TILT
 #define LAND_TILT (25.0f * 3.14159265f / 180)
 #endif
+// Landing blind (no tag in view, the barometer on): the height is then the barometer's, and it cannot find the floor. Against the floor each 2026-11-09 landing came down on (sw/sim/baro_floor.py) the floor itself had moved -0.48 to +0.64 m from the takeoff's (weather, wind pressure), and the last 0.3 s before contact read a median 0.27 m high on top, so the height read -0.51 to +0.89 m at contact. So blind, neither the tilt cut nor a probe goes by the height: the tilt cut waits for a probe's evidence of the floor (BLIND_FELT of PROBE_DEPTH lost to the air with the accelerometer under PROBE_SHARE of it), the "low" start is the camera's only, and the "due" start allows BLIND_HEIGHT more height. In sw/sim/landing_test.py a probe in the air (most started by a stalled descent) made the tilt cut live and the drone's 20-30 degree swings did the rest: blind landings cut in the air fell from 35 to 1 of 181 with --outdoor (the one at 38 degrees of pitch, losing control) and from 77 to 0 of 175 with --no-camera --baro; replayed on the 11 landings of that night, probes started in the air in 9 before and in none now.
+#ifndef BLIND_FELT
+#define BLIND_FELT 0.5f
+#endif
+#ifndef BLIND_HEIGHT
+#define BLIND_HEIGHT 0.5f
+#endif
+// Nor is a blind touchdown declared while the climb rate still reads a descent over BLIND_CLIMB (m/s, or half the land rate if more): ground effect then holds the specific force up as the probe winds thrust down. 2026-11-09 06:10 UTC: a probe started 0.25 m up on the barometer's height reading under the takeoff floor, declared touchdown 0.12 s before contact at 77 % of the hold's thrust with the climb rate at -0.89 m/s, and the drone dropped the last 10 cm (replayed: landing_test --replay ... --contact 81.89). The probe then goes on feeling until the accelerometer shows air (falling) or the descent stops. Without the barometer (the IMU's height, camera lost) landings go on as before: in landing_test's camera rig the IMU-only height drifted down below the floor while the drone rose, and only the "low" start ended those landings.
+#ifndef BLIND_CLIMB
+#define BLIND_CLIMB 0.2f
+#endif
 #ifndef LAND_SHOCK
 #define LAND_SHOCK 1.45f
 #endif
@@ -164,7 +175,7 @@
 #define HEADING_PULL 3.0f
 #define HEADING_EVIDENCE 0.3f
 #define HEADING_COHERENCE 0.6f
-// Barometer (take_baro): the ground's pressure altitude is smoothed over BARO_GROUND_TAU (s) while the motors are off. Readings are not used until BARO_SETTLE_S (s) after liftoff, while the rotors' wash and ground effect change fastest. Near the floor they stay in: weighting them out under half a metre left the hold to the IMU there, and in the sim an accelerometer reading high then held drones on the floor that thought they were climbing, and low holds stalled (sw/sim/outdoor.py and landing_test.py --baro, 2026-11-08). On other multirotors ground effect reads low (ArduPilot's ground effect compensation ignores readings under the takeoff level), so near the floor the hold would err higher; its sign and size on this airframe are unmeasured. Touchdown still goes by the accelerometer. A reading older than BARO_STALE_US no longer stands in for the climb rate's leak.
+// Barometer (take_baro): the ground's pressure altitude is smoothed over BARO_GROUND_TAU (s) while the motors are off. Readings are not used until BARO_SETTLE_S (s) after liftoff, while the rotors' wash and ground effect change fastest. Near the floor they stay in: weighting them out under half a metre left the hold to the IMU there, and in the sim an accelerometer reading high then held drones on the floor that thought they were climbing, and low holds stalled (sw/sim/outdoor.py and landing_test.py --baro, 2026-11-08). Measured on 2026-11-09 against the accelerometer (sw/sim/baro_floor.py): with the motors spinning on the floor it reads -0.13 to +0.14 m (no steady wash), in the first 0.4 s after liftoff 0.3-2.9 m off either way, and in a landing's last 0.3 s a median 0.27 m above the floor it then rests on, small beside the floor's own move of -0.48 to +0.64 m over a flight. Touchdown goes by the accelerometer, and blind the height starts no probe (BLIND_FELT). A reading older than BARO_STALE_US no longer stands in for the climb rate's leak.
 #define BARO_GROUND_TAU 1.0f
 #ifndef BARO_SETTLE_S
 #define BARO_SETTLE_S 1.0f
@@ -658,7 +669,9 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     float lean = fmaxf(0.5f, cosf(roll) * cosf(pitch));
     state->force = g->mass * (GRAVITY + up) / lean;
 
-    bool floor_near = state->probing || state->height < LAND_TILT_HEIGHT;
+    bool felt = state->probing && state->probe_expected <= -BLIND_FELT * PROBE_DEPTH && state->probe_velocity > PROBE_SHARE * state->probe_expected;
+    bool blind = !seeing && g->baro_tau > 0;
+    bool floor_near = blind ? felt : state->probing || state->height < LAND_TILT_HEIGHT;
     // A jolt is a touchdown only if it lasts two ticks: on 2026-11-08 01:54 UTC one reading of 1.5 g (a tick that fell back to a single raw IMU sample, rotor vibration and all, 7 ms off the 10 ms rhythm) cut the motors 0.8 m up, 0.37 s into a landing; the averaged readings in that flight never passed 1.38 g.
     bool jolted = vertical_g > LAND_SHOCK && state->shocked;
     state->shocked = vertical_g > LAND_SHOCK;
@@ -689,9 +702,9 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->impulse = state->impulse * expf(-dt / IMPULSE_TAU) + gained;
         state->probe_wait = fmaxf(0, state->probe_wait - dt);
         state->sink *= expf(-dt / SINK_TAU);
-        float due = (LAND_EASE + fmaxf(state->land_height, 0) / fmaxf(rate, 0.01f)) * (1 + LAND_MARGIN) + LAND_SLACK;
+        float due = (LAND_EASE + (fmaxf(state->land_height, 0) + (blind ? BLIND_HEIGHT : 0)) / fmaxf(rate, 0.01f)) * (1 + LAND_MARGIN) + LAND_SLACK;
         bool stopped = state->land_time > LAND_EASE && state->impulse > fmaxf(IMPULSE * rate, IMPULSE_MIN);
-        bool low = state->land_time > LAND_EASE && state->height < LOW_HEIGHT;
+        bool low = !blind && state->land_time > LAND_EASE && state->height < LOW_HEIGHT;
         if (!state->probing && state->probe_wait <= 0 && (state->stall_time >= STALL_S || stopped || low || state->land_time >= due)) {
             state->probing = true;
             state->ceiling = state->force;
@@ -711,9 +724,10 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->probe_expected += (state->probe_force - state->probe_start) / state->hold_force * GRAVITY * dt;
             state->probe_velocity += (vertical_g - state->probe_g) * GRAVITY * dt;
             bool falling = state->recent_g < state->hold_g - PROBE_FALL || state->probe_velocity <= -PROBE_DEPTH;
-            if (!falling && state->probe_expected <= -PROBE_DEPTH && state->probe_velocity > PROBE_SHARE * state->probe_expected) {
+            bool sinking = blind && state->climb_rate < -fmaxf(0.5f * rate, BLIND_CLIMB);
+            if (!falling && !sinking && state->probe_expected <= -PROBE_DEPTH && state->probe_velocity > PROBE_SHARE * state->probe_expected) {
                 state->landed = true;
-            } else if (falling || state->probe_expected <= -PROBE_DEPTH) {
+            } else if (falling || (!sinking && state->probe_expected <= -PROBE_DEPTH)) {
                 // In the air.
                 state->probing = false;
                 state->probe_wait = PROBE_WAIT;

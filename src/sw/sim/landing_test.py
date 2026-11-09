@@ -294,7 +294,13 @@ def replay(recording, contact=None, source=None, defines=()):
     install(source, list(defines))
     recording = Path(recording)
     data, truncated = read_flight(recording.with_suffix(".bin"))
-    start = json.loads(recording.with_suffix(".jsonl").read_text().splitlines()[0])
+    # The start record, with the drone's metadata (settings, thrust table) when it arrived after the session started, as from 2026-11-09.
+    start = {}
+    for line in recording.with_suffix(".jsonl").read_text().splitlines():
+        event = json.loads(line)
+        if event["type"] in ("start", "metadata"):
+            start = event | start
+    start["settings"] = {key: value for line in recording.with_suffix(".jsonl").read_text().splitlines() for key, value in json.loads(line).get("settings", {}).items()}
     settings, table = start["settings"], np.array(start["thrust_table"])
     t = (data.esp_time_us.values - data.esp_time_us.values[0]) / 1e6
     roll, pitch = np.radians(data.roll_deg.values), np.radians(data.pitch_deg.values)
