@@ -150,11 +150,11 @@ typedef struct {
     int64_t baro_us;
     float baro_wait;
     bool baro_used;
-    // Touchdown (hover.c SETTLE_S): how far a landing near the floor has eased its attitude targets to the resting attitude (0-1).
+    // Unused since hover.c's SETTLE_S (easing landings to the resting attitude) was taken out on 2026-11-09: it did not stop the tip-overs at touchdown. Kept so the layout stays as deployed.
     float settle;
     // How long a landing has waited to descend while the hold brakes (s; hover.c LAND_WAIT_S).
     float land_wait;
-    // Thrust direction (gains thrust_direction): the body pitch the attitude controller was last asked for (radians, from pitch_trim, after the takeoff and touchdown easing) and how far it must sit from the thrust direction aimed (radians, positive nose down).
+    // Thrust direction (gains thrust_direction): the body pitch the attitude controller was last asked for (radians, from pitch_trim, after the takeoff easing) and how far it must sit from the thrust direction aimed (radians, positive nose down).
     float flown_pitch, direction;
 } HoverState;
 
