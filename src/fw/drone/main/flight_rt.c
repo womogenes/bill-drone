@@ -443,7 +443,7 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->baro = isfinite(baro_altitude) ? (int32_t)lroundf(baro_altitude * 1000) : INT32_MIN;
 }
 
-static bool configure_sensor(bool reset);
+static void reconfigure_sensor(void);
 
 static void runtime_task(void *arg) {
     TickType_t deadline = xTaskGetTickCount();
@@ -494,8 +494,7 @@ static void runtime_task(void *arg) {
             bool retry = ++bad_ticks >= SENSOR_RETRY_TICKS && !state.enabled;
             portEXIT_CRITICAL(&lock);
             if (retry) {
-                i2c_driver_delete(I2C_NUM_0);
-                sensor_configured = configure_sensor(true);
+                reconfigure_sensor();
                 bad_ticks = 0;
                 deadline = xTaskGetTickCount();
             }
@@ -512,8 +511,7 @@ static void runtime_task(void *arg) {
             bool retry = stalled && ++bad_ticks >= SENSOR_RETRY_TICKS && !state.enabled;
             portEXIT_CRITICAL(&lock);
             if (retry) {
-                i2c_driver_delete(I2C_NUM_0);
-                sensor_configured = configure_sensor(true);
+                reconfigure_sensor();
                 bad_ticks = 0;
                 deadline = xTaskGetTickCount();
             }
@@ -1167,6 +1165,20 @@ static bool configure_sensor(bool reset) {
         if (write_mpu(registers[i][0], registers[i][1]) != ESP_OK) ok = false;
     }
     return ok;
+}
+
+// After SENSOR_RETRY_TICKS bad ticks: a fresh driver install, a device reset and the configuration, with what the sensor answered on the serial console (WHO_AM_I 0x68 for an MPU6050; PWR_MGMT_1 0x01 once awake; INT_STATUS's bit 0 set when a sample is ready), so a sensor that reads but never samples is told from one that does not answer.
+static void reconfigure_sensor(void) {
+    i2c_driver_delete(I2C_NUM_0);
+    sensor_configured = configure_sensor(true);
+    uint8_t reg = 0x75, who = 0, power = 0, ready = 0;
+    esp_err_t answered = i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1, &who, 1, pdMS_TO_TICKS(20));
+    reg = 0x6b;
+    i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1, &power, 1, pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(10));
+    reg = 0x3a;
+    i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1, &ready, 1, pdMS_TO_TICKS(20));
+    printf("IMU set up again: configured %d, %s, WHO_AM_I 0x%02x, PWR_MGMT_1 0x%02x, INT_STATUS 0x%02x\n", sensor_configured, esp_err_to_name(answered), who, power, ready);
 }
 
 void flight_runtime_start(void) {
