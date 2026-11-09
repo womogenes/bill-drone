@@ -22,10 +22,25 @@
 #include "arming.h"
 #include "camera.h"
 #include "../../pairs.h"
+#include "../../link.h"
 
 // The paired controller's station MAC (fw/pairs.h); the drone answers nothing else. own is this drone's, its ID.
 static uint8_t peer[ESP_NOW_ETH_ALEN], own[ESP_NOW_ETH_ALEN];
+// The channel at boot; with radio_follow on, a disarmed drone that hears nothing from its controller for FOLLOW_AFTER_US tries the others in link.h link_channels, FOLLOW_DWELL_US each, and stays where it hears it (the relay beacons its link report every 250 ms), so a controller moved to another channel takes the drone along and one back on 6 brings it back.
 #define WIFI_CHANNEL 6
+#define FOLLOW_AFTER_US 2000000
+#define FOLLOW_DWELL_US 750000
+// This radio's counts for the LNK1 report (link.h), the channel it is on and its transmit power (0.25 dBm) as set, and the driver's power from boot, which radio_power 0 keeps.
+static LinkCounter link;
+static uint8_t channel_now = WIFI_CHANNEL;
+static int8_t power_now, power_boot;
+static bool following, hopping;
+// When any packet from the controller last arrived, stale or not, for following it.
+static volatile int64_t peer_us;
+static int64_t hopped_us;
+static uint32_t radio_version;
+// Set once ESP-NOW is up: the update task starts before it.
+static volatile bool radio_ready;
 
 #define HEADER 18
 #define PAYLOAD 232
@@ -85,8 +100,8 @@ static TaskHandle_t update_task;
 static bool unconfirmed;
 // Updates may switch the link to FAST_RATE (request F; the controller's relay follows the same request) while requests keep coming: with none for FAST_HOLD_US it goes back to its usual rate by itself, so a lost switch-back cannot leave it fast.
 #define FAST_HOLD_US 3000000
-// This drone's usual rate is the default 1 Mbps, not long range: its 100 Hz log stream needs the airtime, and at 500 kbps retries on a busy channel filled the log ring (10-30% of samples dropped on 2026-10-29); the controller still sends to it at long range, so the targets keep the margin.
-static const esp_now_rate_config_t usual_rate = {.phymode = WIFI_PHY_MODE_11B, .rate = WIFI_PHY_RATE_1M_L};
+// This drone's usual rate (radio_rate, link.h link_rates) defaults to 1 Mbps, not long range: its 100 Hz log stream needs the airtime, and at 500 kbps retries on a busy channel filled the log ring (10-30% of samples dropped on 2026-10-29); the controller still sends to it at long range, so the targets keep the margin. Outdoors on 2026-11-08 the status stream (this direction) lost 25-77% of its packets beyond 15 m from the laptop, so long range here is the first option to try.
+static uint8_t usual_rate;
 static const esp_now_rate_config_t fast_rate = {.phymode = WIFI_PHY_MODE_11B, .rate = WIFI_PHY_RATE_11M_L};
 static bool fast;
 static int64_t fast_until;
@@ -95,8 +110,34 @@ static tinfl_decompressor inflater;
 static uint8_t inflated[SECTOR];
 
 static void set_rate(bool on) {
-    esp_now_rate_config_t rate = on ? fast_rate : usual_rate;
+    esp_now_rate_config_t rate = on ? fast_rate : link_rates[usual_rate];
     if (esp_now_set_peer_rate_config(peer, &rate) == ESP_OK) fast = on;
+}
+
+// The radio settings (settings.def radio_rate, radio_power, radio_follow), whenever the settings change; from the update task only.
+static void apply_radio_settings(void) {
+    if (!radio_ready || radio_version == settings_version()) return;
+    radio_version = settings_version();
+    int rate = settings_get(SETTING_radio_rate);
+    if (rate >= 0 && rate < (int)LINK_RATES && rate != usual_rate) {
+        usual_rate = rate;
+        if (!fast) set_rate(false);
+    }
+    int power = settings_get(SETTING_radio_power) * 4;
+    int8_t wanted = power ? (power < 8 ? 8 : power > 84 ? 84 : power) : power_boot;
+    if (wanted != power_now && esp_wifi_set_max_tx_power(wanted) == ESP_OK) esp_wifi_get_max_tx_power(&power_now);
+    following = settings_get(SETTING_radio_follow) > 0.5f;
+}
+
+// radio_follow: while disarmed and not hearing the controller, step through link_channels until it is heard again.
+static void follow(int64_t now) {
+    hopping = radio_ready && following && flight_runtime_idle() && now - peer_us > FOLLOW_AFTER_US;
+    if (!hopping || now - hopped_us < FOLLOW_DWELL_US) return;
+    size_t index = 0;
+    while (index < LINK_CHANNELS && link_channels[index] != channel_now) index++;
+    uint8_t next = link_channels[(index + 1) % LINK_CHANNELS];
+    if (esp_wifi_set_channel(next, WIFI_SECOND_CHAN_NONE) == ESP_OK) channel_now = next;
+    hopped_us = now;
 }
 
 static uint32_t now_ms(void) {
@@ -147,10 +188,15 @@ static bool transmit(uint8_t channel, uint32_t number, const uint8_t *data, size
     bool open = inflight < WINDOW;
     if (open) inflight++;
     portEXIT_CRITICAL(&lock);
-    if (!open) return false;
+    if (!open) {
+        link_refused(&link);
+        return false;
+    }
     // The send callback may run before esp_now_send returns, so the slot is taken first.
+    link_sending(&link, esp_timer_get_time());
     bool ok = esp_now_send(peer, packet, HEADER + length) == ESP_OK;
     if (!ok) {
+        link_unsent(&link);
         portENTER_CRITICAL(&lock);
         inflight--;
         portEXIT_CRITICAL(&lock);
@@ -159,6 +205,7 @@ static bool transmit(uint8_t channel, uint32_t number, const uint8_t *data, size
 }
 
 static void on_sent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
+    link_sent(&link, esp_timer_get_time(), status == ESP_NOW_SEND_SUCCESS);
     portENTER_CRITICAL(&lock);
     inflight--;
     portEXIT_CRITICAL(&lock);
@@ -199,7 +246,7 @@ bool radio_connected(void) { return esp_timer_get_time() - heard_us < 2000000; }
 // Runs in the Wi-Fi task: parse, check freshness and order, and queue; never sends.
 static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, int size) {
     if (memcmp(info->src_addr, peer, ESP_NOW_ETH_ALEN) || size < HEADER || size > HEADER + PAYLOAD ||
-        memcmp(packet, "DC1", 3) || packet[3] >= CHANNELS || packet[17] > 32 || packet[16] >= packet[17])
+        memcmp(packet, "DC1", 3) || (packet[3] >= CHANNELS && packet[3] != LINK_CHANNEL) || packet[17] > 32 || packet[16] >= packet[17])
         return;
     uint8_t channel = packet[3], index = packet[16], count = packet[17];
     uint32_t packet_session, number, token;
@@ -208,9 +255,18 @@ static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, 
     memcpy(&token, packet + 12, 4);
     const uint8_t *data = packet + HEADER;
     size_t length = size - HEADER;
+    int64_t now = esp_timer_get_time();
+    peer_us = now;
+    // Channel 5 acknowledgements carry this drone's numbers and channel 7 the relay's own, so only the rest count the laptop's gaps.
+    link_heard(&link, now, info, number, channel != 5 && channel != LINK_CHANNEL);
+    // The relay's beacon (its link report) only keeps a following drone on this channel.
+    if (channel == LINK_CHANNEL) return;
     int32_t age = (int32_t)(now_ms() - token);
-    if (packet_session != session || age < 0 || age > 200) return;
-    heard_us = esp_timer_get_time();
+    if (packet_session != session || age < 0 || age > 200) {
+        link_rejected(&link);
+        return;
+    }
+    heard_us = now;
     if (channel == 6) {
         // Stop preempts everything, including a request in progress; the laptop repeats it until answered.
         if (count == 1 && length == 5 && data[4] == 'X') {
@@ -234,7 +290,6 @@ static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, 
     if ((channel != 1 && channel != 4) || !length) return;
     // Older laptops send 8 targets (no mode), 9 (no hold-point nudge) or 11 (no height nudge); the rest stay zero.
     if (channel == 1 && ((length != 1 + TARGETS * 4 && length != 1 + 11 * 4 && length != 1 + 9 * 4 && length != 1 + 8 * 4) || data[0] != 'T')) return;
-    int64_t now = esp_timer_get_time();
     portENTER_CRITICAL(&lock);
     bool newer = !seen[channel] || (uint32_t)(number - latest[channel]) - 1 < 0x7fffffffU;
     if (newer) {
@@ -410,7 +465,20 @@ static void tick(void *arg) {
         portEXIT_CRITICAL(&lock);
     }
     if (++ticks % 5) {
-        stream_log(esp_timer_get_time());
+        int64_t now = esp_timer_get_time();
+        // The link report once a second (link.h), on a tick between status messages; a refused one goes out on a later tick.
+        static LinkReport report;
+        static bool report_pending;
+        if (ticks % 100 == 2) {
+            link_report(&link, now, "LNK1", &report);
+            report.channel = channel_now;
+            report.rate = fast ? 5 : usual_rate;
+            report.power = power_now;
+            report.flags = following | hopping << 1;
+            report_pending = true;
+        }
+        if (report_pending && transmit(LINK_CHANNEL, next_sequence(), (const uint8_t *)&report, sizeof(report), 0, 1)) report_pending = false;
+        stream_log(now);
         return;
     }
     Status status = {.magic = {'S', 'T', 'A', '1'}};
@@ -720,6 +788,8 @@ static void update_loop(void *arg) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
         if (unconfirmed && esp_timer_get_time() > CONFIRM_US && flight_runtime_idle()) esp_restart();
         if (fast && esp_timer_get_time() > fast_until) set_rate(false);
+        apply_radio_settings();
+        follow(esp_timer_get_time());
         store_settings();
         portENTER_CRITICAL(&lock);
         int state = request_state;
@@ -761,6 +831,7 @@ void radio_start(void) {
     esp_now_peer_info_t peer_info = {.ifidx = WIFI_IF_STA};
     memcpy(peer_info.peer_addr, peer, sizeof(peer));
     session = esp_random() | 1;
+    link_init(&link, esp_timer_get_time());
     // A slot written over USB with blank OTA data has no state.
     esp_ota_img_states_t image;
     unconfirmed = esp_ota_get_state_partition(esp_ota_get_running_partition(), &image) == ESP_OK &&
@@ -779,13 +850,16 @@ void radio_start(void) {
     ESP_ERROR_CHECK(esp_now_register_recv_cb(on_received));
     ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
     ESP_ERROR_CHECK(esp_now_add_peer(&peer_info));
-    esp_now_rate_config_t rate = usual_rate;
+    esp_now_rate_config_t rate = link_rates[usual_rate];
     ESP_ERROR_CHECK(esp_now_set_peer_rate_config(peer, &rate));
+    ESP_ERROR_CHECK(esp_wifi_get_max_tx_power(&power_boot));
+    power_now = power_boot;
+    radio_ready = true;
     const esp_timer_create_args_t timer_args = {.callback = tick, .name = "radio"};
     esp_timer_handle_t timer;
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(timer, 10000));
-    printf("Radio on channel %d; reset reason %d\n", WIFI_CHANNEL, esp_reset_reason());
+    printf("Radio on channel %d, transmit power %d (0.25 dBm); reset reason %d\n", WIFI_CHANNEL, power_boot, esp_reset_reason());
 }
 
 bool radio_log_meta(const char *data, size_t length) {
