@@ -71,6 +71,9 @@ def main():
     parser.add_argument("--instrument", type=float, default=1.0, help="weight of identify_airframe's instrumented one-step cost on the test-pattern flights")
     parser.add_argument("--shortest", type=float, default=0.5)
     parser.add_argument("--velocity", choices=("logged", "tag"), default="tag", help="the logged hover velocity everywhere, or only where the tag measured it (identify_airframe.Data)")
+    parser.add_argument("--measured-input", action="store_true", help="the measured velocity (tag or GPS truth) is the speed terms' input at every step that has one, not only at each prediction's start (identify_airframe.predict)")
+    parser.add_argument("--as-saved", action="store_true", help="keep the start model's tied terms (identify_airframe.TIED) instead of the present values")
+    parser.add_argument("--truth", help="a folder of smoothed GPS truths (sw/sim/gps_truth.py --save): their velocity replaces the tag's where they have one (identify_airframe.Data), and the held-out horizontal velocity is scored against them (validate_model.velocity_scores)")
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
@@ -87,9 +90,11 @@ def main():
     train = [i for i, s in enumerate(names) if s != args.held_out]
     print(f"{args.structure}, held out {args.held_out}: {len(train)} flights to fit, {len(test)} held out; free: {', '.join(free) or 'nothing'}", flush=True)
     start = A.complete(json.loads(args.start.read_text()))
-    data = I.Data(records, None, args.velocity)
+    data = I.Data(records, None, "truth" if args.truth else args.velocity, args.truth)
+    data.measured_input = args.measured_input
     start["right_thrust_gain"] = I.thrust_split(records)
-    for key in I.TIED:
+    # --as-saved scores a saved model as it is (e.g. one whose tied terms predate the present TIED values).
+    for key in [] if args.as_saved else I.TIED:
         if key not in free:
             start[key] = I.TIED[key]
     for key, other in I.EQUAL.items():
@@ -114,6 +119,11 @@ def main():
         print(f"{len(pitch_steps)} pitch steps: overshoot {np.nanmedian(real[:, 0]):.2f} -> {np.nanmedian(model[:, 0]):.2f}, time to peak {np.nanmedian(real[:, 1]):.2f} -> {np.nanmedian(model[:, 1]):.2f} s, response error median {np.median([s['error'] for s in pitch_steps]):.1f}°", flush=True)
     print("fitted: " + ", ".join(f"{key} {params[key]:.4g}" for key in free), flush=True)
     result = {"structure": args.structure, "held_out": args.held_out, "free": free, "cost": cost, "train": len(train), "test": len(test), "params": {key: round(float(params[key]), 6) for key in free}, "errors": errors, "steps": steps}
+    if args.truth:
+        scores = V.velocity_scores(params, data, scored, args.truth)
+        if scores:
+            V.print_velocity(scores)
+            result["velocity"] = {name: {str(h): value for h, value in by.items()} for name, by in scores.items() if name != "lanes"}
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(result, indent=1) + "\n")

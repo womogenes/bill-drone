@@ -41,7 +41,8 @@ UNTIL = {"2026-10-29T06-25-19": 18.6, "2026-10-29T06-30-28": 20.1, "2026-10-29T0
 INSTRUMENT_BANDS = ((1.0, 1.8), (1.8, 2.8), (2.8, 4.0), (4.0, 6.0))
 INSTRUMENT_SEGMENT = 200
 # Parameters held by default (--free releases them): roll authority at the table's (the PRBS flights measure 1.0 ± 0.1 of the table's differential thrust), the thrust's voltage law (table × (V/16.1)^1.6 carries the weight on both nights and both packs), the horizontal acceleration from attitude at g (the camera measures 0.9 g on both axes, which is the camera's scale) the servo tilt's forward push at what the camera measures (0.66 of the same body pitch's, 2026-10-29 hovers), and no roll attitude stiffness (free flight has none, and the PRBS flights show none at 1-5 Hz; fitted, it traded against the roll actuator's authority and lag and made the hover loop's velocity damping act backwards) and no band spring (it improved the 2026-10-29 fit by under 0.3%). The sideways speed moment (drag_z_y) is as loose in the fit (0.3%) but sets the hover loop's sideways damping, so calibrate_sim sets it.
-TIED = {"differential_slope": 1.0, "voltage_power": 1.6, "vx_pitch": 9.81, "vy_roll": -9.81, "tilt_push": 0.66, "roll_pendulum": 0.0, "band_k": 0.0}
+# From 2026-11-09 the GPS measures drone 1's 10-inch airframe outdoors (sw/sim/gps_truth.py): the tilt's forward push 0.77-0.80 of the same body pitch's (0.78 held), the voltage law (V/16.1)^1.42, the roll axis' push at g (gain 1.00), and the horizontal drag 0.04-0.08/s forward and 0.20-0.22/s sideways from the accelerometer alone (0.07 and 0.2 held, so the speed moments are drag_z_x and drag_z_y's lever on that drag).
+TIED = {"differential_slope": 1.0, "voltage_power": 1.42, "vx_pitch": 9.81, "vy_roll": -9.81, "tilt_push": 0.78, "vx_drag": 0.07, "vy_drag": 0.2, "roll_pendulum": 0.0, "band_k": 0.0}
 # Parameters held equal to another unless --free releases them: the ESCs' dynamics (their static gains differ, pinned by the thrust split; separate dead times and lags improved the 2026-10-29 fit by under 0.1%).
 EQUAL = {"right_motor_delay": "motor_delay", "right_motor_tau": "motor_tau"}
 
@@ -138,6 +139,34 @@ def body_velocity(record):
     return np.column_stack([vx * sy - vy * cy, vx * cy + vy * sy])
 
 
+def truth_velocity(record, folder):
+    """The flight's body-frame velocity (forward, left; m/s) per sample from its smoothed GPS truth (truth_world), NaN outside the smoothed span; None without one."""
+    found = truth_world(record, folder)
+    if found is None:
+        return None
+    world, heading = found
+    # A body vector b is b e^(i heading) in the world, so the body velocity is the world's turned back.
+    body = world * np.exp(-1j * heading)
+    return np.column_stack([body.real, body.imag])
+
+
+def truth_world(record, folder):
+    """The flight's smoothed GPS truth (folder/<name>.npz from sw/sim/gps_truth.py --save) per sample: the world velocity as north + i west (m/s, gps_truth's convention) and the nose's heading (rad counterclockwise from north), NaN outside the smoothed span; None without one or without a heading."""
+    path = Path(folder) / f"{record['name']}.npz"
+    if not path.exists():
+        return None
+    s = np.load(path)
+    if "v_north" not in s.files:
+        return None
+    t = record["esp_time_us"] / 1e6
+    inside = (t >= s["t"][0]) & (t <= s["t"][-1])
+    world = np.interp(t, s["t"], s["v_north"]) - 1j * np.interp(t, s["t"], s["v_east"])
+    heading = np.interp(t, s["t"], np.unwrap(s["heading"]))
+    world[~inside] = np.nan
+    heading[~inside] = np.nan
+    return world, heading
+
+
 def controller(record):
     """The flight's firmware controller, configured and reset, as the state and command buffers control_many takes."""
     c = Controller()
@@ -154,7 +183,7 @@ def controller(record):
 class Data:
     """The recordings as padded arrays [flight, sample, ...]: the logged signals, the controller's references and voltage-compensated thrust scales, and every sample's replayed controller state."""
 
-    def __init__(self, records, ground=None, velocity="logged"):
+    def __init__(self, records, ground=None, velocity="logged", truth=None):
         self.records = records
         tables = {id(r["table"]) for r in records}
         assert len(tables) == 1, "these flights were flown with different thrust tables (the 2026-10-28 ESC recalibration); fit them separately"
@@ -169,9 +198,20 @@ class Data:
         self.vel = self.pad(lambda r: np.nan_to_num(np.column_stack([r["hover_vx_m_s"], r["hover_vy_m_s"]])))
         # While the hover flies on the tag (flags bit 6) the runtime hands the controller the hover's velocity in body axes (rightward, forward; hover.c output velocity, rotated by the hover's heading) and the speed moment compensation acts on it (flight_rt.c); otherwise pitch_speed is 0 and the controller dead-reckons its own.
         self.tracking = self.pad(lambda r: (r["flags"].astype(int) >> 6 & 1).astype(float))
-        if velocity == "tag":
+        if velocity in ("tag", "truth"):
             # Only the tag measures velocity: elsewhere (Free mode, outdoors without a GPS fix) the logged hover velocity is the IMU's dead reckoning, which drifted to -3.5 m/s on 2026-11-08 01:54 UTC while the attitude implies under 1 m/s. Zero marks it missing: the airframe then carries its own velocity from attitude and tilt (teacher, predict).
             self.vel = self.vel * (self.tracking[..., None] > 0)
+        # Where a flight has a smoothed GPS truth (gps_truth.py --save: IMU, barometer and latency-aligned GPS velocity, 2026-11-09 on), its body-frame velocity replaces the tag's; it is missing (zero) where the truth has no heading.
+        self.truth = np.zeros(len(records), bool)
+        # With measured_input (set by the caller) predict takes the measured velocity at every step it has one instead of only at the start.
+        self.measured_input = False
+        if velocity == "truth":
+            for i, r in enumerate(records):
+                body = truth_velocity(r, truth)
+                if body is not None:
+                    known = np.isfinite(body).all(1)
+                    self.vel[i, :len(body)][known] = body[known]
+                    self.truth[i] = known.any()
         self.body_vel = self.pad(lambda r: body_velocity(r))
         self.pitch_speed = np.array([r["setting"].get("pitch_speed", 0.0) for r in records])
         self.voltage = self.pad(lambda r: np.where(r["battery_v"] > 5, r["battery_v"], self.reference(r)) / self.reference(r))
@@ -316,9 +356,9 @@ def teacher(p, data, flights, residuals=False):
     return (keep, push, trim, residual) if residuals else (keep, push, trim)
 
 
-def predict(p, data, flights, horizons, stride, closed=True, taught=None):
+def predict(p, data, flights, horizons, stride, closed=True, taught=None, velocities=False):
     """
-    Free runs from every start in the flights (a sorted array): closed loop (the replayed controller flies the airframe on the logged references) or on the logged commands. Returns the lanes' flights and starts, which horizons each is valid at [horizon, lane], and the predicted rates and attitudes [step, lane, axis]. taught is teacher's result for these flights, if already computed.
+    Free runs from every start in the flights (a sorted array): closed loop (the replayed controller flies the airframe on the logged references) or on the logged commands. Returns the lanes' flights and starts, which horizons each is valid at [horizon, lane], and the predicted rates and attitudes [step, lane, axis] (and with velocities, the airframe's mean physical tilt [step, lane] in radians, positive forward, as well). taught is teacher's result for these flights, if already computed.
     """
     keep, push, trim = taught[:3] if taught else teacher(p, data, flights)
     F, S0, valid = data.lanes(flights, horizons, stride)
@@ -333,16 +373,24 @@ def predict(p, data, flights, horizons, stride, closed=True, taught=None):
     states, commands = data.states[F, S0].copy(), data.commands[F].copy()
     rates = np.zeros((max(horizons), len(F), 3))
     attitudes = np.zeros((max(horizons), len(F), 2))
+    tilts = np.zeros((max(horizons), len(F))) if velocities else None
+    side_gain = np.array([1.0, p["right_gain"]])
     lane = np.arange(len(F))
     lane_trim = (trim[0][J], trim[1][J])
     for j in range(max(horizons)):
         k = np.minimum(S0 + j, data.size - 1)
         if closed:
             throttle[lane, k], command[lane, k] = data.control(states, commands, F, k, state.att, state.rate)
+        if data.measured_input:
+            # The measured velocity is the speed terms' input wherever there is one, as the hover sim feeds them its own: integrated from the attitude, the airframe's velocity carries the level reference's error (0.1-0.5 m/s² per flight against the GPS on 2026-11-09), which with the measured 0.07/s drag runs up to 1 m/s in 2 s.
+            measured = data.vel[F, k]
+            state.vel = np.where(measured != 0, measured, state.vel)
         state, _ = A.step(p, state, throttle, command, k, voltage[lane, k], push[J], lane_trim, near=None if data.near is None else data.near[F, k], geometry=GEOM, table=data.table)
         rates[j] = state.rate
         attitudes[j] = state.att
-    return F, S0, valid, rates, attitudes
+        if velocities:
+            tilts[j] = (state.tilt * side_gain).mean(1) * DEG
+    return (F, S0, valid, rates, attitudes, tilts) if velocities else (F, S0, valid, rates, attitudes)
 
 
 DATA = None
@@ -485,6 +533,7 @@ def main():
     parser.add_argument("--evaluations", type=int, default=60)
     parser.add_argument("--folds", type=int, default=5, help="held-out groups of flights to score (0 to skip)")
     parser.add_argument("--shortest", type=float, default=0.5, help="seconds airborne a flight needs")
+    parser.add_argument("--truth", help="a folder of smoothed GPS truths (sw/sim/gps_truth.py --save): their body-frame velocity is the airframe's on flights that have one")
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--out", help="default: sw/sim/models/airframe_<newest recording's day>_<the drone's MAC, last three bytes>.json")
     args = parser.parse_args()
@@ -503,7 +552,7 @@ def main():
         start["pitch_ground"] = 0.3
     records = [r for r in (load(p, args.shortest) for p in paths(args.recordings)) if r and (ground != "height" or not np.isnan(r["hover_height_m"]).all())]
     print(f"{len(records)} flights, {sum(r['end'] - r['lift'] for r in records) * DT:.0f} s airborne", flush=True)
-    data = Data(records, ground)
+    data = Data(records, ground, "truth" if args.truth else "logged", args.truth)
     split = thrust_split(records)
     start["right_thrust_gain"] = split
     print(f"right motor static thrust gain {split:.3f} (airborne thrust split)", flush=True)

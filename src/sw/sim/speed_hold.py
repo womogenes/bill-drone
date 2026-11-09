@@ -1,7 +1,7 @@
 """
-The servos' steady tilt against the forward speed: uv run -m sw.sim.speed_hold <recordings or globs> [--sim]
+The servos' steady tilt against the forward speed: uv run -m sw.sim.speed_hold <recordings or globs> [--sim] [--static AIRSPEEDS --airframe model.json]
 
-Forward airspeed pitches this airframe nose-up (the rotors flapping back), and the pitch loop holds it with a steady forward thrust tilt, so below the pitch loop's bandwidth the mean servo tilt follows the speed: tilt = speed_pitch × pitch + speed_tilt × forward speed + offset (fw/drone/main/hover.h; fitted on 2026-10-31 and 11-01 at 5.0 degrees per m/s with speed_pitch -0.54). This fits it per flight on the tag-tracked hover, every signal smoothed over SMOOTH seconds. speed_tilt is the airframe's static speed moment over its held tilt authority, the balance outdoor flight runs on (a steady wind is a steady airspeed) and which the multi-step identification cannot see at hover speeds; the hover sim must give the same number. With --sim each recording's settings (and its test pattern) are flown on the sim plant (sweep.CURRENT with --airframe) and the same fit is made on the sim's own tilts, pitch and speed. A flight with uv run -m sw.excite speed --forward -0.5 --width 3 --rest 3 (away from the tag first) holds steady speeds long enough to pin it; ordinary hovers, at a few cm/s, do not (the sim gives 4-6 there whatever its static balance).
+Forward airspeed pitches this airframe nose-up (the rotors flapping back), and the pitch loop holds it with a steady forward thrust tilt, so below the pitch loop's bandwidth the mean servo tilt follows the speed: tilt = speed_pitch × pitch + speed_tilt × forward speed + offset (fw/drone/main/hover.h; fitted on 2026-10-31 and 11-01 at 5.0 degrees per m/s with speed_pitch -0.54). This fits it per flight on the tag-tracked hover, every signal smoothed over SMOOTH seconds. speed_tilt is the airframe's static speed moment over its held tilt authority, the balance outdoor flight runs on (a steady wind is a steady airspeed) and which the multi-step identification cannot see at hover speeds; the hover sim must give the same number. With --sim each recording's settings (and its test pattern) are flown on the sim plant (sweep.CURRENT with --airframe) and the same fit is made on the sim's own tilts, pitch and speed. With --static (added 2026-11-09) it flies each recording's settings on the GPS hold in a steady headwind at each airspeed instead and fits the steady servo tilt and body pitch on the airspeed, the number the 2026-11-09 outdoor flights measure against the GPS (sw/sim/gps_truth.py analysis 2: 7.8 degrees of tilt per m/s, the body about 4.5 degrees nose-up per m/s). A flight with uv run -m sw.excite speed --forward -0.5 --width 3 --rest 3 (away from the tag first) holds steady speeds long enough to pin it; ordinary hovers, at a few cm/s, do not (the sim gives 4-6 there whatever its static balance).
 """
 
 import argparse
@@ -80,6 +80,51 @@ def simulated(path, airframe, seconds, seed):
     return fit(tilt[keep], np.degrees([e[2][1] for e in log])[keep], forward[keep])
 
 
+def static(job):
+    """
+    The static speed balance in the hover sim: the GPS hold (exact GPS, no turbulence, no drifting torques) taking off and holding still in a steady headwind of airspeed (m/s, negative a tailwind) for seconds, on a recording's settings. Returns the airspeed, the mean servo tilt and body pitch (deg), ground speed (m/s) over the last half, the distance blown (m) and the nose's angle off the wind (deg), or None when lost or down on the floor.
+    """
+    airframe, settings, airspeed, seconds, seed = job
+    from sw.sim.outdoor import GPS
+    from sw.sim.outdoor import plant as outdoor_plant
+    from sw.sim.sweep import run
+    p, _ = outdoor_plant(airframe, 0.0, seed, True, True, settings.get("hover_climb", 1.0))
+    # Air blowing toward the tail (world -x, the nose at engagement facing it) is a forward airspeed.
+    p |= {"wind_mean": (-airspeed, 0.0), "wind": 0.0, "wind_vertical": 0.0, "disturbances": [], "gps": GPS | {"velocity_noise": 0.0, "vertical_noise": 0.0, "position_noise": 0.0, "heading": 0.0}}
+    s = dict(settings) | {"hover_camera": 0, "hover_center": 0, "hover_gps_heading": 0.0}
+    log = []
+    result = run(s, p, seconds=seconds, seed=seed, log=log, hover=True)
+    if not result["stable"]:
+        return None
+    t = np.array([e[0] for e in log])
+    position = np.array([e[1] for e in log])
+    late = t > seconds / 2
+    if position[late, 2].min() < 0.3:
+        return None
+    tilt = np.degrees([(e[4][0] + e[4][1]) / 2 for e in log])[late]
+    pitch = np.degrees([e[2][1] for e in log])[late]
+    velocity = np.gradient(position[:, :2], 1 / FS, axis=0)[late]
+    speed = np.hypot(*velocity.T)
+    # The airspeed along the nose as the airframe feels it (the nose may turn off the wind).
+    yaw = np.array([e[2][2] for e in log])[late]
+    forward = (velocity[:, 0] + airspeed) * np.cos(yaw) + velocity[:, 1] * np.sin(yaw)
+    return float(forward.mean()), float(tilt.mean()), float(pitch.mean()), float(speed.mean()), float(np.hypot(*(position[-1, :2] - position[0, :2]))), float(np.degrees(yaw.mean()))
+
+
+def static_balance(airframe, settings, airspeeds, seconds=40.0, seed=0, workers=1):
+    """static at each airspeed, and the slopes of tilt and pitch on airspeed (deg per m/s) over those held (within 5 m and under 0.3 m/s)."""
+    from multiprocessing import Pool
+    jobs = [(airframe, settings, v, seconds, seed) for v in airspeeds]
+    if workers > 1:
+        with Pool(min(workers, len(jobs))) as pool:
+            rows = pool.map(static, jobs)
+    else:
+        rows = [static(job) for job in jobs]
+    held = np.array([row for row in rows if row is not None and row[4] < 5.0 and row[3] < 0.3])
+    slopes = (np.polyfit(held[:, 0], held[:, 1], 1)[0], np.polyfit(held[:, 0], held[:, 2], 1)[0]) if len(held) >= 2 else (np.nan, np.nan)
+    return rows, slopes
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("recordings", nargs="+")
@@ -87,8 +132,17 @@ def main():
     parser.add_argument("--airframe", type=Path, default=Path(__file__).with_name("models") / "airframe_2026-11-02_9in.json")
     parser.add_argument("--seconds", type=float, default=50.0)
     parser.add_argument("--seeds", type=int, default=3)
+    parser.add_argument("--static", type=lambda text: [float(v) for v in text.split(",")], help="airspeeds (m/s): the static balance in a steady headwind on each recording's settings instead (static)")
+    parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
     airframe = json.loads(args.airframe.read_text())
+    if args.static:
+        for path in N.paths(args.recordings):
+            rows, slopes = static_balance(airframe, recording_settings(path), args.static, args.seconds, 0, args.workers)
+            print(f"{path.stem[:19]} settings, {args.airframe.name}: tilt {slopes[0]:.2f}°/(m/s), pitch {slopes[1]:+.2f}°/(m/s) (2026-11-09 GPS truth: 7.8, about -4.5)")
+            for v, row in zip(args.static, rows):
+                print(f"    {v:+.1f} m/s: " + ("lost" if row is None else f"tilt {row[1]:+6.2f}°, pitch {row[2]:+6.2f}°, ground speed {row[3]:.2f} m/s, {row[4]:.1f} m from where it started, nose {row[5]:+.0f}° off the wind, airspeed along it {row[0]:+.2f} m/s"), flush=True)
+        return
     for path in N.paths(args.recordings):
         r = real(path)
         if r is None:
