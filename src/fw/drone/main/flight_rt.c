@@ -35,6 +35,8 @@
 #define LINK_LAND_RATE 1.0f
 // Tolerate one missed control tick; a second consecutive miss stops the motors.
 #define MAX_SAMPLE_MS (2500 / SAMPLE_HZ)
+// The IMU is set up again from scratch (a fresh driver, a device reset, the configuration) after this many bad control ticks in a row with the motors stopped: on 2026-11-08 19:11 PST every read failed from power-up for 11 minutes until a reset, and "IMU offline" before the first outdoor flights also needed a restart. Never with the motors enabled: a failure there has already stopped them.
+#define SENSOR_RETRY_TICKS SAMPLE_HZ
 // Degrees.
 #define TIP_LIMIT 45
 #define SERVO_LIMIT 60
@@ -441,10 +443,15 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->baro = isfinite(baro_altitude) ? (int32_t)lroundf(baro_altitude * 1000) : INT32_MIN;
 }
 
+static bool configure_sensor(bool reset);
+
 static void runtime_task(void *arg) {
     TickType_t deadline = xTaskGetTickCount();
     TickType_t period = configTICK_RATE_HZ / SAMPLE_HZ;
     uint64_t previous = 0;
+    // Bad ticks in a row (SENSOR_RETRY_TICKS), and whether the stop reason shown is a failure with the motors already stopped, which a recovered sensor clears.
+    int bad_ticks = 0;
+    bool idle_failure = false;
     while (true) {
         uint8_t reg = 0x3a, data[15] = {0};
         esp_err_t result = sensor_configured
@@ -479,21 +486,44 @@ static void runtime_task(void *arg) {
             state.online = false;
             state.calibration_left = 0;
             if (state.enabled) stop_locked(3);
-            else if (!state.reason) state.reason = 3;
+            else if (!state.reason) {
+                state.reason = 3;
+                idle_failure = true;
+            }
             previous = 0;
+            bool retry = ++bad_ticks >= SENSOR_RETRY_TICKS && !state.enabled;
             portEXIT_CRITICAL(&lock);
+            if (retry) {
+                i2c_driver_delete(I2C_NUM_0);
+                sensor_configured = configure_sensor(true);
+                bad_ticks = 0;
+                deadline = xTaskGetTickCount();
+            }
             vTaskDelayUntil(&deadline, period);
             continue;
         }
         // The MPU updates at 1 kHz, so every control tick sees a new sample unless the sensor stalled.
         if (!(data[0] & 1)) {
-            if (state.sample_us && now - state.sample_us > MAX_SAMPLE_MS * 1000ULL) {
+            bool stalled = !state.sample_us || now - state.sample_us > MAX_SAMPLE_MS * 1000ULL;
+            if (state.sample_us && stalled) {
                 state.online = false;
                 if (state.enabled) stop_locked(5);
             }
+            bool retry = stalled && ++bad_ticks >= SENSOR_RETRY_TICKS && !state.enabled;
             portEXIT_CRITICAL(&lock);
+            if (retry) {
+                i2c_driver_delete(I2C_NUM_0);
+                sensor_configured = configure_sensor(true);
+                bad_ticks = 0;
+                deadline = xTaskGetTickCount();
+            }
             vTaskDelayUntil(&deadline, period);
             continue;
+        }
+        bad_ticks = 0;
+        if (idle_failure) {
+            if (state.reason == 3) state.reason = 0;
+            idle_failure = false;
         }
 
         // The tick's mean from the FIFO in place of the newest sample (the temperature stays the newest).
@@ -1117,13 +1147,17 @@ void flight_runtime_outputs(void) {
     }
 }
 
-// Wakes the MPU6050 with 1 kHz output into its FIFO (accelerometer and gyro), which each control tick averages (read_fifo); the DLPF only has to clear what the 10 ms mean does not.
-static bool configure_sensor(void) {
+// Wakes the MPU6050 with 1 kHz output into its FIFO (accelerometer and gyro), which each control tick averages (read_fifo); the DLPF only has to clear what the 10 ms mean does not. With reset, the device is reset to its defaults first.
+static bool configure_sensor(bool reset) {
     i2c_config_t bus = {.mode = I2C_MODE_MASTER, .sda_io_num = SDA, .scl_io_num = SCL,
                         .sda_pullup_en = GPIO_PULLUP_ENABLE, .scl_pullup_en = GPIO_PULLUP_ENABLE,
                         .master.clk_speed = 400000};
     ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &bus));
     ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
+    if (reset) {
+        write_mpu(0x6b, 0x80);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
     bool ok = write_mpu(0x6b, 1) == ESP_OK;
     vTaskDelay(pdMS_TO_TICKS(100));
     uint8_t registers[][2] = {
@@ -1161,10 +1195,10 @@ void flight_runtime_start(void) {
     accel_correction(values);
     state.heartbeat_us = esp_timer_get_time();
     // An initial I2C timeout can leave the sensor idle; one fresh driver install and configuration recovers it.
-    sensor_configured = configure_sensor();
+    sensor_configured = configure_sensor(false);
     if (!sensor_configured) {
         ESP_ERROR_CHECK(i2c_driver_delete(I2C_NUM_0));
-        sensor_configured = configure_sensor();
+        sensor_configured = configure_sensor(false);
     }
     portENTER_CRITICAL(&lock);
     stop_locked(0);
