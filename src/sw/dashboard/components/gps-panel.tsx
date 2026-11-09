@@ -88,18 +88,24 @@ export const GpsPanel = memo(function GpsPanel({
         <div>
           <dt className="text-sm text-muted-foreground">Fix</dt>
           <dd
-            className={`text-lg ${live && gps.ok ? 'text-green-700' : connected && gps ? 'text-red-700' : ''}`}
+            className={
+              live && gps.ok
+                ? 'text-green-700'
+                : connected && gps
+                  ? 'text-red-700'
+                  : ''
+            }
           >
             {state}
           </dd>
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Satellites</dt>
-          <dd className="text-lg">{live ? gps.satellites : '—'}</dd>
+          <dd>{live ? gps.satellites : '—'}</dd>
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Accuracy</dt>
-          <dd className="text-lg">
+          <dd>
             {solved
               ? `${gps.horizontal_accuracy.toFixed(1)} / ${gps.vertical_accuracy.toFixed(1)} m`
               : '—'}
@@ -107,7 +113,7 @@ export const GpsPanel = memo(function GpsPanel({
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Ground speed</dt>
-          <dd className="text-lg">
+          <dd>
             {solved && speed !== undefined
               ? `${speed.toFixed(2)} ± ${gps.speed_accuracy.toFixed(2)} m/s`
               : '—'}
@@ -115,19 +121,15 @@ export const GpsPanel = memo(function GpsPanel({
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Climb</dt>
-          <dd className="text-lg">
-            {solved ? `${(-gps.velocity[2]).toFixed(2)} m/s` : '—'}
-          </dd>
+          <dd>{solved ? `${(-gps.velocity[2]).toFixed(2)} m/s` : '—'}</dd>
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Altitude</dt>
-          <dd className="text-lg">
-            {solved ? `${gps.height.toFixed(1)} m` : '—'}
-          </dd>
+          <dd>{solved ? `${gps.height.toFixed(1)} m` : '—'}</dd>
         </div>
         <div className="col-span-3">
           <dt className="text-sm text-muted-foreground">Position</dt>
-          <dd className="text-lg">
+          <dd>
             {solved
               ? `${gps.latitude.toFixed(7)}, ${gps.longitude.toFixed(7)}`
               : '—'}
@@ -135,7 +137,7 @@ export const GpsPanel = memo(function GpsPanel({
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Signal (top 4)</dt>
-          <dd className="text-lg">
+          <dd>
             {diagnosed?.top4_cno != null
               ? `${diagnosed.top4_cno.toFixed(1)} dB-Hz`
               : '—'}
@@ -148,11 +150,11 @@ export const GpsPanel = memo(function GpsPanel({
         </div>
         <div className="col-span-2">
           <dt className="text-sm text-muted-foreground">Used</dt>
-          <dd className="text-lg">{used}</dd>
+          <dd>{used}</dd>
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Jamming</dt>
-          <dd className={`text-lg ${jammed ? 'text-red-700' : ''}`}>
+          <dd className={jammed ? 'text-red-700' : ''}>
             {diagnosed?.rf_age_ms != null && diagnosed.rf_age_ms < 3000
               ? `${diagnosed.jamming} · ${diagnosed.jam_indicator}/255`
               : '—'}
@@ -166,14 +168,12 @@ export const GpsPanel = memo(function GpsPanel({
         </div>
         <div className="col-span-2">
           <dt className="text-sm text-muted-foreground">SBAS</dt>
-          <dd className="text-lg">
-            {diagnosed ? sbasState(gps, diagnosed) : '—'}
-          </dd>
+          <dd>{diagnosed ? sbasState(gps, diagnosed) : '—'}</dd>
         </div>
         {unconfigured.length > 0 && (
           <div className="col-span-3">
             <dt className="text-sm text-muted-foreground">Configuration</dt>
-            <dd className="text-lg text-red-700">{unconfigured.join(', ')}</dd>
+            <dd className="text-red-700">{unconfigured.join(', ')}</dd>
           </div>
         )}
       </dl>
