@@ -524,7 +524,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 angles[2] + (q * math.sin(roll) + r * math.cos(roll)) / math.cos(pitch) * h,
             ]
         if log is not None:
-            log.append((now, list(position), list(angles), list(attitude), list(servo), list(motor), math.radians(settings["pitch"]), visible, (list(outer.state.position), outer.state.arc, outer.state.setpoint) if hover else None, math.radians(settings["roll"]), math.radians(excited), list(gyro_filter), list(accel_filter)))
+            log.append((now, list(position), list(angles), list(attitude), list(servo), list(motor), math.radians(settings["pitch"]), visible, (list(outer.state.position), outer.state.arc, outer.state.setpoint) if hover else None, math.radians(settings["roll"]), math.radians(excited), list(gyro_filter), list(accel_filter), (outer.state.heading, outer.state.yaw, getattr(outer.state, "aligned", True), getattr(outer.state, "calibrate_time", 0.0)) if hover else None))
         roll, pitch = angles[0], angles[1]
         angle = max(abs(roll), abs(pitch - trim))
         worst = max(worst, angle)

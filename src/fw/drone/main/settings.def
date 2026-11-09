@@ -79,6 +79,7 @@ TUNE(hover_gps_height_tau, hover.gps_height_tau, 1, 0, 60, 0)
 TUNE(hover_gps_heading, hover.gps_heading, RAD, -180, 180, 0)
 TUNE(hover_baro_tau, hover.baro_tau, 1, 0, 10, 0)
 TUNE(hover_thrust_direction, hover.thrust_direction, 1, 0, 1.5, 0)
+TUNE(hover_gps_calibrate, hover.gps_calibrate, RAD, 0, 10, 0)
 TUNE(auto_trim, auto_trim, 1, 0, 1, 0)
 TUNE(pitch_damping_tau, pitch_damping_tau, 1, 0, 0.2, 0)
 // The radio (radio.c, fw/link.h): the rate this drone sends at (link_rates index: 0 1 Mbps, 1 long range 500 kbps, 2 long range 250 kbps, 3 2 Mbps, 4 5.5 Mbps, 5 11 Mbps, 6 802.11g 6 Mbps), its maximum transmit power in dBm (0 = the driver's own, 20 dBm on the ESP32), and whether a disarmed drone that lost its controller looks for it on channels 1, 6 and 11 (1). The controller hears every rate, so the rate and power change only this drone's packets; the defaults are the link as flown before 2026-11-09.
