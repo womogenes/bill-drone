@@ -61,7 +61,11 @@ def evaluate(job):
     C.SPREAD = task.get("spread", 1.0)
     if task["flip"]:
         from sw.sim import flip as F
-        return flip_cost(F.run(decode(x), task["recovery"], n=n, seed=seed))
+        plant = None
+        if task.get("current"):
+            from sw.sim import toss as T
+            plant = T.plant()
+        return flip_cost(F.run(decode(x), task["recovery"], n=n, seed=seed, plant=plant))
     if task.get("toss"):
         from sw.sim import toss as T
         parts = [T.cost(T.run(task["recovery"] | decode(x), name, n=max(1, n // len(T.SCENARIOS)), seed=seed + i)) for i, name in enumerate(T.SCENARIOS)]
@@ -80,6 +84,7 @@ def main():
     parser.add_argument("--spread", type=float, default=1.0, help="plant randomization width (recover.SPREAD)")
     parser.add_argument("--start", type=Path)
     parser.add_argument("--flip", action="store_true")
+    parser.add_argument("--current", action="store_true", help="with --flip: fly drone 1 as of 2026-11-09 (sw/sim/toss.py plant) instead of rigid.load_plant's 2026-10-28 airframe")
     parser.add_argument("--toss", action="store_true", help="tune for sw/sim/toss.py's throws, starting from --recovery's parameters")
     parser.add_argument("--recovery", type=Path, default=Path(__file__).with_name("models") / "recover_params.json")
     parser.add_argument("--out", type=Path, default=Path("recover_params.json"))
@@ -96,7 +101,7 @@ def main():
         start = C.DEFAULTS | recovery | (json.loads(args.start.read_text()) if args.start else {})
     else:
         start = C.DEFAULTS | (json.loads(args.start.read_text()) if args.start else {})
-    task = dict(TASK) | {"spread": args.spread}
+    task = dict(TASK) | {"spread": args.spread, "current": args.current}
     es = cma.CMAEvolutionStrategy(encode(start), 0.15, {"bounds": [0, 1], "popsize": args.popsize, "maxiter": args.generations, "seed": 1, "verbose": -9})
     began = time.time()
     best = (math.inf, None, 0.0)

@@ -47,9 +47,10 @@ class Flip:
         self.stage = np.where(done, RECOVER, self.stage)
 
 
-def run(params, recovery, n=256, seed=0, seconds=10.0, randomize=True, record=False):
+def run(params, recovery, n=256, seed=0, seconds=10.0, randomize=True, record=False, plant=None):
+    """plant: rigid.Sim's (default rigid.load_plant(), the 2026-10-28 airframe; sw/sim/toss.py plant() is drone 1 as of 2026-11-09)."""
     recovery = (recovery or {}) | {key: value for key, value in (params or {}).items() if key in C.DEFAULTS}
-    sim = R.Sim(n, seed=seed, scale=C.randomization(n, seed) if randomize else None)
+    sim = R.Sim(n, plant, seed=seed, scale=C.randomization(n, seed) if randomize else None)
     hover = sim.mass * R.G / 2
     obs = sim.reset(np.tile([0, 0, START], (n, 1)), np.zeros((n, 3)), np.tile([1.0, 0, 0, 0], (n, 1)), np.zeros((n, 3)), motor=np.column_stack([np.full(n, hover), np.full(n, hover)]))
     control = C.Controller(sim, recovery | {"engage": 0.0, "descent": 0.0})
