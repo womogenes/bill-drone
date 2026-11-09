@@ -111,24 +111,22 @@ static uint32_t next_sequence(void) {
     return value;
 }
 
-// The radio quiet test (request M): nothing is transmitted until this time (esp_timer µs), while the GPS is polled for its RF health and satellites, so their readings with the drone's transmitter silent can be compared.
+// The radio quiet test (request M): nothing is transmitted until this time (esp_timer µs), while the GPS's own polls of its RF health and satellites (gps.c, every second) collect in the tunnel, so their readings with the drone's transmitter silent can be compared.
 static volatile int64_t quiet_until;
 
 static void quiet_task(void *arg) {
     int seconds = (int)(intptr_t)arg;
-    // MON-RF and NAV-SAT polls: a UBX frame with an empty payload each.
-    uint8_t polls[2][8] = {{UBX_SYNC1, UBX_SYNC2, 0x0a, 0x38}, {UBX_SYNC1, UBX_SYNC2, 0x01, 0x35}};
-    for (int i = 0; i < 2; i++) ubx_checksum(polls[i] + 2, 4, &polls[i][6], &polls[i][7]);
+    // The tunnel keeps frames through the silence and 5 s after it, for the N that takes them.
+    gps_tunnel_hold(seconds * 1000 + 5300);
     // Time for this request's reply to leave first.
     vTaskDelay(pdMS_TO_TICKS(300));
     quiet_until = esp_timer_get_time() + seconds * 1000000LL;
-    for (int s = 0; s < seconds; s++) {
-        gps_send(polls[0], 8);
-        if (s % 2 == 0) gps_send(polls[1], 8);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
     vTaskDelete(NULL);
 }
+
+// The GPS report (gps_report) goes out once a second while the laptop's recorder subscription asks for it ('G' after its first byte, bridge.py since 2026-11-09), so a bridge that would read it as a status never gets one.
+static int64_t gps_report_us = INT64_MIN / 2;
+static bool gps_report_due;
 
 // Never waits: ESP-NOW keeps at most WINDOW frames queued, and a refused frame is the caller's to retry or drop.
 static bool transmit(uint8_t channel, uint32_t number, const uint8_t *data, size_t length, uint8_t index, uint8_t count) {
@@ -248,6 +246,7 @@ static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, 
             if (data[0] == 1 && !log_requested) meta_dirty = meta_length > 0;
             if (data[0] == 1) log_requested = true;
         }
+        if (channel == 4 && length >= 2 && data[1] == 'G') gps_report_us = now;
     }
     portEXIT_CRITICAL(&lock);
     if (!newer || channel != 1) return;
@@ -410,7 +409,18 @@ static void tick(void *arg) {
         portEXIT_CRITICAL(&lock);
     }
     if (++ticks % 5) {
-        stream_log(esp_timer_get_time());
+        int64_t now = esp_timer_get_time();
+        // Between status messages; a refused send (the window full) is retried on the next tick.
+        portENTER_CRITICAL(&lock);
+        if (ticks % 100 == 3) gps_report_due = now - gps_report_us < 3000000;
+        bool report = gps_report_due;
+        portEXIT_CRITICAL(&lock);
+        if (report) {
+            uint8_t message[PAYLOAD];
+            size_t length = gps_report(message, sizeof(message), now);
+            if (!length || transmit(0, next_sequence(), message, length, 0, 1)) gps_report_due = false;
+        }
+        stream_log(now);
         return;
     }
     Status status = {.magic = {'S', 'T', 'A', '1'}};
@@ -588,7 +598,7 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         return NULL;
     }
     if (op == 'M') {
-        // The radio quiet test: seconds (1-15) without transmitting, only disarmed, the GPS's MON-RF every second and NAV-SAT every other into the tunnel (take them with N after).
+        // The radio quiet test: seconds (1-15) without transmitting, only disarmed, the GPS's MON-RF and NAV-SAT every second into the tunnel (take them with N after; its 4 KB holds about 6 s of them).
         if (!flight_runtime_idle()) return "Disarm and zero throttle first";
         if (length < 1 || body[0] < 1 || body[0] > 15) return "Seconds 1-15";
         if (xTaskCreatePinnedToCore(quiet_task, "quiet", 3072, (void *)(intptr_t)body[0], 2, NULL, 0) != pdPASS) return "No memory for the quiet test";

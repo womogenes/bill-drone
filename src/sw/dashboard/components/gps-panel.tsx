@@ -1,7 +1,7 @@
 'use client';
 
 import { memo } from 'react';
-import type { BaroReading, GpsReading } from '@/lib/telemetry';
+import type { BaroReading, GpsReading, GpsReport } from '@/lib/telemetry';
 
 const FIXES: Record<number, string> = {
   0: 'No fix',
@@ -26,13 +26,37 @@ export function gpsSolved(
   );
 }
 
+// Short names for the satellites used per system.
+const SYSTEMS: Record<string, string> = {
+  GPS: 'GPS',
+  Galileo: 'GAL',
+  BeiDou: 'BDS',
+  GLONASS: 'GLO',
+  QZSS: 'QZS',
+  SBAS: 'SBAS',
+};
+
+// What SBAS is doing: corrections in the solution, a WAAS satellite heard but not yet applied, searching, or the drone's SBAS configuration not taken.
+function sbasState(gps: GpsReading | null | undefined, report: GpsReport) {
+  if (report.config.sbas === 'refused' || report.config.signals === 'refused')
+    return 'Not configured';
+  if (gps?.differential || report.sbas_corrected) return 'Corrections in use';
+  if (report.sbas_heard.length)
+    return `Heard PRN ${report.sbas_heard.join(', ')}`;
+  return report.config.sbas === 'set' ? 'Searching' : '—';
+}
+
 export const GpsPanel = memo(function GpsPanel({
   gps,
   baro,
+  report,
+  time,
   connected,
 }: {
   gps: GpsReading | null | undefined;
   baro?: BaroReading | null;
+  report?: GpsReport | null;
+  time?: number;
   connected: boolean;
 }) {
   const live = connected && gps && gps.age_ms !== null && gps.age_ms < 1000;
@@ -48,6 +72,28 @@ export const GpsPanel = memo(function GpsPanel({
   const speed = solved
     ? Math.hypot(gps.velocity[0], gps.velocity[1])
     : undefined;
+  // The report comes once a second; older than 3 s (or from a drone or bridge without it) shows nothing.
+  const diagnosed =
+    connected &&
+    report &&
+    time !== undefined &&
+    time - report.time < 3000 &&
+    report.satellites_age_ms !== null &&
+    report.satellites_age_ms < 3000
+      ? report
+      : null;
+  const used = diagnosed
+    ? Object.entries(diagnosed.used)
+        .map(([system, count]) => `${SYSTEMS[system] ?? system} ${count}`)
+        .join(' · ') || 'none'
+    : '—';
+  const jammed =
+    diagnosed?.jamming === 'warning' || diagnosed?.jamming === 'critical';
+  const unconfigured = diagnosed
+    ? Object.entries(diagnosed.config)
+        .filter(([, state]) => state === 'refused' || state === 'unanswered')
+        .map(([group, state]) => `${group} ${state}`)
+    : [];
   return (
     <section aria-labelledby="gps-heading" className="space-y-2 px-4 py-3">
       <h2 id="gps-heading" className="font-semibold">
@@ -57,7 +103,13 @@ export const GpsPanel = memo(function GpsPanel({
         <div>
           <dt className="text-sm text-muted-foreground">Fix</dt>
           <dd
-            className={`${live && gps.ok ? 'text-green-700' : connected && gps ? 'text-red-700' : ''}`}
+            className={
+              live && gps.ok
+                ? 'text-green-700'
+                : connected && gps
+                  ? 'text-red-700'
+                  : ''
+            }
           >
             {state}
           </dd>
@@ -98,6 +150,47 @@ export const GpsPanel = memo(function GpsPanel({
               : '—'}
           </dd>
         </div>
+        <div>
+          <dt className="text-sm text-muted-foreground">Signal (top 4)</dt>
+          <dd>
+            {diagnosed?.top4_cno != null
+              ? `${diagnosed.top4_cno.toFixed(1)} dB-Hz`
+              : '—'}
+          </dd>
+          {diagnosed && (
+            <dd className="text-sm text-muted-foreground">
+              {diagnosed.heard} heard of {diagnosed.listed}
+            </dd>
+          )}
+        </div>
+        <div className="col-span-2">
+          <dt className="text-sm text-muted-foreground">Used</dt>
+          <dd>{used}</dd>
+        </div>
+        <div>
+          <dt className="text-sm text-muted-foreground">Jamming</dt>
+          <dd className={jammed ? 'text-red-700' : ''}>
+            {diagnosed?.rf_age_ms != null && diagnosed.rf_age_ms < 3000
+              ? `${diagnosed.jamming} · ${diagnosed.jam_indicator}/255`
+              : '—'}
+          </dd>
+          {diagnosed?.rf_age_ms != null && diagnosed.rf_age_ms < 3000 && (
+            <dd className="text-sm text-muted-foreground">
+              noise {diagnosed.noise_per_ms}, AGC{' '}
+              {(diagnosed.agc * 100).toFixed(0)}%
+            </dd>
+          )}
+        </div>
+        <div className="col-span-2">
+          <dt className="text-sm text-muted-foreground">SBAS</dt>
+          <dd>{diagnosed ? sbasState(gps, diagnosed) : '—'}</dd>
+        </div>
+        {unconfigured.length > 0 && (
+          <div className="col-span-3">
+            <dt className="text-sm text-muted-foreground">Configuration</dt>
+            <dd className="text-red-700">{unconfigured.join(', ')}</dd>
+          </div>
+        )}
         <div className="col-span-3">
           <dt className="text-sm text-muted-foreground">Barometer</dt>
           <dd>

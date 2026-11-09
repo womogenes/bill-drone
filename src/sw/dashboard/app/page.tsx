@@ -935,6 +935,8 @@ export default function Page() {
           <GpsPanel
             gps={reading?.gps}
             baro={reading?.baro}
+            report={reading?.gps_report}
+            time={reading?.time}
             connected={status === 'connected'}
           />
         </div>
