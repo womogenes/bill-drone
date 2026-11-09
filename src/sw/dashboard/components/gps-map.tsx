@@ -17,7 +17,7 @@ const ATTRIBUTION =
   'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community';
 // Imagery is sharp to 19 in most places; one level of upscaling past it still helps at hover scale.
 const NATIVE_ZOOM = 19;
-const MAX_ZOOM = 20;
+const MAX_ZOOM = 22;
 // The view always spans at least this much around the takeoff point (m).
 const MIN_SPAN = 20;
 // Fixes further apart than this are separate stretches, not a path.
@@ -115,6 +115,9 @@ export const GpsMap = memo(function GpsMap({
   hover,
   title = 'Position',
   summary,
+  fill = false,
+  minSpan = MIN_SPAN,
+  heading = true,
 }: {
   gps: GpsReading | null | undefined;
   latest: GpsSample | undefined;
@@ -124,6 +127,12 @@ export const GpsMap = memo(function GpsMap({
   title?: string;
   // Rows in place of the live distance and height, for a recorded flight.
   summary?: [string, string][];
+  // Take the height it is given instead of a 4:3 box, so a report fits one screen.
+  fill?: boolean;
+  // The smallest view around the start (m): a report zooms to a hop's few metres.
+  minSpan?: number;
+  // The title and the distance and height rows; a report shows its own.
+  heading?: boolean;
 }) {
   // Rebuilt per fix (10 Hz), not per status (20 Hz).
   const trail = useMemo(
@@ -244,7 +253,7 @@ export const GpsMap = memo(function GpsMap({
     else map.home.remove();
     if (!origin || !container.current?.clientWidth) return;
     const bounds = L.latLng(origin.latitude, origin.longitude).toBounds(
-      MIN_SPAN
+      minSpan
     );
     if (fix)
       bounds.extend(
@@ -272,7 +281,7 @@ export const GpsMap = memo(function GpsMap({
       });
       map.placed = true;
     }
-  }, [trail, fix, home, origin]);
+  }, [trail, fix, home, origin, minSpan]);
 
   // The local plot: metres from the takeoff point, north up, equal scale.
   const points = origin
@@ -282,8 +291,8 @@ export const GpsMap = memo(function GpsMap({
       }))
     : [];
   const extent: [number, number][] = [
-    [-MIN_SPAN / 2, -MIN_SPAN / 2],
-    [MIN_SPAN / 2, MIN_SPAN / 2],
+    [-minSpan / 2, -minSpan / 2],
+    [minSpan / 2, minSpan / 2],
   ];
   for (const piece of points) extent.push(...piece.points);
   if (offset && fix) {
@@ -324,11 +333,23 @@ export const GpsMap = memo(function GpsMap({
   };
 
   return (
-    <section className="space-y-3 px-4 py-4" aria-labelledby="gps-map-heading">
-      <h2 id="gps-map-heading" className="font-semibold">
+    <section
+      className={
+        fill
+          ? 'flex min-h-0 flex-1 flex-col gap-2 px-4 py-2'
+          : 'space-y-3 px-4 py-4'
+      }
+      aria-labelledby="gps-map-heading"
+    >
+      <h2
+        id="gps-map-heading"
+        className={heading ? 'font-semibold' : 'sr-only'}
+      >
         {title}
       </h2>
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
+      <dl
+        className={`grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums ${heading ? '' : 'hidden'}`}
+      >
         {(
           summary ?? [
             [
@@ -351,7 +372,13 @@ export const GpsMap = memo(function GpsMap({
           </div>
         ))}
       </dl>
-      <div className="relative isolate aspect-4/3">
+      <div
+        className={
+          fill
+            ? 'relative isolate min-h-48 flex-1'
+            : 'relative isolate aspect-4/3'
+        }
+      >
         <div ref={container} className="absolute inset-0 z-0 bg-muted!" />
         {!tiles && (
           <svg

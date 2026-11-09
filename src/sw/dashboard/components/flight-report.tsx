@@ -25,21 +25,20 @@ type Point = {
 };
 
 const DASH = [4, 3];
+// One hue per quantity, its target dashed in the same hue: blue is the measured value, orange the second axis (pitch), and the barometer recedes in gray.
+const BLUE = 'var(--color-blue-700)';
+const ORANGE = 'var(--color-orange-600)';
 const heightSeries: ChartSeries<Point>[] = [
   {
-    label: 'Estimate',
-    color: 'var(--color-blue-700)',
-    value: (point) => point.height,
-  },
-  {
     label: 'Barometer',
-    color: 'var(--muted-foreground)',
+    color: 'var(--color-zinc-400)',
     width: 1,
     value: (point) => point.baro,
   },
+  { label: 'Estimate', color: BLUE, value: (point) => point.height },
   {
     label: 'Target',
-    color: 'var(--foreground)',
+    color: BLUE,
     width: 1,
     dash: DASH,
     value: (point) => point.height_target,
@@ -47,43 +46,31 @@ const heightSeries: ChartSeries<Point>[] = [
 ];
 const attitudeSeries: ChartSeries<Point>[] = [
   {
-    label: 'Roll',
-    color: 'var(--color-red-700)',
-    value: (point) => point.roll,
-  },
-  {
-    label: 'Pitch',
-    color: 'var(--color-green-700)',
-    value: (point) => point.pitch,
-  },
-  {
     label: 'Roll target',
-    color: 'var(--color-red-700)',
+    color: BLUE,
     width: 1,
     dash: DASH,
     value: (point) => point.roll_target,
   },
   {
     label: 'Pitch target',
-    color: 'var(--color-green-700)',
+    color: ORANGE,
     width: 1,
     dash: DASH,
     value: (point) => point.pitch_target,
   },
+  { label: 'Roll', color: BLUE, value: (point) => point.roll },
+  { label: 'Pitch', color: ORANGE, value: (point) => point.pitch },
 ];
 const shakeSeries: ChartSeries<Point>[] = [
   {
-    label: 'Shake',
-    color: 'var(--color-blue-700)',
+    label: 'Pitch rate, 2.2-3.5 Hz',
+    color: BLUE,
     value: (point) => point.shake,
   },
 ];
 const speedSeries: ChartSeries<FlightTrackPoint>[] = [
-  {
-    label: 'Ground speed',
-    color: 'var(--color-blue-700)',
-    value: (point) => point.speed,
-  },
+  { label: 'Ground speed', color: BLUE, value: (point) => point.speed },
 ];
 const time = (point: { time: number }) => point.time;
 // GPS fixes come at 10 Hz: a longer silence is a lost link or fix, not a line to draw across.
@@ -125,18 +112,38 @@ export function startTime(iso: string) {
   });
 }
 
+function Swatch({ color, dash }: { color: string; dash?: number[] }) {
+  return (
+    <svg aria-hidden="true" width="14" height="6" className="shrink-0">
+      <line
+        x1="0"
+        y1="3"
+        x2="14"
+        y2="3"
+        stroke={color}
+        strokeWidth={dash ? 1.5 : 2}
+        strokeDasharray={dash?.join(' ')}
+      />
+    </svg>
+  );
+}
+
 function Chart<T extends { time: number }>({
   title,
+  unit,
   points,
   series,
+  start,
   end,
   format,
   minSpan,
   gap,
 }: {
   title: string;
+  unit: string;
   points: T[];
   series: ChartSeries<T>[];
+  start: number;
   end: number;
   format: (value: number) => string;
   minSpan?: number;
@@ -144,15 +151,21 @@ function Chart<T extends { time: number }>({
 }) {
   const history = useMemo(() => () => points, [points]);
   return (
-    <section className="space-y-2 px-4 py-3" aria-label={title}>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <h2 className="mr-auto font-semibold">{title}</h2>
+    <section
+      className="flex min-h-0 flex-col gap-1.5 px-5 py-3 lg:flex-1"
+      aria-label={title}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <h2 className="mr-auto text-sm font-medium">
+          {title}{' '}
+          <span className="font-normal text-muted-foreground">{unit}</span>
+        </h2>
         {series.map((line) => (
           <span
             key={line.label}
-            className="text-sm"
-            style={{ color: line.color }}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground"
           >
+            <Swatch color={line.color} dash={line.dash} />
             {line.label}
           </span>
         ))}
@@ -161,14 +174,14 @@ function Chart<T extends { time: number }>({
         history={history}
         series={series}
         time={time}
-        start={0}
+        start={start}
         end={end}
         gap={gap}
         formatTime={formatTime}
         formatValue={format}
         minSpan={minSpan}
         label={title}
-        className="h-48"
+        className="h-40 lg:h-auto lg:min-h-16 lg:flex-1"
       />
     </section>
   );
@@ -217,44 +230,61 @@ export function FlightReportView({ report }: { report: FlightReport }) {
         })
       )
     : null;
-  const end = Math.max(report.duration, report.series.time.at(-1) ?? 0, 1);
-  const summary: [string, string][] = [
-    ['Started', startTime(report.started)],
-    ['Duration', clock(report.duration)],
+  const total = Math.max(report.duration, report.series.time.at(-1) ?? 0, 1);
+  // The charts show the flight itself: a second before liftoff to just after the motors stop, so the tumble after the cut doesn't set the scales.
+  const [chartStart, chartEnd] = report.airborne
+    ? [
+        Math.max(0, report.airborne[0] - 1),
+        Math.min(total, report.airborne[1] + 0.25),
+      ]
+    : [0, total];
+  const stats: [string, string][] = [
     [
-      'Airborne',
-      report.airborne
-        ? `${clock(report.airborne[1] - report.airborne[0])} from ${clock(report.airborne[0])}`
-        : 'Never lifted off',
+      'In the air',
+      report.airborne ? clock(report.airborne[1] - report.airborne[0]) : '—',
     ],
-    ['Stop', report.stop_reason ?? 'No stop record'],
     ['Highest', fixed(report.max_height, 2, 'm')],
     ['Top speed', fixed(report.top_speed, 1, 'm/s')],
-    ['Shake (2.2-3.5 Hz)', fixed(report.shake_rms, 1, '°/s RMS')],
-    ['Wind (rough)', windText(report.wind)],
-    ['GPS hold', report.gps_hold ? 'On' : 'Off'],
-    ['Drone', report.drone ?? '—'],
+    ['Furthest', fixed(furthest, 1, 'm')],
+    ['Shake', fixed(report.shake_rms, 1, '°/s')],
+    ['Wind', windText(report.wind)],
   ];
+  const stopped = report.stop_reason ?? 'No stop record';
 
   return (
-    <div className="divide-y divide-border">
+    <div className="flex flex-col divide-y divide-border lg:min-h-0 lg:flex-1">
       <section
-        className="space-y-3 px-4 py-3"
+        className="flex shrink-0 flex-wrap items-center gap-x-10 gap-y-3 px-5 py-3"
         aria-labelledby="summary-heading"
       >
-        <h2 id="summary-heading" className="font-semibold">
+        <h2 id="summary-heading" className="sr-only">
           Summary
         </h2>
-        <dl className="grid grid-cols-2 gap-4 tabular-nums sm:grid-cols-5">
-          {summary.map(([label, value]) => (
+        <dl className="flex flex-wrap gap-x-8 gap-y-2 tabular-nums">
+          {stats.map(([label, value]) => (
             <div key={label}>
-              <dt className="text-sm text-muted-foreground">{label}</dt>
-              <dd>{value}</dd>
+              <dt className="text-xs text-muted-foreground">{label}</dt>
+              <dd className="font-medium">{value}</dd>
             </div>
           ))}
         </dl>
+        <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
+          <span
+            className={`rounded-full border px-2.5 py-0.5 ${stopped === 'Landed' ? 'text-muted-foreground' : 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300'}`}
+          >
+            {stopped}
+          </span>
+          <span className="rounded-full border px-2.5 py-0.5 text-muted-foreground">
+            GPS hold {report.gps_hold ? 'on' : 'off'}
+          </span>
+          {report.drone && (
+            <span className="text-muted-foreground tabular-nums">
+              {report.drone}
+            </span>
+          )}
+        </div>
         {report.warnings.length > 0 && (
-          <ul className="space-y-1 text-red-700 tabular-nums">
+          <ul className="max-h-16 w-full space-y-0.5 overflow-y-auto rounded-md border border-red-500/30 bg-red-500/5 px-3 py-1.5 text-sm text-red-800 tabular-nums dark:text-red-300">
             {report.warnings.map((warning, index) => (
               <li key={index}>
                 {warning.time !== null && (
@@ -268,43 +298,51 @@ export function FlightReportView({ report }: { report: FlightReport }) {
           </ul>
         )}
       </section>
-      <div className="grid divide-y divide-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-        <div className="min-w-0 divide-y divide-border">
+      <div className="grid divide-y divide-border lg:min-h-0 lg:flex-1 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+        <div className="flex min-w-0 flex-col divide-y divide-border lg:min-h-0">
           <Chart
-            title="Height (m)"
+            title="Height"
+            unit="m"
             points={points}
             series={heightSeries}
-            end={end}
+            start={chartStart}
+            end={chartEnd}
             format={metres}
             minSpan={0.5}
           />
           <Chart
-            title="Attitude (°)"
+            title="Attitude"
+            unit="°"
             points={points}
             series={attitudeSeries}
-            end={end}
+            start={chartStart}
+            end={chartEnd}
             format={degrees}
             minSpan={4}
           />
           <Chart
-            title="Pitch shake (°/s RMS, 2.2-3.5 Hz, 1 s)"
+            title="Shake"
+            unit="°/s RMS over 1 s"
             points={points}
             series={shakeSeries}
-            end={end}
+            start={chartStart}
+            end={chartEnd}
             format={rate}
             minSpan={5}
           />
           <Chart
-            title="GPS speed (m/s)"
+            title="Speed"
+            unit="m/s"
             points={report.track}
             series={speedSeries}
-            end={end}
+            start={chartStart}
+            end={chartEnd}
             format={speed}
             minSpan={1}
             gap={fixGap}
           />
         </div>
-        <div className="min-w-0 divide-y divide-border">
+        <div className="flex min-w-0 flex-col divide-y divide-border lg:min-h-0">
           {fixes.length > 0 && (
             <GpsMap
               key={report.name}
@@ -314,6 +352,9 @@ export function FlightReportView({ report }: { report: FlightReport }) {
               history={mapHistory}
               hover={null}
               title="Track"
+              fill
+              heading={false}
+              minSpan={6}
               summary={[
                 ['Furthest from takeoff', fixed(furthest, 1, 'm')],
                 ['Top speed', fixed(report.top_speed, 1, 'm/s')],
@@ -321,10 +362,10 @@ export function FlightReportView({ report }: { report: FlightReport }) {
             />
           )}
           <section
-            className="space-y-2 px-4 py-3"
+            className="max-h-48 shrink-0 space-y-1.5 overflow-y-auto px-5 py-3"
             aria-labelledby="spans-heading"
           >
-            <h2 id="spans-heading" className="font-semibold">
+            <h2 id="spans-heading" className="text-sm font-medium">
               Hands-off hover
             </h2>
             {report.spans.length ? (

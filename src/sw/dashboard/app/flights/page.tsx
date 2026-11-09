@@ -54,7 +54,7 @@ function Flights() {
     label: `${startTime(entry.started)} · ${clock(entry.seconds)}`,
   }));
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="flex min-h-dvh flex-col lg:h-dvh lg:overflow-hidden">
       <header className="flex h-14 shrink-0 items-center gap-6 border-b px-6">
         <h1 className="font-semibold">Flights</h1>
         <Select
