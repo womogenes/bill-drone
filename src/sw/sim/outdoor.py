@@ -28,7 +28,13 @@ RECORDINGS = Path(__file__).parents[1] / "recordings"
 SETTINGS = "2026-11-02T08-15-23"
 AIRFRAME = MODELS / "airframe_2026-11-02_9in_calibrated.json"
 DISTURBANCES = MODELS / "disturbances_2026-11-02_9in_calibrated.json"
-GPS = {"rate": 10.0, "latency": 0.06, "velocity_noise": 0.05, "vertical_noise": 0.1, "position_noise": 0.7, "position_tau": 30.0}
+# At the GPS-held liftoffs of 2026-11-09 (05:45, 05:50, 06:19, 06:25 UTC) the GPS's climb rate read 0.5-1.2 m/s down for 0.3-0.5 s while the drone climbed at up to 1 m/s (sw/sim/gps_truth.py); in flight it is 0.18-0.39 m/s RMS off.
+GPS = {"rate": 10.0, "latency": 0.06, "velocity_noise": 0.05, "vertical_noise": 0.25, "position_noise": 0.7, "position_tau": 30.0, "liftoff_descent": (0.5, 1.2), "liftoff_s": 0.4}
+# Ground effect: 10-inch rotors (0.127 m radius) 0.115 m above the floor at rest (geometry_2026-11-08b rotor_z 0.094 m above the tube, the body's underside 0.02 m below it).
+GROUND_EFFECT = {"radius": 0.127, "rotor": 0.115}
+# The takeoff: the highest the drone climbs in its first TAKEOFF_S (s) after liftoff, over the climb goal and over the height it then settles at (the median over the following SETTLED_S, s), which leaves out the barometer's own error (0.07-0.13 m RMS over 4 s against the accelerometer on 2026-11-09).
+TAKEOFF_S = 5.0
+SETTLED_S = 5.0
 SETTLE = 5.0
 FLYAWAY = 10.0
 # Braking after a stick: the ground speed (m/s) that counts as stopped, and how long after release it may take (s).
@@ -68,7 +74,7 @@ def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwin
         "airframe": p, "rotor_drag": draws["drag"], "sensed_disturbances": True,
         "disturbances": [d for d in disturbances or CURRENT["disturbances"] if d["channel"] in ("roll", "pitch", "yaw")],
         "wind_mean": (wind * math.cos(direction), wind * math.sin(direction)), "wind": 0.2 * wind + 0.1, "wind_tau": 15.0 / speed,
-        "wind_vertical": 0.1 * wind + 0.05, "wind_vertical_tau": height / speed, "vertical_drag": 0.7,
+        "wind_vertical": 0.1 * wind + 0.05, "wind_vertical_tau": height / speed, "vertical_drag": 0.7, "ground_effect": GROUND_EFFECT,
     }
     if flow:
         # The forward camera's scene: trees, buildings or open field, its distance unknown to the drone (hover_flow_depth is its guess), drawn per run with more pixel noise than indoors (grass and leaves moving, the sky's low texture).
@@ -82,6 +88,10 @@ def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwin
 
 def fly(job):
     airframe, disturbances, flown, wind, seed, args = job
+    if args.source:
+        from sw.sim.landing_test import install
+
+        install(args.source, args.defines.split())
     p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind, args.flow, args.baro, args.speed_draw)
     s = dict(flown)
     if args.preload:
@@ -103,6 +113,11 @@ def fly(job):
     t = np.array([e[0] for e in log]) - lifted
     position = np.array([e[1] for e in log])
     angles = np.degrees([e[2][:2] for e in log])
+    peak = position[(t >= 0) & (t < TAKEOFF_S), 2].max()
+    out["overshoot"] = float(peak - position[0, 2] - s["hover_climb"])
+    settled = (t >= TAKEOFF_S) & (t < TAKEOFF_S + SETTLED_S)
+    if settled.any():
+        out["overshoot_settled"] = float(peak - np.median(position[settled, 2]))
     hold = t > SETTLE
     distance = np.hypot(position[hold, 0], position[hold, 1])
     if result.get("touched") is not None:
@@ -149,6 +164,8 @@ def main():
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--flow", type=lambda text: tuple(float(v) for v in text.split(",")), help="the camera's flow, the scene LOW,HIGH m away (drawn log-uniform per run); hover_flow_depth (--set) is the drone's guess")
     parser.add_argument("--out", type=Path, help="write every run's result as JSON")
+    parser.add_argument("--source", help="another copy of hover.c to fly (sw/sim/landing_test.py install), e.g. the previous commit's")
+    parser.add_argument("--defines", default="", help="compile-time overrides for --source, space separated")
     parser.add_argument("--sticks", type=lambda text: [tuple(float(v) for v in item.split(",")) for item in text.split(";")], help="a pilot's stick sequence during the hold: start s after settling, pitch and roll degrees, seconds held; ';' between sticks (e.g. '5,10,0,2;12,-10,0,2'); adds each run's largest pitch peak to peak 0.3-3 s after a stick is let go, and the braking: peak ground speed, time and distance from release to under STOPPED")
     parser.add_argument("--flyaway", type=float, default=FLYAWAY, help="m from takeoff that counts as flown off")
     parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=(0.5, 3.0), help="range the forward speed moment is drawn in, times the airframe's (log-uniform; default 0.5,3 from before any flight measured it; models fitted to the outdoor flights warrant narrower)")
@@ -181,6 +198,11 @@ def main():
                 if stopped:
                     s = lambda key, pct: np.percentile([r[key] for r in stopped], pct)
                     line += f" after {s('stop_time', 50):.1f} s (p90 {s('stop_time', 90):.1f}) and {s('stop_distance', 50):.1f} m (p90 {s('stop_distance', 90):.1f})"
+        overshoot = [r["overshoot"] for r in runs if "overshoot" in r]
+        if overshoot:
+            line += f" | takeoff overshoot median {np.median(overshoot):.2f} m (p90 {np.percentile(overshoot, 90):.2f}, max {max(overshoot):.2f})"
+            settled = [r["overshoot_settled"] for r in runs if "overshoot_settled" in r]
+            line += f", over the settled height median {np.median(settled):.2f} m (p90 {np.percentile(settled, 90):.2f}, max {max(settled):.2f})"
         print(line, flush=True)
         failed = [r for r in runs if r["fate"] != "held"]
         if failed:

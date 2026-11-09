@@ -102,6 +102,17 @@
 #ifndef LAND_TILT
 #define LAND_TILT (25.0f * 3.14159265f / 180)
 #endif
+// Landing blind (no tag in view, the barometer on): the height is then the barometer's, and it cannot find the floor. Against the floor each 2026-11-09 landing came down on (sw/sim/baro_floor.py) the floor itself had moved -0.48 to +0.64 m from the takeoff's (weather, wind pressure), and the last 0.3 s before contact read a median 0.27 m high on top, so the height read -0.51 to +0.89 m at contact. So blind, neither the tilt cut nor a probe goes by the height: the tilt cut waits for a probe's evidence of the floor (BLIND_FELT of PROBE_DEPTH lost to the air with the accelerometer under PROBE_SHARE of it), the "low" start is the camera's only, and the "due" start allows BLIND_HEIGHT more height. In sw/sim/landing_test.py a probe in the air (most started by a stalled descent) made the tilt cut live and the drone's 20-30 degree swings did the rest: blind landings cut in the air fell from 35 to 1 of 181 with --outdoor (the one at 38 degrees of pitch, losing control) and from 77 to 0 of 175 with --no-camera --baro; replayed on the 11 landings of that night, probes started in the air in 9 before and in none now.
+#ifndef BLIND_FELT
+#define BLIND_FELT 0.5f
+#endif
+#ifndef BLIND_HEIGHT
+#define BLIND_HEIGHT 0.5f
+#endif
+// Nor is a blind touchdown declared while the climb rate still reads a descent over BLIND_CLIMB (m/s, or half the land rate if more): ground effect then holds the specific force up as the probe winds thrust down. 2026-11-09 06:10 UTC: a probe started 0.25 m up on the barometer's height reading under the takeoff floor, declared touchdown 0.12 s before contact at 77 % of the hold's thrust with the climb rate at -0.89 m/s, and the drone dropped the last 10 cm (replayed: landing_test --replay ... --contact 81.89). The probe then goes on feeling until the accelerometer shows air (falling) or the descent stops. Without the barometer (the IMU's height, camera lost) landings go on as before: in landing_test's camera rig the IMU-only height drifted down below the floor while the drone rose, and only the "low" start ended those landings.
+#ifndef BLIND_CLIMB
+#define BLIND_CLIMB 0.2f
+#endif
 #ifndef LAND_SHOCK
 #define LAND_SHOCK 1.45f
 #endif
@@ -126,11 +137,12 @@
 #define LIFTING 0.8f
 // Takeoff from wherever the drone rests: it has no legs, and its body sits several degrees off level (3-8 degrees nose-down on 2026-11-07). While the floor holds it the attitude targets are the resting attitude, so the servos do not tilt the thrust against the floor, and from liftoff they ease to the hold's own over TAKEOFF_EASE_S (s). Levelling at once from an 8 degree nose-down rest kicked the pitch at 45 degrees/s at liftoff (2026-11-08 00:39 UTC), and the hold, blind before the tag, answered it with a 10 degree lean back. Liftoff is the height estimate passing LIFTED_HEIGHT (m), 0.25-0.4 s after the motors start in that day's hops (the collective is at hover thrust from the first tick, so it cannot tell), or TAKEOFF_WAIT_S (s) after engaging, whichever comes first.
 #define TAKEOFF_EASE_S 0.6f
-// Touchdown at the resting attitude: with no legs the body rocks on its underside, and a level touchdown from that 4-5 degree nose-up rest tipped it forward onto its nose as the motors cut, on every landing of 2026-11-08 and 09 (05:45 UTC: level at 0.3 m/s, 100 deg/s at the cut, 70 degrees 0.3 s later; indoors at 0.2 m/s too). Once a landing is near the floor (LAND_TILT_HEIGHT, or probing) the attitude the drone rested at before takeoff, at most SETTLE_MAX (radians) from level, is added to its attitude targets over SETTLE_S (s), so it meets the floor about as it sat on it. Added, not in place of the hold's targets: replacing them took the velocity damping away for the whole final descent (seconds at slow land rates), and the simulated drone swung to 28 degrees and was cut 0.1-0.25 m up in 3 of 80 landings.
-#define SETTLE_S 0.4f
-#define SETTLE_MAX (8.0f * 3.14159265f / 180)
 #define LIFTED_HEIGHT 0.005f
 #define TAKEOFF_WAIT_S 1.5f
+// The GPS's climb rate is not taken until TAKEOFF_GPS_S (s) after liftoff, nor while the barometer holds the height: at the 2026-11-09 GPS-held liftoffs it read 0.5-1.2 m/s down for 0.3-0.5 s while the drone climbed (05:45, 05:50, 06:19, 06:25 UTC), and at hover_gps_tau 0.5 it held the climb-rate estimate near zero while the drone climbed at up to 1.5 m/s, so the climb loop kept 0.07-0.14 g of excess thrust and 7 of 12 such takeoffs reached 1.15-1.62 m against a 0.8 m goal (none of the 7 without the GPS hold did; sw/sim/gps_truth.py). In flight it lags 40-180 ms and is 0.18-0.39 m/s RMS off, where the barometer tracks the accelerometer to 0.07-0.13 m over 4 s. Replayed on those 12 takeoffs (sw/sim/height_replay.py) the height estimate's error over the first 2.5 s fell from 0.12-0.40 m RMS (worst 0.85) to 0.04-0.21 (worst 0.40); in sw/sim/outdoor.py (06:19 settings, the false descent modelled) the climb's peak over the height it settles at fell from a median of 0.12-0.19 m (90% 0.41-0.53) to 0.02-0.07 (90% 0.16-0.32, the rest the barometer's own wander).
+#ifndef TAKEOFF_GPS_S
+#define TAKEOFF_GPS_S 2.0f
+#endif
 // Rotor drag: the servos' dead time beyond the tick the runtime's tilt is already late by (us; sw/sim/sweep.py FITTED has 70 ms), how slowly the camera teaches the drag model its offset (s), and that offset's limit (m/s).
 #define SERVO_DELAY_US 60000
 #define OFFSET_TAU 5.0f
@@ -142,13 +154,13 @@
 // After a stick is let go the hold brakes for up to BRAKE_S (s), or until the speed estimate is under BRAKED (m/s), before it holds a place: the place is then where the drone stopped.
 #define BRAKE_S 2.0f
 #define BRAKED 0.15f
-// A landing waits to descend (climb-rate command 0) while the horizontal hold brakes a speed over LAND_WAIT_SPEED (m/s), for at most LAND_WAIT_S (s) from its start, unless already under LAND_TILT_HEIGHT: B pressed in fast flight began descending at once while still braking (asked for after the 2026-11-08 outdoor flights), so it stops first, then comes down. The wait is not landing time (land_time stays 0), so the probes' timing, LAND_EASE and the "due" timeout all start from the descent.
+// A landing waits to descend (holding its height) while the horizontal hold brakes a speed over LAND_WAIT_SPEED (m/s), for at most LAND_WAIT_S (s) from its start, unless already under LAND_TILT_HEIGHT: B pressed in fast flight began descending at once while still braking (asked for after the 2026-11-08 outdoor flights), so it stops first, then comes down. The wait is not landing time (land_time stays 0), so the probes' timing, LAND_EASE and the "due" timeout all start from the descent.
 #ifndef LAND_WAIT_SPEED
 #define LAND_WAIT_SPEED 0.5f
 #endif
-// Off (0) as deployed 2026-11-09: with the wait forced on every landing (LAND_WAIT_SPEED 0.02) one no-camera drag-model landing in landing_test declared touchdown in the air and one hit at 1.84 m/s, against none without it; 2 s is the value to try once that is understood.
+// It was off (0) as deployed 2026-11-09: forced on every landing (LAND_WAIT_SPEED 0.02) it declared touchdowns in the air in landing_test. Waiting held only a zero climb rate (the height target followed the height), so the climb rate's drift moved the drone (--outdoor seed 48: up 0.25 m in the 2 s), and when the descent began late the stall start took the descent not yet under way for a stall and probed in the air, where the probe found "floor" (seed 48 at 1.33 m). Now the wait holds the height, a stall needs the descent first (descended), and the blind rules above keep a probe in the air from cutting: forced on with --outdoor, touchdowns in the air 4 to 0 and cuts in the air 32 to 2 of 181 (both on airframes losing control in 2-3 m/s of wind, which the 2 s more airborne meets a little more often: 29 against 22 crashed or fell over without the wait), contact speed at most 0.98 m/s against 4.51; with the drag model and no GPS (--no-camera --baro --set hover_drag=1) no landing in the air either way.
 #ifndef LAND_WAIT_S
-#define LAND_WAIT_S 0.0f
+#define LAND_WAIT_S 2.0f
 #endif
 // Speed from the servos (gains speed_tilt): the tilt and pitch are smoothed over SPEED_SMOOTH (s; 0.5 fitted best against the camera's speed, against 0.1-1), the offset is first the mean over the first SPEED_TAKEOFF_S airborne (plus speed_takeoff) and then follows the camera's speed over SPEED_LEARN (s) while it sees the tag.
 #define SPEED_SMOOTH 0.5f
@@ -163,7 +175,7 @@
 #define HEADING_PULL 3.0f
 #define HEADING_EVIDENCE 0.3f
 #define HEADING_COHERENCE 0.6f
-// Barometer (take_baro): the ground's pressure altitude is smoothed over BARO_GROUND_TAU (s) while the motors are off. Readings are not used until BARO_SETTLE_S (s) after liftoff, while the rotors' wash and ground effect change fastest. Near the floor they stay in: weighting them out under half a metre left the hold to the IMU there, and in the sim an accelerometer reading high then held drones on the floor that thought they were climbing, and low holds stalled (sw/sim/outdoor.py and landing_test.py --baro, 2026-11-08). On other multirotors ground effect reads low (ArduPilot's ground effect compensation ignores readings under the takeoff level), so near the floor the hold would err higher; its sign and size on this airframe are unmeasured. Touchdown still goes by the accelerometer. A reading older than BARO_STALE_US no longer stands in for the climb rate's leak.
+// Barometer (take_baro): the ground's pressure altitude is smoothed over BARO_GROUND_TAU (s) while the motors are off. Readings are not used until BARO_SETTLE_S (s) after liftoff, while the rotors' wash and ground effect change fastest. Near the floor they stay in: weighting them out under half a metre left the hold to the IMU there, and in the sim an accelerometer reading high then held drones on the floor that thought they were climbing, and low holds stalled (sw/sim/outdoor.py and landing_test.py --baro, 2026-11-08). Measured on 2026-11-09 against the accelerometer (sw/sim/baro_floor.py): with the motors spinning on the floor it reads -0.13 to +0.14 m (no steady wash), in the first 0.4 s after liftoff 0.3-2.9 m off either way, and in a landing's last 0.3 s a median 0.27 m above the floor it then rests on, small beside the floor's own move of -0.48 to +0.64 m over a flight. Touchdown goes by the accelerometer, and blind the height starts no probe (BLIND_FELT). A reading older than BARO_STALE_US no longer stands in for the climb rate's leak.
 #define BARO_GROUND_TAU 1.0f
 #ifndef BARO_SETTLE_S
 #define BARO_SETTLE_S 1.0f
@@ -357,9 +369,12 @@ static void take_gps(HoverState *state, const HoverGains *g, const HoverGps *fix
     float learn = span / (4 * tau * tau);
     state->drag_bias[0] = clamp(state->drag_bias[0] - (error[0] * cy + error[1] * sy) * learn, -MAX_BIAS, MAX_BIAS);
     state->drag_bias[1] = clamp(state->drag_bias[1] - (-error[0] * sy + error[1] * cy) * learn, -MAX_BIAS, MAX_BIAS);
-    float climb_error = fix->velocity[2] - state->climb_rate;
-    state->climb_rate += climb_error * pull;
-    state->flow_bias = clamp(state->flow_bias - climb_error * learn, -MAX_BIAS, MAX_BIAS);
+    bool barometric = g->baro_tau > 0 && state->baro_used && state->baro_us && now_us - state->baro_us <= BARO_STALE_US;
+    if (state->lifted >= TAKEOFF_GPS_S && !barometric) {
+        float climb_error = fix->velocity[2] - state->climb_rate;
+        state->climb_rate += climb_error * pull;
+        state->flow_bias = clamp(state->flow_bias - climb_error * learn, -MAX_BIAS, MAX_BIAS);
+    }
     // Position: the first fix ties the GPS to the dead reckoning; later ones correct it (back-dated by the fix's age) and move the place, which is relative to the hold point, by the same amount.
     float age = clamp((now_us - fix->capture_us) / 1e6f, 0, 0.5f);
     if (first) {
@@ -643,8 +658,13 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         command = clamp(g->kz * (state->target - state->height) + rising, -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
     } else {
         float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? LAND_FAST_FACTOR : 1);
-        command = waiting ? 0 : fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
-        state->target = state->height;
+        if (waiting) {
+            // Waiting, the height the hold was holding is held (kz), not only a zero climb rate.
+            command = clamp(g->kz * (state->target - state->height), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
+        } else {
+            command = fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
+            state->target = state->height;
+        }
     }
     state->command = command;
     // Landing: less the sink a probe that found air left (SINK_TAU).
@@ -654,7 +674,9 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     float lean = fmaxf(0.5f, cosf(roll) * cosf(pitch));
     state->force = g->mass * (GRAVITY + up) / lean;
 
-    bool floor_near = state->probing || state->height < LAND_TILT_HEIGHT;
+    bool felt = state->probing && state->probe_expected <= -BLIND_FELT * PROBE_DEPTH && state->probe_velocity > PROBE_SHARE * state->probe_expected;
+    bool blind = !seeing && g->baro_tau > 0;
+    bool floor_near = blind ? felt : state->probing || state->height < LAND_TILT_HEIGHT;
     // A jolt is a touchdown only if it lasts two ticks: on 2026-11-08 01:54 UTC one reading of 1.5 g (a tick that fell back to a single raw IMU sample, rotor vibration and all, 7 ms off the 10 ms rhythm) cut the motors 0.8 m up, 0.37 s into a landing; the averaged readings in that flight never passed 1.38 g.
     bool jolted = vertical_g > LAND_SHOCK && state->shocked;
     state->shocked = vertical_g > LAND_SHOCK;
@@ -672,7 +694,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->hold_g += (vertical_g - state->hold_g) * pull;
         }
         state->land_time = state->stall_time = state->impulse = state->probe_wait = state->sink = state->land_wait = 0;
-        state->probing = false;
+        state->probing = state->descended = false;
     } else if (waiting) {
         state->land_wait += dt;
     } else {
@@ -681,13 +703,15 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         if (state->land_time == 0) state->land_height = state->height;
         state->land_time += dt;
         // Only once the descent command has eased in: before that the drone is not meant to be moving yet.
-        state->stall_time = state->land_time > LAND_EASE && fabsf(state->climb_rate) < 0.5f * rate ? state->stall_time + dt : 0;
+        // And only once the drone has descended at half the rate: a descent that has not yet begun is no stall.
+        state->descended = state->descended || state->climb_rate < -0.5f * rate;
+        state->stall_time = state->land_time > LAND_EASE && state->descended && fabsf(state->climb_rate) < 0.5f * rate ? state->stall_time + dt : 0;
         state->impulse = state->impulse * expf(-dt / IMPULSE_TAU) + gained;
         state->probe_wait = fmaxf(0, state->probe_wait - dt);
         state->sink *= expf(-dt / SINK_TAU);
-        float due = (LAND_EASE + fmaxf(state->land_height, 0) / fmaxf(rate, 0.01f)) * (1 + LAND_MARGIN) + LAND_SLACK;
+        float due = (LAND_EASE + (fmaxf(state->land_height, 0) + (blind ? BLIND_HEIGHT : 0)) / fmaxf(rate, 0.01f)) * (1 + LAND_MARGIN) + LAND_SLACK;
         bool stopped = state->land_time > LAND_EASE && state->impulse > fmaxf(IMPULSE * rate, IMPULSE_MIN);
-        bool low = state->land_time > LAND_EASE && state->height < LOW_HEIGHT;
+        bool low = !blind && state->land_time > LAND_EASE && state->height < LOW_HEIGHT;
         if (!state->probing && state->probe_wait <= 0 && (state->stall_time >= STALL_S || stopped || low || state->land_time >= due)) {
             state->probing = true;
             state->ceiling = state->force;
@@ -707,9 +731,10 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->probe_expected += (state->probe_force - state->probe_start) / state->hold_force * GRAVITY * dt;
             state->probe_velocity += (vertical_g - state->probe_g) * GRAVITY * dt;
             bool falling = state->recent_g < state->hold_g - PROBE_FALL || state->probe_velocity <= -PROBE_DEPTH;
-            if (!falling && state->probe_expected <= -PROBE_DEPTH && state->probe_velocity > PROBE_SHARE * state->probe_expected) {
+            bool sinking = blind && state->climb_rate < -fmaxf(0.5f * rate, BLIND_CLIMB);
+            if (!falling && !sinking && state->probe_expected <= -PROBE_DEPTH && state->probe_velocity > PROBE_SHARE * state->probe_expected) {
                 state->landed = true;
-            } else if (falling || state->probe_expected <= -PROBE_DEPTH) {
+            } else if (falling || (!sinking && state->probe_expected <= -PROBE_DEPTH)) {
                 // In the air.
                 state->probing = false;
                 state->probe_wait = PROBE_WAIT;
@@ -841,14 +866,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
                   float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
                   const HoverGps *gps, const HoverBaro *baro, HoverOutput *output) {
     hold(state, g, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps, baro, output);
-    if (mode == HOVER_HOLD || state->landed) state->settle = 0;
-    else if (state->probing || state->height < LAND_TILT_HEIGHT) state->settle = fminf(1, state->settle + dt / SETTLE_S);
-    if (state->settle > 0) {
-        output->roll += state->settle * clamp(state->rest[0], -SETTLE_MAX, SETTLE_MAX);
-        output->pitch += state->settle * clamp(state->rest[1], -SETTLE_MAX, SETTLE_MAX);
-    }
-    if (!state->landed && state->lifted < TAKEOFF_EASE_S) {
-        // Negative while on the floor, counting up to the wait; zero from liftoff, counting the ease.
+    if (!state->landed && state->lifted < fmaxf(TAKEOFF_EASE_S, TAKEOFF_GPS_S)) {
+        // Negative while on the floor, counting up to the wait; zero from liftoff, counting the ease and the GPS's wait.
         state->lifted = state->lifted < 0 && state->height >= LIFTED_HEIGHT ? 0 : state->lifted + dt;
         // The share of the resting attitude still in the targets: all of it on the floor, fading to none over the ease.
         float share = state->lifted < 0 ? 1 : fmaxf(0, 1 - state->lifted / TAKEOFF_EASE_S);

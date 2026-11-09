@@ -47,6 +47,7 @@ The dashboard unit runs Next directly: pnpm ignores the stop signal, so a `pnpm 
 | GET `/settings`     | Current cached settings                                                                                               |
 | GET `/schema`       | Native setting names, defaults, ranges and write permissions                                                          |
 | POST `/settings`    | Change settings with `{"settings": {...}}`                                                                            |
+| POST `/radio`       | The controller's sending rate, power and channel until it resets, with `{"rate": i, "power": dBm, "channel": c}` (README "Radio options") |
 | POST `/pattern`     | Load the identification test pattern (built by `uv run -m sw.excite`), recorded at the start of every later recording |
 
 The service records armed sessions directly into `src/sw/recordings/`; `--recordings` changes the directory. Each session has a binary recording and a JSONL event file. `src/sw/flight_log.py` reads them.

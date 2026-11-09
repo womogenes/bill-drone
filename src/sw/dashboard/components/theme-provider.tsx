@@ -12,6 +12,8 @@ function ThemeProvider({
       attribute="class"
       defaultTheme="system"
       enableSystem
+      // A key nothing has written: the old D hotkey's choice, kept under the default "theme", had pinned some browsers to one theme, and nothing sets one now, so the system's always wins.
+      storageKey="dashboard-theme"
       disableTransitionOnChange
       {...props}
     >

@@ -3,6 +3,7 @@ Hover landings for the touchdown detector (fw/drone/main/hover.c), in the simula
 uv run -m sw.sim.landing_test [--runs 200] [--source path/to/hover.c] [--defines "PROBE_RATE=1.0f ..."] flies randomized landings: each takes off on IDENTIFIED_ESC with the 2026-10-29 07:20 camera-hover settings, holds at a random tag height, then lands at a random land_rate (0.05-0.2 m/s) with the hover_mass setting off by up to ±20 % from what the plant needs, the plant's mass off by up to ±10 %, the pack at 16.7 V, 14.3 V or sagging from one to the other over the flight (through the firmware's voltage compensation against the airframe's fitted voltage power, which leaves up to 18 % more thrust per table newton on the low pack), a small level-reference error and accelerometer bias, and the camera's height drifting by up to ±0.3 m over the descent (the drone's attitude error at the tag's 2 m range). --no-camera lands without the tag (--baro with the barometer feeding the height), --gust adds rougher air. It reports any touchdown declared in the air, how long after the body first touched the floor the landing ended (by the detector, or by the tilt and shock cut), the contact speed and the tilt through the touchdown.
 uv run -m sw.sim.landing_test --replay sw/recordings/<flight>.bin [--contact s] replays a recorded landing through hover.c with the recorded estimates, specific force and attitude forced in each tick. Before the contact time given (or throughout without one) the drone is taken to be in the air: thrust the new code flies below the recorded one shows in the specific force as that difference, lagged by the motors, over the weight. After it the floor holds the drone and the recorded specific force stands. It prints when probes start and what they find, and when touchdown comes.
 --source flies another copy of hover.c (its own hover.h beside it gives the state layout), so versions can be compared without touching the one other simulations use.
+--outdoor [RECORDING] flies drone 1 as it flew outdoors on 2026-11-09 instead (OUTDOOR's settings by default: no camera, the drag model, the GPS hold and the barometer): sw/sim/outdoor.py's plant on the current airframe (sweep.CURRENT_AIRFRAME, its uncertain terms drawn) with its GPS (the false descent at liftoff included) and the barometer (sweep.BARO, its near-floor offset drawn from -0.3 to +0.4 m), ground effect, 0-3 m/s of wind, a hold at 0.6-1.5 m and a landing at 0.2-0.75 m/s, hover_mass off by up to ±10 %, the same packs.
 """
 
 import argparse
@@ -17,6 +18,8 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 RECORDING = Path(__file__).resolve().parents[1] / "recordings/2026-10-29T07-20-47-024Z_2551243463.jsonl"
+# --outdoor: the GPS-held barometer hover drone 1 flew on 2026-11-09 06:19 UTC.
+OUTDOOR = "2026-11-09T06-19-08"
 # The pack's resting extremes (V) and the voltage the thrust table was measured at (the recording's thrust_voltage).
 PACKS = (16.7, 14.3)
 # The hover_mass setting that matches IDENTIFIED_ESC's hold thrust at the thrust table's voltage (kg): its hold flies at about 9.5 N.
@@ -121,12 +124,16 @@ def install(source, defines):
     return Recorded
 
 
-def draw(seed):
+def draw(seed, outdoor=None):
     """
     One randomized landing.
     """
     rng = random.Random(seed)
     pack = rng.choice(("high", "low", "sag"))
+    if outdoor:
+        return {"seed": seed, "outdoor": outdoor, "land_rate": rng.choice((0.2, 0.35, 0.5, 0.75)), "mass_error": rng.uniform(0.9, 1.1), "plant_mass": 1.0, "pack": pack,
+                "volts": {"high": (PACKS[0], PACKS[0]), "low": (PACKS[1], PACKS[1]), "sag": PACKS}[pack], "climb": rng.uniform(0.6, 1.5), "wind": rng.choice((0.0, 1.0, 2.0, 3.0)),
+                "wash": rng.uniform(-0.3, 0.4), "level_error": (rng.uniform(-1, 1), rng.uniform(-1.5, 1.5)), "accel_bias": (rng.uniform(-0.005, 0.005), rng.uniform(-0.005, 0.005)), "land_at": rng.uniform(6, 12)}
     return {
         "seed": seed,
         "land_rate": rng.choice((0.05, 0.1, 0.15, 0.2)),
@@ -149,22 +156,38 @@ def fly(case, source=None, defines=()):
     from sw.sim import airframe, sweep
 
     recorded = install(source, list(defines))
-    settings = json.loads(RECORDING.read_text().splitlines()[0])["settings"]
+    if case.get("outdoor"):
+        from sw.fit import settings as recording_settings
+        from sw.sim import outdoor
+
+        settings = recording_settings(next(outdoor.RECORDINGS.glob(case["outdoor"] + "*.bin")))
+        recorded.height_error = 0.0
+        power = sweep.CURRENT_AIRFRAME["voltage_power"]
+        factor = (case["volts"][0] / settings["thrust_voltage"]) ** (power - 2)
+        settings |= {"hover_land_rate": case["land_rate"], "hover_climb": case["climb"], "hover_ceiling": 2.0, "hover_mass": settings["hover_mass"] / factor * case["mass_error"]}
+        settings |= case.get("settings", {})
+        plant, _ = outdoor.plant(sweep.CURRENT_AIRFRAME, case["wind"], case["seed"], True, False, case["climb"], baro=True)
+        plant |= {"land_at": case["land_at"], "level_error": case["level_error"], "accel_bias": case["accel_bias"], "baro": sweep.BARO | {"wash": case["wash"]}}
+        plant["gps"] = plant["gps"] | {"heading": 0.0}
+        settings["hover_gps_heading"] = random.Random(case["seed"] + 1).uniform(-30, 30)
+        expected = case["climb"] / case["land_rate"]
+    else:
+        settings = json.loads(RECORDING.read_text().splitlines()[0])["settings"]
+        recorded.height_error = case["height_error"]
+        power = sweep.IDENTIFIED_ESC["airframe"]["voltage_power"]
+        # The thrust the compensated motors make per table newton at the pack's starting voltage, so hover_mass is off by mass_error from what this plant needs.
+        factor = (case["volts"][0] / settings["thrust_voltage"]) ** (power - 2)
+        settings |= {"hover_land_rate": case["land_rate"], "hover_mass": SIM_MASS * case["plant_mass"] / factor * case["mass_error"], "hover_ceiling": 1.2}
+        if not case.get("camera", True):
+            settings["hover_camera"] = 0
+        if case.get("baro"):
+            settings["hover_baro_tau"] = 1.0
+        settings |= case.get("settings", {})
+        plant = sweep.IDENTIFIED_ESC | {"land_at": case["land_at"], "mass": sweep.IDENTIFIED_ESC["mass"] * case["plant_mass"], "level_error": case["level_error"], "accel_bias": case["accel_bias"],
+                                        **({"gust": case["gust"], "roll_gust": case["gust"]} if case.get("gust") else {}), **({"baro": sweep.BARO} if case.get("baro") else {}),
+                                        "camera": sweep.IDENTIFIED_ESC["camera"] | {"tag": (2.0, 0.1, case["tag_height"]), "fov": FOV}}
+        expected = case["tag_height"] / case["land_rate"]
     thrust_voltage = settings["thrust_voltage"]
-    recorded.height_error = case["height_error"]
-    power = sweep.IDENTIFIED_ESC["airframe"]["voltage_power"]
-    # The thrust the compensated motors make per table newton at the pack's starting voltage, so hover_mass is off by mass_error from what this plant needs.
-    factor = (case["volts"][0] / thrust_voltage) ** (power - 2)
-    settings |= {"hover_land_rate": case["land_rate"], "hover_mass": SIM_MASS * case["plant_mass"] / factor * case["mass_error"], "hover_ceiling": 1.2}
-    if not case.get("camera", True):
-        settings["hover_camera"] = 0
-    if case.get("baro"):
-        settings["hover_baro_tau"] = 1.0
-    settings |= case.get("settings", {})
-    plant = sweep.IDENTIFIED_ESC | {"land_at": case["land_at"], "mass": sweep.IDENTIFIED_ESC["mass"] * case["plant_mass"], "level_error": case["level_error"], "accel_bias": case["accel_bias"],
-                                    **({"gust": case["gust"], "roll_gust": case["gust"]} if case.get("gust") else {}), **({"baro": sweep.BARO} if case.get("baro") else {}),
-                                    "camera": sweep.IDENTIFIED_ESC["camera"] | {"tag": (2.0, 0.1, case["tag_height"]), "fov": FOV}}
-    expected = case["tag_height"] / case["land_rate"]
     seconds = 1.5 + case["land_at"] + 2 * expected + 6
     # The pack over the flight, and the firmware's compensation for it (flight_rt.c: thrust_scale times the battery ratio squared): the motors then make the table thrust times ratio^(voltage_power - 2), which the airframe's voltage input gives at this ratio.
     ticks = [0]
@@ -227,7 +250,7 @@ def summary(results, label):
         return values[min(len(values) - 1, int(q * len(values)))] if values else float("nan")
 
     # Holds that never got the drone off the floor, came down before the landing or flew away (the simulated hold's own failures) say nothing about touchdown.
-    failed = [r for r in results if "error" in r or not 0.1 <= r["land_height"] <= 1.5]
+    failed = [r for r in results if "error" in r or not 0.1 <= r["land_height"] <= 2.5]
     results = [r for r in results if r not in failed]
     air = [r for r in results if r.get("fired_s") is not None and (r.get("contact_s") is None or r["fired_s"] < r["contact_s"] - 0.005)]
     declared = [r for r in air if r.get("how") != "cut"]
@@ -271,7 +294,13 @@ def replay(recording, contact=None, source=None, defines=()):
     install(source, list(defines))
     recording = Path(recording)
     data, truncated = read_flight(recording.with_suffix(".bin"))
-    start = json.loads(recording.with_suffix(".jsonl").read_text().splitlines()[0])
+    # The start record, with the drone's metadata (settings, thrust table) when it arrived after the session started, as from 2026-11-09.
+    start = {}
+    for line in recording.with_suffix(".jsonl").read_text().splitlines():
+        event = json.loads(line)
+        if event["type"] in ("start", "metadata"):
+            start = event | start
+    start["settings"] = {key: value for line in recording.with_suffix(".jsonl").read_text().splitlines() for key, value in json.loads(line).get("settings", {}).items()}
     settings, table = start["settings"], np.array(start["thrust_table"])
     t = (data.esp_time_us.values - data.esp_time_us.values[0]) / 1e6
     roll, pitch = np.radians(data.roll_deg.values), np.radians(data.pitch_deg.values)
@@ -353,13 +382,14 @@ def main():
     parser.add_argument("--set", nargs="*", default=[], help="settings to override, name=value")
     parser.add_argument("--gust", type=float, default=0, help="random pitch and roll disturbance (rad/s² RMS) on top of the room's; indoors fitted 0.49 and 0.89")
     parser.add_argument("--baro", action="store_true", help="the barometer (sweep.BARO) feeding the height without the tag, at hover_baro_tau 1 s unless --set gives another")
+    parser.add_argument("--outdoor", nargs="?", const=OUTDOOR, help="fly drone 1 outdoors on this recording's settings (default %s): see the module notes" % OUTDOOR)
     args = parser.parse_args()
     defines = args.defines.split()
     if args.replay:
         replay(args.replay, args.contact, args.source, defines)
         return
     overrides = {name: float(value) for name, value in (pair.split("=") for pair in args.set)}
-    cases = [draw(args.seed + i) | {"camera": not args.no_camera, "baro": args.baro, "gust": args.gust, "settings": overrides} for i in range(args.runs)]
+    cases = [draw(args.seed + i, args.outdoor) | {"camera": not args.no_camera, "baro": args.baro, "gust": args.gust, "settings": overrides} for i in range(args.runs)]
     with ProcessPoolExecutor(args.workers) as pool:
         results = list(pool.map(fly, cases, [args.source] * len(cases), [defines] * len(cases)))
     if args.save:
