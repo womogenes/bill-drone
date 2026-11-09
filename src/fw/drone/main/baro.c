@@ -1,5 +1,7 @@
 // The barometer (baro.h): a Bosch BMP388 on its own I2C bus, polled from core 0, so the control loop's IMU reads never wait on it and a fault on its wires cannot stop the IMU.
 #include <math.h>
+#include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/i2c.h"
@@ -88,11 +90,22 @@ static void compensate(const Calibration *c, uint32_t raw_pressure, uint32_t raw
     *temperature = t;
 }
 
-// Finds the chip at either address and configures it; its address, or 0 if none answers or it refuses the configuration.
+// Finds the chip at either address and configures it; its address, or 0 if none answers or it refuses the configuration. A failed search prints what each address answered on the serial console whenever that changes (no answer: wiring or power; another chip ID: not a BMP388/390, e.g. 0x58 a BMP280, 0x60 also a BME280; refused: the configuration did not take).
 static uint8_t search(Calibration *c) {
+    static char reported[96];
+    char outcome[96] = "";
+    size_t length = 0;
     for (size_t i = 0; i < sizeof(addresses) / sizeof(addresses[0]); i++) {
         uint8_t address = addresses[i], id = 0, nvm[21], check[2];
-        if (read_registers(address, CHIP_ID, &id, 1) != ESP_OK || (id != BMP388_ID && id != BMP390_ID)) continue;
+        if (read_registers(address, CHIP_ID, &id, 1) != ESP_OK) {
+            length += snprintf(outcome + length, sizeof(outcome) - length, " 0x%02x no answer;", address);
+            continue;
+        }
+        if (id != BMP388_ID && id != BMP390_ID) {
+            length += snprintf(outcome + length, sizeof(outcome) - length, " 0x%02x chip ID 0x%02x;", address, id);
+            continue;
+        }
+        length += snprintf(outcome + length, sizeof(outcome) - length, " 0x%02x chip ID 0x%02x refused the configuration;", address, id);
         if (write_register(address, CMD, SOFT_RESET) != ESP_OK) continue;
         vTaskDelay(pdMS_TO_TICKS(20));
         // In sleep after the reset: the oversampling, rate and filter first, then normal mode, which the chip refuses (conf_err) if the measurement does not fit the period.
@@ -115,6 +128,10 @@ static uint8_t search(Calibration *c) {
     stats.address = 0;
     stats.searches++;
     portEXIT_CRITICAL(&lock);
+    if (strcmp(outcome, reported)) {
+        printf("Barometer not found (SDA %d, SCL %d):%s\n", SDA, SCL, outcome);
+        strcpy(reported, outcome);
+    }
     return 0;
 }
 
