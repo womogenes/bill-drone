@@ -12,6 +12,20 @@ const FIXES: Record<number, string> = {
   5: 'Time only',
 };
 
+// Without a fix the module still sends its filter's placeholders (accuracy 4294967 m, a position anywhere): a position counts only from a fresh 2D or 3D fix it trusts.
+export function gpsSolved(
+  gps: GpsReading | null | undefined
+): gps is GpsReading {
+  return (
+    !!gps &&
+    gps.age_ms !== null &&
+    gps.age_ms < 1000 &&
+    gps.ok &&
+    gps.fix >= 2 &&
+    gps.fix <= 4
+  );
+}
+
 export const GpsPanel = memo(function GpsPanel({
   gps,
   baro,
@@ -30,14 +44,12 @@ export const GpsPanel = memo(function GpsPanel({
         : !live
           ? 'Stale'
           : `${FIXES[gps.fix] ?? gps.fix}${gps.ok ? '' : ' (weak)'}`;
-  // Without a fix the module still sends its filter's placeholders (accuracy 4294967 m, a position anywhere): shown only once it has a 2D or 3D fix it trusts.
-  const solved = live && gps.ok && gps.fix >= 2 && gps.fix <= 4;
-  const speed = solved ? Math.hypot(gps.velocity[0], gps.velocity[1]) : undefined;
+  const solved = connected && gpsSolved(gps);
+  const speed = solved
+    ? Math.hypot(gps.velocity[0], gps.velocity[1])
+    : undefined;
   return (
-    <section
-      aria-labelledby="gps-heading"
-      className="space-y-2 px-4 py-3"
-    >
+    <section aria-labelledby="gps-heading" className="space-y-2 px-4 py-3">
       <h2 id="gps-heading" className="font-semibold">
         GPS
       </h2>

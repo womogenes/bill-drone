@@ -150,6 +150,8 @@ typedef struct {
     bool baro_used;
     // Touchdown (hover.c SETTLE_S): how far a landing near the floor has eased its attitude targets to the resting attitude (0-1).
     float settle;
+    // How long a landing has waited to descend while the hold brakes (s; hover.c LAND_WAIT_S).
+    float land_wait;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

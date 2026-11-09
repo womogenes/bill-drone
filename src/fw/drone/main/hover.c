@@ -142,6 +142,14 @@
 // After a stick is let go the hold brakes for up to BRAKE_S (s), or until the speed estimate is under BRAKED (m/s), before it holds a place: the place is then where the drone stopped.
 #define BRAKE_S 2.0f
 #define BRAKED 0.15f
+// A landing waits to descend (climb-rate command 0) while the horizontal hold brakes a speed over LAND_WAIT_SPEED (m/s), for at most LAND_WAIT_S (s) from its start, unless already under LAND_TILT_HEIGHT: B pressed in fast flight began descending at once while still braking (asked for after the 2026-11-08 outdoor flights), so it stops first, then comes down. The wait is not landing time (land_time stays 0), so the probes' timing, LAND_EASE and the "due" timeout all start from the descent.
+#ifndef LAND_WAIT_SPEED
+#define LAND_WAIT_SPEED 0.5f
+#endif
+// Off (0) as deployed 2026-11-09: with the wait forced on every landing (LAND_WAIT_SPEED 0.02) one no-camera drag-model landing in landing_test declared touchdown in the air and one hit at 1.84 m/s, against none without it; 2 s is the value to try once that is understood.
+#ifndef LAND_WAIT_S
+#define LAND_WAIT_S 0.0f
+#endif
 // Speed from the servos (gains speed_tilt): the tilt and pitch are smoothed over SPEED_SMOOTH (s; 0.5 fitted best against the camera's speed, against 0.1-1), the offset is first the mean over the first SPEED_TAKEOFF_S airborne (plus speed_takeoff) and then follows the camera's speed over SPEED_LEARN (s) while it sees the tag.
 #define SPEED_SMOOTH 0.5f
 #define SPEED_TAKEOFF_S 2.0f
@@ -601,7 +609,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->nudge[i] = nudge[i];
     }
 
-    // Climb-rate command: hold moves the target height toward its goal at climb_rate; landing descends at a set rate.
+    // Climb-rate command: hold moves the target height toward its goal at climb_rate; landing descends at a set rate, once the hold has braked (LAND_WAIT_S). Only the horizontal hold brakes, so without it (neither the tag nor the drag model) there is nothing to wait for.
+    bool waiting = mode != HOVER_HOLD && state->land_time == 0 && state->land_wait < LAND_WAIT_S && (state->tracking || state->dragging) && !state->probing && state->height >= LAND_TILT_HEIGHT && hypotf(state->velocity[0], state->velocity[1]) > LAND_WAIT_SPEED;
     float command;
     if (mode == HOVER_HOLD) {
         // The goal is climb; centring goes to the tag's height instead, climbs toward the ceiling to bring the tag into view until it has been flown on (a glimpse from the ground does not count), and holds the height reached when it is lost.
@@ -620,7 +629,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         command = clamp(g->kz * (state->target - state->height) + rising, -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
     } else {
         float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? LAND_FAST_FACTOR : 1);
-        command = fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
+        command = waiting ? 0 : fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
         state->target = state->height;
     }
     state->command = command;
@@ -648,8 +657,10 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->hold_force += (state->force - state->hold_force) * pull;
             state->hold_g += (vertical_g - state->hold_g) * pull;
         }
-        state->land_time = state->stall_time = state->impulse = state->probe_wait = state->sink = 0;
+        state->land_time = state->stall_time = state->impulse = state->probe_wait = state->sink = state->land_wait = 0;
         state->probing = false;
+    } else if (waiting) {
+        state->land_wait += dt;
     } else {
         // The vertical speed the accelerometer gains this tick, against the hold's specific force.
         float rate = g->land_rate * (mode == HOVER_LAND_FAST ? LAND_FAST_FACTOR : 1), gained = (vertical_g - state->hold_g) * GRAVITY * dt;

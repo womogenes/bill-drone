@@ -135,7 +135,8 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
         float brake_roll = clamp(-c->velocity_damping * state->velocity[0], -VELOCITY_TILT, VELOCITY_TILT);
         float brake_pitch = clamp(-c->velocity_damping * state->velocity[1], -VELOCITY_TILT, VELOCITY_TILT);
         float step = c->target_rate * c->dt;
-        state->setpoint_roll += clamp(c->target_roll + brake_roll - state->setpoint_roll, -step, step);
+        float roll_step = c->roll_target_rate > 0 ? c->roll_target_rate * c->dt : step;
+        state->setpoint_roll += clamp(c->target_roll + brake_roll - state->setpoint_roll, -roll_step, roll_step);
         state->setpoint_pitch += clamp(c->target_pitch + trim + brake_pitch - state->setpoint_pitch, -step, step);
     }
     // Resting tilted (no front legs), forward-pointing thrust would shove the drone along the floor and lever it over its nose. Until it first comes level the servos also tilt back by most of the pitch from level: the thrust points nearly up, and acting ahead of the back feet it lifts the nose. That back tilt is far more torque than the drone needs once it is pivoting or airborne, and the servos lag ~0.1 s, so it is withdrawn as the nose comes up (gone at UPRIGHT_RATE): the righting rotation stays slow enough for the pitch damping to stop at level. Meanwhile the setpoint follows the attitude, so the pitch P term and integrator stay out of it and the hand-over is smooth. Only pitch can be vectored this way.

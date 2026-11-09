@@ -98,6 +98,8 @@ export type GpsReading = {
   corrupt: number;
   configured: boolean;
   age_ms: number | null;
+  // The fix's GPS time of week: a new value is a new fix.
+  itow_ms: number;
   // 0 none, 2 2D, 3 3D; ok: inside the module's accuracy masks.
   fix: number;
   ok: boolean;
@@ -109,6 +111,14 @@ export type GpsReading = {
   horizontal_accuracy: number;
   vertical_accuracy: number;
   speed_accuracy: number;
+};
+
+export type GpsFix = { latitude: number; longitude: number };
+
+export type GpsSample = GpsFix & {
+  time: number;
+  session: number;
+  horizontal_accuracy: number;
 };
 
 // The drone's barometer (src/fw/controller/bridge.py decode_status): its I2C address once found, and the pressure altitude in the standard atmosphere (m, 0.1 m steps; null without a fresh reading).
@@ -139,6 +149,9 @@ export type Reading = {
   adc_voltage?: number;
   // Computed in the dashboard from adc_voltage.
   voltage_ema?: number;
+  // Computed in the dashboard from gps: its latest new fix, as added to the track, and where the drone was at its first fix since arming, else since connecting.
+  gps_fix?: GpsSample;
+  gps_home?: GpsFix;
   actuators?: Record<Side, { servo_angle: number; throttle: number }>;
   time: number;
   force: number | null;

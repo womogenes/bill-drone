@@ -1,8 +1,8 @@
 """
 Fly recordings' stick steps and rate kicks on airframe models with other attitude gains: uv run -m sw.sim.gain_replay <recordings> --models models/airframe_A.json [...] --sets "pitch_p=28,pitch_damping=6" "pitch_p=20,pitch_i=15" [...] [--kick 40]
 
-For every model and gain set (settings the replayed firmware controller takes: pitch_p, pitch_i, pitch_damping, pitch_damping_tau, target_rate, integral_limit, roll_*), the controller flies the model closed loop from the recordings' logged state on their logged references:
-- each stick step (validate_model.steps: a target jump of over 8 degrees held 0.6 s or more), flown as a clean step: its references held at their values just after the jump for 3 s (the logged hover loop moved them as the real drone answered, which a model on other gains would not have done): overshoot (peak over the step), time to peak, settling time (the last time the attitude is more than 10% of the span from the held setpoint), the second swing (the largest return past the setpoint after the peak, over the span) and the RMS error from the setpoint over the last 1.5 s, which the forward speed's moment and the integrator set;
+For every model and gain set (settings the replayed firmware controller takes: pitch_p, pitch_i, pitch_damping, pitch_damping_tau, target_rate, integral_limit, roll_*, roll_target_rate), the controller flies the model closed loop from the recordings' logged state on their logged references:
+- each stick step on --axis (pitch, or roll since 2026-11-08 for roll_target_rate; validate_model.steps: a target jump of over 8 degrees held 0.6 s or more), flown as a clean step: its references held at their values just after the jump for 3 s (the logged hover loop moved them as the real drone answered, which a model on other gains would not have done): overshoot (peak over the step), time to peak, settling time (the last time the attitude is more than 10% of the span from the held setpoint), the second swing (the largest return past the setpoint after the peak, over the span) and the RMS error from the setpoint over the last 1.5 s, which the forward speed's moment and the integrator set;
 - rate kicks: from every half second of airborne flight, a pitch rate of --kick deg/s added at once (a gust's impulse) with the references held at their logged values: the peak pitch excursion from the start, the settling time (last time 2 degrees or more from the no-kick run) and the largest overshoot back past the start (degrees).
 The set "logged" flies each recording's own gains. Steps and kicks are medians over the recordings. Added 2026-11-08 to choose the gains for the next outdoor flight on models that predict the first outdoor flights' steps (sw/sim/crossval_airframe.py), since the logged steps were flown at one gain set.
 """
@@ -16,7 +16,7 @@ import numpy as np
 from sw.sim import airframe as A
 from sw.sim import identify_airframe as I
 from sw.sim import validate_model as V
-from sw.sim.flight import DAMPING_TAU
+from sw.sim.flight import DAMPING_TAU, ROLL_TARGET_RATE
 
 DEG = np.pi / 180
 LONGEST = 3.0
@@ -46,6 +46,8 @@ def fly(params, data, lanes, settings, kick=0.0, hold=False, horizon=int(LONGEST
     for key, value in settings.items():
         if key == "pitch_damping_tau":
             commands[:, DAMPING_TAU] = value
+        elif key == "roll_target_rate":
+            commands[:, ROLL_TARGET_RATE] = value * DEG
         elif key in ("target_rate",):
             commands[:, I.INDEX[key]] = value * DEG
         else:
@@ -90,14 +92,16 @@ def main():
     parser.add_argument("--kick", type=float, default=40.0, help="deg/s of pitch rate added at each kick start (0 = no kicks)")
     parser.add_argument("--geometry", help="default: each model's")
     parser.add_argument("--json", type=Path, help="write the medians as JSON")
+    parser.add_argument("--axis", choices=("pitch", "roll"), default="pitch", help="the axis whose stick steps are flown (kicks stay pitch)")
     parser.add_argument("--velocity", choices=("logged", "tag"), default="tag", help="the logged hover velocity everywhere, or only where the tag measured it (identify_airframe.Data)")
     args = parser.parse_args()
     records = [r for r in (I.load(p, 0.5) for p in I.paths(args.recordings)) if r]
     print(f"{len(records)} flights: " + ", ".join(r["name"] for r in records), flush=True)
     data = I.Data(records, None, args.velocity)
-    found = [(i, start, held, size) for i in range(len(records)) for axis, start, held, size in V.steps(i, data) if axis == 1]
+    axis = 1 if args.axis == "pitch" else 0
+    found = [(i, start, held, size) for i in range(len(records)) for step_axis, start, held, size in V.steps(i, data) if step_axis == axis]
     kicks = [(i, s) for i, r in enumerate(records) for s in range(r["lift"] + 50, r["end"] - int(LONGEST / I.DT), KICK_EVERY)]
-    print(f"{len(found)} pitch steps, {len(kicks)} kick starts", flush=True)
+    print(f"{len(found)} {args.axis} steps, {len(kicks)} kick starts", flush=True)
     results = []
     for model_path in args.models:
         loaded = json.loads(Path(model_path).read_text())
@@ -112,8 +116,8 @@ def main():
                 attitudes = fly(params, data, [(i, s) for i, s, _, _ in found], settings, hold=True)
                 metrics = []
                 for lane, (i, start, held, size) in enumerate(found):
-                    values = np.concatenate([[data.att[i, start, 1]], attitudes[:-1, lane, 1]])
-                    goal = data.targets[i, min(start + 1, data.size - 1), 2]
+                    values = np.concatenate([[data.att[i, start, axis]], attitudes[:-1, lane, axis]])
+                    goal = data.targets[i, min(start + 1, data.size - 1), 1 + axis]
                     if abs(goal - values[0]) > 5 * DEG:
                         metrics.append(step_metrics(values, goal))
                 m = np.median(np.array(metrics), 0)

@@ -31,11 +31,13 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ActuatorPanel } from '@/components/actuator-panel';
 import { ADCPanel } from '@/components/adc-panel';
-import { GpsPanel } from '@/components/gps-panel';
+import { GpsPanel, gpsSolved } from '@/components/gps-panel';
 import { ImuPanel } from '@/components/imu-panel';
 import { EspConnection, type DroneRequest } from '@/lib/esp-connection';
 import { createHistory } from '@/lib/history';
 import type {
+  GpsFix,
+  GpsSample,
   HoverSample,
   ImuSample,
   Reading,
@@ -47,6 +49,11 @@ import type {
 
 const FpvPanel = dynamic(
   () => import('@/components/fpv-panel').then((module) => module.FpvPanel),
+  { ssr: false }
+);
+// Leaflet needs the browser's window as it loads.
+const GpsMap = dynamic(
+  () => import('@/components/gps-map').then((module) => module.GpsMap),
   { ssr: false }
 );
 
@@ -217,6 +224,8 @@ export default function Page() {
   const [hoverHistory] = useState(() =>
     createHistory<HoverSample>(20_000, 1000)
   );
+  // The GPS track: minutes of fixes at 10 Hz.
+  const [gpsHistory] = useState(() => createHistory<GpsSample>(300_000, 3000));
   const [history] = useState(() => createHistory<ImuSample>());
   const [voltageHistory] = useState(() => createHistory<VoltageSample>());
   // One sample a second for the hour view, so discharge over a session fits in a small buffer.
@@ -283,6 +292,12 @@ export default function Page() {
     const session = Date.now();
     let lastVoltage: VoltageSample | undefined;
     let lastHourVoltage: VoltageSample | undefined;
+    let lastFix: GpsSample | undefined;
+    let home: GpsFix | undefined;
+    // Arming moves home to the next fix: the takeoff point.
+    let homePending = false;
+    let wasArmed = false;
+    let lastItow: number | undefined;
     function offline() {
       if (socket.current !== ws) return;
       socket.current = null;
@@ -350,10 +365,33 @@ export default function Page() {
             voltageHourHistory.append(lastVoltage);
           }
         }
+        if (data.control) {
+          if (data.control.enabled && !wasArmed) homePending = true;
+          wasArmed = data.control.enabled;
+        }
+        if (gpsSolved(data.gps)) {
+          const { latitude, longitude, itow_ms } = data.gps;
+          if (!home || homePending) home = { latitude, longitude };
+          homePending = false;
+          // The status repeats each fix until the next one.
+          if (itow_ms !== lastItow) {
+            lastItow = itow_ms;
+            lastFix = {
+              time,
+              session,
+              latitude,
+              longitude,
+              horizontal_accuracy: data.gps.horizontal_accuracy,
+            };
+            gpsHistory.append(lastFix);
+          }
+        }
         latestReading.current = {
           ...data,
           time,
           voltage_ema: lastVoltage?.ema,
+          gps_fix: lastFix,
+          gps_home: home,
         };
         publishReading();
         if (data.control?.enabled) setArming(false);
@@ -377,6 +415,7 @@ export default function Page() {
     voltageHistory,
     voltageHourHistory,
     hoverHistory,
+    gpsHistory,
     publishReading,
     setTargets,
   ]);
@@ -851,11 +890,21 @@ export default function Page() {
         <div
           className={`min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain ${bench ? 'hidden' : ''}`}
         >
-          {/* Always shown, so the layout stays put: armed, the flight's map; else the camera's latest sighting, the last flight's map, or an empty one. */}
-          <HoverPanel
-            state={mapState}
-            history={mapState === hoverState ? hoverHistory.read : noHistory}
-          />
+          {/* Always shown, so the layout stays put: without the camera, the GPS map; armed, the flight's map; else the camera's latest sighting, the last flight's map, or an empty one. */}
+          {reading?.control?.hover_camera === 0 ? (
+            <GpsMap
+              gps={status === 'connected' ? reading.gps : null}
+              latest={reading.gps_fix}
+              home={reading.gps_home}
+              history={gpsHistory.read}
+              hover={hoverState}
+            />
+          ) : (
+            <HoverPanel
+              state={mapState}
+              history={mapState === hoverState ? hoverHistory.read : noHistory}
+            />
+          )}
           <GpsPanel
             gps={reading?.gps}
             baro={reading?.baro}

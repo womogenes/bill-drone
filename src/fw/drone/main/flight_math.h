@@ -49,6 +49,8 @@ typedef struct {
     float auto_trim;
     // Time constant of the low-pass on the pitch rate the pitch damping acts on (s, 0 = the raw rate; flight_math.c). Runtime-only, last.
     float pitch_damping_tau;
+    // Fastest change of the roll setpoint alone (rad/s, 0 = target_rate): roll answers differential thrust far faster than pitch answers the servos, and at target_rate 30 deg/s a full roll stick reversal took a second in the setpoint alone (2026-11-08 outdoor flights). Runtime-only, last.
+    float roll_target_rate;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.
