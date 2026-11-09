@@ -1,0 +1,22 @@
+{
+ "kp": 4.8028,
+ "brake": 27.9216,
+ "max_rate": 11.9992,
+ "k_roll": 11.3749,
+ "k_pitch": 4.7428,
+ "kd_yaw": 2.1858,
+ "kv": 3.0088,
+ "kh": 1.7921,
+ "descent": 0.9712,
+ "flip_thrust": 1.2324,
+ "right_angle": 60.5218,
+ "tilt_max": 13.8072,
+ "servo_max": 43.3987,
+ "level_tau": 3.5381,
+ "cut_time": 0.6929,
+ "flare": 2.2649,
+ "k_alt": 0.2043,
+ "leak_tau": 0.5079,
+ "roll_over": 165.0,
+ "flip_floor": 0.3784
+}

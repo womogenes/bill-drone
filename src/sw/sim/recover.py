@@ -22,6 +22,7 @@ DEFAULTS = {
     "kp": 6.0, "brake": 15.0, "max_rate": 5.0, "k_roll": 8.0, "k_pitch": 12.0, "kd_yaw": 4.0,
     "kv": 3.0, "kh": 1.0, "descent": 0.5, "flip_thrust": 0.35, "right_angle": 45.0, "tilt_max": 15.0,
     "touch_g": 1.0, "engage": 0.05, "servo_max": 45.0, "level_tau": 1.0, "cut_time": 0.5, "flare": 1.0, "k_alt": 1.0, "roll_over": 165.0, "leak_tau": 3.0,
+    "flip_floor": 1.0,
 }
 RIGHT, ARREST, LANDED = 0, 1, 2
 # The attitude estimate's error when control is lost (rad, standard deviation of the rotation about each world axis: roll, pitch, yaw).
@@ -52,6 +53,8 @@ class Controller:
         self.low_time = np.zeros(self.sim.n)
         # Wanted descent speed per env (negative climbs), and an optional manoeuvre that takes over the wanted angular accelerations and collective (sw/sim/flip.py).
         self.descent = np.full(self.sim.n, self.p["descent"])
+        # Envs holding a height (sw/sim/toss.py): their descent is a plain wanted sink rate, not a landing's.
+        self.hold = np.zeros(self.sim.n, bool)
         self.override = None
 
     def __call__(self, obs, time):
@@ -74,7 +77,7 @@ class Controller:
         # Wanted thrust direction (world): straight up while righting; afterwards to stop the fall and drift.
         a_xy = np.clip(-p["kh"] * self.v[:, :2], -R.G * math.tan(math.radians(p["tilt_max"])), R.G * math.tan(math.radians(p["tilt_max"])))
         # Landing (descent > 0) comes down faster while high; a manoeuvre's hold or climb (descent <= 0) is kept as it is.
-        sink = np.where(self.descent > 0, np.clip(self.descent + p["k_alt"] * (self.h - p["flare"]), self.descent, FAST), self.descent)
+        sink = np.where((self.descent > 0) & ~self.hold, np.clip(self.descent + p["k_alt"] * (self.h - p["flare"]), self.descent, FAST), self.descent)
         a_z = -p["kv"] * (self.v[:, 2] + sink)
         arresting = self.phase == ARREST
         landing = self.phase == LANDED
@@ -95,7 +98,8 @@ class Controller:
         wanted_rate = axis * speed[:, None]
         alpha = np.column_stack([p["k_roll"] * (wanted_rate[:, 0] - omega[:, 0]), p["k_pitch"] * (wanted_rate[:, 1] - omega[:, 1]), -p["kd_yaw"] * omega[:, 2]])
         weight = sim.mass * R.G
-        collective = np.where(arresting, sim.mass * (R.G + a_z) / np.maximum(upright, 0.5), p["flip_thrust"] * weight)
+        # While righting, the thrust scales from flip_floor of flip_thrust when inverted to all of it upright (1: the same throughout): low over the ground, thrust pointing down only drives the drone into it.
+        collective = np.where(arresting, sim.mass * (R.G + a_z) / np.maximum(upright, 0.5), p["flip_thrust"] * weight * (p["flip_floor"] + (1 - p["flip_floor"]) * np.clip(upright, 0, 1)))
         collective = np.clip(collective, 0.15 * weight, 2.2 * weight)
         # Landed: the collective winds down from what was flown at touchdown, the attitude held level meanwhile.
         fade = np.clip(1 - (time - self.landed_at) / p["cut_time"], 0, 1)

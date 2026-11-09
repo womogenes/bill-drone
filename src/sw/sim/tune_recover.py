@@ -22,13 +22,15 @@ SPACE = [
     ("kv", 0.5, 8.0), ("kh", 0.2, 4.0), ("descent", 0.2, 1.0), ("flip_thrust", 0.1, 2.5), ("right_angle", 15.0, 80.0), ("tilt_max", 5.0, 35.0),
     ("servo_max", 20.0, 60.0), ("level_tau", 0.3, 5.0), ("cut_time", 0.1, 1.5), ("flare", 0.3, 3.0), ("k_alt", 0.2, 5.0), ("leak_tau", 0.5, 30.0)
 ]
+# With --toss (sw/sim/toss.py's throws) the righting's thrust floor is searched too, and the landing's terms are left out (the throws hold a height first).
+TOSS_SPACE = [item for item in SPACE if item[0] not in ("descent", "cut_time", "flare")] + [("flip_floor", 0.05, 1.0)]
 HEIGHTS = (3.0, 8.0)
 # Not searched: recover.DEFAULTS roll_over (165°) only matters near inverted, which random falls rarely reach, so the search drifted it to 179°, where 180° drops from 5 m fall from 95% to 67% safe; from 150° rolling the long way does not pay (3 m: 46% at 165°, 38% at 135°).
 # The flip's parameters, searched with the recovery controller's (from models/recover_params.json unless --recovery) for the hold after it.
 FLIP_SPACE = [("climb_thrust", 1.0, 2.2), ("climb_time", 0.1, 1.0), ("spin_rate", 4.0, 30.0), ("k_spin", 5.0, 80.0), ("spin_thrust", 0.1, 1.5), ("handoff", 0.3, 2.5)]
 # Height a flip may climb before the cost counts it (m).
 FLIP_ROOM = 1.0
-TASK = {"space": SPACE, "flip": False, "recovery": {}}
+TASK = {"space": SPACE, "flip": False, "toss": False, "recovery": {}}
 
 
 def decode(x):
@@ -60,6 +62,10 @@ def evaluate(job):
     if task["flip"]:
         from sw.sim import flip as F
         return flip_cost(F.run(decode(x), task["recovery"], n=n, seed=seed))
+    if task.get("toss"):
+        from sw.sim import toss as T
+        parts = [T.cost(T.run(task["recovery"] | decode(x), name, n=max(1, n // len(T.SCENARIOS)), seed=seed + i)) for i, name in enumerate(T.SCENARIOS)]
+        return float(np.mean([p[0] for p in parts])), float(np.mean([p[1] for p in parts]))
     C.scenarios.__defaults__ = (HEIGHTS,)
     return cost(C.run(decode(x), n=n, seed=seed, seconds=20.0))
 
@@ -74,6 +80,7 @@ def main():
     parser.add_argument("--spread", type=float, default=1.0, help="plant randomization width (recover.SPREAD)")
     parser.add_argument("--start", type=Path)
     parser.add_argument("--flip", action="store_true")
+    parser.add_argument("--toss", action="store_true", help="tune for sw/sim/toss.py's throws, starting from --recovery's parameters")
     parser.add_argument("--recovery", type=Path, default=Path(__file__).with_name("models") / "recover_params.json")
     parser.add_argument("--out", type=Path, default=Path("recover_params.json"))
     args = parser.parse_args()
@@ -83,6 +90,10 @@ def main():
         recovery = json.loads(args.recovery.read_text())
         TASK.update(space=FLIP_SPACE + SPACE, flip=True, recovery=recovery)
         start = F.DEFAULTS | C.DEFAULTS | recovery | (json.loads(args.start.read_text()) if args.start else {})
+    elif args.toss:
+        recovery = json.loads(args.recovery.read_text())
+        TASK.update(space=TOSS_SPACE, toss=True, recovery=recovery)
+        start = C.DEFAULTS | recovery | (json.loads(args.start.read_text()) if args.start else {})
     else:
         start = C.DEFAULTS | (json.loads(args.start.read_text()) if args.start else {})
     task = dict(TASK) | {"spread": args.spread}

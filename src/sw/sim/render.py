@@ -20,6 +20,14 @@ from PIL import Image, ImageDraw  # noqa: E402
 
 MODEL = Path(__file__).with_name("models") / "bicopter.xml"
 PHASES = ("righting", "arresting / descending", "landed, motors off")
+# sw/sim/toss.py's phases (toss.phase_of).
+TOSS_PHASES = ("thrown, motors off", "righting", "stopping", "holding height", "landing", "landed")
+# The 10-inch props (drone 1 from 2026-11-07): blade tip radius (m).
+PROP_RADIUS = 0.127
+# The props' drawn spin (revolutions per second of video at a motor's share of the hover thrust): the real ~100 rev/s would alias at any frame rate, so they turn this fast, scaling with the square root of the thrust as the speed does.
+SPIN_REV_S = 7.0
+# The model's measured range (degrees from upright): beyond it the airframe terms are extrapolated (rigid.ATTITUDE_RANGE fades them out).
+MEASURED_TILT = 35.0
 
 
 def big_floor(xml):
@@ -31,9 +39,23 @@ def big_floor(xml):
     return xml.replace("<asset>", '<asset>\n    <texture name="grid" type="2d" builtin="checker" rgb1="0.93 0.93 0.91" rgb2="0.80 0.82 0.84" width="512" height="512"/>\n    <material name="grid" texture="grid" texrepeat="40 40"/>\n    <texture type="skybox" builtin="gradient" rgb1="0.75 0.85 0.95" rgb2="0.95 0.97 1.0" width="256" height="256"/>', 1)
 
 
-def render(trace, env, path, width=960, height=720, fps=50, label="", slow=1.0, phases=PHASES):
-    """One env of a recover.run(..., record=True) trace to an mp4 at path; slow > 1 plays it in slow motion."""
+def spinning_props(xml):
+    """Each prop on its own spinning hub (joints left_spin, right_spin), 10-inch blades, and a translucent disc for the blur (geoms left_disc, right_disc, faded in with the thrust)."""
+    for side in ("left", "right"):
+        old = f'<geom name="{side}_prop" type="ellipsoid" pos="0 0 0.0568" size="0.012 0.1143 0.0015" mass="0.012" rgba="0.15 0.15 0.15 1" contype="0" conaffinity="0"/>'
+        assert old in xml, f"{side} prop not found in {MODEL.name}"
+        new = (f'<body name="{side}_hub" pos="0 0 0.0568"><joint name="{side}_spin" axis="0 0 1"/>'
+               f'<geom name="{side}_prop" type="ellipsoid" size="0.011 {PROP_RADIUS} 0.0015" mass="0.012" rgba="0.12 0.12 0.12 1" contype="0" conaffinity="0"/>'
+               f'<geom name="{side}_disc" type="cylinder" size="{PROP_RADIUS} 0.0004" mass="0.0001" rgba="0.3 0.3 0.32 0" contype="0" conaffinity="0"/></body>')
+        xml = xml.replace(old, new)
+    return xml
+
+
+def render(trace, env, path, width=960, height=720, fps=50, label="", slow=1.0, phases=PHASES, props=False):
+    """One env of a recover.run(..., record=True) trace to an mp4 at path; slow > 1 plays it in slow motion. With props the props spin with their thrust (spinning_props)."""
     xml = big_floor(MODEL.read_text())
+    if props:
+        xml = spinning_props(xml)
     cwd = os.getcwd()
     os.chdir(MODEL.parent)
     try:
@@ -47,10 +69,15 @@ def render(trace, env, path, width=960, height=720, fps=50, label="", slow=1.0, 
     renderer = mujoco.Renderer(model, height, width)
     camera = mujoco.MjvCamera()
     camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-    camera.distance, camera.elevation, camera.azimuth = 2.2, -12.0, 135.0
+    camera.distance, camera.elevation, camera.azimuth = (1.5, -15.0, 135.0) if props else (2.2, -12.0, 135.0)
     left = model.joint("left_tilt").qposadr[0]
     right = model.joint("right_tilt").qposadr[0]
     step = max(1, round(1 / (fps * 0.01) / slow))
+    if props:
+        spins = [model.joint(f"{side}_spin").qposadr[0] for side in ("left", "right")]
+        discs = [model.geom(f"{side}_disc").id for side in ("left", "right")]
+        hover = None
+        angle = [0.0, 0.0]
     command = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-", "-pix_fmt", "yuv420p", "-vcodec", "libx264", "-crf", "20", str(path)]
     with subprocess.Popen(command, stdin=subprocess.PIPE) as ffmpeg:
         for t, pos, quat, motor, tilt, phase in trace[::step]:
@@ -58,13 +85,22 @@ def render(trace, env, path, width=960, height=720, fps=50, label="", slow=1.0, 
             data.qpos[3:7] = quat[env]
             data.qpos[left] = tilt[env, 0]
             data.qpos[right] = -tilt[env, 1]
+            if props:
+                # The props counter-rotate (left counterclockwise seen from above); speed as the square root of the thrust over a motor's hover share.
+                hover = hover or 9.81 * 1.05 / 2
+                for side, direction in ((0, 1.0), (1, -1.0)):
+                    share = math.sqrt(max(motor[env, side], 0.0) / hover)
+                    angle[side] += direction * 2 * math.pi * SPIN_REV_S * share / fps
+                    data.qpos[spins[side]] = angle[side]
+                    model.geom_rgba[discs[side], 3] = 0.28 * min(share, 1.2)
             mujoco.mj_forward(model, data)
             camera.lookat[:] = [pos[env, 0], pos[env, 1], max(pos[env, 2] - 0.2, 0.15)]
             renderer.update_scene(data, camera)
             frame = Image.fromarray(renderer.render())
             draw = ImageDraw.Draw(frame)
             up = 2 * (quat[env, 0] ** 2 + quat[env, 3] ** 2) - 1
-            text = f"{label}  t {t:4.2f} s   height {pos[env, 2]:4.2f} m   tilt from upright {math.degrees(math.acos(max(-1, min(1, up)))):5.1f}°\nthrust L {motor[env, 0]:4.1f} N  R {motor[env, 1]:4.1f} N   motor tilt L {math.degrees(tilt[env, 0]):+5.1f}° R {math.degrees(tilt[env, 1]):+5.1f}°   {phases[int(phase[env])]}"
+            tilted = math.degrees(math.acos(max(-1, min(1, up))))
+            text = f"{label}  t {t:4.2f} s   height {pos[env, 2]:4.2f} m   tilt from upright {tilted:5.1f}°{'  (beyond measured: extrapolated)' if props and tilted > MEASURED_TILT else ''}\nthrust L {motor[env, 0]:4.1f} N  R {motor[env, 1]:4.1f} N   motor tilt L {math.degrees(tilt[env, 0]):+5.1f}° R {math.degrees(tilt[env, 1]):+5.1f}°   {phases[int(phase[env])]}"
             draw.rectangle([0, 0, width, 52], fill=(255, 255, 255))
             draw.multiline_text((12, 6), text, fill=(20, 20, 20))
             ffmpeg.stdin.write(np.asarray(frame).tobytes())
