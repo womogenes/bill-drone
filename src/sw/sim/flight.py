@@ -110,8 +110,8 @@ THRUST_VOLTAGE = MODEL_OFFSET + len(MODEL_KEYS)
 YAW_I = THRUST_VOLTAGE + 1
 # The speed moment compensation (rad/s² per m/s, 0 = off; flight_math.c), runtime-only after yaw_i.
 PITCH_SPEED = YAW_I + 1
-# The pitch damping's rate low-pass time constant (s, 0 = raw rate; flight_math.c), the last runtime-only field: after pitch_speed come the 48 hover gains (sw/sim/hover.py GAIN_KEYS; not imported here, since importing hover.py compiles hover.c), hover_camera and auto_trim.
-DAMPING_TAU = PITCH_SPEED + 1 + 48 + 2
+# The pitch damping's rate low-pass time constant (s, 0 = raw rate; flight_math.c), the last runtime-only field: after pitch_speed come the 49 hover gains (sw/sim/hover.py GAIN_KEYS; not imported here, since importing hover.py compiles hover.c), hover_camera and auto_trim.
+DAMPING_TAU = PITCH_SPEED + 1 + 49 + 2
 # The roll setpoint's own slew rate (rad/s, 0 = target_rate; flight_math.c), after pitch_damping_tau.
 ROLL_TARGET_RATE = DAMPING_TAU + 1
 

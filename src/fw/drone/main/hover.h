@@ -54,6 +54,8 @@ typedef struct {
     float pitch_trim;
     // Not settings: the laptop's tilt without the tag (radians; pitch positive nose down, roll positive right side down), filled in by the runtime; on the tag the arrows move the hold point instead (nudge). While one is held its axis flies that tilt outright instead of holding; once released the hold brakes and holds where the drone stopped.
     float stick_pitch, stick_roll;
+    // Thrust direction (hover.c THRUST_DIRECTION_TAU): the share of the motors' mean forward tilt that moves the drone as the same body pitch does (0 = off; the airframe model's tilt_push is 0.66). On, the hold's tilt (within tilt) aims the thrust, body pitch plus this share of the tilt the servos reached, and a slow correction finds the body pitch that gives it (within THRUST_BODY_MAX), in place of thrust_tilt's take on the pitch asked for: at 4 m/s on 2026-11-09 05:55 UTC the forward speed's nose-up moment held the motors 27 degrees forward, so the -15 degree body pitch asked for braked with a near vertical thrust. Last, so copies of hover.c from before it keep their layout (sw/sim/landing_test.py --source).
+    float thrust_direction;
 } HoverGains;
 
 // One camera sighting: the tag centre in the camera frame (m; right, down, forward), the wall's normal into it in the camera frame when the camera settled the tag's tilt (zero otherwise), and its capture time.
@@ -152,6 +154,8 @@ typedef struct {
     float settle;
     // How long a landing has waited to descend while the hold brakes (s; hover.c LAND_WAIT_S).
     float land_wait;
+    // Thrust direction (gains thrust_direction): the body pitch the attitude controller was last asked for (radians, from pitch_trim, after the takeoff and touchdown easing) and how far it must sit from the thrust direction aimed (radians, positive nose down).
+    float flown_pitch, direction;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).
