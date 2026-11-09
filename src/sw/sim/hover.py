@@ -123,15 +123,15 @@ class Hover:
         library.hover_body_to_camera(ctypes.byref(self.gains), (ctypes.c_float * 3)(*body), out)
         return list(out)
 
-    def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None, gps=None, baro=None):
+    def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None, gps=None, baro=None, gains=None):
         """
-        drag is (specific force in the level reference's body axes in g, commanded thrust tilt in radians) or None; flow is (capture time in us, translational rate right and down in rad/s) or None; gps is (capture time in us, velocity north, east, up in m/s, position north, east, up in m) or None; baro is (capture time in us, pressure altitude in m) or None.
+        drag is (specific force in the level reference's body axes in g, commanded thrust tilt in radians) or None; flow is (capture time in us, translational rate right and down in rad/s) or None; gps is (capture time in us, velocity north, east, up in m/s, position north, east, up in m) or None; baro is (capture time in us, pressure altitude in m) or None; gains, when given, are flown this tick instead of self.gains (the runtime's per-tick copy, as the failsafe changes it).
         """
         inputs = Drag(specific=tuple(drag[0]), tilt=drag[1]) if drag else None
         measured = Flow(capture_us=flow[0], rate=tuple(flow[1])) if flow else None
         located = Gps(capture_us=gps[0], velocity=tuple(gps[1]), position=tuple(gps[2])) if gps else None
         reading = Baro(capture_us=baro[0], altitude=baro[1]) if baro else None
-        library.hover_update(ctypes.byref(self.state), ctypes.byref(self.gains), mode, ctypes.byref(pose) if pose else None, now_us, dt, roll, pitch, yaw_rate, vertical_g, force,
+        library.hover_update(ctypes.byref(self.state), ctypes.byref(gains if gains is not None else self.gains), mode, ctypes.byref(pose) if pose else None, now_us, dt, roll, pitch, yaw_rate, vertical_g, force,
                              ctypes.byref(inputs) if inputs else None, ctypes.byref(measured) if measured else None, ctypes.byref(located) if located else None,
                              ctypes.byref(reading) if reading else None, ctypes.byref(self.output))
         return self.output

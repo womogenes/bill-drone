@@ -22,7 +22,7 @@ static const int sensor_to_body[3] = {1, -1, 1};
 typedef struct __attribute__((packed)) {
     char magic[4];
     uint32_t time_ms, target_sequence;
-    // 1 IMU online, 2 calibrating, 4 calibrated, 8 armed, 16 recording, 32 recorder subscribed, 64 throttle latched, 128 force valid.
+    // 1 IMU online, 2 calibrating, 4 calibrated, 8 armed, 16 recording, 32 recorder subscribed, 64 throttle latched, 128 force valid; bits 8-13 the guards as the flight record's guard field holds them (flight_rt.c Record).
     uint16_t flags;
     // Native stop reason (controller/log_format.py STOP_REASONS).
     uint8_t reason;
@@ -61,7 +61,7 @@ typedef struct {
 } LogState;
 
 // One binary flight-log record (controller/log_format.py SAMPLE_FORMAT), and the longest metadata JSON: the settings plus 1 KB for the header and thrust table.
-#define RECORD_SIZE 84
+#define RECORD_SIZE 86
 #define META (SETTINGS_JSON_SIZE + 1024)
 
 // Outputs at zero throttle and servos at their offsets; before the radio, so a stop always has outputs to stop.

@@ -5,7 +5,9 @@ Each run takes off in Free mode (hover_camera 0) on a recording's settings (defa
 
 Indoors nothing measured the airframe above about 0.5 m/s of airspeed, so every run also draws the terms that matter there from wide ranges (unless --nominal): the forward speed's pitching moment ×0.5-3 of the airframe's (the rotors flapping back, linear in airspeed as fitted), the sideways one ×0.5-2, rotor drag 0.04-0.4/s forward and 0.1-0.4/s sideways, the tilt's pitch authority ×0.8-1.2, the thrust level ±8 %, the servos' dead time and response ±25 %, the GPS latency 40-120 ms (the firmware assumes 60).
 
-It prints, per wind: how many runs lost attitude (past 45 degrees), touched down unasked or flew off (beyond 10 m), and over the rest the median and 90th percentile of the horizontal distance from the takeoff point and of the height error over the hold, the worst tilt, the pitch RMS and the pitch's RMS in the swing band (0.4-1.6 Hz, as pitch_check measures the swing). With --sticks also the pitch's swing after each release and the braking: peak ground speed, and the time and distance from release until under STOPPED.
+The firmware's fly-away failsafe (fw/drone/main/guard.c; on at settings.def's defaults, off with --set failsafe_speed=0,failsafe_distance=0) flies with the hover. A run it lands counts as "failsafe landed" rather than touched down.
+
+It prints, per wind: how many runs lost attitude (past 45 degrees), touched down unasked, were landed by the failsafe or flew off (beyond 10 m), and over the rest the median and 90th percentile of the horizontal distance from the takeoff point and of the height error over the hold, the worst tilt, the pitch RMS and the pitch's RMS in the swing band (0.4-1.6 Hz, as pitch_check measures the swing). With --sticks also the pitch's swing after each release and the braking: peak ground speed, and the time and distance from release until under STOPPED.
 """
 
 import argparse
@@ -105,13 +107,20 @@ def fly(job):
     log = []
     result = run(s, p, seconds=args.seconds + SETTLE, seed=seed, log=log, hover=True)
     out = {"wind": wind, "seed": seed, "draws": draws}
+    lifted = result.get("liftoff_s")
+    if lifted is not None and log:
+        t = np.array([e[0] for e in log]) - lifted
+        position = np.array([e[1] for e in log])
+        # The failsafe (guard.c): its phase changes, and where it first fired the true speed and distance from takeoff (a false alarm fires on a drone that is neither fast nor far).
+        failsafe = [(time, phase) for time, phase in result.get("failsafe", []) if time >= 0]
+        out |= {"failsafe": failsafe, "max_distance": float(np.hypot(position[t > 0, 0], position[t > 0, 1]).max())}
+        if failsafe:
+            k = min(np.searchsorted(t, failsafe[0][0]), len(t) - 2)
+            out |= {"fired_speed": float(np.hypot(*(position[k + 1, :2] - position[k, :2])) / (t[k + 1] - t[k])), "fired_distance": float(np.hypot(*position[k, :2]))}
     if not result["stable"]:
         return out | {"fate": "lost", "at": result["fail_s"]}
-    lifted = result.get("liftoff_s")
     if lifted is None:
         return out | {"fate": "no liftoff"}
-    t = np.array([e[0] for e in log]) - lifted
-    position = np.array([e[1] for e in log])
     angles = np.degrees([e[2][:2] for e in log])
     peak = position[(t >= 0) & (t < TAKEOFF_S), 2].max()
     out["overshoot"] = float(peak - position[0, 2] - s["hover_climb"])
@@ -121,7 +130,8 @@ def fly(job):
     hold = t > SETTLE
     distance = np.hypot(position[hold, 0], position[hold, 1])
     if result.get("touched") is not None:
-        return out | {"fate": "touched", "at": result["touched"]}
+        landed = any(phase == "land" for _, phase in out.get("failsafe", []))
+        return out | {"fate": "failsafe landed" if landed else "touched", "at": result["touched"], "landed_distance": float(np.hypot(*position[-1, :2]))}
     if distance.max() > args.flyaway:
         return out | {"fate": "flew off", "at": float(t[hold][np.argmax(distance > args.flyaway)])}
     height = position[hold, 2] - position[0, 2] - s["hover_climb"]
@@ -185,7 +195,7 @@ def main():
     print(f"{args.airframe.name} with {args.disturbances.name}, settings {args.settings}{' + ' + args.set if args.set else ''}, {'GPS' if args.gps else 'no GPS'}, {f'baro at {args.baro:g} s' if args.baro else 'no baro'}, {'nominal' if args.nominal else 'drawn'} plant, {args.runs} runs per wind, {args.seconds:.0f} s hold at {args.climb} m")
     for wind in winds:
         runs = [r for r in results if r["wind"] == wind]
-        fates = {f: sum(r["fate"] == f for r in runs) for f in ("lost", "touched", "flew off", "no liftoff")}
+        fates = {f: sum(r["fate"] == f for r in runs) for f in ("lost", "touched", "failsafe landed", "flew off", "no liftoff")}
         held = [r for r in runs if r["fate"] == "held"]
         line = f"wind {wind:3.0f} m/s: held {len(held)}/{len(runs)}" + "".join(f", {f} {n}" for f, n in fates.items() if n)
         if held:
@@ -204,6 +214,14 @@ def main():
             settled = [r["overshoot_settled"] for r in runs if "overshoot_settled" in r]
             line += f", over the settled height median {np.median(settled):.2f} m (p90 {np.percentile(settled, 90):.2f}, max {max(settled):.2f})"
         print(line, flush=True)
+        fired = [r for r in runs if r.get("failsafe")]
+        if fired:
+            # The failsafe: how many runs it fired in, by what it reached, the true speed and distance where it fired, and the furthest any run got.
+            reached = {phase: sum(any(p == phase for _, p in r["failsafe"]) for r in fired) for phase in ("hold", "land")}
+            print(f"    failsafe fired in {len(fired)}/{len(runs)} (held after braking {reached['hold']}, landed {reached['land']}), first at {np.median([r['failsafe'][0][0] for r in fired]):.1f} s median, true speed there {np.median([r['fired_speed'] for r in fired]):.1f} m/s median (min {min(r['fired_speed'] for r in fired):.1f}), distance {np.median([r['fired_distance'] for r in fired]):.1f} m median", flush=True)
+        if any("max_distance" in r for r in runs):
+            far = [r["max_distance"] for r in runs if "max_distance" in r]
+            print(f"    furthest from takeoff over the run: median {np.median(far):.1f} m, p90 {np.percentile(far, 90):.1f}, worst {max(far):.1f}", flush=True)
         failed = [r for r in runs if r["fate"] != "held"]
         if failed:
             # Which drawn terms the failures had, against all runs: a failure that follows one term names what to measure.

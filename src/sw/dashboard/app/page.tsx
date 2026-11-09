@@ -612,7 +612,10 @@ export default function Page() {
   }, [connect, stopMotors]);
 
   const recorder = reading?.recorder;
-  const reason = requestError || reading?.control_status?.reason || '';
+  // The fly-away failsafe outranks the stop reason while it acts; a stopped test pattern shows when nothing else does.
+  const guard = reading?.control_status;
+  const failsafe = guard?.failsafe ? `Failsafe (${guard.failsafe_far ? 'too far' : 'flying off'}): ${guard.failsafe === 'brake' ? 'braking' : guard.failsafe === 'hold' ? 'holding, stick to take over' : 'landing'}` : '';
+  const reason = requestError || failsafe || reading?.control_status?.reason || (guard?.pattern_stop ? `Test pattern stopped: ${guard.pattern_stop}` : '');
   const controlStatus = useMemo(() => ({ reason }), [reason]);
 
   const { label, icon: StatusIcon, color } = statuses[status];
