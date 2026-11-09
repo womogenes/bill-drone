@@ -15,6 +15,7 @@ import {
   Disc,
   LoaderCircle,
   Plug,
+  Radio,
   RefreshCw,
   Satellite,
   Wifi,
@@ -160,6 +161,11 @@ const VOLTAGE_TAU = 1500;
 // The drone refuses to arm under ARM_MIN_V (fw/drone/main/flight_rt.c); NO_PACK_V and below is no pack at all. A disarmed pack falling faster than DRAIN_V_PER_MIN is being run down on the bench: on 2026-11-02 a half hour of hang tests took a 4S pack from 14.5 V to 9.9 V.
 const ARM_MIN_V = 14;
 const NO_PACK_V = 5;
+
+// An RSSI after a space, or nothing when no packet was heard.
+function dbm(rssi: number | null | undefined) {
+  return rssi === null || rssi === undefined ? '' : ` ${rssi} dBm`;
+}
 const DRAIN_V_PER_MIN = 0.3;
 
 const statuses = {
@@ -625,6 +631,22 @@ export default function Page() {
           : 'Recorder ready'
         : 'Recorder connecting');
   const connected = status === 'connected';
+  // The radio link over the last second (src/fw/controller/bridge.py decode_link): status messages reaching the laptop of the drone's 20 and the controller's RSSI of them, then the controller's packets reaching the drone and the drone's RSSI of them. Weak: a quarter of the status lost or a 0.3 s gap, which on 2026-11-08 came before every link timeout.
+  const link = reading?.link;
+  const linkWeak =
+    !!link?.bridge &&
+    (link.bridge.statuses < 15 || link.bridge.longest_gap_ms >= 300);
+  const linkText = !link?.bridge
+    ? 'Radio link'
+    : [
+        `Laptop: ${link.bridge.statuses} status/s, longest gap ${link.bridge.longest_gap_ms} ms, ${link.bridge.late} late, ${link.bridge.timeouts} timeouts`,
+        link.controller
+          ? `Controller: hears drone ${link.controller.rx}/s${dbm(link.controller.rssi)} (min${dbm(link.controller.rssi_min)}, noise ${link.controller.noise_floor} dBm), ${link.controller.gaps} missed; sends ${link.controller.tx_ok} ok, ${link.controller.tx_fail} failed, ${link.controller.refused} refused, ${link.controller.rejected} dropped; ch ${link.controller.channel}, ${link.controller.rate_name}, ${link.controller.power} dBm`
+          : 'Controller: no link report (older firmware)',
+        link.drone
+          ? `Drone: hears controller ${link.drone.rx}/s${dbm(link.drone.rssi)} (min${dbm(link.drone.rssi_min)}, noise ${link.drone.noise_floor} dBm), ${link.drone.gaps} missed, ${link.drone.rejected} stale, longest silence ${link.drone.silence_ms} ms; sends ${link.drone.tx_ok} ok, ${link.drone.tx_fail} failed, ${link.drone.refused} refused, slowest ${link.drone.latency_ms} ms; ch ${link.drone.channel}${link.drone.hopping ? ' (searching)' : ''}, ${link.drone.rate_name}, ${link.drone.power} dBm`
+          : 'Drone: no link report (older firmware)',
+      ].join('\n');
   return (
     <div className="flex flex-col lg:h-dvh">
       {(arming || armed) && (
@@ -706,6 +728,23 @@ export default function Page() {
             <span className="min-w-[8ch]">
               {connected && gps?.ok && gps.fix >= 2 && gps.fix <= 4
                 ? `${gps.satellites} · ${gps.horizontal_accuracy.toFixed(1)} m`
+                : '—'}
+            </span>
+          </span>
+          <span
+            title={linkText}
+            className={`flex items-center gap-1.5 ${
+              !connected || !link?.bridge
+                ? 'text-muted-foreground'
+                : linkWeak
+                  ? 'text-red-700'
+                  : 'text-green-700'
+            }`}
+          >
+            <Radio aria-hidden="true" className="size-4" />
+            <span className="min-w-[12ch] tabular-nums">
+              {connected && link?.bridge
+                ? `${link.bridge.statuses}/20${dbm(link.controller?.rssi)} · ${link.drone ? `${link.drone.rx}/s${dbm(link.drone.rssi)}` : '—'}`
                 : '—'}
             </span>
           </span>

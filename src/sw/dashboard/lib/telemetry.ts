@@ -129,8 +129,46 @@ export type BaroReading = {
   altitude: number | null;
 };
 
+// One end's link report over its last second (src/fw/controller/bridge.py decode_link, src/fw/link.h): the partner's packets heard, rejected and missed (sequence gaps), the longest silence, their RSSI (dBm; null with none heard), the sends acknowledged, failed and refused, and the radio's channel, rate and power. Absent from firmware before 2026-11-09.
+export type LinkReport = {
+  source: 'drone' | 'controller';
+  interval_ms: number;
+  rx: number;
+  rejected: number;
+  gaps: number;
+  silence_ms: number;
+  rssi: number | null;
+  rssi_min: number | null;
+  noise_floor: number;
+  tx_ok: number;
+  tx_fail: number;
+  refused: number;
+  latency_ms: number;
+  channel: number;
+  rate: number;
+  rate_name: string | null;
+  power: number;
+  follow: boolean;
+  hopping: boolean;
+};
+
+// The drone service's own view of the last second: status messages received (20 expected), the longest gap between them, packets it dropped as late, and link timeouts.
+export type BridgeLink = {
+  statuses: number;
+  longest_gap_ms: number;
+  late: number;
+  timeouts: number;
+};
+
+export type LinkReading = {
+  drone: LinkReport | null;
+  controller: LinkReport | null;
+  bridge: BridgeLink | null;
+};
+
 export type Reading = {
   gps?: GpsReading | null;
+  link?: LinkReading;
   baro?: BaroReading | null;
   logging?: {
     active: boolean;
