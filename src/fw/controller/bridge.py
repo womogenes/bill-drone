@@ -27,7 +27,7 @@ import time
 from aiohttp import WSMsgType, web
 import serial
 
-from log_format import HEADER_FORMAT, HEADER_SIZE, PATTERN_CHANNELS, RECORD_SIZE, SAMPLE_FORMAT, STOP_REASONS
+from log_format import FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, PATTERN_CHANNELS, STOP_REASONS
 from wire import PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 # Messages of more fragments than this go out twice (send_message).
@@ -40,8 +40,11 @@ STATUS_FORMAT = "<4sIIHB3f3f3f2f2H4f2IiIIHHf"
 CAMERA_FORMAT = "<15I2B"
 # Then the GPS's (absent before the GPS driver): counters, the newest NAV-PVT and its age (ms, 0xffffffff before the first).
 GPS_FORMAT = "<5I4B6i3I"
+# Then the barometer's (absent before the barometer driver): the newest reading's pressure altitude (dm) and its flags (1 the chip answered, 2 a reading in the last 200 ms, 4 at address 0x77).
+BARO_FORMAT = "<hB"
 STATUS_SIZE = struct.calcsize(STATUS_FORMAT)
 CAMERA_SIZE = struct.calcsize(CAMERA_FORMAT)
+GPS_SIZE = struct.calcsize(GPS_FORMAT)
 CAMERA_KEYS = (
     "packets", "frames", "poses", "flows", "corrupt", "repeats", "stale",
     "unsynced", "skipped_bytes", "overflows", "line_errors", "sync_edges", "rx_edges",
@@ -57,14 +60,19 @@ def decode_status(payload, settings):
     The dashboard's reading (sw/dashboard/lib/telemetry.ts Reading) from a status message.
     """
     magic, time_ms, target_sequence, flags, reason, *values = struct.unpack_from(STATUS_FORMAT, payload)
-    camera = gps = None
+    camera = gps = baro = None
     if len(payload) >= STATUS_SIZE + CAMERA_SIZE:
         camera = dict(zip(CAMERA_KEYS, struct.unpack_from(CAMERA_FORMAT, payload, STATUS_SIZE)))
         # No frame yet: the age is meaningless.
         if camera["age_ms"] == 0xFFFFFFFF:
             camera["age_ms"] = None
-    if len(payload) == STATUS_SIZE + CAMERA_SIZE + struct.calcsize(GPS_FORMAT):
+    if len(payload) >= STATUS_SIZE + CAMERA_SIZE + GPS_SIZE:
         gps = decode_gps(struct.unpack_from(GPS_FORMAT, payload, STATUS_SIZE + CAMERA_SIZE))
+    if len(payload) == STATUS_SIZE + CAMERA_SIZE + GPS_SIZE + struct.calcsize(BARO_FORMAT):
+        altitude, flags = struct.unpack_from(BARO_FORMAT, payload, STATUS_SIZE + CAMERA_SIZE + GPS_SIZE)
+        # The pressure altitude in the standard atmosphere (m), None without a fresh reading; address 0x76 (SDO low) or 0x77, None while not found.
+        baro = {"found": bool(flags & 1), "fresh": bool(flags & 2), "address": (0x77 if flags & 4 else 0x76) if flags & 1 else None,
+                "altitude": altitude / 10 if flags & 2 else None}
     accel, gyro = values[0:3], values[3:6]
     roll, pitch, temperature, left_servo, right_servo, left_throttle, right_throttle = values[6:13]
     target_roll, target_pitch, target_yaw, base = values[13:17]
@@ -111,6 +119,7 @@ def decode_status(payload, settings):
         },
         "camera": camera,
         "gps": gps,
+        "baro": baro,
     }
 
 
@@ -507,9 +516,9 @@ class Service:
         The newest flight record's hover state, for the dashboard's tag chart: {"type": "hover", ...} in the hover loop's yaw-turned level frame (m; forward, left, up), with the tag relative to the drone (None without a sighting), the range and arc targets as nudged (None before they are set), and the mode and tracking flags.
         """
         _, _, count, size = struct.unpack_from(HEADER_FORMAT, payload)
-        if size != RECORD_SIZE or not count:
+        if size not in FORMATS or size < HOVER_SIZE or not count:
             return
-        fields = struct.unpack_from(SAMPLE_FORMAT, payload, HEADER_SIZE + (count - 1) * size)
+        fields = struct.unpack_from(FORMATS[size], payload, HEADER_SIZE + (count - 1) * size)
         flags = fields[20]
         x, y, z, age = fields[22:26]
         targeted = flags >> 7 & 1

@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Hover and landing: height from the IMU's vertical acceleration, corrected by the camera when it sees the tag, which also holds the range and bearing to the tag. No ESP-IDF, so the host can replay recordings through it.
+// Hover and landing: height from the IMU's vertical acceleration, corrected by the camera when it sees the tag (and without it by the barometer, GPS or flow when they are on), which also holds the range and bearing to the tag. No ESP-IDF, so the host can replay recordings through it.
 // The camera's tag rotation is ambiguous and noisy at range (fw/esp32cam/README.md), so the hold flies on the tag centre in the camera frame: turned level by the IMU's roll and pitch, it gives range, bearing and height to the tag; the gyro's yaw separates the drone's own turning from its travel, and tilt dead-reckons the velocity between sightings. Only the rotations the camera settled outright steer, slowly, where on the circle about the tag the drone sits.
 // Body conventions (flight_math.c): positive pitch (nose down) accelerates forward, positive roll (right side down) accelerates right, positive yaw rate turns left.
 
@@ -46,6 +46,8 @@ typedef struct {
     float view;
     // GPS without the tag (hover.c take_gps): its velocity pulls the estimate over gps_tau (s; 0 = off), its position the hold's place over gps_place_tau and its height the height over gps_height_tau (s; 0 = not used); gps_heading is where the drone's nose points at engage (radians clockwise from true north), which turns north and east into the hold's frame until the flight's own accelerations against the GPS's refine it.
     float gps_tau, gps_place_tau, gps_height_tau, gps_heading;
+    // Barometer without the tag (hover.c take_baro): its height above the ground it read with the motors off pulls the height and climb rate over baro_tau (s; 0 = off, the IMU's height alone as before). On, the hold also never asks for more height than ceiling, so a height above it descends.
+    float baro_tau;
     // Not settings: the laptop's nudge of the hold point (m; toward the tag, to the drone's left, and up), streamed with the targets (the dashboard's arrows and W/S in hover).
     float nudge_forward, nudge_left, nudge_up;
     // Not a setting: the attitude controller's pitch_trim (radians, filled in by the runtime). The drone flies level at this pitch (a tail-heavy drone hovers nose-up with its servos tilted forward), so horizontal acceleration follows the pitch beyond it.
@@ -77,6 +79,12 @@ typedef struct {
     int64_t capture_us;
     float velocity[3], position[3];
 } HoverGps;
+
+// One barometer reading: when the pressure it gives was measured (us, this clock) and the pressure altitude (m in the standard atmosphere; only its changes matter).
+typedef struct {
+    int64_t capture_us;
+    float altitude;
+} HoverBaro;
 
 #define HOVER_HISTORY 24
 
@@ -134,6 +142,12 @@ typedef struct {
     float rest[2], lifted;
     // Whether the last tick's vertical specific force was past LAND_SHOCK (hover.c): a touchdown jolt must last two ticks.
     bool shocked;
+    // Barometer (hover.c take_baro): the ground's pressure altitude (m), smoothed while the motors are off (hover_rest) and kept through the flight, and whether there is one; the newest reading's capture time (us; 0 before the first since engaging); how much longer after liftoff it waits before it is used (s); and whether the last reading was used.
+    float baro_ground;
+    bool baro_grounded;
+    int64_t baro_us;
+    float baro_wait;
+    bool baro_used;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).
@@ -143,14 +157,14 @@ typedef struct {
     float velocity[2];
 } HoverOutput;
 
-// While not hovering: forget the hover. With the motors off, learn the resting vertical specific force (g); spinning (manual flight), keep integrating the climb rate and height so a later hover or landing starts from them.
-void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt);
+// While not hovering: forget the hover. With the motors off, learn the resting vertical specific force (g) and, from baro (the newest barometer reading or NULL, each passed once), the ground's pressure altitude; spinning (manual flight), keep integrating the climb rate and height so a later hover or landing starts from them.
+void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt, const HoverBaro *baro);
 // One control tick. mode is HOVER_HOLD, HOVER_LAND or HOVER_LAND_FAST; pose is the newest camera sighting or NULL (camera disabled or no tag); roll and pitch are the measured attitude from level and yaw_rate the measured heading rate (rad/s, positive left); vertical_g is the measured specific force along vertical, in g; force is the collective thrust in N being flown now, so taking over mid-flight is smooth; drag is what the rotor-drag model needs (used when gains->drag is set).
 // A body vector (forward, left, up) in camera axes (right, down, forward): the inverse of the mounting the hover turns sightings by (cam_roll, cam_pitch), for taking the drone's own rotation out of the flow.
 void hover_body_to_camera(const HoverGains *gains, const float *body, float *camera);
-// flow is the newest camera flow measurement and gps the newest GPS solution, or NULL (each is passed once).
+// flow is the newest camera flow measurement, gps the newest GPS solution and baro the newest barometer reading, or NULL (each is passed once).
 void hover_update(HoverState *state, const HoverGains *gains, int mode, const HoverPose *pose, int64_t now_us, float dt,
                   float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
-                  const HoverGps *gps, HoverOutput *output);
+                  const HoverGps *gps, const HoverBaro *baro, HoverOutput *output);
 
 #endif

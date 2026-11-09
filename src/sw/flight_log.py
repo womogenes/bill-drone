@@ -10,7 +10,7 @@ import struct
 from pathlib import Path
 
 import pandas as pd
-from fw.controller.log_format import HEADER_FORMAT, HEADER_SIZE, FORMATS, MAX_BATCH
+from fw.controller.log_format import BARO_NONE, HEADER_FORMAT, HEADER_SIZE, FORMATS, MAX_BATCH
 
 # The hover loop's state (fw/drone/main/flight_rt.c Record), NaN in recordings from before it was logged. In the yaw-turned level frame (x forward, y left, z up at hover_yaw_deg 0): the tag position the loop last took and that sighting's age, its velocity estimate; then height above the engage point and climb rate, the height, range and arc targets, the gyro heading, the trim and the drag model's velocity in body axes (x forward, y left). Tag and age are NaN without a sighting, range and arc targets before they are set (flags bit 7), and the drag velocity while the drag model is off (flags bit 5).
 HOVER_COLUMNS = [
@@ -18,6 +18,8 @@ HOVER_COLUMNS = [
     "hover_height_m", "hover_climb_m_s", "hover_height_target_m", "hover_range_target_m", "hover_arc_deg",
     "hover_yaw_deg", "hover_trim_x_m_s2", "hover_trim_y_m_s2", "hover_drag_vx_m_s", "hover_drag_vy_m_s",
 ]
+# The barometer's pressure altitude in the standard atmosphere (m; only its changes are height) and whether there was a reading in the last 100 ms (the altitude is NaN without one, and in recordings from before the barometer).
+BARO_COLUMNS = ["baro_altitude_m", "baro_valid"]
 NAN = float("nan")
 
 
@@ -94,7 +96,8 @@ def read_flight(path):
                     left, right,
                     *(value / 100 for value in (left_servo, right_servo, target_roll, target_pitch, target_yaw)),
                     base, control_us, flags, voltage_mv / 1000,
-                    *hover_values(flags, fields[22:]),
+                    *hover_values(flags, fields[22:38]),
+                    *((fields[38] / 1000, True) if len(fields) > 38 and fields[38] != BARO_NONE else (NAN, False)),
                 ])
             if len(payload) != count * size:
                 truncated = True
@@ -104,7 +107,7 @@ def read_flight(path):
         "session", "sequence", "esp_time_us", "ax_g", "ay_g", "az_g", "gx_deg_s", "gy_deg_s", "gz_deg_s", "temperature_c",
         "roll_deg", "pitch_deg", "left_throttle", "right_throttle", "left_servo_deg", "right_servo_deg",
         "target_roll_deg", "target_pitch_deg", "target_yaw_deg_s", "base_throttle", "control_us", "flags", "battery_v",
-        *HOVER_COLUMNS,
+        *HOVER_COLUMNS, *BARO_COLUMNS,
     ]
     data = pd.DataFrame(rows, columns=columns).drop_duplicates(["session", "sequence"])
     return data, truncated

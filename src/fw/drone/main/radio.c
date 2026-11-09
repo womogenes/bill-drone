@@ -1,5 +1,6 @@
 // Direct ESP-NOW link: status messages, streamed targets, stop, and the request service for updates and transactions. Framing: src/fw/controller/wire.py.
 // Channels: 0 status (drone, every 50 ms), 1 targets (laptop, newest wins; each one is the controller heartbeat), 2/3 binary/JSON flight log (one message in flight, resent until acknowledged), 4 recorder subscription, 5 log acknowledgement, 6 requests and replies (id-tagged, fragmented).
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +17,7 @@
 #include "esp_wifi.h"
 #include "mbedtls/sha256.h"
 #include "gps.h"
+#include "baro.h"
 #include "runtime.h"
 #include "arming.h"
 #include "camera.h"
@@ -388,6 +390,15 @@ static void gps_status(Status *status, int64_t now) {
     status->gps_speed_accuracy = pvt->speed_accuracy_mm_s;
 }
 
+static void baro_status(Status *status, int64_t now) {
+    BaroStats baro;
+    baro_stats(&baro);
+    bool fresh = baro.sample.read_us >= 0 && now - baro.sample.read_us <= 200000;
+    float altitude = fminf(fmaxf(baro.sample.altitude * 10, INT16_MIN), INT16_MAX);
+    status->baro_altitude_dm = fresh ? lroundf(altitude) : 0;
+    status->baro_flags = (baro.address != 0) | fresh << 1 | (baro.address == 0x77) << 2;
+}
+
 static void tick(void *arg) {
     portENTER_CRITICAL(&lock);
     bool stopping = stop_pending;
@@ -411,6 +422,7 @@ static void tick(void *arg) {
     status.flags |= settings_calibration_unsaved() << 1;
     camera_status(&status, now);
     gps_status(&status, now);
+    baro_status(&status, now);
     portENTER_CRITICAL(&lock);
     status.target_sequence = target_sequence;
     status.flags |= subscribed(now) << 5;

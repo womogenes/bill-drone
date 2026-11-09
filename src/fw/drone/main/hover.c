@@ -152,6 +152,14 @@
 #define HEADING_PULL 3.0f
 #define HEADING_EVIDENCE 0.3f
 #define HEADING_COHERENCE 0.6f
+// Barometer (take_baro): the ground's pressure altitude is smoothed over BARO_GROUND_TAU (s) while the motors are off. Readings are not used until BARO_SETTLE_S (s) after liftoff, while the rotors' wash and ground effect change fastest. Near the floor they stay in: weighting them out under half a metre left the hold to the IMU there, and in the sim an accelerometer reading high then held drones on the floor that thought they were climbing, and low holds stalled (sw/sim/outdoor.py and landing_test.py --baro, 2026-11-08). On other multirotors ground effect reads low (ArduPilot's ground effect compensation ignores readings under the takeoff level), so near the floor the hold would err higher; its sign and size on this airframe are unmeasured. Touchdown still goes by the accelerometer. A reading older than BARO_STALE_US no longer stands in for the climb rate's leak.
+#define BARO_GROUND_TAU 1.0f
+#ifndef BARO_SETTLE_S
+#define BARO_SETTLE_S 1.0f
+#endif
+#define BARO_STALE_US 300000
+// The filter's time constant is at least this many readings, so its discrete steps stay well inside stability.
+#define BARO_MIN_STEPS 10
 
 static float clamp(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
@@ -161,10 +169,19 @@ static float wrap(float angle) {
     return atan2f(sinf(angle), cosf(angle));
 }
 
-void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt) {
-    float bias = state->bias, climb_rate = 0, height = 0;
+void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt, const HoverBaro *baro) {
+    float bias = state->bias, climb_rate = 0, height = 0, ground = state->baro_ground;
+    bool grounded = state->baro_grounded;
+    int64_t baro_us = state->baro_us;
     if (!spinning) {
         bias = bias ? bias + (vertical_g - bias) * (1 - expf(-dt / BIAS_TAU)) : vertical_g;
+        // The ground's pressure altitude, over the time each reading covers; spinning, it stays as it was before the motors started.
+        if (baro) {
+            float span = baro_us && baro->capture_us > baro_us ? fminf((baro->capture_us - baro_us) / 1e6f, 0.1f) : 0;
+            ground = grounded ? ground + (baro->altitude - ground) * (1 - expf(-span / BARO_GROUND_TAU)) : baro->altitude;
+            grounded = true;
+            baro_us = baro->capture_us;
+        }
     } else if (bias) {
         // Manual flight: keep the climb rate and height current (leaking like the no-camera hover), so a hover or landing taken over mid-flight starts from the real climb, not from rest.
         climb_rate = (state->climb_rate + (vertical_g - bias) * GRAVITY * dt) * expf(-dt / LEAK_TAU);
@@ -174,6 +191,9 @@ void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt) {
     state->bias = bias;
     state->climb_rate = climb_rate;
     state->height = height;
+    state->baro_ground = ground;
+    state->baro_grounded = grounded;
+    state->baro_us = baro_us;
 }
 
 // The newest recorded tick no later than time (the oldest kept if none is).
@@ -342,9 +362,35 @@ static void take_gps(HoverState *state, const HoverGains *g, const HoverGps *fix
     }
 }
 
+// Barometer without the tag: its height above the ground corrects the height, the climb rate and the vertical acceleration's bias (flow_bias, which the flow and GPS also learn) as they were at the reading's capture, as a critically damped third-order complementary filter over baro_tau (the IMU carries what changes faster, the barometer what changes slower), so the height cannot drift away as the IMU's alone did (2026-11-08 01:56 UTC: it read 0.4-0.8 m while the drone climbed to about 6 m). Without the bias a steady accelerometer error b would leave the climb rate 2 baro_tau b off. A hover engaged in the air (from manual flight, or a link-loss landing) takes the barometer's height outright at its first reading, so it starts from the true height instead of the IMU's.
+static void take_baro(HoverState *state, const HoverGains *g, const HoverBaro *baro, int64_t now_us) {
+    bool first = !state->baro_us;
+    float span = first || baro->capture_us <= state->baro_us ? 0 : fminf((baro->capture_us - state->baro_us) / 1e6f, 0.1f);
+    state->baro_us = baro->capture_us;
+    // No ground was read with the motors off (the barometer came up in flight): the ground is where the height estimate puts it now.
+    if (!state->baro_grounded) {
+        state->baro_ground = baro->altitude - state->height;
+        state->baro_grounded = true;
+    }
+    state->baro_used = state->baro_wait <= 0;
+    if (!state->baro_used) return;
+    float above = baro->altitude - state->baro_ground, age = clamp((now_us - baro->capture_us) / 1e6f, 0, 0.5f);
+    // Only a hover engaged in the air has its first reading here: on the floor the first comes while it waits.
+    if (first) {
+        state->height = above + state->climb_rate * age;
+        return;
+    }
+    if (span <= 0) return;
+    float error = above - (state->height - state->climb_rate * age), tau = fmaxf(g->baro_tau, BARO_MIN_STEPS * span);
+    // A triple pole at -1 / tau.
+    state->height += 3 * error * span / tau;
+    state->climb_rate += 3 * error * span / (tau * tau);
+    state->flow_bias = clamp(state->flow_bias - error * span / (tau * tau * tau), -MAX_BIAS, MAX_BIAS);
+}
+
 static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPose *pose, int64_t now_us, float dt,
                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
-                 const HoverGps *gps, HoverOutput *output) {
+                 const HoverGps *gps, const HoverBaro *baro, HoverOutput *output) {
     float weight = g->mass * GRAVITY;
     bool dragging = g->drag > 0 && drag;
     if (!state->engaged) {
@@ -359,6 +405,9 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->heading = g->gps_heading;
         state->turn[0] = state->turn[1] = state->turn_weight = 0;
         state->inertial[0] = state->inertial[1] = state->track[0] = state->track[1] = 0;
+        state->baro_us = 0;
+        state->baro_wait = grounded ? BARO_SETTLE_S : 0;
+        state->baro_used = false;
         // Continue from the thrust being flown, so taking over a manual flight does not step.
         state->integral = force > 0.5f * weight ? clamp(force / g->mass - GRAVITY, -MAX_INTEGRAL, MAX_INTEGRAL) : 0;
         state->force = force;
@@ -475,8 +524,10 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->height += (state->tag_height - state->position[2] - state->height) * pull;
         state->climb_rate += (state->velocity[2] - state->climb_rate) * pull;
     } else if (!seeing) {
+        // Not while the barometer holds the climb rate, which the leak would only pull toward the command.
+        bool barometric = g->baro_tau > 0 && state->baro_used && state->baro_us && now_us - state->baro_us <= BARO_STALE_US;
         float leak = mode == HOVER_HOLD && state->height >= AIRBORNE ? state->command : 0;
-        state->climb_rate += (leak - state->climb_rate) * (1 - expf(-dt / LEAK_TAU));
+        if (!barometric) state->climb_rate += (leak - state->climb_rate) * (1 - expf(-dt / LEAK_TAU));
         if (!dragging) {
             float keep = expf(-dt / DRIFT_TAU);
             state->velocity[0] *= keep;
@@ -489,6 +540,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         take_gps(state, g, gps, now_us, cy, sy, dt);
         located = true;
     }
+    if (state->lifted >= 0) state->baro_wait = fmaxf(0, state->baro_wait - dt);
+    if (baro && !seeing && g->baro_tau > 0) take_baro(state, g, baro, now_us);
     if (located && state->dragging) {
         // What the drag model reads beyond the GPS's ground speed, in body axes, is the wind (with its own offset): learned as the camera teaches the offset, and allowed a wind's size.
         float forward = state->velocity[0] * cy + state->velocity[1] * sy, left = -state->velocity[0] * sy + state->velocity[1] * cy;
@@ -554,8 +607,14 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         float goal = g->climb, up = state->tracking || state->dragging ? g->nudge_up : 0;
         if (g->center) goal = seeing ? clamp(state->tag_height + up, MIN_HEIGHT, g->ceiling) : state->tracking ? fmaxf(g->climb, state->target) : g->ceiling;
         else goal += up;
+        // With the barometer the height is the true one above the ground, so the ceiling holds for every goal and the nudge: above it the hold descends.
+        bool capped = g->baro_tau > 0;
+        if (capped) goal = fminf(goal, g->ceiling);
         state->target += clamp(goal - state->target, -g->climb_rate * dt, g->climb_rate * dt);
-        command = clamp(g->kz * (state->target - state->height) + (state->tracking || state->dragging ? state->nudge_rate[2] : 0), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
+        if (capped) state->target = fminf(state->target, g->ceiling);
+        float rising = state->tracking || state->dragging ? state->nudge_rate[2] : 0;
+        if (capped && state->target >= g->ceiling) rising = fminf(rising, 0);
+        command = clamp(g->kz * (state->target - state->height) + rising, -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
     } else {
         float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? LAND_FAST_FACTOR : 1);
         command = fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
@@ -749,8 +808,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
 
 void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverPose *pose, int64_t now_us, float dt,
                   float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
-                  const HoverGps *gps, HoverOutput *output) {
-    hold(state, g, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps, output);
+                  const HoverGps *gps, const HoverBaro *baro, HoverOutput *output) {
+    hold(state, g, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps, baro, output);
     if (state->landed || state->lifted >= TAKEOFF_EASE_S) return;
     // Negative while on the floor, counting up to the wait; zero from liftoff, counting the ease.
     state->lifted = state->lifted < 0 && state->height >= LIFTED_HEIGHT ? 0 : state->lifted + dt;

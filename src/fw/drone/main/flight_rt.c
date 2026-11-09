@@ -14,6 +14,7 @@
 #include "runtime.h"
 #include "settings.h"
 #include "arming.h"
+#include "baro.h"
 #include "camera.h"
 #include "gps.h"
 #include "hover.h"
@@ -65,6 +66,8 @@ typedef struct __attribute__((packed)) {
     int16_t tag[3];
     uint16_t tag_age;
     int16_t velocity[2], height, climb, height_target, range_target, arc, yaw, trim[2], drag_velocity[2];
+    // The barometer's newest reading (baro_input): pressure altitude in the standard atmosphere (mm), INT32_MIN without one in the last BARO_MAX_AGE_US.
+    int32_t baro;
 } Record;
 _Static_assert(sizeof(Record) == RECORD_SIZE, "Flight record layout");
 
@@ -132,6 +135,23 @@ static bool gps_input(HoverGps *out) {
     *out = (HoverGps){.capture_us = fix.received_us - GPS_LATENCY_US,
                       .velocity = {p->velocity_mm_s[0] / 1000.0f, p->velocity_mm_s[1] / 1000.0f, -p->velocity_mm_s[2] / 1000.0f},
                       .position = {(p->latitude - latitude0) * metres, (p->longitude - longitude0) * metres * east_scale, p->height_mm / 1000.0f}};
+    return true;
+}
+
+// Barometer readings the hover takes (once each) and the log records: at most BARO_MAX_AGE_US old. A reading gives the pressure about BARO_LATENCY_US before it was read: the IIR filter's lag (three 20 ms samples at coefficient 3), half the 19 ms measurement and half the 10 ms poll.
+#define BARO_MAX_AGE_US 100000
+#define BARO_LATENCY_US 75000
+// The newest reading's altitude this tick (m), NaN without a fresh one.
+static float baro_altitude = NAN;
+
+static bool baro_input(HoverBaro *out) {
+    static int64_t taken_us = -1;
+    BaroSample sample;
+    bool fresh = baro_sample(&sample, BARO_MAX_AGE_US);
+    baro_altitude = fresh ? sample.altitude : NAN;
+    if (!fresh || sample.read_us == taken_us) return false;
+    taken_us = sample.read_us;
+    *out = (HoverBaro){.capture_us = sample.read_us - BARO_LATENCY_US, .altitude = sample.altitude};
     return true;
 }
 
@@ -418,6 +438,7 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->range_target = scaled(range, 1000);
     record->arc = scaled((hover.arc - (range > 0.1f ? held_nudge(1) / range : 0)) * DEG, 100);
     record->yaw = scaled(hover.yaw * DEG, 100);
+    record->baro = isfinite(baro_altitude) ? (int32_t)lroundf(baro_altitude * 1000) : INT32_MIN;
 }
 
 static void runtime_task(void *arg) {
@@ -532,6 +553,9 @@ static void runtime_task(void *arg) {
         state.temperature = raw[3] / 340.0f + 36.53f;
         state.sample_us = now;
         previous = now;
+        // The barometer's newest reading, taken once this tick by whichever of the hover's calls runs.
+        HoverBaro baro;
+        bool have_baro = baro_input(&baro);
         uint64_t started = esp_timer_get_time();
         Attitude pose = relative_attitude(&state);
         if (state.enabled && (fabsf(pose.roll) > TIP_LIMIT / DEG || fabsf(pose.pitch) > TIP_LIMIT / DEG)) stop_locked(4);
@@ -581,7 +605,7 @@ static void runtime_task(void *arg) {
                 HoverGps gps;
                 bool have_gps = gains.gps_tau > 0 && gps_input(&gps);
                 hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag,
-                             have_flow ? &flow : NULL, have_gps ? &gps : NULL, &out);
+                             have_flow ? &flow : NULL, have_gps ? &gps : NULL, have_baro ? &baro : NULL, &out);
                 // A finished landing disarms, ending the session like a stop, so the laptop can take off again (H or Enable) instead of being left armed with hover holding thrust at zero.
                 if (hover.landed && out.force <= 0) stop_locked(link_landing ? 8 : 7);
                 scaled.base = out.force > 0 ? fminf(THROTTLE_MAX, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
@@ -687,7 +711,7 @@ static void runtime_task(void *arg) {
         }
         if (!state.enabled || !hover_mode) {
             flown = command;
-            hover_rest(&hover, vertical, spinning(), dt);
+            hover_rest(&hover, vertical, spinning(), dt, have_baro ? &baro : NULL);
         }
         uint32_t duration = esp_timer_get_time() - started;
         if (recording) capture(now, raw, duration);
