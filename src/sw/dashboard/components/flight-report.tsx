@@ -2,7 +2,18 @@
 
 import { useMemo } from 'react';
 import dynamic from 'next/dynamic';
+import { TriangleAlert } from 'lucide-react';
 import { FastChart, type ChartSeries } from '@/components/fast-chart';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import type { FlightReport, FlightTrackPoint } from '@/lib/flight-report';
 import type { GpsSample } from '@/lib/telemetry';
 
@@ -268,34 +279,37 @@ export function FlightReportView({ report }: { report: FlightReport }) {
             </div>
           ))}
         </dl>
-        <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
-          <span
-            className={`rounded-full border px-2.5 py-0.5 ${stopped === 'Landed' ? 'text-muted-foreground' : 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300'}`}
-          >
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Badge variant={stopped === 'Landed' ? 'outline' : 'destructive'}>
             {stopped}
-          </span>
-          <span className="rounded-full border px-2.5 py-0.5 text-muted-foreground">
+          </Badge>
+          <Badge variant="outline">
             GPS hold {report.gps_hold ? 'on' : 'off'}
-          </span>
+          </Badge>
           {report.drone && (
-            <span className="text-muted-foreground tabular-nums">
+            <span className="text-xs text-muted-foreground tabular-nums">
               {report.drone}
             </span>
           )}
         </div>
         {report.warnings.length > 0 && (
-          <ul className="max-h-16 w-full space-y-0.5 overflow-y-auto rounded-md border border-red-500/30 bg-red-500/5 px-3 py-1.5 text-sm text-red-800 tabular-nums dark:text-red-300">
-            {report.warnings.map((warning, index) => (
-              <li key={index}>
-                {warning.time !== null && (
-                  <span className="mr-2 text-muted-foreground">
-                    {clock(warning.time)}
-                  </span>
-                )}
-                {warning.text}
-              </li>
-            ))}
-          </ul>
+          <Alert variant="destructive" className="w-full py-2">
+            <TriangleAlert />
+            <AlertDescription>
+              <ul className="max-h-14 space-y-0.5 overflow-y-auto tabular-nums">
+                {report.warnings.map((warning, index) => (
+                  <li key={index}>
+                    {warning.time !== null && (
+                      <span className="mr-2 text-muted-foreground">
+                        {clock(warning.time)}
+                      </span>
+                    )}
+                    {warning.text}
+                  </li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </Alert>
         )}
       </section>
       <div className="grid divide-y divide-border lg:min-h-0 lg:flex-1 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
@@ -369,51 +383,51 @@ export function FlightReportView({ report }: { report: FlightReport }) {
               Hands-off hover
             </h2>
             {report.spans.length ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm tabular-nums">
-                  <thead className="text-left text-muted-foreground">
-                    <tr className="border-b">
-                      <th className="py-1 pr-3 font-normal">Span</th>
-                      <th className="py-1 pr-3 font-normal">Pitch sd</th>
-                      <th className="py-1 pr-3 font-normal">Roll sd</th>
-                      <th className="py-1 pr-3 font-normal">Height sd</th>
-                      <th className="py-1 pr-3 font-normal">Baro range</th>
-                      <th className="py-1 pr-3 font-normal">Drift</th>
-                      <th className="py-1 pr-3 font-normal">Furthest</th>
-                      <th className="py-1 font-normal">Wind</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.spans.map((span) => (
-                      <tr key={span.start} className="border-b last:border-0">
-                        <td className="py-1 pr-3">
-                          {clock(span.start)}–{clock(span.end)} (
-                          {(span.end - span.start).toFixed(0)} s)
-                        </td>
-                        <td className="py-1 pr-3">
-                          {fixed(span.pitch_sd, 1, '°')}
-                        </td>
-                        <td className="py-1 pr-3">
-                          {fixed(span.roll_sd, 1, '°')}
-                        </td>
-                        <td className="py-1 pr-3">
-                          {fixed(span.height_sd, 2, 'm')}
-                        </td>
-                        <td className="py-1 pr-3">
-                          {fixed(span.baro_range, 2, 'm')}
-                        </td>
-                        <td className="py-1 pr-3">
-                          {fixed(span.drift_m, 1, 'm')}
-                        </td>
-                        <td className="py-1 pr-3">
-                          {fixed(span.wander_m, 1, 'm')}
-                        </td>
-                        <td className="py-1">{windText(span.wind)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <Table className="tabular-nums">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="h-8">Span</TableHead>
+                    <TableHead className="h-8">Pitch sd</TableHead>
+                    <TableHead className="h-8">Roll sd</TableHead>
+                    <TableHead className="h-8">Height sd</TableHead>
+                    <TableHead className="h-8">Baro range</TableHead>
+                    <TableHead className="h-8">Drift</TableHead>
+                    <TableHead className="h-8">Furthest</TableHead>
+                    <TableHead className="h-8">Wind</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {report.spans.map((span) => (
+                    <TableRow key={span.start}>
+                      <TableCell className="py-1">
+                        {clock(span.start)}–{clock(span.end)} (
+                        {(span.end - span.start).toFixed(0)} s)
+                      </TableCell>
+                      <TableCell className="py-1">
+                        {fixed(span.pitch_sd, 1, '°')}
+                      </TableCell>
+                      <TableCell className="py-1">
+                        {fixed(span.roll_sd, 1, '°')}
+                      </TableCell>
+                      <TableCell className="py-1">
+                        {fixed(span.height_sd, 2, 'm')}
+                      </TableCell>
+                      <TableCell className="py-1">
+                        {fixed(span.baro_range, 2, 'm')}
+                      </TableCell>
+                      <TableCell className="py-1">
+                        {fixed(span.drift_m, 1, 'm')}
+                      </TableCell>
+                      <TableCell className="py-1">
+                        {fixed(span.wander_m, 1, 'm')}
+                      </TableCell>
+                      <TableCell className="py-1">
+                        {windText(span.wind)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             ) : (
               <p className="text-muted-foreground">None</p>
             )}

@@ -233,11 +233,7 @@ export const PreflightPanel = memo(function PreflightPanel({
           className={`flex items-center gap-1.5 font-medium ${color}`}
         >
           <OverallIcon aria-hidden="true" className="size-4" />
-          {stops
-            ? `Not OK to fly: ${stops} to fix`
-            : cautions
-              ? `OK to fly, ${cautions} caution${cautions > 1 ? 's' : ''}`
-              : 'OK to fly'}
+          {stops ? 'Not ready' : 'Ready'}
         </span>
       </div>
       <ul className="space-y-1 text-sm tabular-nums">
