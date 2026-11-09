@@ -99,6 +99,8 @@ export type GpsReading = {
   // 0 none, 2 2D, 3 3D; ok: inside the module's accuracy masks.
   fix: number;
   ok: boolean;
+  // SBAS corrections applied (NAV-PVT diffSoln); absent from bridges before 2026-11-09.
+  differential?: boolean;
   satellites: number;
   latitude: number;
   longitude: number;
@@ -109,8 +111,32 @@ export type GpsReading = {
   speed_accuracy: number;
 };
 
+// The drone's GPS report once a second (src/fw/controller/bridge.py decode_gps_report, without its satellite list): time on the drone's clock (ms, as Reading.time); top4_cno the mean C/N0 (dB-Hz) of the strongest four; used the satellites in the solution per system; jam_indicator the CW jamming indicator (0-255).
+export type GpsReport = {
+  time: number;
+  satellites_age_ms: number | null;
+  rf_age_ms: number | null;
+  jamming: 'unknown' | 'ok' | 'warning' | 'critical';
+  jam_indicator: number;
+  noise_per_ms: number;
+  agc: number;
+  antenna: string;
+  antenna_power: string;
+  config: Record<
+    'signals' | 'sbas' | 'interference' | 'output',
+    'pending' | 'set' | 'refused' | 'unanswered'
+  >;
+  listed: number;
+  heard: number;
+  top4_cno: number | null;
+  used: Record<string, number>;
+  sbas_heard: number[];
+  sbas_corrected: boolean;
+};
+
 export type Reading = {
   gps?: GpsReading | null;
+  gps_report?: GpsReport | null;
   logging?: {
     active: boolean;
     ready: boolean;

@@ -824,7 +824,12 @@ export default function Page() {
             state={mapState}
             history={mapState === hoverState ? hoverHistory.read : noHistory}
           />
-          <GpsPanel gps={reading?.gps} connected={status === 'connected'} />
+          <GpsPanel
+            gps={reading?.gps}
+            report={reading?.gps_report}
+            time={reading?.time}
+            connected={status === 'connected'}
+          />
         </div>
       </main>
     </div>

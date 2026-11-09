@@ -47,6 +47,15 @@ CAMERA_KEYS = (
     "unsynced", "skipped_bytes", "overflows", "line_errors", "sync_edges", "rx_edges",
     "sequence", "age_ms", "valid", "trusted",
 )
+# The drone's GPS report (drone/main/gps.c gps_report), on the status channel once a second while the recorder subscription asks for it: drone time, NAV-SAT's time of week and age, MON-RF's age (ms); noise, AGC; jamming state, CW indicator, antenna status and power, configuration, satellites listed and sent; then 5 bytes per satellite.
+GPS_REPORT_FORMAT = "<4s4I2H7B"
+GPS_REPORT_SIZE = struct.calcsize(GPS_REPORT_FORMAT)
+GPS_SYSTEMS = {0: "GPS", 1: "SBAS", 2: "Galileo", 3: "BeiDou", 5: "QZSS", 6: "GLONASS"}
+GPS_JAMMING = ("unknown", "ok", "warning", "critical")
+GPS_ANTENNA = ("init", "unknown", "ok", "short", "open")
+# gps.c's configuration groups, in order, and how each went (gps.h GPS_PENDING...).
+GPS_GROUPS = ("signals", "sbas", "interference", "output")
+GPS_CONFIG = ("pending", "set", "refused", "unanswered")
 REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T", "esc": b"E"}
 # Schema entries per D reply (drone/main/settings.h SCHEMA_PAGE).
 SCHEMA_PAGE = 12
@@ -123,11 +132,44 @@ def decode_gps(fields):
     return {
         "messages": messages, "corrupt": corrupt, "skipped": skipped, "configured": bool(configured),
         "age_ms": None if age == 0xFFFFFFFF else age, "itow_ms": itow,
-        # 0 none, 2 2D, 3 3D; ok is the module's gnssFixOK, inside its accuracy masks.
-        "fix": fix, "ok": bool(flags & 1), "satellites": satellites,
+        # 0 none, 2 2D, 3 3D; ok is the module's gnssFixOK, inside its accuracy masks; differential: SBAS corrections applied (diffSoln).
+        "fix": fix, "ok": bool(flags & 1), "differential": bool(flags & 2), "satellites": satellites,
         "latitude": lat / 1e7, "longitude": lon / 1e7, "height": height / 1000,
         "velocity": [v / 1000 for v in velocity],
         "horizontal_accuracy": horizontal / 1000, "vertical_accuracy": vertical / 1000, "speed_accuracy": speed / 1000,
+    }
+
+
+def decode_gps_report(payload):
+    """
+    The drone's GPS report: the module's satellites heard or used (UBX-NAV-SAT; C/N0 in dB-Hz, elevation in degrees or None, quality 4 code locked and 5-7 carrier locked, health 1 healthy and 2 not), its RF health (UBX-MON-RF; jam_indicator is the CW indicator, 0-255; agc a fraction of full scale) and how each configuration group went, with a summary: the mean C/N0 of the strongest four, the satellites used per system and the SBAS PRNs heard. Ages are None before the first reply.
+    """
+    _, time_ms, itow, sat_age, rf_age, noise, agc, jamming, cw, antenna, power, config, listed, count = struct.unpack_from(GPS_REPORT_FORMAT, payload)
+    satellites = []
+    for index in range(min(count, (len(payload) - GPS_REPORT_SIZE) // 5)):
+        gnss, sv, cno, elevation, flags = struct.unpack_from("<3BbB", payload, GPS_REPORT_SIZE + 5 * index)
+        satellites.append({
+            "system": GPS_SYSTEMS.get(gnss, str(gnss)), "sv": sv, "cno": cno, "elevation": elevation if -90 <= elevation <= 90 else None,
+            "quality": flags & 7, "used": bool(flags & 8), "health": flags >> 4 & 3, "sbas_corrected": bool(flags & 128),
+        })
+    strongest = sorted((satellite["cno"] for satellite in satellites if satellite["cno"]), reverse=True)[:4]
+    used = {}
+    for satellite in satellites:
+        if satellite["used"]:
+            used[satellite["system"]] = used.get(satellite["system"], 0) + 1
+    return {
+        "time": time_ms,
+        "satellites_age_ms": None if sat_age == 0xFFFFFFFF else sat_age, "satellites_itow_ms": itow,
+        "rf_age_ms": None if rf_age == 0xFFFFFFFF else rf_age,
+        "jamming": GPS_JAMMING[jamming], "jam_indicator": cw, "noise_per_ms": noise, "agc": agc / 8191,
+        "antenna": GPS_ANTENNA[antenna] if antenna < len(GPS_ANTENNA) else str(antenna), "antenna_power": ("off", "on", "unknown", "unknown")[power & 3],
+        "config": {group: GPS_CONFIG[config >> 2 * index & 3] for index, group in enumerate(GPS_GROUPS)},
+        "listed": listed, "heard": sum(1 for satellite in satellites if satellite["cno"]),
+        "top4_cno": sum(strongest) / len(strongest) if strongest else None,
+        "used": used,
+        "sbas_heard": sorted(satellite["sv"] for satellite in satellites if satellite["system"] == "SBAS" and satellite["cno"]),
+        "sbas_corrected": any(satellite["sbas_corrected"] for satellite in satellites),
+        "satellites": satellites,
     }
 
 
@@ -184,7 +226,7 @@ class Recorder:
 
     def gps(self, message):
         """
-        Each new GPS solution while a recording is open: {"type": "gps", "drone_ms": its arrival on the drone's esp_timer clock (the start record's started_ticks_us is on the same clock), ...}. They ride the status messages, which are not acknowledged, so one can be missing.
+        Each new GPS solution while a recording is open: {"type": "gps", "drone_ms": its arrival on the drone's esp_timer clock (the start record's started_ticks_us is on the same clock), ...}; and each GPS report (decode_gps_report, once a second from firmware of 2026-11-09 on): {"type": "gps_report", "drone_ms": when the drone sent it, ...}. They ride the status channel, which is not acknowledged, so one can be missing.
         """
         if self.events is not None:
             self.event(message)
@@ -353,6 +395,8 @@ class Service:
         self.reading = None
         # The newest GPS solution recorded (its time of week), so each goes into the recording once.
         self.gps_itow = None
+        # The newest GPS report without its satellite list, for the dashboard's readings (None until one comes from this drone boot).
+        self.gps_report = None
         self.settings = None
         self.settings_version = None
         self.sequence = int(time.time() * 1000) & 0xFFFFFFFF
@@ -584,6 +628,12 @@ class Service:
 
     def receive(self, packet):
         channel, session, sequence, token, index, count, payload = unpack(packet)
+        if channel == 0 and payload[:4] == b"GPD1":
+            if session == self.session and len(payload) >= GPS_REPORT_SIZE:
+                report = decode_gps_report(payload)
+                self.gps_report = {key: value for key, value in report.items() if key != "satellites"}
+                self.queue_record("gps", {"type": "gps_report", "drone_ms": report["time"], **report})
+            return
         if channel == 0:
             if self.session and session != self.session:
                 self.disconnect("Drone restarted")
@@ -591,8 +641,10 @@ class Service:
                 self.queue_record("close", "Drone restarted")
                 self.settings_version = None
                 self.recorder.firmware = None
+                self.gps_report = None
             self.session, self.token, self.last_status = session, token, time.monotonic()
             version, self.reading = decode_status(payload, self.settings)
+            self.reading["gps_report"] = self.gps_report
             gps = self.reading["gps"]
             if gps and gps["age_ms"] is not None and gps["itow_ms"] != self.gps_itow:
                 self.gps_itow = gps["itow_ms"]
@@ -678,8 +730,8 @@ class Service:
                 self.last_status = 0
             ticks += 1
             if ticks % 20 == 0:
-                # The recorder subscription; the drone arms only while it is fresh.
-                self.send(4, b"\x01")
+                # The recorder subscription; the drone arms only while it is fresh. The G asks for its GPS report (decode_gps_report), which older drones ignore.
+                self.send(4, b"\x01G")
                 self.queue_record("check", bool(self.reading and self.reading["logging"]["active"]))
 
     async def connect(self, request, slot=None):
