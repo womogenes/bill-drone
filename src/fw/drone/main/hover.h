@@ -156,6 +156,8 @@ typedef struct {
     float land_wait;
     // Thrust direction (gains thrust_direction): the body pitch the attitude controller was last asked for (radians, from pitch_trim, after the takeoff easing) and how far it must sit from the thrust direction aimed (radians, positive nose down).
     float flown_pitch, direction;
+    // Whether this landing's climb rate has yet been under half its descent rate (hover.c: until then a slow climb rate is no stall).
+    bool descended;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

@@ -154,13 +154,13 @@
 // After a stick is let go the hold brakes for up to BRAKE_S (s), or until the speed estimate is under BRAKED (m/s), before it holds a place: the place is then where the drone stopped.
 #define BRAKE_S 2.0f
 #define BRAKED 0.15f
-// A landing waits to descend (climb-rate command 0) while the horizontal hold brakes a speed over LAND_WAIT_SPEED (m/s), for at most LAND_WAIT_S (s) from its start, unless already under LAND_TILT_HEIGHT: B pressed in fast flight began descending at once while still braking (asked for after the 2026-11-08 outdoor flights), so it stops first, then comes down. The wait is not landing time (land_time stays 0), so the probes' timing, LAND_EASE and the "due" timeout all start from the descent.
+// A landing waits to descend (holding its height) while the horizontal hold brakes a speed over LAND_WAIT_SPEED (m/s), for at most LAND_WAIT_S (s) from its start, unless already under LAND_TILT_HEIGHT: B pressed in fast flight began descending at once while still braking (asked for after the 2026-11-08 outdoor flights), so it stops first, then comes down. The wait is not landing time (land_time stays 0), so the probes' timing, LAND_EASE and the "due" timeout all start from the descent.
 #ifndef LAND_WAIT_SPEED
 #define LAND_WAIT_SPEED 0.5f
 #endif
-// Off (0) as deployed 2026-11-09: with the wait forced on every landing (LAND_WAIT_SPEED 0.02) one no-camera drag-model landing in landing_test declared touchdown in the air and one hit at 1.84 m/s, against none without it; 2 s is the value to try once that is understood.
+// It was off (0) as deployed 2026-11-09: forced on every landing (LAND_WAIT_SPEED 0.02) it declared touchdowns in the air in landing_test. Waiting held only a zero climb rate (the height target followed the height), so the climb rate's drift moved the drone (--outdoor seed 48: up 0.25 m in the 2 s), and when the descent began late the stall start took the descent not yet under way for a stall and probed in the air, where the probe found "floor" (seed 48 at 1.33 m). Now the wait holds the height, a stall needs the descent first (descended), and the blind rules above keep a probe in the air from cutting: forced on with --outdoor, touchdowns in the air 4 to 0 and cuts in the air 32 to 2 of 181 (both on airframes losing control in 2-3 m/s of wind, which the 2 s more airborne meets a little more often: 29 against 22 crashed or fell over without the wait), contact speed at most 0.98 m/s against 4.51; with the drag model and no GPS (--no-camera --baro --set hover_drag=1) no landing in the air either way.
 #ifndef LAND_WAIT_S
-#define LAND_WAIT_S 0.0f
+#define LAND_WAIT_S 2.0f
 #endif
 // Speed from the servos (gains speed_tilt): the tilt and pitch are smoothed over SPEED_SMOOTH (s; 0.5 fitted best against the camera's speed, against 0.1-1), the offset is first the mean over the first SPEED_TAKEOFF_S airborne (plus speed_takeoff) and then follows the camera's speed over SPEED_LEARN (s) while it sees the tag.
 #define SPEED_SMOOTH 0.5f
@@ -658,8 +658,13 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         command = clamp(g->kz * (state->target - state->height) + rising, -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
     } else {
         float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? LAND_FAST_FACTOR : 1);
-        command = waiting ? 0 : fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
-        state->target = state->height;
+        if (waiting) {
+            // Waiting, the height the hold was holding is held (kz), not only a zero climb rate.
+            command = clamp(g->kz * (state->target - state->height), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
+        } else {
+            command = fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
+            state->target = state->height;
+        }
     }
     state->command = command;
     // Landing: less the sink a probe that found air left (SINK_TAU).
@@ -689,7 +694,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->hold_g += (vertical_g - state->hold_g) * pull;
         }
         state->land_time = state->stall_time = state->impulse = state->probe_wait = state->sink = state->land_wait = 0;
-        state->probing = false;
+        state->probing = state->descended = false;
     } else if (waiting) {
         state->land_wait += dt;
     } else {
@@ -698,7 +703,9 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         if (state->land_time == 0) state->land_height = state->height;
         state->land_time += dt;
         // Only once the descent command has eased in: before that the drone is not meant to be moving yet.
-        state->stall_time = state->land_time > LAND_EASE && fabsf(state->climb_rate) < 0.5f * rate ? state->stall_time + dt : 0;
+        // And only once the drone has descended at half the rate: a descent that has not yet begun is no stall.
+        state->descended = state->descended || state->climb_rate < -0.5f * rate;
+        state->stall_time = state->land_time > LAND_EASE && state->descended && fabsf(state->climb_rate) < 0.5f * rate ? state->stall_time + dt : 0;
         state->impulse = state->impulse * expf(-dt / IMPULSE_TAU) + gained;
         state->probe_wait = fmaxf(0, state->probe_wait - dt);
         state->sink *= expf(-dt / SINK_TAU);
