@@ -62,10 +62,7 @@ export const ADCPanel = memo(function ADCPanel({
     previous.session !== next.session || next.time - previous.time > maxGap;
 
   return (
-    <section
-      aria-labelledby="adc-heading"
-      className="space-y-2 px-4 py-3"
-    >
+    <section aria-labelledby="adc-heading" className="space-y-2 px-4 py-3">
       <div className="flex items-center gap-2">
         <h2 id="adc-heading" className="font-semibold">
           ADC
@@ -91,13 +88,13 @@ export const ADCPanel = memo(function ADCPanel({
       <dl className="grid grid-cols-3 gap-4 tabular-nums">
         <div>
           <dt className="text-sm text-muted-foreground">Voltage</dt>
-          <dd className="text-xl font-medium">
+          <dd className="font-medium">
             {connected && ema !== undefined ? `${ema.toFixed(2)} V` : '—'}
           </dd>
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Raw voltage</dt>
-          <dd className="text-lg">
+          <dd>
             {connected && voltage !== undefined
               ? `${voltage.toFixed(2)} V`
               : '—'}
@@ -105,9 +102,7 @@ export const ADCPanel = memo(function ADCPanel({
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Raw ADC</dt>
-          <dd className="text-lg">
-            {connected && raw !== undefined ? raw.toLocaleString() : '—'}
-          </dd>
+          <dd>{connected && raw !== undefined ? raw.toLocaleString() : '—'}</dd>
         </div>
       </dl>
       <FastChart

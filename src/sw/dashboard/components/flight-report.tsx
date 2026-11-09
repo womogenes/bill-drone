@@ -249,7 +249,7 @@ export function FlightReportView({ report }: { report: FlightReport }) {
           {summary.map(([label, value]) => (
             <div key={label}>
               <dt className="text-sm text-muted-foreground">{label}</dt>
-              <dd className="text-lg">{value}</dd>
+              <dd>{value}</dd>
             </div>
           ))}
         </dl>

@@ -52,10 +52,7 @@ export const ActuatorPanel = memo(function ActuatorPanel({
   const disabled = !connected || angle === undefined;
 
   return (
-    <section
-      aria-labelledby={heading}
-      className="space-y-4 px-4 py-4"
-    >
+    <section aria-labelledby={heading} className="space-y-4 px-4 py-4">
       <div className="flex items-center gap-4">
         <h2 id={heading} className="font-semibold">
           {title}
@@ -93,7 +90,7 @@ export const ActuatorPanel = memo(function ActuatorPanel({
         <p className="text-sm text-muted-foreground">
           {isServo ? 'Angle' : 'Throttle'}
         </p>
-        <p className="mt-1 text-3xl font-medium tabular-nums">
+        <p className="mt-1 font-medium tabular-nums">
           {disabled ? '—' : `${draft ?? angle}${suffix}`}
         </p>
       </div>

@@ -641,7 +641,7 @@ export default function Page() {
         <div className="pointer-events-none fixed inset-0 z-50 border-4 border-destructive" />
       )}
       <header className="flex h-14 shrink-0 items-center gap-6 border-b px-6">
-        <h1 className="text-lg font-semibold">Drone dashboard</h1>
+        <h1 className="font-semibold">Drone dashboard</h1>
         <Tabs
           value={bench ? 'bench' : 'fly'}
           onValueChange={(value) => setBench(value === 'bench')}

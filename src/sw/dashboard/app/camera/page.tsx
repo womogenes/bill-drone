@@ -247,7 +247,7 @@ export default function CameraPage() {
   return (
     <main className="mx-auto max-w-3xl space-y-6 p-6">
       <header className="flex items-center justify-between border-b pb-4">
-        <h1 className="text-lg font-semibold">Camera calibration</h1>
+        <h1 className="font-semibold">Camera calibration</h1>
         <Link href="/" className="text-sm underline">
           Dashboard
         </Link>

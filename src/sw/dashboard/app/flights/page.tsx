@@ -56,7 +56,7 @@ function Flights() {
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="flex h-14 shrink-0 items-center gap-6 border-b px-6">
-        <h1 className="text-lg font-semibold">Flights</h1>
+        <h1 className="font-semibold">Flights</h1>
         <Select
           value={name}
           items={items}

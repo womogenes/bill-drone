@@ -57,18 +57,18 @@ export const GpsPanel = memo(function GpsPanel({
         <div>
           <dt className="text-sm text-muted-foreground">Fix</dt>
           <dd
-            className={`text-lg ${live && gps.ok ? 'text-green-700' : connected && gps ? 'text-red-700' : ''}`}
+            className={`${live && gps.ok ? 'text-green-700' : connected && gps ? 'text-red-700' : ''}`}
           >
             {state}
           </dd>
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Satellites</dt>
-          <dd className="text-lg">{live ? gps.satellites : '—'}</dd>
+          <dd>{live ? gps.satellites : '—'}</dd>
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Accuracy</dt>
-          <dd className="text-lg">
+          <dd>
             {solved
               ? `${gps.horizontal_accuracy.toFixed(1)} / ${gps.vertical_accuracy.toFixed(1)} m`
               : '—'}
@@ -76,7 +76,7 @@ export const GpsPanel = memo(function GpsPanel({
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Ground speed</dt>
-          <dd className="text-lg">
+          <dd>
             {solved && speed !== undefined
               ? `${speed.toFixed(2)} ± ${gps.speed_accuracy.toFixed(2)} m/s`
               : '—'}
@@ -84,19 +84,15 @@ export const GpsPanel = memo(function GpsPanel({
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Climb</dt>
-          <dd className="text-lg">
-            {solved ? `${(-gps.velocity[2]).toFixed(2)} m/s` : '—'}
-          </dd>
+          <dd>{solved ? `${(-gps.velocity[2]).toFixed(2)} m/s` : '—'}</dd>
         </div>
         <div>
           <dt className="text-sm text-muted-foreground">Altitude</dt>
-          <dd className="text-lg">
-            {solved ? `${gps.height.toFixed(1)} m` : '—'}
-          </dd>
+          <dd>{solved ? `${gps.height.toFixed(1)} m` : '—'}</dd>
         </div>
         <div className="col-span-3">
           <dt className="text-sm text-muted-foreground">Position</dt>
-          <dd className="text-lg">
+          <dd>
             {solved
               ? `${gps.latitude.toFixed(7)}, ${gps.longitude.toFixed(7)}`
               : '—'}
@@ -104,7 +100,7 @@ export const GpsPanel = memo(function GpsPanel({
         </div>
         <div className="col-span-3">
           <dt className="text-sm text-muted-foreground">Barometer</dt>
-          <dd className="text-lg">
+          <dd>
             {!connected || !baro
               ? '—'
               : !baro.found
