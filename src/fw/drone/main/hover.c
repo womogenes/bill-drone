@@ -171,6 +171,13 @@
 #define BARO_STALE_US 300000
 // The filter's time constant is at least this many readings, so its discrete steps stay well inside stability.
 #define BARO_MIN_STEPS 10
+// Thrust direction (gains thrust_direction): the correction from the hold's tilt to the body pitch moves over THRUST_DIRECTION_TAU (s), and the body pitch asked for stays within THRUST_BODY_MAX (radians), short of flight_rt.c TIP_LIMIT's 45 degree cut. In sw/sim/outdoor.py (2026-11-09, 06:38 settings) 0.3-0.7 s fed a 0.3-0.4 Hz swing of the hold itself (pitch RMS 12-16 degrees in still air against 5.5 off), 1.5-2.5 s held as well without it.
+#ifndef THRUST_DIRECTION_TAU
+#define THRUST_DIRECTION_TAU 1.5f
+#endif
+#ifndef THRUST_BODY_MAX
+#define THRUST_BODY_MAX (35.0f * 3.14159265f / 180)
+#endif
 
 static float clamp(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
@@ -487,6 +494,13 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     if (g->thrust_tilt > 0 && drag && state->height >= AIRBORNE) {
         float reached = state->history[recorded(state, now_us - SERVO_DELAY_US)][5] + g->pitch_trim;
         state->thrust_tilt += (reached - state->thrust_tilt) * (1 - expf(-dt / fmaxf(g->thrust_tilt_tau, dt)));
+    }
+    // Thrust direction: the body pitch beyond pitch_trim plus the share of the servos' reached tilt beyond pitch_trim's that moves the drone. The correction follows what the last body pitch asked for gave, so it integrates the hold's aim less the thrust direction while the body pitch is free, and stops winding up once a limit holds it.
+    if (g->thrust_direction > 0 && drag && state->height >= AIRBORNE) {
+        float reached = state->history[recorded(state, now_us - SERVO_DELAY_US)][5] + g->pitch_trim;
+        float thrust = pitch - g->pitch_trim + g->thrust_direction * reached;
+        state->direction += (state->flown_pitch - thrust - state->direction) * (1 - expf(-dt / THRUST_DIRECTION_TAU));
+        state->direction = clamp(state->direction, -THRUST_BODY_MAX, THRUST_BODY_MAX);
     }
 
     // Rotor drag: the body's horizontal specific force less the thrust vector's forward part (at the tilt the servos have reached) is -drag times the airspeed. It is noisy (vibration, the pitch loop's servo motion), so it pulls the estimate slowly, and the past with it, as the camera's correction does; a steady disagreement is the integrated acceleration's bias, which it learns (a critically damped second-order filter, settling over a few drag_tau). The camera, when it sees the tag, measures the velocity itself: then the disagreement is the drag model's own offset (servo zero, accelerometer bias, mounting) instead, which it teaches below.
@@ -808,7 +822,10 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     state->carry[1] = clamp(state->trim[1] - (-state->push[0] * sy + state->push[1] * cy), -g->trim_max, g->trim_max);
     output->velocity[0] = state->velocity[0] * sy - state->velocity[1] * cy;
     output->velocity[1] = state->velocity[0] * cy + state->velocity[1] * sy;
-    output->pitch = clamp(atanf(forward / GRAVITY) - g->thrust_tilt * state->thrust_tilt, -g->tilt, g->tilt);
+    if (g->thrust_direction > 0)
+        output->pitch = clamp(clamp(atanf(forward / GRAVITY), -g->tilt, g->tilt) + state->direction, -THRUST_BODY_MAX, THRUST_BODY_MAX);
+    else
+        output->pitch = clamp(atanf(forward / GRAVITY) - g->thrust_tilt * state->thrust_tilt, -g->tilt, g->tilt);
     // Keep the tag in view: leaning nose-down turns the camera down and moves the tag up the picture, so the pitch is limited to put the tag (as last seen, relative to level) no further than view from the picture's centre. On 2026-11-02 04:55 UTC a tag 9 degrees above level left the top of the camera's 18 degrees as the body pitched past 11 degrees, and the hold, blind, swung out of control.
     if (g->view > 0 && state->have_pose) {
         float elevation = atan2f(state->position[2], fmaxf(hypotf(state->position[0], state->position[1]), 0.1f));
@@ -830,11 +847,13 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
         output->roll += state->settle * clamp(state->rest[0], -SETTLE_MAX, SETTLE_MAX);
         output->pitch += state->settle * clamp(state->rest[1], -SETTLE_MAX, SETTLE_MAX);
     }
-    if (state->landed || state->lifted >= TAKEOFF_EASE_S) return;
-    // Negative while on the floor, counting up to the wait; zero from liftoff, counting the ease.
-    state->lifted = state->lifted < 0 && state->height >= LIFTED_HEIGHT ? 0 : state->lifted + dt;
-    // The share of the resting attitude still in the targets: all of it on the floor, fading to none over the ease.
-    float share = state->lifted < 0 ? 1 : fmaxf(0, 1 - state->lifted / TAKEOFF_EASE_S);
-    output->roll += share * (state->rest[0] - output->roll);
-    output->pitch += share * (state->rest[1] - output->pitch);
+    if (!state->landed && state->lifted < TAKEOFF_EASE_S) {
+        // Negative while on the floor, counting up to the wait; zero from liftoff, counting the ease.
+        state->lifted = state->lifted < 0 && state->height >= LIFTED_HEIGHT ? 0 : state->lifted + dt;
+        // The share of the resting attitude still in the targets: all of it on the floor, fading to none over the ease.
+        float share = state->lifted < 0 ? 1 : fmaxf(0, 1 - state->lifted / TAKEOFF_EASE_S);
+        output->roll += share * (state->rest[0] - output->roll);
+        output->pitch += share * (state->rest[1] - output->pitch);
+    }
+    state->flown_pitch = output->pitch;
 }

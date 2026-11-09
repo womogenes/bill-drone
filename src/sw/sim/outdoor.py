@@ -7,7 +7,7 @@ Indoors nothing measured the airframe above about 0.5 m/s of airspeed, so every 
 
 The firmware's fly-away failsafe (fw/drone/main/guard.c; on at settings.def's defaults, off with --set failsafe_speed=0,failsafe_distance=0) flies with the hover. A run it lands counts as "failsafe landed" rather than touched down.
 
-It prints, per wind: how many runs lost attitude (past 45 degrees), touched down unasked, were landed by the failsafe or flew off (beyond 10 m), and over the rest the median and 90th percentile of the horizontal distance from the takeoff point and of the height error over the hold, the worst tilt, the pitch RMS and the pitch's RMS in the swing band (0.4-1.6 Hz, as pitch_check measures the swing).
+It prints, per wind: how many runs lost attitude (past 45 degrees), touched down unasked, were landed by the failsafe or flew off (beyond 10 m), and over the rest the median and 90th percentile of the horizontal distance from the takeoff point and of the height error over the hold, the worst tilt, the pitch RMS and the pitch's RMS in the swing band (0.4-1.6 Hz, as pitch_check measures the swing). With --sticks also the pitch's swing after each release and the braking: peak ground speed, and the time and distance from release until under STOPPED.
 """
 
 import argparse
@@ -33,6 +33,9 @@ DISTURBANCES = MODELS / "disturbances_2026-11-02_9in_calibrated.json"
 GPS = {"rate": 10.0, "latency": 0.06, "velocity_noise": 0.05, "vertical_noise": 0.1, "position_noise": 0.7, "position_tau": 30.0}
 SETTLE = 5.0
 FLYAWAY = 10.0
+# Braking after a stick: the ground speed (m/s) that counts as stopped, and how long after release it may take (s).
+STOPPED = 0.3
+STOP_WINDOW = 8.0
 
 
 def loguniform(rng, low, high):
@@ -120,9 +123,21 @@ def fly(job):
     held = {"fate": "held", "distance": float(np.median(distance)), "distance_max": float(distance.max()), "height": float(np.sqrt(np.mean(height ** 2))),
             "tilt": float(np.abs(angles[hold]).max()), "pitch_rms": float(np.std(angles[hold, 1])), "swing_band": float(np.sqrt(np.mean(band(angles[:, 1], *SWING)[hold] ** 2)))}
     if args.sticks:
-        # After each stick is let go: the pitch's peak to peak from 0.3 s to 3 s after (the hold braking, and any swing it leaves).
-        swings = [float(np.ptp(angles[(t > start + length + 0.3) & (t < start + length + 3.0), 1])) for start, _, _, length in args.sticks if ((t > start + length + 0.3) & (t < start + length + 3.0)).any()]
+        # After each stick is let go (SETTLE + start + length after liftoff, as p["stick"] flies it): the pitch's peak to peak from 0.3 s to 3 s after (the hold braking, and any swing it leaves).
+        releases = [(SETTLE + start, SETTLE + start + length) for start, _, _, length in args.sticks]
+        swings = [float(np.ptp(angles[(t > end + 0.3) & (t < end + 3.0), 1])) for _, end in releases if ((t > end + 0.3) & (t < end + 3.0)).any()]
         held["swing"] = max(swings) if swings else 0.0
+        # Braking: the peak ground speed from the stick to STOP_WINDOW after release, how long after release the speed first falls under STOPPED, and how far the drone went from where it was let go by then (NaN if it never stops in the window).
+        speed = np.hypot(*np.gradient(position[:, :2], t, axis=0).T)
+        brakes = []
+        for begin, end in releases:
+            window = (t >= begin) & (t <= end + STOP_WINDOW)
+            after = np.flatnonzero((t > end) & (t <= end + STOP_WINDOW) & (speed < STOPPED))
+            released = np.flatnonzero(t >= end)[0]
+            stop = after[0] if len(after) else None
+            brakes.append({"peak": float(speed[window].max()), "stop_time": float(t[stop] - end) if stop is not None else math.nan,
+                           "stop_distance": float(np.hypot(*(position[stop, :2] - position[released, :2]))) if stop is not None else math.nan})
+        held |= {key: max(b[key] for b in brakes) for key in ("peak", "stop_time", "stop_distance")}
     return out | held
 
 
@@ -144,7 +159,7 @@ def main():
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--flow", type=lambda text: tuple(float(v) for v in text.split(",")), help="the camera's flow, the scene LOW,HIGH m away (drawn log-uniform per run); hover_flow_depth (--set) is the drone's guess")
     parser.add_argument("--out", type=Path, help="write every run's result as JSON")
-    parser.add_argument("--sticks", type=lambda text: [tuple(float(v) for v in item.split(",")) for item in text.split(";")], help="a pilot's stick sequence during the hold: start s after settling, pitch and roll degrees, seconds held; ';' between sticks (e.g. '5,10,0,2;12,-10,0,2'); adds each run's largest pitch peak to peak 0.3-3 s after a stick is let go")
+    parser.add_argument("--sticks", type=lambda text: [tuple(float(v) for v in item.split(",")) for item in text.split(";")], help="a pilot's stick sequence during the hold: start s after settling, pitch and roll degrees, seconds held; ';' between sticks (e.g. '5,10,0,2;12,-10,0,2'); adds each run's largest pitch peak to peak 0.3-3 s after a stick is let go, and the braking: peak ground speed, time and distance from release to under STOPPED")
     parser.add_argument("--flyaway", type=float, default=FLYAWAY, help="m from takeoff that counts as flown off")
     parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=(0.5, 3.0), help="range the forward speed moment is drawn in, times the airframe's (log-uniform; default 0.5,3 from before any flight measured it; models fitted to the outdoor flights warrant narrower)")
     args = parser.parse_args()
@@ -171,6 +186,11 @@ def main():
             line += f" | distance median {q('distance', 50):.2f} m (p90 {q('distance', 90):.2f}, worst max {max(r['distance_max'] for r in held):.1f}), height rms {q('height', 50):.2f} m (p90 {q('height', 90):.2f}), tilt max {q('tilt', 50):.1f}° (p90 {q('tilt', 90):.1f}), pitch rms {q('pitch_rms', 50):.1f}°, swing band (0.4-1.6 Hz) rms {q('swing_band', 50):.1f}° (p90 {q('swing_band', 90):.1f})"
             if args.sticks:
                 line += f", swing after release {q('swing', 50):.1f}° (p90 {q('swing', 90):.1f})"
+                stopped = [r for r in held if not math.isnan(r["stop_time"])]
+                line += f", peak speed {q('peak', 50):.2f} m/s (p90 {q('peak', 90):.2f}), stopped under {STOPPED} m/s in {len(stopped)}/{len(held)}"
+                if stopped:
+                    s = lambda key, pct: np.percentile([r[key] for r in stopped], pct)
+                    line += f" after {s('stop_time', 50):.1f} s (p90 {s('stop_time', 90):.1f}) and {s('stop_distance', 50):.1f} m (p90 {s('stop_distance', 90):.1f})"
         print(line, flush=True)
         fired = [r for r in runs if r.get("failsafe")]
         if fired:

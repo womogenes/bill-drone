@@ -10,7 +10,7 @@ The drone's GPS from the laptop, through the drone's N request (fw/drone/main/ra
   get <KEY> ...     configuration items from the module's RAM layer, by pyubx2's names, e.g. CFG_RATE_MEAS CFG_SIGNAL_GLO_ENA
   set <KEY=VALUE> ...  configuration items in the RAM layer (lost at power-off); only with the drone disarmed
 
-The module's own routine messages (NAV-PVT, already in the drone's status) do not come through; everything else it sends does. A setting that leaves the module silent at the drone's baud makes the drone search and configure it again after 3 s (gps.c).
+The module's own routine messages (NAV-PVT, already in the drone's status) do not come through; everything else it sends does, including the replies to the drone's own NAV-SAT and MON-RF polls each second (firmware from 2026-11-09), while the tunnel has been used in the last 5 s. Which source disturbs the GPS (camera video, camera, the drone's radio): uv run -m sw.gps_interference. A setting that leaves the module silent at the drone's baud makes the drone search and configure it again after 3 s (gps.c).
 """
 
 import argparse

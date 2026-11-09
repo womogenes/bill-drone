@@ -52,6 +52,8 @@ typedef struct {
     float pitch_damping_tau;
     // Fastest change of the roll setpoint alone (rad/s, 0 = target_rate): roll answers differential thrust far faster than pitch answers the servos, and at target_rate 30 deg/s a full roll stick reversal took a second in the setpoint alone (2026-11-08 outdoor flights). Runtime-only, last.
     float roll_target_rate;
+    // The radio settings (settings.def radio_rate, radio_power, radio_follow), read by radio.c alone through the settings store. Runtime-only, last.
+    float radio_rate, radio_power, radio_follow;
     // The fly-away failsafe and the test pattern's limits (guard.h). Runtime-only, last.
     GuardGains guard;
 } Command;

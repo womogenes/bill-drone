@@ -272,10 +272,14 @@ export function FastChart<T>({
       attributes: true,
       attributeFilter: ['class', 'style'],
     });
+    // The theme follows the system's color scheme by media query, which changes no attribute.
+    const scheme = window.matchMedia('(prefers-color-scheme: dark)');
+    scheme.addEventListener('change', refreshStyle);
     surface.addEventListener('pointermove', move);
     surface.addEventListener('pointerleave', leave);
     schedule();
     return () => {
+      scheme.removeEventListener('change', refreshStyle);
       cancelAnimationFrame(frame);
       redraw.current = () => {};
       resize.disconnect();
