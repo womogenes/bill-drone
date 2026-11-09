@@ -65,6 +65,8 @@ export type ControlSettings = {
   hover_trim_max: number;
   // Absent from firmware before the GPS hold.
   hover_gps_tau?: number;
+  // Absent from firmware before the barometer; 0 leaves the barometer out of the hover's height.
+  hover_baro_tau?: number;
   auto_trim: number;
 };
 
@@ -119,6 +121,8 @@ export type GpsSample = GpsFix & {
   time: number;
   session: number;
   horizontal_accuracy: number;
+  // Ground speed (m/s), which colors the map's trail.
+  speed?: number;
 };
 
 // The drone's barometer (src/fw/controller/bridge.py decode_status): its I2C address once found, and the pressure altitude in the standard atmosphere (m, 0.1 m steps; null without a fresh reading).

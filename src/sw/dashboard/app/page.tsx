@@ -26,7 +26,9 @@ import Link from 'next/link';
 import { GamepadView } from '@/components/gamepad';
 import { ControlPanel } from '@/components/control-panel';
 import { HoverPanel } from '@/components/hover-panel';
-import type { PreviewTag } from '@/components/fpv-panel';
+import type { CameraStatus, PreviewTag } from '@/components/fpv-panel';
+import { LastFlight } from '@/components/last-flight';
+import { PreflightPanel } from '@/components/preflight-panel';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ActuatorPanel } from '@/components/actuator-panel';
@@ -221,6 +223,8 @@ export default function Page() {
     []
   );
   const latestHover = useRef<HoverSample | null>(null);
+  // The camera's state as the camera panel last polled it, for the preflight check.
+  const [cameraStatus, setCameraStatus] = useState<CameraStatus>(null);
   const [hoverHistory] = useState(() =>
     createHistory<HoverSample>(20_000, 1000)
   );
@@ -382,6 +386,7 @@ export default function Page() {
               latitude,
               longitude,
               horizontal_accuracy: data.gps.horizontal_accuracy,
+              speed: Math.hypot(data.gps.velocity[0], data.gps.velocity[1]),
             };
             gpsHistory.append(lastFix);
           }
@@ -625,6 +630,11 @@ export default function Page() {
           : 'Recorder ready'
         : 'Recorder connecting');
   const connected = status === 'connected';
+  // The bridge's last recording once it has closed it (its stop record written), for the last flight's summary.
+  const lastFlight =
+    recorder?.file && !recorder.writing
+      ? recorder.file.replace(/\.bin$/, '')
+      : null;
   return (
     <div className="flex flex-col lg:h-dvh">
       {(arming || armed) && (
@@ -734,6 +744,15 @@ export default function Page() {
           <Link href="/camera" className="text-sm underline">
             Camera
           </Link>
+          {/* Its own tab: it reads recordings only, and this one keeps the drone link (the bridge serves one dashboard). */}
+          <a
+            href="/flights"
+            target="_blank"
+            rel="noopener"
+            className="text-sm underline"
+          >
+            Flights
+          </a>
           {fps !== null && (
             <span
               className="min-w-[6ch] text-right text-sm text-muted-foreground tabular-nums"
@@ -820,6 +839,13 @@ export default function Page() {
               }}
             />
           )}
+          <PreflightPanel
+            reading={reading}
+            connected={connected}
+            fps={fps}
+            camera={cameraStatus}
+          />
+          {lastFlight && <LastFlight name={lastFlight} />}
           {/* Drawn whether or not the drone is connected, so the controller can be checked on its own. */}
           <section className="px-4 py-3" aria-label="Controller">
             <GamepadView />
@@ -884,6 +910,7 @@ export default function Page() {
             onFree={(free) => sendControl({ hover_camera: free ? 0 : 1 })}
             roll={reading?.control?.hover_cam_roll}
             onTag={showPreviewTag}
+            onStatus={setCameraStatus}
           />
         </div>
         {/* On the bench the servo and ESC panels take its place. */}
