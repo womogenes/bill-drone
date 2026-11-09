@@ -36,8 +36,8 @@ ACCEL_NOISE = 0.0004 * math.sqrt(44)  # g RMS: MPU6050 noise density × DLPF ban
 # Rate, delay and noise as flown on 2026-10-28 (06:55-07:01 hovers): 21-22 sightings a second, 50 ms median age at use (90th percentile 70), range noise 0.5% of range about a 9-frame mean.
 # noise is the measured 0.5% range noise; lateral_noise from the camera hovers' sideways spectrum above 2 Hz, about 100x below the range noise in power.
 CAMERA = {"tag": (2.0, 0.0, 0.5), "fov": (18.0, 12.4, 15.0), "fps": 22.0, "latency": 0.045, "noise": 0.005, "lateral_noise": 0.0005}
-# The BMP388 as flight_rt.c reads it (run's plant["baro"]): 50 Hz, about 75 ms behind, its noise in moving air, a slow drift (weather, the chip warming), and up to 0.3 m of rotor wash at the floor (its sign and size on this airframe unmeasured).
-BARO = {"rate": 50.0, "latency": 0.075, "noise": 0.2, "drift": 0.3, "drift_tau": 60.0, "wash": -0.3, "wash_height": 0.5}
+# The BMP388 as flight_rt.c reads it (run's plant["baro"]): 50 Hz, about 75 ms behind, its noise in moving air, a slow drift (weather, the chip warming), the liftoff's kick and no steady wash, as measured on drone 1's 2026-11-09 outdoor flights against the accelerometer (sw/sim/gps_truth.py, sw/sim/baro_floor.py): 0.06-0.09 m of scatter above 1 Hz in flight, the floor moving -0.46 to +0.60 m between takeoff and landing, -0.13 to +0.14 m with the motors spinning on the floor, and in the first 0.4 s after liftoff 0.3-2.9 m off either way (0-0.2 s: median -0.42 m, 10-90% -1.42 to +0.79). The kick is drawn per run as a gaussian of "kick" m RMS decaying over "kick_tau" s from liftoff. Near the floor in a landing ("wash", fading to none at "wash_height" m) the sign and size are unresolved (+0.25 to +0.45 m against the floor read after the cut, uncertain), so landing_test draws it.
+BARO = {"rate": 50.0, "latency": 0.075, "noise": 0.08, "drift": 0.35, "drift_tau": 60.0, "wash": 0.0, "wash_height": 0.3, "kick": 0.8, "kick_tau": 0.2}
 # The drone has no landing legs: it rests on the bottom of its body (contact points relative to the CoM, m).
 BODY_FEET = [(x, y, -0.035) for x in (0.07, -0.07) for y in (0.1, -0.1)]
 
@@ -103,8 +103,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py, at the geometry they name), sw/sim/airframe.py supplies the motors, servos and angular accelerations and the body's inertia instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
     With hover and plant["excite"] (a test pattern as a recording's "pattern" event, sw/excite.py: {"after", "repeat", "segments"}), its roll and pitch steps add to the hover's attitude targets and its forward and left speeds move the hold point (on top of plant["nudge"], within NUDGE_MAX) from "after" seconds past collective first reaching integrate_throttle, "repeat" times (0 = until the end), as flight_rt.c excite does; its other channels are ignored.
-    GPS (fw/drone/main/flight_rt.c gps_input): plant["gps"] = {"rate" (Hz), "latency" (s, measurement to arrival; the firmware assumes 0.06), "velocity_noise" and "vertical_noise" (m/s RMS, white), "position_noise" (m RMS) wandering over "position_tau" (s), "heading": where the world's forward axis (the drone's nose at takeoff) points, degrees clockwise from north} gives the hover each fix once; settings hover_gps_tau (and hover_gps_heading, the drone's belief about that heading) turn it on.
-    Barometer (fw/drone/main/flight_rt.c baro_input): plant["baro"] = {"rate" (Hz), "latency" (s, measurement to the hover; the firmware assumes 0.075), "noise" (m RMS, white per reading), "drift" (m RMS wandering over "drift_tau" s: weather and the chip's warming), "wash" (m the rotors' wash and ground effect add while the motors are commanded, fading to none at "wash_height" m above the start)} gives the hover each reading once, and at rest too (its ground); setting hover_baro_tau turns it on.
+    GPS (fw/drone/main/flight_rt.c gps_input): plant["gps"] = {"rate" (Hz), "latency" (s, measurement to arrival; the firmware assumes 0.06), "velocity_noise" and "vertical_noise" (m/s RMS, white), "position_noise" (m RMS) wandering over "position_tau" (s), "liftoff_descent" (a range of m/s, drawn per run: the climb rate it reads instead of the truth for "liftoff_s" s from liftoff), "heading": where the world's forward axis (the drone's nose at takeoff) points, degrees clockwise from north} gives the hover each fix once; settings hover_gps_tau (and hover_gps_heading, the drone's belief about that heading) turn it on.
+    Barometer (fw/drone/main/flight_rt.c baro_input): plant["baro"] = {"rate" (Hz), "latency" (s, measurement to the hover; the firmware assumes 0.075), "noise" (m RMS, white per reading), "drift" (m RMS wandering over "drift_tau" s: weather and the chip's warming), "wash" (m the rotors' wash and ground effect add while the motors are commanded, fading to none at "wash_height" m above the start), "kick" (m RMS, drawn per run: the liftoff's transient, decaying over "kick_tau" s)} gives the hover each reading once, and at rest too (its ground); setting hover_baro_tau turns it on.
     Optical flow (fw/drone/main/flight_rt.c flow_input): plant["flow"] = {"depth": the scene's true distance along the camera (m), "noise_px": per-frame shift noise (full-resolution px), "fps", "latency" (s), "max_px": the largest shift per frame and axis the camera's block search finds (full-resolution px; fw/esp32cam/src/flow.h reach, about 14; none by default)} gives the hover the camera's flow, the mean image motion over each frame interval with the mean measured gyro over it taken out as the firmware does; a frame whose shift exceeds max_px on either axis gives none; settings hover_flow_depth and hover_flow_tau turn it on.
     IMU errors for the hover's estimators: plant["accel_bias"] (g; forward, left) on the accelerometer, "flight_accel_bias" (g, along body up) on it only while the motors are commanded (vibration rectification and the like, which the resting calibration of the vertical specific force cannot learn), "vibration" (g RMS, white, while the motors are commanded; one value or forward, left, up), and "level_error" (degrees; roll, pitch) in the level reference the drone flies and turns its specific force by. Rotor drag: "rotor_drag" (1/s; one value, or forward and left) pulls the body's horizontal velocity relative to the air. The air: "wind_mean" (m/s; world forward, left) blowing steadily, plus turbulence of "wind" (m/s RMS per horizontal axis) and "wind_vertical" (m/s RMS up) with time constants "wind_tau" and "wind_vertical_tau" (s, the latter defaulting to the former; outdoors about the turbulence length scale over the mean wind: near the ground about 15 m horizontally and the height vertically, MIL-F-8785C); the airframe's speed terms (its forward and sideways speed moments and drag) and the bluff-body drag go by the airspeed, and "vertical_drag" (1/s) pulls the vertical velocity toward the air's (the rotors' thrust change with their inflow: about g / (2 v_induced), 0.7/s for these rotors at hover; 0 by default, as the indoor calibrations had it); "tilt_offset" (degrees) and "tilt_gain" make the servos' physical forward tilt differ from their commands. "disturbances" is a list of force and torque terms acting once airborne, any mix of constant, drifting, white, periodic and ramping (sw/sim/disturbance.py); with "sensed_disturbances" the accelerometer feels their forces.
     """
@@ -143,6 +143,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     rotor_drag, wind_size, wind_keep = plant.get("rotor_drag", 0.0), plant.get("wind", 0.0), math.exp(-DT / plant.get("wind_tau", 2.0))
     wind_mean = list(plant.get("wind_mean", (0.0, 0.0))) + [0.0]
     wind_vertical, vertical_drag = plant.get("wind_vertical", 0.0), plant.get("vertical_drag", 0.0)
+    ground_effect = plant.get("ground_effect")
     vertical_keep = math.exp(-DT / plant.get("wind_vertical_tau", plant.get("wind_tau", 2.0)))
     turbulence = [0.0, 0.0, 0.0]
     wind = list(wind_mean)
@@ -239,6 +240,9 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         gps_plant, gps_fixes, gps_capture, gps_rng = plant.get("gps"), deque(), 0.0, random.Random(seed + 6000)
         gps_error = [0.0, 0.0, 0.0]
         baro_plant, baro_readings, baro_capture, baro_rng, baro_drift = plant.get("baro"), deque(), 0.0, random.Random(seed + 8000), 0.0
+        baro_kick = baro_rng.gauss(0, baro_plant.get("kick", 0.0)) if baro_plant else 0.0
+        # The GPS's false descent at liftoff (plant["gps"]["liftoff_descent"]: a range in m/s, drawn per run, read for "liftoff_s" s from liftoff instead of the climb).
+        gps_descent = random.Random(seed + 6500).uniform(*gps_plant["liftoff_descent"]) if gps_plant and gps_plant.get("liftoff_descent") else 0.0
         seen, ranges = [], []
     # The test pattern's roll, pitch and hold-point speeds per control tick, the step collective first reached integrate_throttle, and how far the pattern has moved the hold point (m; toward the tag, left).
     excite = plant.get("excite") if hover else None
@@ -317,7 +321,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     north = lambda x, y: x * math.cos(psi) + y * math.sin(psi)
                     east = lambda x, y: x * math.sin(psi) - y * math.cos(psi)
                     noise = gps_plant.get("velocity_noise", 0.05)
-                    speed = [north(*velocity[:2]) + gps_rng.gauss(0, noise), east(*velocity[:2]) + gps_rng.gauss(0, noise), velocity[2] + gps_rng.gauss(0, gps_plant.get("vertical_noise", 0.1))]
+                    climb = -gps_descent if lifted is not None and now - lifted < gps_plant.get("liftoff_s", 0.4) else velocity[2]
+                    speed = [north(*velocity[:2]) + gps_rng.gauss(0, noise), east(*velocity[:2]) + gps_rng.gauss(0, noise), climb + gps_rng.gauss(0, gps_plant.get("vertical_noise", 0.1))]
                     place = [north(*position[:2]) + gps_error[0], east(*position[:2]) + gps_error[1], position[2] + gps_error[2]]
                     gps_fixes.append((gps_capture + gps_plant.get("latency", 0.06), speed, place))
                     gps_capture += period
@@ -334,7 +339,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     baro_drift = keep * baro_drift + baro_plant.get("drift", 0.3) * math.sqrt(1 - keep * keep) * baro_rng.gauss(0, 1)
                     above = position[2] - start_height
                     wash = baro_plant.get("wash", 0.0) * max(0.0, 1 - above / baro_plant.get("wash_height", 0.5)) if commanded[0] + commanded[1] > 0 else 0.0
-                    baro_readings.append((baro_capture + baro_plant.get("latency", 0.075), 100.0 + above + baro_drift + wash + baro_rng.gauss(0, baro_plant.get("noise", 0.15))))
+                    kick = baro_kick * math.exp(-(baro_capture - lifted) / baro_plant.get("kick_tau", 0.2)) if lifted is not None and baro_capture >= lifted else 0.0
+                    baro_readings.append((baro_capture + baro_plant.get("latency", 0.075), 100.0 + above + baro_drift + wash + kick + baro_rng.gauss(0, baro_plant.get("noise", 0.15))))
                     baro_capture += period
                 while baro_readings and baro_readings[0][0] <= now:
                     arrived, altitude = baro_readings.popleft()
@@ -426,6 +432,11 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
             accel, motor, servo = airframe.step((left, right), tilt_commands, 1.0, rate, angles[:2], body_velocity[:2], airborne=lifted is not None or not liftoff, near=near)
             motor, servo = list(motor), list(servo)
         substeps = AIR_SUB if clearance > CLEAR + math.hypot(*velocity) * DT else SUB
+        # Ground effect (plant["ground_effect"] = {"radius": rotor radius, "rotor": the rotors' height above the body's lowest point, m}): Cheeseman and Bennett's 1 / (1 - (R / 4z)^2) at the rotors' height z, at most 1.5.
+        cushion = 1.0
+        if ground_effect:
+            z = max(0.01, clearance + ground_effect["rotor"])
+            cushion = 1 / (1 - min(1 / 3, (ground_effect["radius"] / (4 * z)) ** 2))
         h = DT / substeps
         slew = slew_rate * h
         for _ in range(substeps):
@@ -442,8 +453,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                         servo[side] = horn - slack[side]
                     elif servo[side] - horn > slack[side]:
                         servo[side] = horn + slack[side]
-            vertical = [motor[s] * math.cos(servo[s]) for s in range(2)]
-            forward = [motor[s] * math.sin(servo[s]) * tilt_share for s in range(2)]
+            vertical = [motor[s] * math.cos(servo[s]) * cushion for s in range(2)]
+            forward = [motor[s] * math.sin(servo[s]) * tilt_share * cushion for s in range(2)]
             if airframe:
                 # The airframe's accelerations already hold the thrust torques; the random and constant extras still add.
                 torque = [accel[0] * inertia[0] + ((roll_disturbance + roll_gust + extra_torque[0]) * inertia[0] if airborne else 0.0), accel[1] * inertia[1] + (gust + disturbance + extra_torque[1] if airborne else 0.0) * inertia[1], accel[2] * inertia[2] + (extra_torque[2] * inertia[2] if airborne else 0.0)]
