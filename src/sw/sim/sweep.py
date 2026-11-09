@@ -102,6 +102,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     With hover and plant["land_at"], the hover loop is switched to its landing (HOVER_LAND, or HOVER_LAND_FAST with plant["land_fast"]) that many seconds after liftoff, as the dashboard's L does; the result then also holds when it came down and how.
     With hover, the drone arms on the ground and the firmware's hover loop (fw/drone/main/hover.c, gains from the hover_* settings) flies it from takeoff on the plant's camera (CAMERA, overridden by plant["camera"]; none with hover_camera 0, and none from plant["camera_lost"] seconds after liftoff), glued to the attitude controller as flight_rt.c does.
     With plant["airframe"] (parameters fitted by sw/sim/identify_airframe.py, at the geometry they name), sw/sim/airframe.py supplies the motors, servos and angular accelerations and the body's inertia instead of the plant's own actuator and torque model; the rest (translation, ground contact, sensors, camera) stays.
+    With hover the firmware's guards (fw/drone/main/guard.c, settings failsafe_* and pattern_*, on by settings.def's defaults; plant["guard"] False leaves them out) run as flight_rt.c runs them: the fly-away failsafe before each hover tick, and the test pattern's limits while it plays; the result then holds the failsafe's phase changes ("failsafe": [(s after liftoff, phase)]) when the pattern began ("pattern_start": s after liftoff, or None) and when and why it stopped ("pattern_stop": (s after liftoff, reason) or None).
     With hover and plant["excite"] (a test pattern as a recording's "pattern" event, sw/excite.py: {"after", "repeat", "segments"}), its roll and pitch steps add to the hover's attitude targets and its forward and left speeds move the hold point (on top of plant["nudge"], within NUDGE_MAX) from "after" seconds past collective first reaching integrate_throttle, "repeat" times (0 = until the end), as flight_rt.c excite does; its other channels are ignored.
     GPS (fw/drone/main/flight_rt.c gps_input): plant["gps"] = {"rate" (Hz), "latency" (s, measurement to arrival; the firmware assumes 0.06), "velocity_noise" and "vertical_noise" (m/s RMS, white), "position_noise" (m RMS) wandering over "position_tau" (s), "heading": where the world's forward axis (the drone's nose at takeoff) points, degrees clockwise from north} gives the hover each fix once; settings hover_gps_tau (and hover_gps_heading, the drone's belief about that heading) turn it on.
     Barometer (fw/drone/main/flight_rt.c baro_input): plant["baro"] = {"rate" (Hz), "latency" (s, measurement to the hover; the firmware assumes 0.075), "noise" (m RMS, white per reading), "drift" (m RMS wandering over "drift_tau" s: weather and the chip's warming), "wash" (m the rotors' wash and ground effect add while the motors are commanded, fading to none at "wash_height" m above the start)} gives the hover each reading once, and at rest too (its ground); setting hover_baro_tau turns it on.
@@ -229,6 +230,11 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         if not use_camera:
             settings["hover_center"] = 0
         outer = Hover(settings)
+        from sw.sim.guard import PHASES, STOPS, Guard
+        from sw.sim.hover import Gains
+
+        guard = Guard(settings) if plant.get("guard", True) else None
+        failsafe_log, pattern_stop, pattern_start = [], None, None
         camera = CAMERA | plant.get("camera", {})
         cam_pitch, cam_roll = math.radians(settings.get("hover_cam_pitch", 0.0)), math.radians(settings.get("hover_cam_roll", 0.0))
         # Frames waiting out their latency (ready time, capture time, sighting or None), the newest delivered one, and the next capture time.
@@ -376,12 +382,18 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     for start, stick_pitch, stick_roll, length in sticks:
                         if lifted is not None and start <= now - lifted < start + length:
                             outer.gains.stick_pitch, outer.gains.stick_roll = math.radians(stick_pitch), math.radians(stick_roll)
+                laptop_nudge = (outer.gains.nudge_forward if nudge else 0.0, outer.gains.nudge_left if nudge else 0.0)
                 if pattern:
                     # As flight_rt.c: on top of the laptop's nudge, a tick late.
                     outer.gains.nudge_forward = (outer.gains.nudge_forward if nudge else 0.0) + excite_hold[0]
                     outer.gains.nudge_left = (outer.gains.nudge_left if nudge else 0.0) + excite_hold[1]
                 mode = HOLD if land_at is None or lifted is None or now - lifted < land_at else LAND_FAST if land_fast else LAND
-                out = outer.update(mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag, flow, gps, baro)
+                # As flight_rt.c: the failsafe flies this tick's copy of the gains, and may land.
+                flown_gains = Gains.from_buffer_copy(outer.gains)
+                flown_mode = guard.hover(outer.state, flown_gains, mode, round((now + 1) * 1e6), DT) if guard else mode
+                if guard and guard.state.failsafe != (failsafe_log[-1][1] if failsafe_log else 0):
+                    failsafe_log.append((now - lifted if lifted is not None else -now, guard.state.failsafe))
+                out = outer.update(flown_mode, pose, round((now + 1) * 1e6), DT, roll_estimate, pitch_estimate, heading_rate, vertical, flying, drag, flow, gps, baro, gains=flown_gains)
                 settings["base_throttle"] = min(HOVER_THROTTLE, throttle(out.force / 2 / math.cos(trim))) if out.force > 0 else 0
                 settings["roll"], settings["pitch"], settings["yaw_rate"] = math.degrees(out.roll), math.degrees(out.pitch), math.degrees(out.yaw_rate)
                 excited = 0.0
@@ -389,7 +401,15 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     if integrating is None and settings["base_throttle"] >= settings["integrate_throttle"]:
                         integrating = step
                     tick = -1 if integrating is None else step - integrating - round(excite["after"] / DT)
-                    if 0 <= tick and (not excite.get("repeat", 1) or tick < len(pattern) * excite["repeat"]):
+                    playing = 0 <= tick and (not excite.get("repeat", 1) or tick < len(pattern) * excite["repeat"]) and pattern_stop is None
+                    if playing and guard:
+                        # As flight_rt.c: the pattern's limits, checked each tick it plays, stop it for good.
+                        stop = guard.pattern(outer.state if outer.state.engaged else None, round((now + 1) * 1e6), roll_estimate, pitch_estimate, outer.gains.stick_roll, outer.gains.stick_pitch, laptop_nudge, excite_hold)
+                        if stop:
+                            pattern_stop, playing = (now - lifted if lifted is not None else -now, STOPS[stop]), False
+                    if playing:
+                        if pattern_start is None:
+                            pattern_start = now - lifted if lifted is not None else -now
                         excited = pattern[tick % len(pattern)][0]
                         settings["roll"] += excited
                         settings["pitch"] += pattern[tick % len(pattern)][1]
@@ -517,7 +537,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 seen.append(visible)
                 ranges.append(math.hypot(camera["tag"][0] - position[0], camera["tag"][1] - position[1]))
         if angle > math.radians(45) or (hover and lifted is not None and position[2] + lowest < -0.01):
-            return {"stable": False, "fail_s": now, "worst": 45.0, "axis": "roll" if abs(roll) > abs(pitch - trim) else "pitch", "yaw_rate": math.degrees(rate[2])}
+            failed = {"stable": False, "fail_s": now, "worst": 45.0, "axis": "roll" if abs(roll) > abs(pitch - trim) else "pitch", "yaw_rate": math.degrees(rate[2])}
+            return failed | ({"failsafe": [(t, PHASES[phase]) for t, phase in failsafe_log], "pattern_stop": pattern_stop, "pattern_start": pattern_start, "liftoff_s": lifted} if hover else {})
         if now >= seconds / 2:
             late.append((roll, pitch - trim, rate[2]))
     rms = [math.degrees(math.sqrt(sum(v[i] ** 2 for v in late) / len(late))) for i in range(3)]
@@ -540,6 +561,9 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         result["places"] = places
         # Seconds after liftoff the feet first came back within 1 cm of the floor (from 2 s on), or None: the height hold let it down.
         result["touched"] = touched
+        result["failsafe"] = [(t, PHASES[phase]) for t, phase in failsafe_log]
+        result["pattern_stop"] = pattern_stop
+        result["pattern_start"] = pattern_start
         if land_at is not None:
             result |= landing
     return result
