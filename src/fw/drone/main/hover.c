@@ -128,6 +128,10 @@
 #define TAKEOFF_EASE_S 0.6f
 #define LIFTED_HEIGHT 0.005f
 #define TAKEOFF_WAIT_S 1.5f
+// The GPS's climb rate is not taken until TAKEOFF_GPS_S (s) after liftoff, nor while the barometer holds the height: at the 2026-11-09 GPS-held liftoffs it read 0.5-1.2 m/s down for 0.3-0.5 s while the drone climbed (05:45, 05:50, 06:19, 06:25 UTC), and at hover_gps_tau 0.5 it held the climb-rate estimate near zero while the drone climbed at up to 1.5 m/s, so the climb loop kept 0.07-0.14 g of excess thrust and 7 of 12 such takeoffs reached 1.15-1.62 m against a 0.8 m goal (none of the 7 without the GPS hold did; sw/sim/gps_truth.py). In flight it lags 40-180 ms and is 0.18-0.39 m/s RMS off, where the barometer tracks the accelerometer to 0.07-0.13 m over 4 s. Replayed on those 12 takeoffs (sw/sim/height_replay.py) the height estimate's error over the first 2.5 s fell from 0.12-0.40 m RMS (worst 0.85) to 0.04-0.21 (worst 0.40); in sw/sim/outdoor.py (06:19 settings, the false descent modelled) the climb's peak over the height it settles at fell from a median of 0.12-0.19 m (90% 0.41-0.53) to 0.02-0.07 (90% 0.16-0.32, the rest the barometer's own wander).
+#ifndef TAKEOFF_GPS_S
+#define TAKEOFF_GPS_S 2.0f
+#endif
 // Rotor drag: the servos' dead time beyond the tick the runtime's tilt is already late by (us; sw/sim/sweep.py FITTED has 70 ms), how slowly the camera teaches the drag model its offset (s), and that offset's limit (m/s).
 #define SERVO_DELAY_US 60000
 #define OFFSET_TAU 5.0f
@@ -354,9 +358,12 @@ static void take_gps(HoverState *state, const HoverGains *g, const HoverGps *fix
     float learn = span / (4 * tau * tau);
     state->drag_bias[0] = clamp(state->drag_bias[0] - (error[0] * cy + error[1] * sy) * learn, -MAX_BIAS, MAX_BIAS);
     state->drag_bias[1] = clamp(state->drag_bias[1] - (-error[0] * sy + error[1] * cy) * learn, -MAX_BIAS, MAX_BIAS);
-    float climb_error = fix->velocity[2] - state->climb_rate;
-    state->climb_rate += climb_error * pull;
-    state->flow_bias = clamp(state->flow_bias - climb_error * learn, -MAX_BIAS, MAX_BIAS);
+    bool barometric = g->baro_tau > 0 && state->baro_used && state->baro_us && now_us - state->baro_us <= BARO_STALE_US;
+    if (state->lifted >= TAKEOFF_GPS_S && !barometric) {
+        float climb_error = fix->velocity[2] - state->climb_rate;
+        state->climb_rate += climb_error * pull;
+        state->flow_bias = clamp(state->flow_bias - climb_error * learn, -MAX_BIAS, MAX_BIAS);
+    }
     // Position: the first fix ties the GPS to the dead reckoning; later ones correct it (back-dated by the fix's age) and move the place, which is relative to the hold point, by the same amount.
     float age = clamp((now_us - fix->capture_us) / 1e6f, 0, 0.5f);
     if (first) {
@@ -838,8 +845,8 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
                   float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
                   const HoverGps *gps, const HoverBaro *baro, HoverOutput *output) {
     hold(state, g, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps, baro, output);
-    if (!state->landed && state->lifted < TAKEOFF_EASE_S) {
-        // Negative while on the floor, counting up to the wait; zero from liftoff, counting the ease.
+    if (!state->landed && state->lifted < fmaxf(TAKEOFF_EASE_S, TAKEOFF_GPS_S)) {
+        // Negative while on the floor, counting up to the wait; zero from liftoff, counting the ease and the GPS's wait.
         state->lifted = state->lifted < 0 && state->height >= LIFTED_HEIGHT ? 0 : state->lifted + dt;
         // The share of the resting attitude still in the targets: all of it on the floor, fading to none over the ease.
         float share = state->lifted < 0 ? 1 : fmaxf(0, 1 - state->lifted / TAKEOFF_EASE_S);
