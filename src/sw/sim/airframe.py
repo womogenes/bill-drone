@@ -39,14 +39,14 @@ PARAMS = {
     "prop_torque": (-0.05, 0.05, -0.015), "prop_momentum": (-0.05, 0.05, 0.003),
     "inflow_damping": (-2.0, 5.0, 0.2), "edgewise_damping": (-2.0, 5.0, 0.05),
     "wash": (-1.0, 1.5, 0.0), "wash_z": (-0.2, 0.3, 0.02), "pitch_wake": (-1.5, 1.5, 0.0), "wake_tau": (0.01, 2.0, 0.15), "pitch_ground": (-1, 3, 0.0), "ground_scale": (0.01, 2.0, 0.1),
-    "roll_pendulum": (-0.2, 0.2, 0.0), "pitch_pendulum": (-0.2, 0.2, 0.0), "drag_z_x": (-0.5, 0.5, 0.017), "drag_z_y": (-0.5, 0.5, 0.06),
+    "roll_pendulum": (-0.2, 0.2, 0.0), "pitch_pendulum": (-0.2, 0.2, 0.0), "drag_z_x": (-0.5, 0.5, 0.017), "drag_z_y": (-0.5, 0.5, 0.06), "speed_moment2": (-0.05, 0.05, 0.0), "tilt_speed": (-0.3, 0.3, 0.0), "tilt_push_speed": (0.0, 0.2, 0.0),
     "roll_from_yaw": (-0.5, 0.5, 0.0), "yaw_from_roll": (-0.5, 0.5, 0.0), "com_x": (-0.01, 0.01, -0.0021),
     # Horizontal speed (only for prediction from logs; the simulation moves the vehicle itself): forward from pitch and the motors' mean tilt (1 - wash as strong), left from roll, each with linear drag.
     "vx_pitch": (-40, 40, 7.7), "vx_drag": (0, 5, 0.1), "vy_roll": (-20, 20, -9.0), "vy_drag": (0, 5, 0.2), "tilt_push": (0.0, 1.5, 0.66),
 }
 KEYS = list(PARAMS)
 # Terms a parameter set may leave out (they then stay off).
-OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance")
+OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed")
 # The running time (s) of a motor that has long been spinning.
 RUNNING = 10.0
 def flown_by(recordings):
@@ -253,7 +253,7 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
     tilted = left * sl + right * sr
     state.wake = tilted[:, None] + (state.wake - tilted[:, None]) * math.exp(-DT / p["wake_tau"])
     ground = 1.0 if near is None else 1 + p["pitch_ground"] * np.exp(-np.asarray(near, float) / p["ground_scale"])
-    arm_tilt = c["tilt_arm"] * p.get("tilt_gain", 1.0)
+    arm_tilt = c["tilt_arm"] * p.get("tilt_gain", 1.0) * (1 + flying * p["tilt_speed"] * np.abs(vel[:, 0]))
     # Pitch: the tilted thrusts at their effective height above the CoM and its lagged share, the CoM's fore/aft offset under the thrust, edgewise damping at the rotors' height, the attitude term, the forward drag at its height.
     pitch_torque = (
         arm_tilt * ground * tilted
@@ -262,6 +262,7 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
         - p["edgewise_damping"] * c["hr"] ** 2 * total * rate[:, 1]
         - flying * p["pitch_pendulum"] * total * att[:, 1]
         - flying * c["hx"] * p["vx_drag"] * c["mass"] * vel[:, 0]
+        - flying * p["speed_moment2"] * vel[:, 0] * np.abs(vel[:, 0])
     )
     pitch_other = pitch_torque / c["Iyy"] + push[:, 1]
     # Yaw: the tilted thrusts at the arms (1 - wash of it), the props' reaction torque, edgewise damping at the arm, cross-coupling.

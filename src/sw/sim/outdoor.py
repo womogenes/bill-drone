@@ -48,7 +48,7 @@ def loguniform(rng, low, high):
     return math.exp(rng.uniform(math.log(low), math.log(high)))
 
 
-def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwind=False, flow=None, baro=False, speed_draw=(0.5, 3.0), gps_noise=None):
+def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwind=False, flow=None, baro=False, speed_draw=(0.5, 3.0), gps_noise=None, level_sd=0.0):
     """The outdoor plant for one run: the airframe with its uncertain terms drawn, the wind and the GPS."""
     rng = random.Random(seed)
     p = dict(airframe) | {f"{axis}_push": 0.0 for axis in ("roll", "pitch", "yaw")}
@@ -85,6 +85,10 @@ def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwin
         out["gps"] = GPS | {"latency": draws["latency"], "heading": rng.uniform(-180, 180)} | ({"velocity_noise": gps_noise} if gps_noise else {})
     if baro:
         out["baro"] = BARO
+    if level_sd:
+        # The level reference's error the drone flies with (degrees, roll and pitch): on 2026-11-09 each flight's constant forward acceleration against the GPS was -0.12 to +0.68 m/s² (sd about 0.22, 1.3 degrees).
+        level = random.Random(seed + 9000)
+        out["level_error"] = (level.gauss(0, level_sd), level.gauss(0, level_sd))
     return out, draws
 
 
@@ -94,7 +98,7 @@ def fly(job):
         from sw.sim.landing_test import install
 
         install(args.source, args.defines.split())
-    p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind, args.flow, args.baro, args.speed_draw, args.gps_noise)
+    p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind, args.flow, args.baro, args.speed_draw, args.gps_noise, args.level_sd)
     s = dict(flown)
     if args.preload:
         # The wind's expected nose-up moment at liftoff, cancelled by pitch_bias (rad/s², ramped in once airborne): preload per m/s of the wind.
@@ -191,6 +195,7 @@ def main():
     parser.add_argument("--source", help="another copy of hover.c to fly (sw/sim/landing_test.py install), e.g. the previous commit's")
     parser.add_argument("--defines", default="", help="compile-time overrides for --source, space separated")
     parser.add_argument("--sticks", type=lambda text: [tuple(float(v) for v in item.split(",")) for item in text.split(";")], help="a pilot's stick sequence during the hold: start s after settling, pitch and roll degrees, seconds held; ';' between sticks (e.g. '5,10,0,2;12,-10,0,2'); adds each run's largest pitch peak to peak 0.3-3 s after a stick is let go, and the braking: peak ground speed, time and distance from release to under STOPPED")
+    parser.add_argument("--level-sd", type=float, default=0.0, help="degrees: each run's level-reference error drawn from a normal of this spread in roll and pitch (2026-11-09 flights: about 1.3)")
     parser.add_argument("--flyaway", type=float, default=FLYAWAY, help="m from takeoff that counts as flown off")
     parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=(0.5, 3.0), help="range the forward speed moment is drawn in, times the airframe's (log-uniform; default 0.5,3 from before any flight measured it; models fitted to the outdoor flights warrant narrower)")
     args = parser.parse_args()

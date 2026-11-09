@@ -209,8 +209,11 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         motor = list(airframe.motor)
         # Models with tilt_push carry the share of the tilted thrust's horizontal force that moves the drone (the rest its slipstream cancels on the airframe); older ones move it with all of it.
         tilt_share = airframe.p["tilt_push"] if "tilt_push" in plant["airframe"] else 1.0
+        # The share grows with the forward airspeed by tilt_push_speed per m/s (at most 1): the slipstream swept back off the airframe (2026-11-09 GPS: 0.73 below 1 m/s, 0.89 above 3).
+        push_speed = airframe.p.get("tilt_push_speed", 0.0)
     else:
-        tilt_share = 1.0
+        tilt_share, push_speed = 1.0, 0.0
+    base_share = tilt_share
     ideal_height, nudge, camera_lost, land_at, land_fast = plant.get("ideal_height"), plant.get("nudge"), plant.get("camera_lost"), plant.get("land_at"), plant.get("land_fast")
     gyro_noise, slew_rate = math.radians(plant["gyro_noise"]), math.radians(plant["servo_slew"])
     # Narrowband gyro vibration (plant["gyro_vibration"]: RMS deg/s per axis at "hz" with "bandwidth" Hz, as the 100 Hz control samples see it): a resonant AR(2) driven by white noise and scaled to that RMS. The rotors shake the pitch gyro without moving the attitude; through the D term it jitters the servos.
@@ -450,6 +453,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
             # The near-ground pitch term goes by the lowest foot's height (as the logged height above the engage point) or the time since liftoff, as it was fitted.
             near = None if not ground_by else max(0.0, clearance) if ground_by == "height" else (now - lifted if lifted is not None else 0.0) if liftoff else 10.0
             accel, motor, servo = airframe.step((left, right), tilt_commands, 1.0, rate, angles[:2], body_velocity[:2], airborne=lifted is not None or not liftoff, near=near)
+            tilt_share = min(1.0, base_share + push_speed * abs(body_velocity[0]))
             motor, servo = list(motor), list(servo)
         substeps = AIR_SUB if clearance > CLEAR + math.hypot(*velocity) * DT else SUB
         # Ground effect (plant["ground_effect"] = {"radius": rotor radius, "rotor": the rotors' height above the body's lowest point, m}): Cheeseman and Bennett's 1 / (1 - (R / 4z)^2) at the rotors' height z, at most 1.5.
