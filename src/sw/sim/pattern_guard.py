@@ -8,6 +8,7 @@ Each case flies a test pattern once, 12 s after collective first reached integra
   stick       the chirp with the laptop's arrow held from about 2 s into it: it should stop for the stick
   lost        the chirp with the camera blind from about 3 s into it: it should stop for the lost tag
   gps         the doublets on the GPS hold: position from the GPS-corrected track
+  still       a pattern of nothing for as long on the GPS hold: how often the hold's own wander leaves the box
   tilt        as gps with pattern_tilt 8 degrees: it should stop for tilt
 It prints per case how the runs ended (played to the end, or stopped and why, with the median time into the pattern), and with --plot saves each case's first run: distance from where the pattern meant the drone to be, with the pattern's span and the stop.
 """
@@ -30,14 +31,15 @@ AFTER = 12.0
 CHIRP_FROM = "2026-11-02T05-30-45"
 DOUBLETS = {"after": AFTER, "repeat": 1, "segments": [{"ticks": 30, "pitch": 8.0}, {"ticks": 30, "pitch": -8.0}, {"ticks": 500}, {"ticks": 30, "roll": 8.0}, {"ticks": 30, "roll": -8.0}, {"ticks": 500}]}
 SPEED = {"after": AFTER, "repeat": 1, "segments": [{"ticks": 300, "forward": -0.5}, {"ticks": 300}, {"ticks": 300, "forward": 0.5}, {"ticks": 300}]}
-CASES = ("chirp", "speed", "pushed", "stick", "lost", "gps", "tilt")
+STILL = {"after": AFTER, "repeat": 1, "segments": [{"ticks": 1120}]}
+CASES = ("chirp", "speed", "pushed", "stick", "lost", "gps", "tilt", "still")
 SECONDS = 30.0
 
 
 def plant_for(case, seed):
     from sw.sim.sweep import IDENTIFIED_ESC
 
-    if case in ("gps", "tilt"):
+    if case in ("gps", "tilt", "still"):
         from sw.sim.outdoor import plant
         from sw.sim.sweep import model
 
@@ -46,7 +48,7 @@ def plant_for(case, seed):
         p = dict(IDENTIFIED_ESC)
     events = map(json.loads, next(RECORDINGS.glob(CHIRP_FROM + "*.jsonl")).read_text().splitlines())
     chirp = next(e for e in events if e["type"] == "pattern") | {"after": AFTER, "repeat": 1}
-    p = dict(p) | {"excite": SPEED if case == "speed" else DOUBLETS if case in ("gps", "tilt") else chirp}
+    p = dict(p) | {"excite": SPEED if case == "speed" else STILL if case == "still" else DOUBLETS if case in ("gps", "tilt") else chirp}
     # The pattern starts about AFTER + 1 s from the run's start (liftoff, then collective reaching integrate_throttle).
     if case == "pushed":
         p["disturbances"] = list(p["disturbances"]) + [{"channel": "forward", "kind": "ramp", "rate": -20.0, "start": AFTER + 2.0, "limit": -2.0}]
@@ -61,7 +63,7 @@ def fly(job):
     from sw.sim.sweep import run
 
     case, seed = job
-    if case in ("gps", "tilt"):
+    if case in ("gps", "tilt", "still"):
         settings = recording_settings(next(RECORDINGS.glob(GPS_SETTINGS + "*.bin"))) | {"hover_camera": 0, "hover_center": 0, "hover_climb": 1.2, "hover_ceiling": 1.2, "hover_gps_tau": 0.5, "hover_gps_place_tau": 2.0, "hover_baro_tau": 2.0}
     else:
         settings = recording_settings(next(RECORDINGS.glob(TAG_SETTINGS + "*.bin")))
@@ -118,7 +120,7 @@ def main():
                 if r["stop"]:
                     ax.axvline(r["stop"][0] + r["lifted"] - t[k0], color=line.get_color(), ls=":", lw=1)
             ax.axhline(0.7, color="grey", ls="--", lw=0.8)
-            ax.axvspan(0, 12.0 if case == "speed" else 11.2 if case in ("gps", "tilt") else 8.0, color="tab:blue", alpha=0.07)
+            ax.axvspan(0, 12.0 if case == "speed" else 11.2 if case in ("gps", "tilt", "still") else 8.0, color="tab:blue", alpha=0.07)
             ax.set_ylabel("m")
             ax.set_title(f"{case}: distance from the pattern's start (dotted: the guard stopped it; dashed: pattern_distance)", fontsize=9)
             ax.set_xlim(-2, 14)

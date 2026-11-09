@@ -15,8 +15,8 @@ OFF, BRAKE, HOLD, LAND = range(4)
 PHASES = ("off", "brake", "hold", "land")
 STOPS = ("playing", "distance", "tag lost", "tilt", "stick")
 # settings.def: name, GuardGains member, default, whether stored in degrees.
-SETTINGS = (("failsafe_speed", "speed", 2.0, False), ("failsafe_distance", "distance", 10.0, False), ("failsafe_time", "time", 1.5, False), ("failsafe_land", "land", 5.0, False),
-            ("failsafe_tilt", "tilt", 15.0, True), ("pattern_distance", "pattern_distance", 0.7, False), ("pattern_tilt", "pattern_tilt", 30.0, True))
+SETTINGS = (("failsafe_speed", "speed", 2.0, False), ("failsafe_distance", "distance", 10.0, False), ("failsafe_time", "time", 1.5, False), ("failsafe_land", "land", 3.0, False),
+            ("failsafe_tilt", "tilt", 20.0, True), ("pattern_distance", "pattern_distance", 0.7, False), ("pattern_tilt", "pattern_tilt", 30.0, True))
 
 
 class Gains(ctypes.Structure):
