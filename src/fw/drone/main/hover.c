@@ -126,6 +126,9 @@
 #define LIFTING 0.8f
 // Takeoff from wherever the drone rests: it has no legs, and its body sits several degrees off level (3-8 degrees nose-down on 2026-11-07). While the floor holds it the attitude targets are the resting attitude, so the servos do not tilt the thrust against the floor, and from liftoff they ease to the hold's own over TAKEOFF_EASE_S (s). Levelling at once from an 8 degree nose-down rest kicked the pitch at 45 degrees/s at liftoff (2026-11-08 00:39 UTC), and the hold, blind before the tag, answered it with a 10 degree lean back. Liftoff is the height estimate passing LIFTED_HEIGHT (m), 0.25-0.4 s after the motors start in that day's hops (the collective is at hover thrust from the first tick, so it cannot tell), or TAKEOFF_WAIT_S (s) after engaging, whichever comes first.
 #define TAKEOFF_EASE_S 0.6f
+// Touchdown at the resting attitude: with no legs the body rocks on its underside, and a level touchdown from that 4-5 degree nose-up rest tipped it forward onto its nose as the motors cut, on every landing of 2026-11-08 and 09 (05:45 UTC: level at 0.3 m/s, 100 deg/s at the cut, 70 degrees 0.3 s later; indoors at 0.2 m/s too). Once a landing is near the floor (LAND_TILT_HEIGHT, or probing) the attitude the drone rested at before takeoff, at most SETTLE_MAX (radians) from level, is added to its attitude targets over SETTLE_S (s), so it meets the floor about as it sat on it. Added, not in place of the hold's targets: replacing them took the velocity damping away for the whole final descent (seconds at slow land rates), and the simulated drone swung to 28 degrees and was cut 0.1-0.25 m up in 3 of 80 landings.
+#define SETTLE_S 0.4f
+#define SETTLE_MAX (8.0f * 3.14159265f / 180)
 #define LIFTED_HEIGHT 0.005f
 #define TAKEOFF_WAIT_S 1.5f
 // Rotor drag: the servos' dead time beyond the tick the runtime's tilt is already late by (us; sw/sim/sweep.py FITTED has 70 ms), how slowly the camera teaches the drag model its offset (s), and that offset's limit (m/s).
@@ -810,6 +813,12 @@ void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverP
                   float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
                   const HoverGps *gps, const HoverBaro *baro, HoverOutput *output) {
     hold(state, g, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps, baro, output);
+    if (mode == HOVER_HOLD || state->landed) state->settle = 0;
+    else if (state->probing || state->height < LAND_TILT_HEIGHT) state->settle = fminf(1, state->settle + dt / SETTLE_S);
+    if (state->settle > 0) {
+        output->roll += state->settle * clamp(state->rest[0], -SETTLE_MAX, SETTLE_MAX);
+        output->pitch += state->settle * clamp(state->rest[1], -SETTLE_MAX, SETTLE_MAX);
+    }
     if (state->landed || state->lifted >= TAKEOFF_EASE_S) return;
     // Negative while on the floor, counting up to the wait; zero from liftoff, counting the ease.
     state->lifted = state->lifted < 0 && state->height >= LIFTED_HEIGHT ? 0 : state->lifted + dt;

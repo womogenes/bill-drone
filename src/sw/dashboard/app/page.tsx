@@ -497,14 +497,26 @@ export default function Page() {
     if (targets.current.nudge.some(Boolean)) setTargets({ nudge: NO_NUDGE });
   }, [armed, setTargets]);
 
+  // On the tag the nudge is the hold point's offset, so it stops at NUDGE_MAX. Without it (wrap) only its speed counts, so forward and left wrap around the limit and a held stick keeps flying; the drone ignores the jump (fw/drone/main/hover.c NUDGE_JUMP).
   const nudgeHold = useCallback(
-    (forward: number, left: number, up: number) => {
-      const step = (value: number, change: number) =>
-        Math.round(
-          Math.max(-NUDGE_MAX, Math.min(NUDGE_MAX, value + change)) * 1000
-        ) / 1000;
+    (forward: number, left: number, up: number, wrap = false) => {
+      const step = (value: number, change: number, around: boolean) => {
+        let next = value + change;
+        if (around && Math.abs(next) > NUDGE_MAX)
+          next -= Math.sign(next) * 2 * NUDGE_MAX;
+        return (
+          Math.round(Math.max(-NUDGE_MAX, Math.min(NUDGE_MAX, next)) * 1000) /
+          1000
+        );
+      };
       const [x, y, z] = targets.current.nudge;
-      setTargets({ nudge: [step(x, forward), step(y, left), step(z, up)] });
+      setTargets({
+        nudge: [
+          step(x, forward, wrap),
+          step(y, left, wrap),
+          step(z, up, false),
+        ],
+      });
     },
     [setTargets]
   );
@@ -736,6 +748,11 @@ export default function Page() {
             <ControlPanel
               key={`${status}-${stopEpoch}-${reading.control.enabled}`}
               settings={reading.control}
+              gpsHold={
+                !!reading.gps?.ok &&
+                reading.gps.fix === 3 &&
+                (reading.control.hover_gps_tau ?? 0) > 0
+              }
               recorderReady={!!reading.logging?.ready}
               recorderError={recorder?.error ?? undefined}
               status={controlStatus}

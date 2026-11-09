@@ -61,7 +61,7 @@ class State(ctypes.Structure):
         ("inertial", ctypes.c_float * 2), ("track", ctypes.c_float * 2), ("gps_us", ctypes.c_int64), ("heading", ctypes.c_float), ("turn", ctypes.c_float * 2),
         ("turn_weight", ctypes.c_float), ("gps_velocity", ctypes.c_float * 2), ("gps_inertial", ctypes.c_float * 2), ("origin", ctypes.c_float * 3),
         ("rest", ctypes.c_float * 2), ("lifted", ctypes.c_float), ("shocked", ctypes.c_bool),
-        ("baro_ground", ctypes.c_float), ("baro_grounded", ctypes.c_bool), ("baro_us", ctypes.c_int64), ("baro_wait", ctypes.c_float), ("baro_used", ctypes.c_bool)]
+        ("baro_ground", ctypes.c_float), ("baro_grounded", ctypes.c_bool), ("baro_us", ctypes.c_int64), ("baro_wait", ctypes.c_float), ("baro_used", ctypes.c_bool), ("settle", ctypes.c_float)]
 
 
 class Output(ctypes.Structure):

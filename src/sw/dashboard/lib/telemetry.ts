@@ -63,6 +63,8 @@ export type ControlSettings = {
   hover_drag_tau: number;
   hover_trim_tau: number;
   hover_trim_max: number;
+  // Absent from firmware before the GPS hold.
+  hover_gps_tau?: number;
   auto_trim: number;
 };
 

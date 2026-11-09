@@ -249,6 +249,7 @@ const gainKeys = gainSections.flatMap(({ fields }) =>
 
 export const ControlPanel = memo(function ControlPanel({
   settings,
+  gpsHold,
   recorderReady,
   recorderError,
   imu,
@@ -266,6 +267,8 @@ export const ControlPanel = memo(function ControlPanel({
   onEscStage,
 }: {
   settings: ControlSettings;
+  // A 3D GPS fix and the GPS hold on: without the tag the right stick then flies a speed instead of a tilt.
+  gpsHold: boolean;
   recorderReady: boolean;
   recorderError?: string;
   imu: 'offline' | 'calibrating' | 'uncalibrated' | 'calibrated';
@@ -277,7 +280,7 @@ export const ControlPanel = memo(function ControlPanel({
   onChange: (settings: Partial<ControlSettings>) => void;
   onMode: (mode: number) => void;
   onHover: () => void;
-  onNudge: (forward: number, left: number, up: number) => void;
+  onNudge: (forward: number, left: number, up: number, wrap?: boolean) => void;
   onStop: () => void;
   escError: string | null;
   onEscStage: (stage: 0 | 1 | 2) => void;
@@ -315,6 +318,8 @@ export const ControlPanel = memo(function ControlPanel({
   const free = settings.hover_camera === 0;
   const freeRef = useRef(free);
   freeRef.current = free;
+  const gpsHoldRef = useRef(gpsHold);
+  gpsHoldRef.current = gpsHold;
   const throttle = useRef(settings.base_throttle);
   // Key handlers read the mode through a ref so a mode change doesn't re-register them and forget held keys.
   const modeRef = useRef(mode);
@@ -503,7 +508,7 @@ export const ControlPanel = memo(function ControlPanel({
     return () => window.removeEventListener('keydown', keydown, true);
   }, [available, settings.enabled, open, onHover]);
 
-  // The gamepad flies like the keys, polled every GAMEPAD_TICK_MS: in Mode 2 the right stick tilts in proportion up to hover_tilt (without the tag) or moves the hold point at hover_nudge_speed (on it), the left stick climbs at hover_climb_rate and yaws at hover_yaw_rate, A hovers and B lands (held: fast), all only once the drone is enabled on the dashboard; both bumpers stop the motors at any time. A lost gamepad zeroes its tilt and yaw and the hold carries on.
+  // The gamepad flies like the keys, polled every GAMEPAD_TICK_MS: in Mode 2 the right stick tilts in proportion up to hover_tilt (without the tag), flies a speed up to hover_nudge_speed (without the tag, on the GPS hold) or moves the hold point at hover_nudge_speed (on it), the left stick climbs at hover_climb_rate and yaws at hover_yaw_rate, A hovers and B lands (held: fast), all only once the drone is enabled on the dashboard; both bumpers stop the motors at any time. A lost gamepad zeroes its tilt and yaw and the hold carries on.
   const enabledRef = useRef(settings.enabled);
   enabledRef.current = settings.enabled;
   useEffect(() => {
@@ -576,7 +581,7 @@ export const ControlPanel = memo(function ControlPanel({
         if (modeRef.current === LAND_FAST) setMode(LAND);
       }
 
-      // Mode 2, as on RC transmitters: the left stick climbs and yaws, the right stick tilts.
+      // Mode 2, as on RC transmitters: the left stick climbs and yaws, the right stick tilts or flies.
       const [yawX, climbY, tiltX, tiltY] = [0, 1, 2, 3].map((index) =>
         stick(pad.axes[index] ?? 0)
       );
@@ -584,7 +589,9 @@ export const ControlPanel = memo(function ControlPanel({
       const sizes = keySizes.current;
       const hovering = modeRef.current !== MANUAL;
       const yaw_rate = round(-yawX * sizes.yaw);
-      if (hovering && freeRef.current)
+      // Without the tag but with the GPS hold the right stick flies a speed, up to hover_nudge_speed, through the hold's velocity loop: let go and it slows to a stop where it is. Flown as a tilt it sped up as long as it was held and the hold then braked at full tilt the other way (2026-11-09 05:50 UTC: 15 degrees for 1.5 s reached 3 m/s, then -15 on release).
+      const speed = freeRef.current && gpsHoldRef.current;
+      if (hovering && freeRef.current && !speed)
         send({
           roll: round(tiltX * sizes.tilt),
           pitch: round(-tiltY * sizes.tilt),
@@ -593,10 +600,12 @@ export const ControlPanel = memo(function ControlPanel({
       else send({ roll: 0, pitch: 0, yaw_rate });
       if (!hovering) return;
       const seconds = GAMEPAD_TICK_MS / 1000;
-      const forward = freeRef.current ? 0 : -tiltY * sizes.move * seconds;
-      const left = freeRef.current ? 0 : -tiltX * sizes.move * seconds;
+      const forward =
+        freeRef.current && !speed ? 0 : -tiltY * sizes.move * seconds;
+      const left =
+        freeRef.current && !speed ? 0 : -tiltX * sizes.move * seconds;
       const up = -climbY * sizes.climb * seconds;
-      if (forward || left || up) onNudge(forward, left, up);
+      if (forward || left || up) onNudge(forward, left, up, speed);
     }
 
     const timer = setInterval(tick, GAMEPAD_TICK_MS);
