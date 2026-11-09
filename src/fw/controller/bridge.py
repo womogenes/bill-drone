@@ -388,6 +388,8 @@ class Service:
         self.delivered = {}
         self.stopping = None
         self.stop_reply = None
+        # Dashboards closed by disconnect() (a lost link or a drone restart), whose close must not stop the drone.
+        self.dropped = set()
 
     def fresh(self):
         return self.session != 0 and time.monotonic() - self.last_status < 0.25
@@ -578,6 +580,8 @@ class Service:
             # Stop is intentionally retried after reconnect; ordinary requests are bound to this link.
             if not reply.done() and reply is not self.stop_reply:
                 reply.set_exception(RuntimeError(reason))
+        if self.dashboard is not None:
+            self.dropped.add(self.dashboard)
         for client in (self.dashboard, *self.updaters):
             if client is not None:
                 asyncio.create_task(client.close(code=1012, message=reason.encode()))
@@ -721,8 +725,11 @@ class Service:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
-            # A closed dashboard can no longer stop the drone.
-            self.stop()
+            # A dashboard the pilot closed can no longer stop the drone, so it stops now. One closed because the link timed out does not: the stop, repeated until acknowledged, reached the drone as soon as the link came back and cut the motors in the air (2026-11-09 06:52:39 UTC, level at 1.57 m, after 0.5 s without status), where the drone's own link-loss handling lands it (fw/drone/main/flight_rt.c LINK_LAND_RATE) or, still on the ground, stops it.
+            if ws in self.dropped:
+                self.dropped.discard(ws)
+            else:
+                self.stop()
             await self.senders.pop(ws).close()
         return ws
 
