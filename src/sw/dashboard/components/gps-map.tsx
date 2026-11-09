@@ -33,6 +33,43 @@ const RIGHT = 8;
 const TOP = 8;
 const BOTTOM = 36;
 const STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+// The trail colored by ground speed (m/s): steady hover, slow moves, fast moves, past the 2 m/s that is a fly-away when not asked for.
+const SPEEDS = [
+  {
+    below: 0.5,
+    label: '< 0.5',
+    className: 'stroke-blue-700 dark:stroke-blue-400',
+  },
+  {
+    below: 1,
+    label: '0.5–1',
+    className: 'stroke-green-600 dark:stroke-green-500',
+  },
+  { below: 2, label: '1–2', className: 'stroke-amber-500' },
+  { below: Infinity, label: '> 2 m/s', className: 'stroke-red-600' },
+];
+const SWATCHES = [
+  'bg-blue-700 dark:bg-blue-400',
+  'bg-green-600 dark:bg-green-500',
+  'bg-amber-500',
+  'bg-red-600',
+];
+
+function speedBand(sample: GpsSample) {
+  return SPEEDS.findIndex(({ below }) => (sample.speed ?? 0) < below);
+}
+
+// A stretch cut where its speed band changes, each run sharing its first point with the run before so the line stays joined.
+function runs(stretch: GpsSample[]) {
+  const result: { band: number; samples: GpsSample[] }[] = [];
+  stretch.forEach((sample, index) => {
+    const band = speedBand(sample);
+    if (result.at(-1)?.band !== band)
+      result.push({ band, samples: index ? [stretch[index - 1]] : [] });
+    result.at(-1)!.samples.push(sample);
+  });
+  return result;
+}
 
 // Metres east and north of origin: flat over a flight's few hundred metres.
 function local(origin: GpsFix, point: GpsFix): [number, number] {
@@ -63,7 +100,7 @@ function stretches(samples: GpsSample[]): GpsSample[][] {
 
 type Layers = {
   view: L.Map;
-  trail: L.Polyline;
+  trails: L.Polyline[];
   accuracy: L.Circle;
   drone: L.CircleMarker;
   home: L.Marker;
@@ -76,12 +113,17 @@ export const GpsMap = memo(function GpsMap({
   home,
   history,
   hover,
+  title = 'Position',
+  summary,
 }: {
   gps: GpsReading | null | undefined;
   latest: GpsSample | undefined;
   home: GpsFix | undefined;
   history: (start: number, end: number) => GpsSample[];
   hover: HoverSample | null;
+  title?: string;
+  // Rows in place of the live distance and height, for a recorded flight.
+  summary?: [string, string][];
 }) {
   // Rebuilt per fix (10 Hz), not per status (20 Hz).
   const trail = useMemo(
@@ -135,11 +177,9 @@ export const GpsMap = memo(function GpsMap({
     resize.observe(element);
     layers.current = {
       view,
-      trail: L.polyline([], {
-        interactive: false,
-        weight: 2,
-        className: 'stroke-blue-700 dark:stroke-blue-400',
-      }).addTo(view),
+      trails: SPEEDS.map(({ className }) =>
+        L.polyline([], { interactive: false, weight: 2, className }).addTo(view)
+      ),
       accuracy: L.circle([0, 0], {
         interactive: false,
         radius: 0,
@@ -177,12 +217,17 @@ export const GpsMap = memo(function GpsMap({
     const map = layers.current;
     if (!map) return;
     const { view } = map;
-    map.trail.setLatLngs(
-      trail.map((stretch) =>
-        stretch.map((sample): L.LatLngTuple => [
-          sample.latitude,
-          sample.longitude,
-        ])
+    const pieces = trail.flatMap(runs);
+    map.trails.forEach((line, band) =>
+      line.setLatLngs(
+        pieces
+          .filter((piece) => piece.band === band)
+          .map(({ samples }) =>
+            samples.map((sample): L.LatLngTuple => [
+              sample.latitude,
+              sample.longitude,
+            ])
+          )
       )
     );
     if (fix) {
@@ -231,13 +276,16 @@ export const GpsMap = memo(function GpsMap({
 
   // The local plot: metres from the takeoff point, north up, equal scale.
   const points = origin
-    ? trail.map((stretch) => stretch.map((sample) => local(origin, sample)))
+    ? trail.flatMap(runs).map(({ band, samples }) => ({
+        band,
+        points: samples.map((sample) => local(origin, sample)),
+      }))
     : [];
   const extent: [number, number][] = [
     [-MIN_SPAN / 2, -MIN_SPAN / 2],
     [MIN_SPAN / 2, MIN_SPAN / 2],
   ];
-  for (const stretch of points) extent.push(...stretch);
+  for (const piece of points) extent.push(...piece.points);
   if (offset && fix) {
     extent.push([
       offset[0] - fix.horizontal_accuracy,
@@ -278,21 +326,30 @@ export const GpsMap = memo(function GpsMap({
   return (
     <section className="space-y-3 px-4 py-4" aria-labelledby="gps-map-heading">
       <h2 id="gps-map-heading" className="font-semibold">
-        Position
+        {title}
       </h2>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
-        <dt className="text-muted-foreground">From takeoff</dt>
-        <dd>
-          {distance === null || bearing === null
-            ? '—'
-            : `${distance.toFixed(1)} m ${COMPASS[Math.round((bearing * 4) / Math.PI + 8) % 8]}`}
-        </dd>
-        <dt className="text-muted-foreground">Height</dt>
-        <dd>
-          {hover
-            ? `${hover.height.toFixed(2)} / ${hover.height_target.toFixed(2)} m`
-            : '—'}
-        </dd>
+        {(
+          summary ?? [
+            [
+              'From takeoff',
+              distance === null || bearing === null
+                ? '—'
+                : `${distance.toFixed(1)} m ${COMPASS[Math.round((bearing * 4) / Math.PI + 8) % 8]}`,
+            ],
+            [
+              'Height',
+              hover
+                ? `${hover.height.toFixed(2)} / ${hover.height_target.toFixed(2)} m`
+                : '—',
+            ],
+          ]
+        ).map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
       </dl>
       <div className="relative isolate aspect-4/3">
         <div ref={container} className="absolute inset-0 z-0 bg-muted!" />
@@ -367,15 +424,15 @@ export const GpsMap = memo(function GpsMap({
                 className="fill-foreground"
               />
             )}
-            {points.map((stretch, index) => (
+            {points.map((piece, index) => (
               <polyline
                 key={index}
-                points={stretch
+                points={piece.points
                   .map(([east, north]) => `${px(east)},${py(north)}`)
                   .join(' ')}
                 fill="none"
                 strokeWidth={1.5}
-                className="stroke-blue-700 dark:stroke-blue-400"
+                className={SPEEDS[piece.band].className}
               />
             ))}
             {offset && fix && (
@@ -398,6 +455,17 @@ export const GpsMap = memo(function GpsMap({
             )}
           </svg>
         )}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground tabular-nums">
+        {SPEEDS.map(({ label }, band) => (
+          <span key={label} className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className={`h-0.5 w-4 ${SWATCHES[band]}`}
+            />
+            {label}
+          </span>
+        ))}
       </div>
     </section>
   );
