@@ -15,6 +15,7 @@ import {
   Disc,
   LoaderCircle,
   Plug,
+  Radio,
   RefreshCw,
   Satellite,
   Wifi,
@@ -26,7 +27,9 @@ import Link from 'next/link';
 import { GamepadView } from '@/components/gamepad';
 import { ControlPanel } from '@/components/control-panel';
 import { HoverPanel } from '@/components/hover-panel';
-import type { PreviewTag } from '@/components/fpv-panel';
+import type { CameraStatus, PreviewTag } from '@/components/fpv-panel';
+import { LastFlight } from '@/components/last-flight';
+import { PreflightPanel } from '@/components/preflight-panel';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ActuatorPanel } from '@/components/actuator-panel';
@@ -160,6 +163,11 @@ const VOLTAGE_TAU = 1500;
 // The drone refuses to arm under ARM_MIN_V (fw/drone/main/flight_rt.c); NO_PACK_V and below is no pack at all. A disarmed pack falling faster than DRAIN_V_PER_MIN is being run down on the bench: on 2026-11-02 a half hour of hang tests took a 4S pack from 14.5 V to 9.9 V.
 const ARM_MIN_V = 14;
 const NO_PACK_V = 5;
+
+// An RSSI after a space, or nothing when no packet was heard.
+function dbm(rssi: number | null | undefined) {
+  return rssi === null || rssi === undefined ? '' : ` ${rssi} dBm`;
+}
 const DRAIN_V_PER_MIN = 0.3;
 
 const statuses = {
@@ -221,6 +229,8 @@ export default function Page() {
     []
   );
   const latestHover = useRef<HoverSample | null>(null);
+  // The camera's state as the camera panel last polled it, for the preflight check.
+  const [cameraStatus, setCameraStatus] = useState<CameraStatus>(null);
   const [hoverHistory] = useState(() =>
     createHistory<HoverSample>(20_000, 1000)
   );
@@ -382,6 +392,7 @@ export default function Page() {
               latitude,
               longitude,
               horizontal_accuracy: data.gps.horizontal_accuracy,
+              speed: Math.hypot(data.gps.velocity[0], data.gps.velocity[1]),
             };
             gpsHistory.append(lastFix);
           }
@@ -625,13 +636,34 @@ export default function Page() {
           : 'Recorder ready'
         : 'Recorder connecting');
   const connected = status === 'connected';
+  // The bridge's last recording once it has closed it (its stop record written), for the last flight's summary.
+  const lastFlight =
+    recorder?.file && !recorder.writing
+      ? recorder.file.replace(/\.bin$/, '')
+      : null;
+  // The radio link over the last second (src/fw/controller/bridge.py decode_link): status messages reaching the laptop of the drone's 20 and the controller's RSSI of them, then the controller's packets reaching the drone and the drone's RSSI of them. Weak: a quarter of the status lost or a 0.3 s gap, which on 2026-11-08 came before every link timeout.
+  const link = reading?.link;
+  const linkWeak =
+    !!link?.bridge &&
+    (link.bridge.statuses < 15 || link.bridge.longest_gap_ms >= 300);
+  const linkText = !link?.bridge
+    ? 'Radio link'
+    : [
+        `Laptop: ${link.bridge.statuses} status/s, longest gap ${link.bridge.longest_gap_ms} ms, ${link.bridge.late} late, ${link.bridge.timeouts} timeouts`,
+        link.controller
+          ? `Controller: hears drone ${link.controller.rx}/s${dbm(link.controller.rssi)} (min${dbm(link.controller.rssi_min)}, noise ${link.controller.noise_floor} dBm), ${link.controller.gaps} missed; sends ${link.controller.tx_ok} ok, ${link.controller.tx_fail} failed, ${link.controller.refused} refused, ${link.controller.rejected} dropped; ch ${link.controller.channel}, ${link.controller.rate_name}, ${link.controller.power} dBm`
+          : 'Controller: no link report (older firmware)',
+        link.drone
+          ? `Drone: hears controller ${link.drone.rx}/s${dbm(link.drone.rssi)} (min${dbm(link.drone.rssi_min)}, noise ${link.drone.noise_floor} dBm), ${link.drone.gaps} missed, ${link.drone.rejected} stale, longest silence ${link.drone.silence_ms} ms; sends ${link.drone.tx_ok} ok, ${link.drone.tx_fail} failed, ${link.drone.refused} refused, slowest ${link.drone.latency_ms} ms; ch ${link.drone.channel}${link.drone.hopping ? ' (searching)' : ''}, ${link.drone.rate_name}, ${link.drone.power} dBm`
+          : 'Drone: no link report (older firmware)',
+      ].join('\n');
   return (
     <div className="flex flex-col lg:h-dvh">
       {(arming || armed) && (
         <div className="pointer-events-none fixed inset-0 z-50 border-4 border-destructive" />
       )}
       <header className="flex h-14 shrink-0 items-center gap-6 border-b px-6">
-        <h1 className="text-lg font-semibold">Drone dashboard</h1>
+        <h1 className="font-semibold">Drone dashboard</h1>
         <Tabs
           value={bench ? 'bench' : 'fly'}
           onValueChange={(value) => setBench(value === 'bench')}
@@ -710,6 +742,23 @@ export default function Page() {
             </span>
           </span>
           <span
+            title={linkText}
+            className={`flex items-center gap-1.5 ${
+              !connected || !link?.bridge
+                ? 'text-muted-foreground'
+                : linkWeak
+                  ? 'text-red-700'
+                  : 'text-green-700'
+            }`}
+          >
+            <Radio aria-hidden="true" className="size-4" />
+            <span className="min-w-[12ch] tabular-nums">
+              {connected && link?.bridge
+                ? `${link.bridge.statuses}/20${dbm(link.controller?.rssi)} · ${link.drone ? `${link.drone.rx}/s${dbm(link.drone.rssi)}` : '—'}`
+                : '—'}
+            </span>
+          </span>
+          <span
             title={recorderText}
             className={`flex items-center gap-1.5 ${
               // Dropped records warn only while that flight records: the count stays until the next flight starts.
@@ -734,6 +783,15 @@ export default function Page() {
           <Link href="/camera" className="text-sm underline">
             Camera
           </Link>
+          {/* Its own tab: it reads recordings only, and this one keeps the drone link (the bridge serves one dashboard). */}
+          <a
+            href="/flights"
+            target="_blank"
+            rel="noopener"
+            className="text-sm underline"
+          >
+            Flights
+          </a>
           {fps !== null && (
             <span
               className="min-w-[6ch] text-right text-sm text-muted-foreground tabular-nums"
@@ -820,6 +878,13 @@ export default function Page() {
               }}
             />
           )}
+          <PreflightPanel
+            reading={reading}
+            connected={connected}
+            fps={fps}
+            camera={cameraStatus}
+          />
+          {lastFlight && <LastFlight name={lastFlight} />}
           {/* Drawn whether or not the drone is connected, so the controller can be checked on its own. */}
           <section className="px-4 py-3" aria-label="Controller">
             <GamepadView />
@@ -884,6 +949,7 @@ export default function Page() {
             onFree={(free) => sendControl({ hover_camera: free ? 0 : 1 })}
             roll={reading?.control?.hover_cam_roll}
             onTag={showPreviewTag}
+            onStatus={setCameraStatus}
           />
         </div>
         {/* On the bench the servo and ESC panels take its place. */}
@@ -908,6 +974,8 @@ export default function Page() {
           <GpsPanel
             gps={reading?.gps}
             baro={reading?.baro}
+            report={reading?.gps_report}
+            time={reading?.time}
             connected={status === 'connected'}
           />
         </div>

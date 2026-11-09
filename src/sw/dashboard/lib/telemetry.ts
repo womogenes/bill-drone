@@ -65,6 +65,8 @@ export type ControlSettings = {
   hover_trim_max: number;
   // Absent from firmware before the GPS hold.
   hover_gps_tau?: number;
+  // Absent from firmware before the barometer; 0 leaves the barometer out of the hover's height.
+  hover_baro_tau?: number;
   auto_trim: number;
 };
 
@@ -103,6 +105,8 @@ export type GpsReading = {
   // 0 none, 2 2D, 3 3D; ok: inside the module's accuracy masks.
   fix: number;
   ok: boolean;
+  // SBAS corrections applied (NAV-PVT diffSoln); absent from bridges before 2026-11-09.
+  differential?: boolean;
   satellites: number;
   latitude: number;
   longitude: number;
@@ -119,6 +123,8 @@ export type GpsSample = GpsFix & {
   time: number;
   session: number;
   horizontal_accuracy: number;
+  // Ground speed (m/s), which colors the map's trail.
+  speed?: number;
 };
 
 // The drone's barometer (src/fw/controller/bridge.py decode_status): its I2C address once found, and the pressure altitude in the standard atmosphere (m, 0.1 m steps; null without a fresh reading).
@@ -129,9 +135,71 @@ export type BaroReading = {
   altitude: number | null;
 };
 
+// The drone's GPS report once a second (src/fw/controller/bridge.py decode_gps_report, without its satellite list): time on the drone's clock (ms, as Reading.time); top4_cno the mean C/N0 (dB-Hz) of the strongest four; used the satellites in the solution per system; jam_indicator the CW jamming indicator (0-255).
+export type GpsReport = {
+  time: number;
+  satellites_age_ms: number | null;
+  rf_age_ms: number | null;
+  jamming: 'unknown' | 'ok' | 'warning' | 'critical';
+  jam_indicator: number;
+  noise_per_ms: number;
+  agc: number;
+  antenna: string;
+  antenna_power: string;
+  config: Record<
+    'signals' | 'sbas' | 'interference' | 'output',
+    'pending' | 'set' | 'refused' | 'unanswered'
+  >;
+  listed: number;
+  heard: number;
+  top4_cno: number | null;
+  used: Record<string, number>;
+  sbas_heard: number[];
+  sbas_corrected: boolean;
+};
+
+// One end's link report over its last second (src/fw/controller/bridge.py decode_link, src/fw/link.h): the partner's packets heard, rejected and missed (sequence gaps), the longest silence, their RSSI (dBm; null with none heard), the sends acknowledged, failed and refused, and the radio's channel, rate and power. Absent from firmware before 2026-11-09.
+export type LinkReport = {
+  source: 'drone' | 'controller';
+  interval_ms: number;
+  rx: number;
+  rejected: number;
+  gaps: number;
+  silence_ms: number;
+  rssi: number | null;
+  rssi_min: number | null;
+  noise_floor: number;
+  tx_ok: number;
+  tx_fail: number;
+  refused: number;
+  latency_ms: number;
+  channel: number;
+  rate: number;
+  rate_name: string | null;
+  power: number;
+  follow: boolean;
+  hopping: boolean;
+};
+
+// The drone service's own view of the last second: status messages received (20 expected), the longest gap between them, packets it dropped as late, and link timeouts.
+export type BridgeLink = {
+  statuses: number;
+  longest_gap_ms: number;
+  late: number;
+  timeouts: number;
+};
+
+export type LinkReading = {
+  drone: LinkReport | null;
+  controller: LinkReport | null;
+  bridge: BridgeLink | null;
+};
+
 export type Reading = {
   gps?: GpsReading | null;
+  link?: LinkReading;
   baro?: BaroReading | null;
+  gps_report?: GpsReport | null;
   logging?: {
     active: boolean;
     ready: boolean;

@@ -1,6 +1,6 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { HoverSample, HoverState } from '@/lib/telemetry';
 
 const TRAIL_MS = 10_000;
@@ -8,12 +8,12 @@ const TRAIL_MS = 10_000;
 const STALE_MS = 150;
 // Trail samples further apart than this are separate stretches, not a path.
 const TRAIL_GAP_MS = 500;
-const WIDTH = 400;
-const HEIGHT = 300;
-const LEFT = 56;
+// The plot is drawn at its real pixel size, so its text stays text-xs however wide the panel is (a viewBox scaled the labels up to 24 px on a wide screen).
+const LEFT = 40;
 const RIGHT = 8;
 const TOP = 8;
-const BOTTOM = 36;
+const BOTTOM = 22;
+const MAX_HEIGHT = 360;
 const STEPS = [0.1, 0.2, 0.25, 0.5, 1, 2];
 
 // The drone in a tag-aligned frame, rotated so the hold line points straight out from the tag: [0] toward the tag (the hold sits at -range_target), [1] to the left of that line.
@@ -52,6 +52,18 @@ export const HoverPanel = memo(function HoverPanel({
   const distanceError =
     distance !== null && range !== null ? distance - range : null;
   const sidewaysError = state.tag && drone ? drone[1] : null;
+  const box = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(400);
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return;
+    const resize = new ResizeObserver(() =>
+      setWidth(Math.max(200, element.clientWidth))
+    );
+    resize.observe(element);
+    return () => resize.disconnect();
+  }, []);
+  const height = Math.min(MAX_HEIGHT, Math.round(width * 0.75));
 
   const points = trail.map((sample) => {
     const position = aligned(sample);
@@ -65,8 +77,8 @@ export const HoverPanel = memo(function HoverPanel({
   let maxX = Math.max(...extent.map(([x]) => x)) + 0.15;
   let minY = Math.min(...extent.map(([, y]) => y)) - 0.15;
   let maxY = Math.max(...extent.map(([, y]) => y)) + 0.15;
-  const plotWidth = WIDTH - LEFT - RIGHT;
-  const plotHeight = HEIGHT - TOP - BOTTOM;
+  const plotWidth = width - LEFT - RIGHT;
+  const plotHeight = height - TOP - BOTTOM;
   // Equal scale on both axes: widen the tighter one about its centre.
   const scale = Math.min(
     plotWidth / Math.max(maxX - minX, 0.6),
@@ -90,7 +102,7 @@ export const HoverPanel = memo(function HoverPanel({
     return values;
   };
   const tickText = (value: number) =>
-    Math.abs(value).toFixed(step < 0.5 ? 2 : 1);
+    (Math.abs(value) < 1e-9 ? 0 : value).toFixed(step < 0.5 ? 2 : 1);
 
   return (
     <section className="space-y-3 px-4 py-4" aria-labelledby="hover-heading">
@@ -127,128 +139,118 @@ export const HoverPanel = memo(function HoverPanel({
             : `${stale ? 'Stale · ' : ''}${state.tag_age_ms} ms`}
         </dd>
       </dl>
-      <svg
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        className="block w-full"
-        role="img"
-        aria-label="Drone position relative to the tag, top down, with the hold target and the last 10 seconds"
-      >
-        {ticks(minX, maxX).map((value) => (
-          <g key={`x${value}`}>
-            <line
-              x1={px(value)}
-              x2={px(value)}
-              y1={TOP}
-              y2={HEIGHT - BOTTOM}
-              className="stroke-border"
-            />
-            <text
-              x={px(value)}
-              y={HEIGHT - BOTTOM + 14}
-              textAnchor="middle"
-              className="fill-muted-foreground text-xs"
-            >
-              {tickText(value)}
-            </text>
-          </g>
-        ))}
-        {ticks(minY, maxY).map((value) => (
-          <g key={`y${value}`}>
-            <line
-              x1={LEFT}
-              x2={WIDTH - RIGHT}
-              y1={py(value)}
-              y2={py(value)}
-              className="stroke-border"
-            />
-            <text
-              x={LEFT - 6}
-              y={py(value)}
-              textAnchor="end"
-              dominantBaseline="middle"
-              className="fill-muted-foreground text-xs"
-            >
-              {tickText(value)}
-            </text>
-          </g>
-        ))}
-        <text
-          x={LEFT + plotWidth / 2}
-          y={HEIGHT - 4}
-          textAnchor="middle"
-          className="fill-muted-foreground text-xs"
+      <div ref={box} className="w-full">
+        <svg
+          width={width}
+          height={height}
+          className="block"
+          role="img"
+          aria-label="Drone position relative to the tag, top down, with the hold target and the last 10 seconds"
         >
-          sideways (m)
-        </text>
-        <text
-          transform={`translate(10 ${TOP + plotHeight / 2}) rotate(-90)`}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          className="fill-muted-foreground text-xs"
-        >
-          toward tag (m) →
-        </text>
-        <line
-          x1={px(0)}
-          x2={px(0)}
-          y1={py(0)}
-          y2={HEIGHT - BOTTOM}
-          strokeDasharray="4 4"
-          className="stroke-muted-foreground"
-        />
-        <rect
-          x={px(0) - 5}
-          y={py(0) - 5}
-          width={10}
-          height={10}
-          className="fill-foreground"
-        />
-        {range !== null && (
-          <circle
-            cx={px(0)}
-            cy={py(range)}
-            r={7}
-            fill="none"
-            strokeWidth={1.5}
-            className="stroke-foreground"
+          {ticks(minX, maxX).map((value) => (
+            <g key={`x${value}`}>
+              <line
+                x1={px(value)}
+                x2={px(value)}
+                y1={TOP}
+                y2={height - BOTTOM}
+                className="stroke-border"
+              />
+              <text
+                x={px(value)}
+                y={height - BOTTOM + 14}
+                textAnchor="middle"
+                className="fill-muted-foreground text-xs"
+              >
+                {tickText(value)}
+              </text>
+            </g>
+          ))}
+          {ticks(minY, maxY).map((value) => (
+            <g key={`y${value}`}>
+              <line
+                x1={LEFT}
+                x2={width - RIGHT}
+                y1={py(value)}
+                y2={py(value)}
+                className="stroke-border"
+              />
+              <text
+                x={LEFT - 6}
+                y={py(value)}
+                textAnchor="end"
+                dominantBaseline="middle"
+                className="fill-muted-foreground text-xs"
+              >
+                {tickText(value)}
+              </text>
+            </g>
+          ))}
+          <line
+            x1={px(0)}
+            x2={px(0)}
+            y1={py(0)}
+            y2={height - BOTTOM}
+            strokeDasharray="4 4"
+            className="stroke-muted-foreground"
           />
-        )}
-        {points.map((point, index) => {
-          const previous = points[index - 1];
-          if (
-            !point ||
-            !previous ||
-            trail[index].time - trail[index - 1].time > TRAIL_GAP_MS
-          )
-            return null;
-          return (
-            <line
-              key={index}
-              x1={px(previous[0])}
-              y1={py(previous[1])}
-              x2={px(point[0])}
-              y2={py(point[1])}
+          <rect
+            x={px(0) - 5}
+            y={py(0) - 5}
+            width={10}
+            height={10}
+            className="fill-foreground"
+          />
+          {range !== null && (
+            <circle
+              cx={px(0)}
+              cy={py(range)}
+              r={7}
+              fill="none"
               strokeWidth={1.5}
-              strokeOpacity={
-                1 - (0.9 * (state.time - trail[index].time)) / TRAIL_MS
-              }
-              className="stroke-blue-700 dark:stroke-blue-400"
+              className="stroke-foreground"
             />
-          );
-        })}
-        {drone && (
-          <circle
-            cx={px(screen(drone)[0])}
-            cy={py(screen(drone)[1])}
-            r={5}
-            className={
-              stale
-                ? 'fill-muted-foreground'
-                : 'fill-blue-700 dark:fill-blue-400'
-            }
-          />
-        )}
-      </svg>
+          )}
+          {points.map((point, index) => {
+            const previous = points[index - 1];
+            if (
+              !point ||
+              !previous ||
+              trail[index].time - trail[index - 1].time > TRAIL_GAP_MS
+            )
+              return null;
+            return (
+              <line
+                key={index}
+                x1={px(previous[0])}
+                y1={py(previous[1])}
+                x2={px(point[0])}
+                y2={py(point[1])}
+                strokeWidth={1.5}
+                strokeOpacity={
+                  1 - (0.9 * (state.time - trail[index].time)) / TRAIL_MS
+                }
+                className="stroke-blue-700 dark:stroke-blue-400"
+              />
+            );
+          })}
+          {drone && (
+            <circle
+              cx={px(screen(drone)[0])}
+              cy={py(screen(drone)[1])}
+              r={5}
+              className={
+                stale
+                  ? 'fill-muted-foreground'
+                  : 'fill-blue-700 dark:fill-blue-400'
+              }
+            />
+          )}
+        </svg>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Top down, metres from the tag (■), up toward it. Circle: hold point.
+      </p>
     </section>
   );
 });

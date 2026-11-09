@@ -50,12 +50,17 @@ function parseTag(header: string): PreviewTag | null {
   };
 }
 
+// The camera's own state through the drone (running, fpv, stalled or stopped) and the FPV frame rate, or null while it does not answer.
+export type CameraStatus = { state: string; fps?: number } | null;
+
 export function FpvPanel({
   free,
   onFree,
   onTag,
+  onStatus,
   roll = 0,
 }: {
+  onStatus?: (status: CameraStatus) => void;
   // Each shown tag-mode frame's tag, or null when it has none.
   onTag?: (tag: PreviewTag | null) => void;
   // The camera's roll on its mount (the drone's hover_cam_roll, degrees): the picture is turned back by it, so it shows upright.
@@ -76,10 +81,12 @@ export function FpvPanel({
   useEffect(() => {
     rollRef.current = roll;
   }, [roll]);
-  const [status, setStatus] = useState<{
-    state: string;
-    fps?: number;
-  } | null>(null);
+  const [status, setStatus] = useState<CameraStatus>(null);
+  const onStatusRef = useRef(onStatus);
+  useEffect(() => {
+    onStatusRef.current = onStatus;
+  }, [onStatus]);
+  useEffect(() => onStatusRef.current?.(status), [status]);
   const where = host ? `&host=${encodeURIComponent(host)}` : '';
 
   useEffect(() => {
