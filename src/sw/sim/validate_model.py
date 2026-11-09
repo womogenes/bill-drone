@@ -133,7 +133,7 @@ def main():
     parser.add_argument("--models", nargs="+", required=True)
     parser.add_argument("--shortest", type=float, default=0.5)
     parser.add_argument("--velocity", choices=("logged", "tag"), default="tag", help="the logged hover velocity everywhere, or only where the tag measured it (identify_airframe.Data)")
-    parser.add_argument("--measured-input", action="store_true", help="the measured velocity (tag or GPS truth) is the speed terms' input at every step that has one, not only at each prediction's start (identify_airframe.predict)")
+    parser.add_argument("--measured-input", action="store_true", help="the measured velocity (tag or GPS truth) is the speed terms' input at every step, zero where it is missing, not only at each prediction's start (identify_airframe.predict)")
     parser.add_argument("--truth", help="a folder of smoothed GPS truths (sw/sim/gps_truth.py --save): their velocity is the airframe's where they have one, and the horizontal velocity prediction is scored against them")
     args = parser.parse_args()
     records = [r for r in (I.load(p, args.shortest) for p in I.paths(args.recordings)) if r]

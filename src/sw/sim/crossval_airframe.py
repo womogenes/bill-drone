@@ -71,7 +71,7 @@ def main():
     parser.add_argument("--instrument", type=float, default=1.0, help="weight of identify_airframe's instrumented one-step cost on the test-pattern flights")
     parser.add_argument("--shortest", type=float, default=0.5)
     parser.add_argument("--velocity", choices=("logged", "tag"), default="tag", help="the logged hover velocity everywhere, or only where the tag measured it (identify_airframe.Data)")
-    parser.add_argument("--measured-input", action="store_true", help="the measured velocity (tag or GPS truth) is the speed terms' input at every step that has one, not only at each prediction's start (identify_airframe.predict)")
+    parser.add_argument("--measured-input", action="store_true", help="the measured velocity (tag or GPS truth) is the speed terms' input at every step, zero where it is missing, not only at each prediction's start (identify_airframe.predict)")
     parser.add_argument("--as-saved", action="store_true", help="keep the start model's tied terms (identify_airframe.TIED) instead of the present values")
     parser.add_argument("--truth", help="a folder of smoothed GPS truths (sw/sim/gps_truth.py --save): their velocity replaces the tag's where they have one (identify_airframe.Data), and the held-out horizontal velocity is scored against them (validate_model.velocity_scores)")
     parser.add_argument("--workers", type=int, default=os.cpu_count())

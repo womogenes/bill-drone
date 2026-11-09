@@ -29,6 +29,8 @@ DT = A.DT
 DEG = A.DEG
 HORIZONS = (5, 10, 25, 50, 100, 200)
 SCORE_HORIZONS = (1, 5, 10, 25, 50, 100)
+# Samples of logged commands each prediction lane keeps before its start: more than the longest dead time (PARAMS: 0.12 s).
+WINDOW = 32
 INDEX = {key: 6 + TUNING_LAYOUT.index(key) for key in TUNING_LAYOUT}
 VOLTAGE_TAU = 0.3  # the runtime's battery smoothing for thrust compensation (flight_rt.c)
 VOLTAGE_RANGE = 0.15
@@ -203,7 +205,7 @@ class Data:
             self.vel = self.vel * (self.tracking[..., None] > 0)
         # Where a flight has a smoothed GPS truth (gps_truth.py --save: IMU, barometer and latency-aligned GPS velocity, 2026-11-09 on), its body-frame velocity replaces the tag's; it is missing (zero) where the truth has no heading.
         self.truth = np.zeros(len(records), bool)
-        # With measured_input (set by the caller) predict takes the measured velocity at every step it has one instead of only at the start.
+        # With measured_input (set by the caller) teacher and predict take the measured velocity at every step, and none (still) where it is missing, instead of carrying the airframe's own.
         self.measured_input = False
         if velocity == "truth":
             for i, r in enumerate(records):
@@ -347,7 +349,8 @@ def teacher(p, data, flights, residuals=False):
     for k in range(data.size - 1):
         state.rate, state.att = data.rate[f, k].copy(), data.att[f, k].copy()
         v = data.vel[f, k]
-        state.vel = np.where(v != 0, v, state.vel)
+        # With measured_input a missing velocity is taken as still (see predict).
+        state.vel = v.copy() if data.measured_input else np.where(v != 0, v, state.vel)
         for key in keep:
             keep[key][:, k] = getattr(state, key)
         state, _ = A.step(p, state, throttle, command, np.full(n, k), data.voltage[f, k], zero, trim, near=None if data.near is None else data.near[f, k], geometry=GEOM, table=data.table)
@@ -369,7 +372,9 @@ def predict(p, data, flights, horizons, stride, closed=True, taught=None, veloci
     state.rate, state.att = data.rate[F, S0].copy(), data.att[F, S0].copy()
     # A logged velocity of zero is missing (as in teacher): the lane starts from the airframe's own.
     state.vel = np.where(data.vel[F, S0] != 0, data.vel[F, S0], state.vel)
-    throttle, command, voltage = data.throttle[F].copy(), data.command[F].copy(), data.voltage[F]
+    # Each lane's own window of the logged commands, from WINDOW samples before its start (longer than any dead time) to its last horizon: copying whole flights per lane took 50-60 GB for the 2026-11-09 flights (up to 190 s) at stride 1.
+    window = np.clip(S0[:, None] + np.arange(-WINDOW, max(horizons) + 1)[None, :], 0, data.size - 1)
+    throttle, command, voltage = data.throttle[F[:, None], window], data.command[F[:, None], window], data.voltage[F[:, None], window]
     states, commands = data.states[F, S0].copy(), data.commands[F].copy()
     rates = np.zeros((max(horizons), len(F), 3))
     attitudes = np.zeros((max(horizons), len(F), 2))
@@ -379,13 +384,14 @@ def predict(p, data, flights, horizons, stride, closed=True, taught=None, veloci
     lane_trim = (trim[0][J], trim[1][J])
     for j in range(max(horizons)):
         k = np.minimum(S0 + j, data.size - 1)
+        local = np.full(len(F), WINDOW + j)
         if closed:
-            throttle[lane, k], command[lane, k] = data.control(states, commands, F, k, state.att, state.rate)
+            throttle[lane, local], command[lane, local] = data.control(states, commands, F, k, state.att, state.rate)
         if data.measured_input:
-            # The measured velocity is the speed terms' input wherever there is one, as the hover sim feeds them its own: integrated from the attitude, the airframe's velocity carries the level reference's error (0.1-0.5 m/s² per flight against the GPS on 2026-11-09), which with the measured 0.07/s drag runs up to 1 m/s in 2 s.
+            # The measured velocity is the speed terms' input, as the hover sim feeds them its own, and still where there is none: integrated from the attitude the airframe's velocity carries the level reference's error (0.1-0.5 m/s² per flight against the GPS on 2026-11-09), which with the measured 0.07/s drag runs to 1 m/s in 2 s, and from takeoff (teacher) on flights without a tag or GPS truth to meters per second (the roll error held out on 2026-11-09 rose from 1.34 to 1.83 degrees at 250 ms).
             measured = data.vel[F, k]
-            state.vel = np.where(measured != 0, measured, state.vel)
-        state, _ = A.step(p, state, throttle, command, k, voltage[lane, k], push[J], lane_trim, near=None if data.near is None else data.near[F, k], geometry=GEOM, table=data.table)
+            state.vel = measured.copy()
+        state, _ = A.step(p, state, throttle, command, local, voltage[lane, local], push[J], lane_trim, near=None if data.near is None else data.near[F, k], geometry=GEOM, table=data.table)
         rates[j] = state.rate
         attitudes[j] = state.att
         if velocities:

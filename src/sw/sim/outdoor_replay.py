@@ -1,5 +1,5 @@
 """
-A 2026-11-09 outdoor flight against the hover sim flying it: uv run --with scipy -m sw.sim.outdoor_replay <recording name> --truth DIR --models models/airframe_A.json [...] [--span A,B] [--heading-error DEG] [--stick 'start,pitch,roll,seconds;...'] [--wind 0.3] [--seconds S] [--seeds 8] [--workers N] [--save file.json]
+A 2026-11-09 outdoor flight against the hover sim flying it: uv run --with scipy -m sw.sim.outdoor_replay <recording name> --truth DIR --models models/airframe_A.json [...] [--span A,B] [--heading-error DEG] [--stick 'start,pitch,roll,seconds;...'] [--wind 0.3] [--gps-latency S] [--seconds S] [--seeds 8] [--workers N] [--save file.json]
 
 Written 2026-11-09 to check airframe models on what the outer loop must handle: hands-off drift, fly-aways and braking. The real side comes from the flight's smoothed GPS truth (sw/sim/gps_truth.py --save; seconds are counted from the throttle onset): over --span the pitch swing (swing_damping.resonance: frequency, damping ratio, 0.4-1.6 Hz RMS), the horizontal wander (RMS distance from the span's mean position) and the ground speed (mean, peak, and its trace). The sim side flies the recording's settings from takeoff on the GPS hold (outdoor.plant, nominal: the airframe as given, the night's light wind of --wind m/s from a random direction with its turbulence) with the hold's heading belief off by --heading-error degrees (gps_truth analysis 3 measures it per flight: 06:33-06:38 about -60) and the pilot's sticks replayed (s after liftoff, as sweep.run's plant["stick"]), and is measured over the same span after liftoff.
 """
@@ -50,10 +50,10 @@ def real(name, truth, span):
 
 
 def fly(job):
-    airframe, settings, wind, heading_error, sticks, seconds, span, seed = job
+    airframe, settings, wind, heading_error, latency, sticks, seconds, span, seed = job
     from sw.sim.sweep import run
     p, _ = outdoor_plant(airframe, wind, seed, True, True, settings.get("hover_climb", 1.0))
-    p["gps"] = GPS | {"heading": 0.0}
+    p["gps"] = GPS | {"heading": 0.0, "latency": latency}
     if sticks:
         p["stick"] = sticks
     s = dict(settings) | {"hover_camera": 0, "hover_center": 0, "hover_gps_heading": heading_error}
@@ -80,6 +80,7 @@ def main():
     parser.add_argument("--heading-error", type=float, default=0.0)
     parser.add_argument("--stick", type=lambda text: [tuple(float(v) for v in item.split(",")) for item in text.split(";")], help="the pilot's sticks: start s after liftoff, pitch and roll degrees, seconds held; ';' between them")
     parser.add_argument("--wind", type=float, default=0.3)
+    parser.add_argument("--gps-latency", type=float, default=GPS["latency"], help="s from the GPS measurement to the hold (gps_truth analysis 3 measures the hold's velocity 0-140 ms behind the GPS on most flights, 240-320 ms at 06:33-06:38)")
     parser.add_argument("--seconds", type=float, help="sim seconds (default: the span's end plus 2)")
     parser.add_argument("--seeds", type=int, default=8)
     parser.add_argument("--set", default="", help="setting overrides, name=value,...")
@@ -100,7 +101,7 @@ def main():
     with Pool(min(args.workers, args.seeds)) as pool:
         for model in args.models:
             airframe = json.loads(Path(model).read_text())
-            runs = [r for r in pool.map(fly, [(airframe, settings, args.wind, args.heading_error, args.stick, seconds, span, seed) for seed in range(args.seeds)]) if r is not None]
+            runs = [r for r in pool.map(fly, [(airframe, settings, args.wind, args.heading_error, args.gps_latency, args.stick, seconds, span, seed) for seed in range(args.seeds)]) if r is not None]
             lost = [r["lost"] for r in runs if r["lost"] is not None]
             keys = sorted({key for r in runs for key in r if key not in ("lost", "t", "speed")})
             medians = {key: float(np.median([r[key] for r in runs if key in r])) for key in keys}
