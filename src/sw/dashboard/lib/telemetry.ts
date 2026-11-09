@@ -142,6 +142,10 @@ export type Reading = {
   control_status?: {
     reason: string;
     throttle_latched?: boolean;
+    // The drone's guards (fw/drone/main/guard.h): the fly-away failsafe's phase, whether distance (not speed) set it off, and why the test pattern stopped.
+    failsafe?: 'brake' | 'hold' | 'land' | null;
+    failsafe_far?: boolean;
+    pattern_stop?: 'distance' | 'tag lost' | 'tilt' | 'stick' | null;
   };
   recorder?: RecorderStatus;
   imu?: ImuReading | null;

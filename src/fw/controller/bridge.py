@@ -27,7 +27,7 @@ import time
 from aiohttp import WSMsgType, web
 import serial
 
-from log_format import FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, PATTERN_CHANNELS, STOP_REASONS
+from log_format import FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, PATTERN_CHANNELS, STOP_REASONS, guard_state
 from wire import PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 # Messages of more fragments than this go out twice (send_message).
@@ -108,6 +108,8 @@ def decode_status(payload, settings):
         },
         "control_status": {
             "reason": STOP_REASONS[reason],
+            # The fly-away failsafe's phase and the test pattern's stop (drone/main/guard.h), from flags bits 8-13.
+            **guard_state(flags >> 8),
             "throttle_latched": bool(flags & 64),
             "target_sequence": target_sequence,
         },
@@ -529,6 +531,7 @@ class Service:
             "tag": [x / 1000, y / 1000, z / 1000] if age != 65535 else None, "tag_age_ms": age if age != 65535 else None,
             "velocity": [fields[26] / 1000, fields[27] / 1000], "height": fields[28] / 1000, "height_target": fields[30] / 1000,
             "range_target": fields[31] / 1000 if targeted else None, "arc_deg": fields[32] / 100 if targeted else None,
+            **(guard_state(fields[39]) if len(fields) > 39 else {}),
         })
 
     def push(self, ws, data, binary=False):

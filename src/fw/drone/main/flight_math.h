@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 
+#include "guard.h"
 #include "hover.h"
 
 // Angles/rates are radians. Shared by the drone and the host simulation (sw/sim/flight.py).
@@ -51,6 +52,8 @@ typedef struct {
     float pitch_damping_tau;
     // Fastest change of the roll setpoint alone (rad/s, 0 = target_rate): roll answers differential thrust far faster than pitch answers the servos, and at target_rate 30 deg/s a full roll stick reversal took a second in the setpoint alone (2026-11-08 outdoor flights). Runtime-only, last.
     float roll_target_rate;
+    // The fly-away failsafe and the test pattern's limits (guard.h). Runtime-only, last.
+    GuardGains guard;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.

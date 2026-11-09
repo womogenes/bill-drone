@@ -17,6 +17,7 @@
 #include "baro.h"
 #include "camera.h"
 #include "gps.h"
+#include "guard.h"
 #include "hover.h"
 
 #define LOG_CAPACITY 200
@@ -70,6 +71,8 @@ typedef struct __attribute__((packed)) {
     int16_t velocity[2], height, climb, height_target, range_target, arc, yaw, trim[2], drag_velocity[2];
     // The barometer's newest reading (baro_input): pressure altitude in the standard atmosphere (mm), INT32_MIN without one in the last BARO_MAX_AGE_US.
     int32_t baro;
+    // The guards (guard.h): bits 0-1 the fly-away failsafe's phase (FAILSAFE_*), bit 2 set off by distance rather than speed, bits 3-5 why the test pattern stopped (PATTERN_*, 0 while it plays or never did).
+    uint16_t guard;
 } Record;
 _Static_assert(sizeof(Record) == RECORD_SIZE, "Flight record layout");
 
@@ -219,6 +222,8 @@ static bool link_landing;
 static int requested_mode;
 static uint64_t link_land_us;
 static HoverState hover;
+// The fly-away failsafe and the test pattern's limits (guard.h).
+static Guard guard;
 static Command flown;
 // The laptop's hold-point nudge for hover (m; toward the tag, left, up), from the targets.
 #define NUDGE_MAX 1.5f
@@ -264,6 +269,7 @@ static void rewind_pattern(void) {
     excite.index = excite.tick = excite.played = excite.now = 0;
     excite.active = false;
     excite.hold[0] = excite.hold[1] = 0;
+    guard_pattern_reset(&guard);
 }
 
 // The hold-point nudge hover flies (m; toward the tag, left, up): the laptop's and the test pattern's.
@@ -441,6 +447,7 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->arc = scaled((hover.arc - (range > 0.1f ? held_nudge(1) / range : 0)) * DEG, 100);
     record->yaw = scaled(hover.yaw * DEG, 100);
     record->baro = isfinite(baro_altitude) ? (int32_t)lroundf(baro_altitude * 1000) : INT32_MIN;
+    record->guard = guard.failsafe | guard.far << 2 | guard.stopped << 3;
 }
 
 static void reconfigure_sensor(void);
@@ -632,10 +639,12 @@ static void runtime_task(void *arg) {
                 bool have_flow = gains.flow_depth > 0 && flow_input(&gains, &flow);
                 HoverGps gps;
                 bool have_gps = gains.gps_tau > 0 && gps_input(&gps);
-                hover_update(&hover, &gains, hover_mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag,
+                // The fly-away failsafe may ignore the stick, brake harder or land (guard.c).
+                int mode = guard_hover(&guard, &command.guard, &hover, &gains, hover_mode, now, dt);
+                hover_update(&hover, &gains, mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag,
                              have_flow ? &flow : NULL, have_gps ? &gps : NULL, have_baro ? &baro : NULL, &out);
                 // A finished landing disarms, ending the session like a stop, so the laptop can take off again (H or Enable) instead of being left armed with hover holding thrust at zero.
-                if (hover.landed && out.force <= 0) stop_locked(link_landing ? 8 : 7);
+                if (hover.landed && out.force <= 0) stop_locked(link_landing ? 8 : guard.failsafe == FAILSAFE_LAND ? 9 : 7);
                 scaled.base = out.force > 0 ? fminf(THROTTLE_MAX, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
                 scaled.target_roll = out.roll;
                 scaled.target_pitch = out.pitch;
@@ -650,7 +659,9 @@ static void runtime_task(void *arg) {
                 }
             }
             float add[EXCITE_CHANNELS] = {0};
-            excite.active = excite.count && scaled.base > 0 && state.controller.airborne > excite.after && (!excite.repeat || excite.played < excite.repeat);
+            excite.active = excite.count && !guard.stopped && scaled.base > 0 && state.controller.airborne > excite.after && (!excite.repeat || excite.played < excite.repeat);
+            // The pattern stops for good (until the next arming) once it strays, loses the tag, tilts too far or the pilot steers (guard.c); the hold keeps flying, its hold point where the pattern left it.
+            if (excite.active && guard_pattern(&guard, &command.guard, hover_mode && hover.engaged ? &hover : NULL, now, pose.roll, pose.pitch, command.target_roll, command.target_pitch, nudge, excite.hold)) excite.active = false;
             if (excite.active) {
                 const ExciteSegment *segment = &excite.segment[excite.index];
                 for (int i = 0; i < EXCITE_CHANNELS; i++) add[i] = segment->value[i] / 100.0f;
@@ -740,6 +751,7 @@ static void runtime_task(void *arg) {
         if (!state.enabled || !hover_mode) {
             flown = command;
             hover_rest(&hover, vertical, spinning(), dt, have_baro ? &baro : NULL);
+            guard.failsafe = FAILSAFE_OFF;
         }
         uint32_t duration = esp_timer_get_time() - started;
         if (recording) capture(now, raw, duration);
@@ -1021,6 +1033,7 @@ void flight_runtime_command_stop(uint32_t sequence) {
 void flight_runtime_status(Status *status) {
     portENTER_CRITICAL(&lock);
     State copy = state;
+    int guarded = guard.failsafe | guard.far << 2 | guard.stopped << 3;
     float target[] = {command.target_roll * DEG, command.target_pitch * DEG, command.target_yaw * DEG, command.base};
     bool recording = log_active;
     uint32_t samples = log_samples, dropped = log_dropped;
@@ -1028,7 +1041,7 @@ void flight_runtime_status(Status *status) {
     Attitude pose = relative_attitude(&copy);
     bool fresh = copy.online && esp_timer_get_time() - copy.sample_us < 100000;
     status->flags = fresh | (copy.calibration_left > 0 || copy.calibration_ready) << 1 | copy.calibrated << 2 | copy.enabled << 3 |
-                    recording << 4 | copy.latched << 6;
+                    recording << 4 | copy.latched << 6 | guarded << 8;
     status->reason = copy.reason;
     for (int i = 0; i < 3; i++) {
         status->accel[i] = copy.accel[i];
