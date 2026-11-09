@@ -91,7 +91,8 @@ def static(job):
     p, _ = outdoor_plant(airframe, 0.0, seed, True, True, settings.get("hover_climb", 1.0))
     # Air blowing toward the tail (world -x, the nose at engagement facing it) is a forward airspeed.
     p |= {"wind_mean": (-airspeed, 0.0), "wind": 0.0, "wind_vertical": 0.0, "disturbances": [], "gps": GPS | {"velocity_noise": 0.0, "vertical_noise": 0.0, "position_noise": 0.0, "heading": 0.0}}
-    s = dict(settings) | {"hover_camera": 0, "hover_center": 0, "hover_gps_heading": 0.0}
+    # The hold steers by the GPS only once its heading is pinned (79fa5b2), which a drone held still in a steady wind may never do: the calibration pulses pin it.
+    s = dict(settings) | {"hover_camera": 0, "hover_center": 0, "hover_gps_heading": 0.0, "hover_gps_calibrate": settings.get("hover_gps_calibrate") or 5.0}
     log = []
     result = run(s, p, seconds=seconds, seed=seed, log=log, hover=True)
     if not result["stable"]:
