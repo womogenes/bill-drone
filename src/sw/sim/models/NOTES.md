@@ -423,3 +423,19 @@ At 2 m/s commanded the speed peaks at 3.2-3.4 m/s (it overshoots to 2.9 and sett
 **Smaller:** hover.py now asserts that flight.py HOVER_GAINS is the number of HoverGains members (adding return_speed shifted every Command field after the gains without an error until the count was fixed). The preflight's 'Outdoor hold' row asks for hover_thrust_direction, hover_kd, hover_gps_calibrate and hover_return_speed. The pre-mortem's "left motor trend" was wrong: it is a step that coincides with the hardware changes, nothing for software.
 
 **Not flown.** After the flash hover_gps_calibrate 5 and hover_return_speed 1 come by default; hover_thrust_direction 0.8 and hover_kd 1.5 (stored 2.5) have to be set.
+
+## Landing tip-overs on the tray: no touchdown strategy, the base's front edge (2026-11-09)
+
+Every landing of 2026-11-09 ended tipped at least 20 degrees (15 nose-down, 3 nose-up). The question was whether hover.c could stop it. landing_test.py --outdoor --tray lands on the base as built (sweep.TRAY_FEET: the battery tray's underside 73.5 mm below the CoM, its front edge 27.5 mm ahead and its rear 54.5 mm behind, resting 4 degrees nose-down; plus nose, tail and arm points placed so a tipped drone rests as recorded) on a soft floor sloping up to 3 degrees, with the gyro clipping at 250 degrees/s. landing_tipovers_2026-11-09.png has every bar.
+
+**Against the recordings:** replaying the 16 recorded contact states 15 tip (16 recorded), the direction right in 12 of 13, ending at 40-60 degrees of pitch against 42-57, 30 degrees reached in 0.06-0.46 s against 0.07-0.36. Whole flights on the firmware as flown (b7d4639): 190 of 228 tip. The floor's stiffness is not pinned (800 to 20000 N/m a contact point each reproduce 14-15 of the 16), so the comparisons ran on 800 and on 5000.
+
+**The code as is** (dacbb29, bdfda69, ef302dd, 6a3837c, unflown): cuts in the air 21 to 0, contact speed median 0.88 to 0.42 m/s, tip-overs 83% to 72% (156 of 218; 68% on the stiffer floor). In wind 0-1 m/s 78% to 55%.
+
+**Touchdown strategies on top, 240 same seeds each, wind 0-3 m/s** (tipped on the 800 floor, then the 5000): descend at 0.2 m/s 71%, 67%; at 0.1 m/s 65%, 68%; wait until under 0.15 m/s over the ground 72%, 66%; that with twice the velocity damping 68%, 68%; arrive moving back 0.1 m/s 66%, 68%; arrive 4 degrees nose-down 77%; keep flying on the ground holding the resting attitude 76%, 79%, or pushing against the tip 75%, 78%; wait, damping, back and 0.2 m/s together 67%, 64%, with 3-4 touchdowns in the air. None is better than the code as is beyond the noise (same-seed sign tests 0.07-0.21 on one floor, nothing on the other); flying on is worse (9 saved, 34 newly tipped on the stiffer floor). A cut on the pitch or roll rate in the landed branch changes nothing: the jolt cut ends 97% of landings within 2-3 ticks of contact.
+
+**Why:** the drone tips forward past 20-22 degrees of static tilt, and stays up only arriving between -0.2 and +0.05 m/s forward over the ground, within 6 degrees of its resting attitude and under 0.4 m/s down. 7-8% of landings arrive there (the hold's speed over the ground at contact is 0.2 m/s median, 1.2-1.6 at the 90th percentile), and 12 of 66 of those tip anyway.
+
+**The base, same code:** the front edge 54.5 mm ahead of the CoM (as far as the rear is behind) tips 28% (64 of 227; 37% on the stiffer floor), in wind 0-1 m/s 9% and 16%, and of quiet touchdowns 1 of 38 against 15 of 37 as built. Resting level with the front edge where it is: 53-59%.
+
+**Inferred, not measured:** the CoM 14.5 mm above the tilt axis, the doubled pitch inertia, the floor (stiffness, slope), thrust on the ground, and anything slower than 0.4 m/s at contact, which has never been flown outdoors.
