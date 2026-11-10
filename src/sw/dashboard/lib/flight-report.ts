@@ -1,7 +1,10 @@
 // A recorded flight (src/sw/recordings/<UTC start>_<session>.bin and .jsonl, written by src/fw/controller/bridge.py) decoded and summarized for the post-flight report. The decoding follows src/fw/controller/log_format.py and src/sw/flight_log.py read_flight.
 
+import { distance } from '@/lib/gps';
+import { rotorTilt } from '@/lib/telemetry';
+
 // Each FLG1 batch: magic, session, record count, record size (log_format.py HEADER_FORMAT "<4sIHH").
-const HEADER_SIZE = 12;
+export const HEADER_SIZE = 12;
 // The record sizes log_format.py FORMATS knows: the 48-byte base record, plus the hover state (80), plus the barometer (84), plus the guards' word (86: fly-away failsafe phase and pattern stop, fw/drone/main/guard.h), plus the Kalman filter's estimate (108, fw/drone/main/ekf.h; the report does not read it yet).
 const BASE_SIZE = 48;
 const HOVER_SIZE = 80;
@@ -63,11 +66,10 @@ type CommandEvent = {
   nudge?: number[];
 };
 
-// One recording in the list: its file stem, start (from the name), size and length estimated from the size (84-byte records at 100 Hz, batches of up to 5 with a 12-byte header).
+// One recording in the list: its file stem, start (from the name) and length (estimateSeconds).
 export type RecordingEntry = {
   name: string;
   started: string;
-  bytes: number;
   seconds: number;
 };
 
@@ -147,8 +149,6 @@ export function estimateSeconds(bytes: number, header: Uint8Array) {
   return bytes / (((size || RECORD_SIZE) + HEADER_SIZE / 4) * RATE_HZ);
 }
 
-export const RECORDING_HEADER_SIZE = HEADER_SIZE;
-
 function round(value: number, digits: number) {
   if (!Number.isFinite(value)) return null;
   const scale = 10 ** digits;
@@ -175,21 +175,6 @@ function spread(values: ArrayLike<number>, from: number, to: number) {
   if (count < 2) return NaN;
   const mean = sum / count;
   return Math.sqrt(Math.max(0, squares / count - mean * mean));
-}
-
-// Metres between two fixes: flat over a flight's few hundred metres.
-function distance(
-  a: { latitude: number; longitude: number },
-  b: { latitude: number; longitude: number }
-) {
-  const radians = Math.PI / 180;
-  const east =
-    (b.longitude - a.longitude) *
-    radians *
-    6_371_000 *
-    Math.cos(a.latitude * radians);
-  const north = (b.latitude - a.latitude) * radians * 6_371_000;
-  return Math.hypot(east, north);
 }
 
 // The second-order Butterworth band-pass scipy's butter(2, band, btype="band") designs, as two sections [gain, pole radius², 2 × pole real part], each (1 - z⁻²) over (1 - 2 Re z⁻¹ + |p|² z⁻²): the low-pass prototype's poles moved to the band and through the bilinear transform.
@@ -311,7 +296,9 @@ function decodeRecords(bin: Uint8Array, session: number) {
     if (
       magic !== 'FLG1' ||
       batchSession !== session ||
-      ![BASE_SIZE, HOVER_SIZE, BARO_SIZE, GUARD_SIZE, RECORD_SIZE].includes(size) ||
+      ![BASE_SIZE, HOVER_SIZE, BARO_SIZE, GUARD_SIZE, RECORD_SIZE].includes(
+        size
+      ) ||
       count < 1 ||
       count > MAX_BATCH
     )
@@ -406,11 +393,12 @@ export function analyzeFlight(
     roll[index] = int16(22) / 100;
     pitch[index] = int16(24) / 100;
     throttle[index] = uint16(26) + uint16(28);
-    servoTilt[index] =
-      (int16(30) / 100 -
-        (settings.left_trim ?? 0) -
-        (int16(32) / 100 - (settings.right_trim ?? 0))) /
-      2;
+    servoTilt[index] = rotorTilt(
+      int16(30) / 100,
+      int16(32) / 100,
+      settings.left_trim ?? 0,
+      settings.right_trim ?? 0
+    );
     rollTarget[index] = int16(34) / 100;
     pitchTarget[index] = int16(36) / 100;
     base[index] = uint16(40);

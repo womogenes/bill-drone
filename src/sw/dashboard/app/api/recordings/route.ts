@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import {
   analyzeFlight,
   estimateSeconds,
-  RECORDING_HEADER_SIZE,
+  HEADER_SIZE,
   recordingStart,
   type RecordingEntry,
 } from '@/lib/flight-report';
@@ -32,14 +32,14 @@ export async function GET(request: Request) {
         const started = recordingStart(stem);
         if (!file.endsWith('.bin') || !started || !stems.has(stem)) continue;
         const handle = await open(resolve(RECORDINGS, file));
-        const header = new Uint8Array(RECORDING_HEADER_SIZE);
+        const header = new Uint8Array(HEADER_SIZE);
         const [{ size }, { bytesRead }] = await Promise.all([
           handle.stat(),
-          handle.read(header, 0, RECORDING_HEADER_SIZE, 0),
+          handle.read(header, 0, HEADER_SIZE, 0),
         ]).finally(() => handle.close());
         const seconds = estimateSeconds(size, header.subarray(0, bytesRead));
         if (seconds >= SHORTEST_S)
-          entries.push({ name: stem, started, bytes: size, seconds });
+          entries.push({ name: stem, started, seconds });
       }
       entries.sort((a, b) => b.started.localeCompare(a.started));
       return Response.json(entries, {

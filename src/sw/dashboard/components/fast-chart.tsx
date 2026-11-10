@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export type ChartSeries<T> = {
   label: string;
@@ -9,6 +9,30 @@ export type ChartSeries<T> = {
   dash?: number[];
   value: (point: T) => number | null;
 };
+
+// The dash of a target's line, in the hue of the value it is the target of.
+export const DASH = [4, 3];
+
+export const sampleTime = (point: { time: number }) => point.time;
+
+// A live trace breaks where the drone link was made again (a new session) or samples stopped for longer than maxGap (ms).
+export function sessionGap(maxGap = 1000) {
+  return (
+    previous: { time: number; session: number },
+    next: { time: number; session: number }
+  ) => previous.session !== next.session || next.time - previous.time > maxGap;
+}
+
+// A live chart's right edge: the latest sample, or this laptop's clock once the link is down, so the trace scrolls away instead of standing still.
+export function useChartEnd(connected: boolean, latest: number) {
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    if (connected) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [connected]);
+  return Math.max(now, latest);
+}
 
 export function FastChart<T>({
   history,

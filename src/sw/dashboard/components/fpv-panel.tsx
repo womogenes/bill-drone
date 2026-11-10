@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { typing } from '@/components/control-panel';
 import { Input } from '@/components/ui/input';
-import { readParts } from '@/lib/multipart';
+import { typing } from '@/lib/keys';
+import { parseTag, readParts, type PreviewTag } from '@/lib/multipart';
 
 const HOST_KEY = 'camera-host';
 // FPV frames go on screen this long after the earliest any frame could have, by their capture time, so the link's jitter up to it does not show.
@@ -25,34 +25,10 @@ function save(key: string, value: string) {
   } catch {}
 }
 
-// Rendered in the browser only (the page loads it without server rendering), so the saved address is there from the start. Always streams, by the drone's hover_camera setting: the tracking preview (the flow's 80x60 reduction, tracking undisturbed, over the camera's network) or FPV, the camera's own 480x320 video over the radio to the FPV receiver or over its network, during which it does not track the tag, so camera hover has no sightings; it resumes tracking 3 s after FPV ends.
-// A preview frame's tag (X-Tag): the corners in the camera's 320x240 pixels and the tag centre in the camera frame (m; right, down, forward).
-export type PreviewTag = {
-  valid: boolean;
-  corners: [number, number][];
-  position: [number, number, number];
-};
-
-function parseTag(header: string): PreviewTag | null {
-  const match = /X-Tag: *(valid|tracked) ([^\r\n]+)/i.exec(header);
-  if (!match) return null;
-  const parts = match[2].trim().split(/\s+/);
-  const corners = parts
-    .slice(0, 4)
-    .map((pair) => pair.split(',').map(Number) as [number, number]);
-  const position = (parts[4] ?? '').split(',').map(Number);
-  if (corners.some((c) => c.some(Number.isNaN)) || position.length !== 3)
-    return null;
-  return {
-    valid: match[1].toLowerCase() === 'valid',
-    corners,
-    position: position as [number, number, number],
-  };
-}
-
 // The camera's own state through the drone (running, fpv, stalled or stopped) and the FPV frame rate, or null while it does not answer.
 export type CameraStatus = { state: string; fps?: number } | null;
 
+// Rendered in the browser only (the page loads it without server rendering), so the saved address is there from the start. Always streams, by the drone's hover_camera setting: the tracking preview (the flow's 80x60 reduction, tracking undisturbed, over the camera's network) or FPV, the camera's own 480x320 video over the radio to the FPV receiver or over its network, during which it does not track the tag, so camera hover has no sightings; it resumes tracking 3 s after FPV ends.
 export function FpvPanel({
   free,
   onFree,

@@ -1,30 +1,12 @@
 'use client';
 
-import { memo, useEffect, useState } from 'react';
-import { clock } from '@/components/flight-report';
-import type { FlightReport } from '@/lib/flight-report';
+import { memo } from 'react';
+import { clock } from '@/lib/format';
+import { useFlightReport } from '@/hooks/use-flight-report';
 
 // The flight that just ended, from its recording once the bridge has closed it (stop record written): how it ended and what went wrong, with the full report in its own tab so this one keeps the drone link.
 export const LastFlight = memo(function LastFlight({ name }: { name: string }) {
-  const [report, setReport] = useState<FlightReport | null>(null);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch(`/api/recordings?name=${encodeURIComponent(name)}`, {
-      signal: controller.signal,
-    })
-      .then((response) => response.json())
-      .then((value) => {
-        if (value.error) throw new Error(value.error);
-        setReport(value);
-        setError('');
-      })
-      .catch((failure: Error) => {
-        if (!controller.signal.aborted) setError(failure.message);
-      });
-    return () => controller.abort();
-  }, [name]);
-  const shown = report?.name === name ? report : null;
+  const { report: shown, error } = useFlightReport(name);
   return (
     <section
       className="space-y-2 px-4 py-3"

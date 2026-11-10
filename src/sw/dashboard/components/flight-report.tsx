@@ -3,7 +3,12 @@
 import { useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { TriangleAlert } from 'lucide-react';
-import { FastChart, type ChartSeries } from '@/components/fast-chart';
+import {
+  DASH,
+  FastChart,
+  sampleTime,
+  type ChartSeries,
+} from '@/components/fast-chart';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -14,7 +19,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import type { FlightReport, FlightTrackPoint } from '@/lib/flight-report';
+import type {
+  FlightReport,
+  FlightTrackPoint,
+  HandsOffSpan,
+} from '@/lib/flight-report';
+import { clock } from '@/lib/format';
+import { distance } from '@/lib/gps';
 import type { GpsSample } from '@/lib/telemetry';
 
 // Leaflet needs the browser's window as it loads.
@@ -35,7 +46,6 @@ type Point = {
   shake: number | null;
 };
 
-const DASH = [4, 3];
 // One hue per quantity, its target dashed in the same hue: blue is the measured value, orange the second axis (pitch), and the barometer recedes in gray.
 const BLUE = 'var(--color-blue-700)';
 const ORANGE = 'var(--color-orange-600)';
@@ -83,21 +93,12 @@ const shakeSeries: ChartSeries<Point>[] = [
 const speedSeries: ChartSeries<FlightTrackPoint>[] = [
   { label: 'Ground speed', color: BLUE, value: (point) => point.speed },
 ];
-const time = (point: { time: number }) => point.time;
 // GPS fixes come at 10 Hz: a longer silence is a lost link or fix, not a line to draw across.
 const fixGap = (previous: FlightTrackPoint, next: FlightTrackPoint) =>
   next.time - previous.time > 1;
 
-export function clock(seconds: number) {
-  const whole = Math.max(0, Math.round(seconds));
-  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
-}
-
-const formatTime = (value: number) => clock(value);
-const metres = (value: number) => value.toFixed(1);
-const degrees = (value: number) => value.toFixed(0);
-const rate = (value: number) => value.toFixed(0);
-const speed = (value: number) => value.toFixed(1);
+const tenths = (value: number) => value.toFixed(1);
+const whole = (value: number) => value.toFixed(0);
 
 function fixed(value: number | null | undefined, digits: number, unit: string) {
   return value === null || value === undefined
@@ -112,16 +113,21 @@ function windText(value: number | null) {
     : `${Math.abs(value).toFixed(1)} m/s ${value < 0 ? 'head' : 'tail'}`;
 }
 
-// The start in this laptop's local time, which is how flights are named.
-export function startTime(iso: string) {
-  return new Date(iso).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
+// The hands-off table: each column's heading and its text for a span.
+const SPAN_COLUMNS: [string, (span: HandsOffSpan) => string][] = [
+  [
+    'Span',
+    (span) =>
+      `${clock(span.start)}–${clock(span.end)} (${(span.end - span.start).toFixed(0)} s)`,
+  ],
+  ['Pitch sd', (span) => fixed(span.pitch_sd, 1, '°')],
+  ['Roll sd', (span) => fixed(span.roll_sd, 1, '°')],
+  ['Height sd', (span) => fixed(span.height_sd, 2, 'm')],
+  ['Baro range', (span) => fixed(span.baro_range, 2, 'm')],
+  ['Drift', (span) => fixed(span.drift_m, 1, 'm')],
+  ['Furthest', (span) => fixed(span.wander_m, 1, 'm')],
+  ['Wind', (span) => windText(span.wind)],
+];
 
 function Swatch({ color, dash }: { color: string; dash?: number[] }) {
   return (
@@ -184,11 +190,11 @@ function Chart<T extends { time: number }>({
       <FastChart
         history={history}
         series={series}
-        time={time}
+        time={sampleTime}
         start={start}
         end={end}
         gap={gap}
-        formatTime={formatTime}
+        formatTime={clock}
         formatValue={format}
         minSpan={minSpan}
         label={title}
@@ -227,19 +233,7 @@ export function FlightReportView({ report }: { report: FlightReport }) {
   const [lift] = report.airborne ?? [0];
   const home = fixes.find((fix) => fix.time >= lift * 1000) ?? fixes[0];
   const furthest = home
-    ? Math.max(
-        0,
-        ...fixes.map((fix) => {
-          const radians = Math.PI / 180;
-          const east =
-            (fix.longitude - home.longitude) *
-            radians *
-            6_371_000 *
-            Math.cos(home.latitude * radians);
-          const north = (fix.latitude - home.latitude) * radians * 6_371_000;
-          return Math.hypot(east, north);
-        })
-      )
+    ? Math.max(0, ...fixes.map((fix) => distance(home, fix)))
     : null;
   const total = Math.max(report.duration, report.series.time.at(-1) ?? 0, 1);
   // The charts show the flight itself: a second before liftoff to just after the motors stop, so the tumble after the cut doesn't set the scales.
@@ -280,7 +274,13 @@ export function FlightReportView({ report }: { report: FlightReport }) {
           ))}
         </dl>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Badge variant={stopped === 'Landed' ? 'outline' : 'destructive'}>
+          <Badge
+            variant={
+              stopped === 'Landed' || stopped === 'Disarmed'
+                ? 'outline'
+                : 'destructive'
+            }
+          >
             {stopped}
           </Badge>
           <Badge variant="outline">
@@ -321,7 +321,7 @@ export function FlightReportView({ report }: { report: FlightReport }) {
             series={heightSeries}
             start={chartStart}
             end={chartEnd}
-            format={metres}
+            format={tenths}
             minSpan={0.5}
           />
           <Chart
@@ -331,7 +331,7 @@ export function FlightReportView({ report }: { report: FlightReport }) {
             series={attitudeSeries}
             start={chartStart}
             end={chartEnd}
-            format={degrees}
+            format={whole}
             minSpan={4}
           />
           <Chart
@@ -341,7 +341,7 @@ export function FlightReportView({ report }: { report: FlightReport }) {
             series={shakeSeries}
             start={chartStart}
             end={chartEnd}
-            format={rate}
+            format={whole}
             minSpan={5}
           />
           <Chart
@@ -351,7 +351,7 @@ export function FlightReportView({ report }: { report: FlightReport }) {
             series={speedSeries}
             start={chartStart}
             end={chartEnd}
-            format={speed}
+            format={tenths}
             minSpan={1}
             gap={fixGap}
           />
@@ -369,10 +369,6 @@ export function FlightReportView({ report }: { report: FlightReport }) {
               fill
               heading={false}
               minSpan={6}
-              summary={[
-                ['Furthest from takeoff', fixed(furthest, 1, 'm')],
-                ['Top speed', fixed(report.top_speed, 1, 'm/s')],
-              ]}
             />
           )}
           <section
@@ -386,44 +382,21 @@ export function FlightReportView({ report }: { report: FlightReport }) {
               <Table className="tabular-nums">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="h-8">Span</TableHead>
-                    <TableHead className="h-8">Pitch sd</TableHead>
-                    <TableHead className="h-8">Roll sd</TableHead>
-                    <TableHead className="h-8">Height sd</TableHead>
-                    <TableHead className="h-8">Baro range</TableHead>
-                    <TableHead className="h-8">Drift</TableHead>
-                    <TableHead className="h-8">Furthest</TableHead>
-                    <TableHead className="h-8">Wind</TableHead>
+                    {SPAN_COLUMNS.map(([title]) => (
+                      <TableHead key={title} className="h-8">
+                        {title}
+                      </TableHead>
+                    ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {report.spans.map((span) => (
                     <TableRow key={span.start}>
-                      <TableCell className="py-1">
-                        {clock(span.start)}–{clock(span.end)} (
-                        {(span.end - span.start).toFixed(0)} s)
-                      </TableCell>
-                      <TableCell className="py-1">
-                        {fixed(span.pitch_sd, 1, '°')}
-                      </TableCell>
-                      <TableCell className="py-1">
-                        {fixed(span.roll_sd, 1, '°')}
-                      </TableCell>
-                      <TableCell className="py-1">
-                        {fixed(span.height_sd, 2, 'm')}
-                      </TableCell>
-                      <TableCell className="py-1">
-                        {fixed(span.baro_range, 2, 'm')}
-                      </TableCell>
-                      <TableCell className="py-1">
-                        {fixed(span.drift_m, 1, 'm')}
-                      </TableCell>
-                      <TableCell className="py-1">
-                        {fixed(span.wander_m, 1, 'm')}
-                      </TableCell>
-                      <TableCell className="py-1">
-                        {windText(span.wind)}
-                      </TableCell>
+                      {SPAN_COLUMNS.map(([title, text]) => (
+                        <TableCell key={title} className="py-1">
+                          {text(span)}
+                        </TableCell>
+                      ))}
                     </TableRow>
                   ))}
                 </TableBody>

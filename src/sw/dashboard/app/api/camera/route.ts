@@ -4,6 +4,7 @@ import { closeSync, constants, existsSync, openSync, writeSync } from 'node:fs';
 import tty from 'node:tty';
 import { resolve } from 'node:path';
 import { decode } from '@/lib/fec';
+import { indexOf } from '@/lib/multipart';
 
 export const runtime = 'nodejs';
 
@@ -13,15 +14,6 @@ function cameraUrl(host: string, path: string) {
   const url = new URL(`http://${host}${path}`);
   if (path.startsWith('/stream')) url.port = String(Number(url.port || 80) + 1);
   return url;
-}
-
-function indexOf(bytes: Uint8Array, pattern: number[], from = 0) {
-  outer: for (let i = from; i <= bytes.length - pattern.length; i++) {
-    for (let j = 0; j < pattern.length; j++)
-      if (bytes[i + j] !== pattern[j]) continue outer;
-    return i;
-  }
-  return -1;
 }
 
 // The camera's stream server handles one connection at a time, so every viewer of a host shares one upstream stream, which reconnects whenever it goes quiet. Viewers get whole parts, so they can join at any time.
@@ -47,6 +39,15 @@ function closeHub(hub: Hub) {
     try {
       viewer.close();
     } catch {}
+}
+
+// A viewer that falls behind skips parts rather than queueing them.
+function send(hub: Hub, part: Uint8Array) {
+  for (const viewer of hub.viewers)
+    if ((viewer.desiredSize ?? 1) > 0)
+      try {
+        viewer.enqueue(part);
+      } catch {}
 }
 
 async function runHub(hub: Hub, url: URL) {
@@ -89,12 +90,7 @@ async function runHub(hub: Hub, url: URL) {
           const part = buffer.slice(0, end);
           buffer = buffer.slice(end);
           backoff = 250;
-          // A viewer that falls behind skips parts rather than queueing them.
-          for (const viewer of hub.viewers)
-            if ((viewer.desiredSize ?? 1) > 0)
-              try {
-                viewer.enqueue(part);
-              } catch {}
+          send(hub, part);
         }
       }
     } catch {}
@@ -106,7 +102,7 @@ async function runHub(hub: Hub, url: URL) {
 
 // FPV shards (fw/esp32cam/src/fpv.h) carry a 20-byte header (FPV2, frame number, shard index, shard count, data shards, the JPEG's length, capture and send times); any data of a frame's shards rebuild it (lib/fec.ts). With the receiver plugged in they arrive on its port as [length u16][rssi i8][chunk] at 1 Mbaud, or from the monitor-mode adapter as UDP datagrams, while a K V request every 500 ms keeps the camera sending over the radio; otherwise over UDP, kept coming by "FPVW" to the camera's port 5601. A frame still short of shards when a newer one starts is dropped.
 // op: V for FPV, P for tag mode's preview over the radio (tracking on).
-// A tag-mode preview frame ends in its tag (fw/esp32cam/src/web.h PreviewTag, 52 bytes: "TAGP", the state, three spare bytes, the four corners in 320x240 pixels and the tag centre in the camera frame in metres, little-endian floats), passed on as the X-Tag header the camera's own stream uses ("none", or "valid"/"tracked", the corners as x,y and the position as x,y,z).
+// A tag-mode preview frame ends in its tag (fw/esp32cam/src/web.h PreviewTag, 52 bytes: "TAGP", the state, three spare bytes, the four corners in 320x240 pixels and the tag center in the camera frame in meters, little-endian floats), passed on as the X-Tag header the camera's own stream uses ("none", or "valid"/"tracked", the corners as x,y and the position as x,y,z).
 const PREVIEW_TAG_BYTES = 52;
 function splitTag(frame: Buffer) {
   const at = frame.length - PREVIEW_TAG_BYTES;
@@ -162,11 +158,7 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
         Buffer.from('\r\n'),
       ])
     );
-    for (const viewer of hub.viewers)
-      if ((viewer.desiredSize ?? 1) > 0)
-        try {
-          viewer.enqueue(part);
-        } catch {}
+    send(hub, part);
   };
   let keepalive: () => void;
   let close: () => void;
@@ -309,7 +301,6 @@ a[6][termios.VMIN], a[6][termios.VTIME] = 1, 0
 termios.tcflush(fd, termios.TCIOFLUSH)
 termios.tcsetattr(fd, termios.TCSANOW, a)
 termios.tcflow(fd, termios.TCOON)`;
-// chunks: every one heard, for the status.
 // copies: every chunk copy heard, chunks: the first of each, signal: the monitor's last (dBm), for the status.
 // choose: takes only this camera's shards from now on (its MAC, as K N reports it).
 type Receiver = {

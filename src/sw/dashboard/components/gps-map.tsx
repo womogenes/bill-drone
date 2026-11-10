@@ -3,7 +3,7 @@
 import 'leaflet/dist/leaflet.css';
 import * as L from 'leaflet';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { gpsSolved } from '@/components/gps-panel';
+import { gpsSolved, local } from '@/lib/gps';
 import type {
   GpsFix,
   GpsReading,
@@ -24,7 +24,6 @@ const MIN_SPAN = 20;
 const TRAIL_GAP_MS = 2000;
 // Drawn points per trail: the history holds minutes at the GPS's 10 Hz.
 const TRAIL_POINTS = 600;
-const EARTH_RADIUS = 6_371_000;
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 const WIDTH = 400;
 const HEIGHT = 300;
@@ -39,20 +38,26 @@ const SPEEDS = [
     below: 0.5,
     label: '< 0.5',
     className: 'stroke-blue-700 dark:stroke-blue-400',
+    swatch: 'bg-blue-700 dark:bg-blue-400',
   },
   {
     below: 1,
     label: '0.5–1',
     className: 'stroke-green-600 dark:stroke-green-500',
+    swatch: 'bg-green-600 dark:bg-green-500',
   },
-  { below: 2, label: '1–2', className: 'stroke-amber-500' },
-  { below: Infinity, label: '> 2 m/s', className: 'stroke-red-600' },
-];
-const SWATCHES = [
-  'bg-blue-700 dark:bg-blue-400',
-  'bg-green-600 dark:bg-green-500',
-  'bg-amber-500',
-  'bg-red-600',
+  {
+    below: 2,
+    label: '1–2',
+    className: 'stroke-amber-500',
+    swatch: 'bg-amber-500',
+  },
+  {
+    below: Infinity,
+    label: '> 2 m/s',
+    className: 'stroke-red-600',
+    swatch: 'bg-red-600',
+  },
 ];
 
 function speedBand(sample: GpsSample) {
@@ -69,18 +74,6 @@ function runs(stretch: GpsSample[]) {
     result.at(-1)!.samples.push(sample);
   });
   return result;
-}
-
-// Metres east and north of origin: flat over a flight's few hundred metres.
-function local(origin: GpsFix, point: GpsFix): [number, number] {
-  const radians = Math.PI / 180;
-  return [
-    (point.longitude - origin.longitude) *
-      radians *
-      EARTH_RADIUS *
-      Math.cos(origin.latitude * radians),
-    (point.latitude - origin.latitude) * radians * EARTH_RADIUS,
-  ];
 }
 
 // The trail thinned to at most TRAIL_POINTS, split where fixes stopped coming.
@@ -114,7 +107,6 @@ export const GpsMap = memo(function GpsMap({
   history,
   hover,
   title = 'Position',
-  summary,
   fill = false,
   minSpan = MIN_SPAN,
   heading = true,
@@ -125,11 +117,9 @@ export const GpsMap = memo(function GpsMap({
   history: (start: number, end: number) => GpsSample[];
   hover: HoverSample | null;
   title?: string;
-  // Rows in place of the live distance and height, for a recorded flight.
-  summary?: [string, string][];
   // Take the height it is given instead of a 4:3 box, so a report fits one screen.
   fill?: boolean;
-  // The smallest view around the start (m): a report zooms to a hop's few metres.
+  // The smallest view around the start (m): a report zooms to a hop's few meters.
   minSpan?: number;
   // The title and the distance and height rows; a report shows its own.
   heading?: boolean;
@@ -139,6 +129,7 @@ export const GpsMap = memo(function GpsMap({
     () => (latest ? stretches(history(0, latest.time)) : []),
     [history, latest]
   );
+  const pieces = useMemo(() => trail.flatMap(runs), [trail]);
   const fix = gpsSolved(gps) ? latest : undefined;
   // The last connection's track, if this one has no fix yet.
   const origin = home ?? trail.at(-1)?.at(-1);
@@ -226,7 +217,6 @@ export const GpsMap = memo(function GpsMap({
     const map = layers.current;
     if (!map) return;
     const { view } = map;
-    const pieces = trail.flatMap(runs);
     map.trails.forEach((line, band) =>
       line.setLatLngs(
         pieces
@@ -281,11 +271,11 @@ export const GpsMap = memo(function GpsMap({
       });
       map.placed = true;
     }
-  }, [trail, fix, home, origin, minSpan]);
+  }, [trail, pieces, fix, home, origin, minSpan]);
 
-  // The local plot: metres from the takeoff point, north up, equal scale.
+  // The local plot: meters from the takeoff point, north up, equal scale.
   const points = origin
-    ? trail.flatMap(runs).map(({ band, samples }) => ({
+    ? pieces.map(({ band, samples }) => ({
         band,
         points: samples.map((sample) => local(origin, sample)),
       }))
@@ -350,22 +340,20 @@ export const GpsMap = memo(function GpsMap({
       <dl
         className={`grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums ${heading ? '' : 'hidden'}`}
       >
-        {(
-          summary ?? [
-            [
-              'From takeoff',
-              distance === null || bearing === null
-                ? '—'
-                : `${distance.toFixed(1)} m ${COMPASS[Math.round((bearing * 4) / Math.PI + 8) % 8]}`,
-            ],
-            [
-              'Height',
-              hover
-                ? `${hover.height.toFixed(2)} / ${hover.height_target.toFixed(2)} m`
-                : '—',
-            ],
-          ]
-        ).map(([label, value]) => (
+        {[
+          [
+            'From takeoff',
+            distance === null || bearing === null
+              ? '—'
+              : `${distance.toFixed(1)} m ${COMPASS[Math.round((bearing * 4) / Math.PI + 8) % 8]}`,
+          ],
+          [
+            'Height',
+            hover
+              ? `${hover.height.toFixed(2)} / ${hover.height_target.toFixed(2)} m`
+              : '—',
+          ],
+        ].map(([label, value]) => (
           <div key={label} className="contents">
             <dt className="text-muted-foreground">{label}</dt>
             <dd>{value}</dd>
@@ -484,12 +472,9 @@ export const GpsMap = memo(function GpsMap({
         )}
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground tabular-nums">
-        {SPEEDS.map(({ label }, band) => (
+        {SPEEDS.map(({ label, swatch }) => (
           <span key={label} className="flex items-center gap-1.5">
-            <span
-              aria-hidden="true"
-              className={`h-0.5 w-4 ${SWATCHES[band]}`}
-            />
+            <span aria-hidden="true" className={`h-0.5 w-4 ${swatch}`} />
             {label}
           </span>
         ))}

@@ -1,6 +1,8 @@
 'use client';
 
 import { memo } from 'react';
+import { Stat } from '@/components/stat';
+import { gpsSolved } from '@/lib/gps';
 import type { BaroReading, GpsReading, GpsReport } from '@/lib/telemetry';
 
 const FIXES: Record<number, string> = {
@@ -11,20 +13,6 @@ const FIXES: Record<number, string> = {
   4: '3D + DR',
   5: 'Time only',
 };
-
-// Without a fix the module still sends its filter's placeholders (accuracy 4294967 m, a position anywhere): a position counts only from a fresh 2D or 3D fix it trusts.
-export function gpsSolved(
-  gps: GpsReading | null | undefined
-): gps is GpsReading {
-  return (
-    !!gps &&
-    gps.age_ms !== null &&
-    gps.age_ms < 1000 &&
-    gps.ok &&
-    gps.fix >= 2 &&
-    gps.fix <= 4
-  );
-}
 
 // Short names for the satellites used per system.
 const SYSTEMS: Record<string, string> = {
@@ -89,6 +77,11 @@ export const GpsPanel = memo(function GpsPanel({
     : '—';
   const jammed =
     diagnosed?.jamming === 'warning' || diagnosed?.jamming === 'critical';
+  // The RF report (jamming, noise, AGC) has its own age.
+  const rf =
+    diagnosed?.rf_age_ms != null && diagnosed.rf_age_ms < 3000
+      ? diagnosed
+      : null;
   const unconfigured = diagnosed
     ? Object.entries(diagnosed.config)
         .filter(([, state]) => state === 'refused' || state === 'unanswered')
@@ -100,109 +93,81 @@ export const GpsPanel = memo(function GpsPanel({
         GPS
       </h2>
       <dl className="grid grid-cols-3 gap-4 tabular-nums">
-        <div>
-          <dt className="text-sm text-muted-foreground">Fix</dt>
-          <dd
-            className={
-              live && gps.ok
-                ? 'text-green-700'
-                : connected && gps
-                  ? 'text-red-700'
-                  : ''
-            }
-          >
-            {state}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-sm text-muted-foreground">Satellites</dt>
-          <dd>{live ? gps.satellites : '—'}</dd>
-        </div>
-        <div>
-          <dt className="text-sm text-muted-foreground">Accuracy</dt>
-          <dd>
-            {solved
-              ? `${gps.horizontal_accuracy.toFixed(1)} / ${gps.vertical_accuracy.toFixed(1)} m`
-              : '—'}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-sm text-muted-foreground">Ground speed</dt>
-          <dd>
-            {solved && speed !== undefined
-              ? `${speed.toFixed(2)} ± ${gps.speed_accuracy.toFixed(2)} m/s`
-              : '—'}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-sm text-muted-foreground">Climb</dt>
-          <dd>{solved ? `${(-gps.velocity[2]).toFixed(2)} m/s` : '—'}</dd>
-        </div>
-        <div>
-          <dt className="text-sm text-muted-foreground">Altitude</dt>
-          <dd>{solved ? `${gps.height.toFixed(1)} m` : '—'}</dd>
-        </div>
-        <div className="col-span-3">
-          <dt className="text-sm text-muted-foreground">Position</dt>
-          <dd>
-            {solved
-              ? `${gps.latitude.toFixed(7)}, ${gps.longitude.toFixed(7)}`
-              : '—'}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-sm text-muted-foreground">Signal (top 4)</dt>
-          <dd>
-            {diagnosed?.top4_cno != null
-              ? `${diagnosed.top4_cno.toFixed(1)} dB-Hz`
-              : '—'}
-          </dd>
-          {diagnosed && (
-            <dd className="text-sm text-muted-foreground">
-              {diagnosed.heard} heard of {diagnosed.listed}
-            </dd>
-          )}
-        </div>
-        <div className="col-span-2">
-          <dt className="text-sm text-muted-foreground">Used</dt>
-          <dd>{used}</dd>
-        </div>
-        <div>
-          <dt className="text-sm text-muted-foreground">Jamming</dt>
-          <dd className={jammed ? 'text-red-700' : ''}>
-            {diagnosed?.rf_age_ms != null && diagnosed.rf_age_ms < 3000
-              ? `${diagnosed.jamming} · ${diagnosed.jam_indicator}/255`
-              : '—'}
-          </dd>
-          {diagnosed?.rf_age_ms != null && diagnosed.rf_age_ms < 3000 && (
-            <dd className="text-sm text-muted-foreground">
-              noise {diagnosed.noise_per_ms}, AGC{' '}
-              {(diagnosed.agc * 100).toFixed(0)}%
-            </dd>
-          )}
-        </div>
-        <div className="col-span-2">
-          <dt className="text-sm text-muted-foreground">SBAS</dt>
-          <dd>{diagnosed ? sbasState(gps, diagnosed) : '—'}</dd>
-        </div>
+        <Stat
+          label="Fix"
+          valueClassName={
+            live && gps.ok
+              ? 'text-green-700'
+              : connected && gps
+                ? 'text-red-700'
+                : ''
+          }
+        >
+          {state}
+        </Stat>
+        <Stat label="Satellites">{live ? gps.satellites : '—'}</Stat>
+        <Stat label="Accuracy">
+          {solved
+            ? `${gps.horizontal_accuracy.toFixed(1)} / ${gps.vertical_accuracy.toFixed(1)} m`
+            : '—'}
+        </Stat>
+        <Stat label="Ground speed">
+          {solved && speed !== undefined
+            ? `${speed.toFixed(2)} ± ${gps.speed_accuracy.toFixed(2)} m/s`
+            : '—'}
+        </Stat>
+        <Stat label="Climb">
+          {solved ? `${(-gps.velocity[2]).toFixed(2)} m/s` : '—'}
+        </Stat>
+        <Stat label="Altitude">
+          {solved ? `${gps.height.toFixed(1)} m` : '—'}
+        </Stat>
+        <Stat label="Position" className="col-span-3">
+          {solved
+            ? `${gps.latitude.toFixed(7)}, ${gps.longitude.toFixed(7)}`
+            : '—'}
+        </Stat>
+        <Stat
+          label="Signal (top 4)"
+          note={diagnosed && `${diagnosed.heard} heard of ${diagnosed.listed}`}
+        >
+          {diagnosed?.top4_cno != null
+            ? `${diagnosed.top4_cno.toFixed(1)} dB-Hz`
+            : '—'}
+        </Stat>
+        <Stat label="Used" className="col-span-2">
+          {used}
+        </Stat>
+        <Stat
+          label="Jamming"
+          valueClassName={jammed ? 'text-red-700' : ''}
+          note={
+            rf && `noise ${rf.noise_per_ms}, AGC ${(rf.agc * 100).toFixed(0)}%`
+          }
+        >
+          {rf ? `${rf.jamming} · ${rf.jam_indicator}/255` : '—'}
+        </Stat>
+        <Stat label="SBAS" className="col-span-2">
+          {diagnosed ? sbasState(gps, diagnosed) : '—'}
+        </Stat>
         {unconfigured.length > 0 && (
-          <div className="col-span-3">
-            <dt className="text-sm text-muted-foreground">Configuration</dt>
-            <dd className="text-red-700">{unconfigured.join(', ')}</dd>
-          </div>
+          <Stat
+            label="Configuration"
+            className="col-span-3"
+            valueClassName="text-red-700"
+          >
+            {unconfigured.join(', ')}
+          </Stat>
         )}
-        <div className="col-span-3">
-          <dt className="text-sm text-muted-foreground">Barometer</dt>
-          <dd>
-            {!connected || !baro
-              ? '—'
-              : !baro.found
-                ? 'Not found'
-                : baro.altitude === null
-                  ? 'Stale'
-                  : `${baro.altitude.toFixed(1)} m pressure altitude`}
-          </dd>
-        </div>
+        <Stat label="Barometer" className="col-span-3">
+          {!connected || !baro
+            ? '—'
+            : !baro.found
+              ? 'Not found'
+              : baro.altitude === null
+                ? 'Stale'
+                : `${baro.altitude.toFixed(1)} m pressure altitude`}
+        </Stat>
       </dl>
     </section>
   );

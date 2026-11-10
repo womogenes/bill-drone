@@ -1,8 +1,6 @@
 'use client';
 
-import { FLIGHT_MODES } from '@/lib/telemetry';
-
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
   ArrowDown,
@@ -25,7 +23,17 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import type { ControlSettings, Reading } from '@/lib/telemetry';
+import { typing } from '@/lib/keys';
+import {
+  FLIGHT_MODES,
+  LAND,
+  LAND_FAST,
+  MANUAL,
+  type ControlSettings,
+  type ImuState,
+  type NumberSetting,
+  type Reading,
+} from '@/lib/telemetry';
 
 const keyIcons: Record<string, LucideIcon> = {
   ArrowUp,
@@ -37,22 +45,7 @@ const keyIcons: Record<string, LucideIcon> = {
 
 // L hands the drone its controlled landing (a steady descent, then motors off at touchdown), from hover or manual flight; holding it past LAND_FAST_MS descends faster.
 const LAND_FAST_MS = 300;
-const MANUAL = 0;
-const LAND = 2;
-const LAND_FAST = 3;
 
-// Keys typed into a field or a dialog aren't flight commands.
-export function typing(event: KeyboardEvent) {
-  return (
-    event.ctrlKey ||
-    event.metaKey ||
-    event.altKey ||
-    (event.target instanceof HTMLElement &&
-      !!event.target.closest(
-        'input, textarea, select, [contenteditable="true"], [role="dialog"]'
-      ))
-  );
-}
 // Mode 2, like the gamepad: the arrows tilt (positive pitch is nose down, so the up arrow tilts forward), and W and S climb and A and D yaw (yawKeys).
 const tiltKeys = {
   ArrowUp: { axis: 'pitch', direction: 1 },
@@ -87,8 +80,12 @@ function nudgeText([forward, left, up]: [number, number, number]) {
 // The setpoints the keys stream (the drone's targets).
 type Setpoint = 'roll' | 'pitch' | 'yaw_rate' | 'base_throttle';
 // The gains dialog's sections: each field is a drone setting; label is read within its section's title.
-type Field = { key: string; label: string; min?: number; max?: number };
-const gainSections: { title: string; needs?: string; fields: Field[] }[] = [
+type Field = { key: NumberSetting; label: string; min?: number; max?: number };
+const gainSections: {
+  title: string;
+  needs?: NumberSetting;
+  fields: Field[];
+}[] = [
   {
     title: 'Roll',
     fields: [
@@ -151,7 +148,7 @@ const gainSections: { title: string; needs?: string; fields: Field[] }[] = [
   {
     title: 'Hover on the tag',
     fields: [
-      { key: 'hover_center', label: 'Centre on tag (1 on, 0 off)', min: 0 },
+      { key: 'hover_center', label: 'Center on tag (1 on, 0 off)', min: 0 },
       {
         key: 'hover_distance',
         label: 'Distance (m, 0 = takeoff range)',
@@ -217,6 +214,12 @@ const gainSections: { title: string; needs?: string; fields: Field[] }[] = [
         min: 0,
       },
       {
+        key: 'hover_baro_tau',
+        label: 'Barometer height correction time (s, 0 off)',
+        min: 0,
+        max: 10,
+      },
+      {
         key: 'hover_gps_heading',
         label: 'Heading at takeoff (° from north)',
         min: -180,
@@ -263,18 +266,18 @@ const gainSections: { title: string; needs?: string; fields: Field[] }[] = [
     title: 'Model',
     needs: 'arm',
     fields: [
-      { key: 'pivot_height', label: 'Pivot height (m)', min: 0 },
+      { key: 'pivot_height', label: 'Pivot height (m)', min: 0.000001 },
       { key: 'com_x', label: 'CoM x (m)', min: -0.02, max: 0.02 },
-      { key: 'roll_inertia', label: 'Roll inertia (kg·m²)', min: 0 },
-      { key: 'pitch_inertia', label: 'Pitch inertia (kg·m²)', min: 0 },
-      { key: 'yaw_inertia', label: 'Yaw inertia (kg·m²)', min: 0 },
+      { key: 'roll_inertia', label: 'Roll inertia (kg·m²)', min: 0.000001 },
+      { key: 'pitch_inertia', label: 'Pitch inertia (kg·m²)', min: 0.000001 },
+      { key: 'yaw_inertia', label: 'Yaw inertia (kg·m²)', min: 0.000001 },
       {
         key: 'reaction_torque_ratio',
         label: 'Reaction torque ratio',
         min: -0.1,
         max: 0.1,
       },
-      { key: 'arm', label: 'Arm (m)', min: 0 },
+      { key: 'arm', label: 'Arm (m)', min: 0.001 },
     ],
   },
 ];
@@ -306,7 +309,7 @@ export const ControlPanel = memo(function ControlPanel({
   gpsHold: boolean;
   recorderReady: boolean;
   recorderError?: string;
-  imu: 'offline' | 'calibrating' | 'uncalibrated' | 'calibrated';
+  imu: ImuState;
   status: Reading['control_status'];
   arming: boolean;
   connected: boolean;
@@ -339,16 +342,15 @@ export const ControlPanel = memo(function ControlPanel({
   const [draft, setDraft] = useState<Partial<Record<Setpoint, number>>>({});
   const [gains, setGains] = useState<Record<string, string>>({});
   // A setting by name, undefined when this drone's firmware has none.
-  const setting = (key: string) =>
-    (settings as unknown as Record<string, number | undefined>)[key];
+  const setting = (key: NumberSetting): number | undefined => settings[key];
   const [open, setOpen] = useState(false);
   // Every key's size is a drone setting, so it can be tuned over the bridge like the rest: the arrows tilt as far as the hold itself may (hover_tilt; a per-browser step had been left at 5 degrees, too little to bring back a drifting drone, 2026-11-02), on the tag they move the hold point at hover_nudge_speed, A and D turn at hover_yaw_rate and W and S climb at hover_climb_rate.
   const keySizes = useRef({ tilt: 15, yaw: 30, climb: 0.3, move: 0.5 });
   keySizes.current = {
-    tilt: setting('hover_tilt') ?? 15,
-    yaw: setting('hover_yaw_rate') ?? 30,
-    climb: setting('hover_climb_rate') ?? 0.3,
-    move: setting('hover_nudge_speed') ?? 0.5,
+    tilt: settings.hover_tilt ?? 15,
+    yaw: settings.hover_yaw_rate ?? 30,
+    climb: settings.hover_climb_rate ?? 0.3,
+    move: settings.hover_nudge_speed ?? 0.5,
   };
   const free = settings.hover_camera === 0;
   const freeRef = useRef(free);
@@ -361,6 +363,13 @@ export const ControlPanel = memo(function ControlPanel({
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+  const setMode = useCallback(
+    (next: number) => {
+      modeRef.current = next;
+      onMode(next);
+    },
+    [onMode]
+  );
 
   useEffect(() => {
     throttle.current = draft.base_throttle ?? settings.base_throttle;
@@ -374,11 +383,6 @@ export const ControlPanel = memo(function ControlPanel({
     const nudging = new Set<string>();
     let nudgeTimer: ReturnType<typeof setInterval> | undefined;
     let landFast: ReturnType<typeof setTimeout> | undefined;
-
-    function setMode(next: number) {
-      modeRef.current = next;
-      onMode(next);
-    }
 
     function land() {
       // Manual with no collective is already on the ground.
@@ -526,7 +530,7 @@ export const ControlPanel = memo(function ControlPanel({
       window.removeEventListener('keyup', keyup);
       window.removeEventListener('blur', blur);
     };
-  }, [available, settings.enabled, open, onChange, onMode, onNudge, onStop]);
+  }, [available, settings.enabled, open, onChange, setMode, onNudge, onStop]);
 
   // H (or T) takes off once Enable has armed the drone; disarmed, it does nothing.
   useEffect(() => {
@@ -553,11 +557,6 @@ export const ControlPanel = memo(function ControlPanel({
     let sent = { ...zero };
     let was = { a: false, b: false, stop: false };
     let landSince = 0;
-
-    function setMode(next: number) {
-      modeRef.current = next;
-      onMode(next);
-    }
 
     function send(next: typeof zero) {
       const changed = Object.fromEntries(
@@ -646,7 +645,7 @@ export const ControlPanel = memo(function ControlPanel({
 
     const timer = setInterval(tick, GAMEPAD_TICK_MS);
     return () => clearInterval(timer);
-  }, [available, open, onChange, onMode, onNudge, onStop, onHover]);
+  }, [available, open, onChange, setMode, onNudge, onStop, onHover]);
 
   return (
     <section

@@ -1,4 +1,10 @@
 export const THROTTLE_MAX = 1200;
+// The drone refuses to arm under ARM_MIN_V (fw/drone/main/flight_rt.c); NO_PACK_V and below is no pack at all: USB power alone.
+export const ARM_MIN_V = 14;
+export const NO_PACK_V = 5;
+// The drone sends its status at STATUS_HZ; well under it (LINK_MIN_HZ) the radio is losing packets.
+export const STATUS_HZ = 20;
+export const LINK_MIN_HZ = 15;
 
 export type ImuReading = {
   calibrated: boolean;
@@ -10,7 +16,30 @@ export type ImuReading = {
   temperature: number;
 };
 
+export type ImuState =
+  'offline' | 'calibrating' | 'calibrated' | 'uncalibrated';
+
+export function imuState(imu: ImuReading | null | undefined): ImuState {
+  return !imu
+    ? 'offline'
+    : imu.calibrating
+      ? 'calibrating'
+      : imu.calibrated
+        ? 'calibrated'
+        : 'uncalibrated';
+}
+
 export type Side = 'left' | 'right';
+
+// The rotors' mean forward tilt (degrees) from the servo angles less their trims: left tilts forward with positive angles, right with negative (sw/sim/flight.py MODEL servo directions).
+export function rotorTilt(
+  left: number,
+  right: number,
+  leftTrim: number,
+  rightTrim: number
+) {
+  return (left - leftTrim - (right - rightTrim)) / 2;
+}
 
 export type ControlSettings = {
   enabled: boolean;
@@ -63,12 +92,37 @@ export type ControlSettings = {
   hover_drag_tau: number;
   hover_trim_tau: number;
   hover_trim_max: number;
-  // Absent from firmware before the GPS hold.
-  hover_gps_tau?: number;
-  // Absent from firmware before the barometer; 0 leaves the barometer out of the hover's height.
-  hover_baro_tau?: number;
   auto_trim: number;
+  // The rest are absent from older firmware.
+  hover_tilt?: number;
+  hover_yaw_rate?: number;
+  hover_climb_rate?: number;
+  hover_nudge_speed?: number;
+  hover_speed_tilt?: number;
+  hover_speed_pitch?: number;
+  hover_speed_takeoff?: number;
+  hover_speed_tau?: number;
+  // 0 leaves the GPS out of the hold.
+  hover_gps_tau?: number;
+  hover_gps_place_tau?: number;
+  hover_gps_height_tau?: number;
+  hover_gps_heading?: number;
+  hover_gps_calibrate?: number;
+  // 0 leaves the barometer out of the hover's height.
+  hover_baro_tau?: number;
+  hover_thrust_direction?: number;
+  hover_kd?: number;
+  hover_return_speed?: number;
+  hover_ekf?: number;
+  failsafe_speed?: number;
+  failsafe_distance?: number;
+  failsafe_time?: number;
+  failsafe_land?: number;
+  failsafe_tilt?: number;
 };
+
+// A setting that is a number: all but enabled.
+export type NumberSetting = Exclude<keyof ControlSettings, 'enabled'>;
 
 // The drone service's recorder (src/fw/controller/bridge.py).
 export type RecorderStatus = {
@@ -93,8 +147,12 @@ export type Targets = {
 };
 
 export const FLIGHT_MODES = ['Manual', 'Hover', 'Landing', 'Landing fast'];
+export const MANUAL = 0;
+export const HOVER = 1;
+export const LAND = 2;
+export const LAND_FAST = 3;
 
-// The drone's GPS (src/fw/controller/bridge.py decode_gps): degrees, metres above sea level, m/s north, east and down.
+// The drone's GPS (src/fw/controller/bridge.py decode_gps): degrees, meters above sea level, m/s north, east and down.
 export type GpsReading = {
   messages: number;
   corrupt: number;

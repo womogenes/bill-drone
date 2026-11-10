@@ -4,30 +4,13 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { readParts } from '@/lib/multipart';
+import { typing } from '@/lib/keys';
+import { parseTag, readParts, type PreviewTag } from '@/lib/multipart';
 
 type Corners = number[][];
 type Result = { rms: number; views: number };
-type Status = {
-  calibrated: boolean;
-  valid: boolean;
-  capture_count: number;
-  pose_count: number;
-  preview_count: number;
-  position_m: number[];
-};
-// The tag in one preview frame, from its X-Tag header: corners in 320x240 pixels.
-type Tag = { valid: boolean; corners: number[][]; position: number[] } | null;
-
-function parseTag(text: string): Tag {
-  const [state, ...fields] = text.trim().split(' ');
-  if (state === 'none' || fields.length < 5) return null;
-  return {
-    valid: state === 'valid',
-    corners: fields.slice(0, 4).map((pair) => pair.split(',').map(Number)),
-    position: fields[4].split(',').map(Number),
-  };
-}
+// The camera's own state through the drone (app/api/camera GET mode=status): running, fpv, stalled or stopped.
+type Status = { camera?: string };
 
 async function calculate(body: object) {
   const response = await fetch('/api/camera', {
@@ -53,20 +36,14 @@ export default function CameraPage() {
   const [stalled, setStalled] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
-  const [rates, setRates] = useState({ preview: 0, pose: 0 });
   const [full, setFull] = useState(false);
-  const [tag, setTag] = useState<Tag>(null);
+  const [tag, setTag] = useState<PreviewTag | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const captureButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     function captureOnSpace(event: KeyboardEvent) {
-      if (
-        event.code !== 'Space' ||
-        (event.target instanceof HTMLElement &&
-          event.target.closest('input, textarea, select, [contenteditable]'))
-      )
-        return;
+      if (event.code !== 'Space' || typing(event)) return;
       event.preventDefault();
       if (!event.repeat) captureButton.current?.click();
     }
@@ -78,7 +55,6 @@ export default function CameraPage() {
     if (!connectedHost) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
-    let previous: { value: Status; time: number } | undefined;
     async function refresh() {
       try {
         const response = await fetch(
@@ -87,21 +63,6 @@ export default function CameraPage() {
         );
         const value = await response.json();
         if (!response.ok) throw new Error(value.error);
-        const time = performance.now();
-        if (previous) {
-          const seconds = (time - previous.time) / 1000;
-          setRates({
-            preview: Math.max(
-              0,
-              (value.preview_count - previous.value.preview_count) / seconds
-            ),
-            pose: Math.max(
-              0,
-              (value.pose_count - previous.value.pose_count) / seconds
-            ),
-          });
-        }
-        previous = { value, time };
         setStatus(value);
       } catch (error) {
         if (controller.signal.aborted) return;
@@ -141,7 +102,7 @@ export default function CameraPage() {
           canvas.height = bitmap.height;
           canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
           bitmap.close();
-          setTag(parseTag(/X-Tag: *(.*)/i.exec(header)?.[1] ?? 'none'));
+          setTag(parseTag(header));
           setStreamError('');
         })
         .catch(() => {})
@@ -288,15 +249,14 @@ export default function CameraPage() {
           >
             <polygon
               points={tag.corners.map((p) => p.join(',')).join(' ')}
-              fill="none"
-              stroke={tag.valid ? '#22c55e' : '#f59e0b'}
+              className={`fill-none ${tag.valid ? 'stroke-green-500' : 'stroke-amber-500'}`}
               strokeWidth="1.5"
             />
             <circle
               cx={tag.corners.reduce((sum, p) => sum + p[0], 0) / 4}
               cy={tag.corners.reduce((sum, p) => sum + p[1], 0) / 4}
               r="2"
-              fill={tag.valid ? '#22c55e' : '#f59e0b'}
+              className={tag.valid ? 'fill-green-500' : 'fill-amber-500'}
             />
           </svg>
         )}
@@ -308,14 +268,14 @@ export default function CameraPage() {
       )}
       {status && (
         <p role="status" className="text-sm text-muted-foreground tabular-nums">
-          Preview {rates.preview.toFixed(1)} fps · Pose {rates.pose.toFixed(1)}{' '}
-          Hz ·{' '}
-          {status.calibrated
-            ? status.valid
-              ? 'Tag tracked'
-              : 'Tag not tracked'
-            : 'Lens calibration needed'}
-          {tag && ` · ${tag.position.map((v) => v.toFixed(3)).join(', ')} m`}
+          {status.camera ? `Camera ${status.camera} · ` : ''}
+          {tag?.valid
+            ? 'Tag tracked'
+            : tag
+              ? 'Tag seen without a pose'
+              : 'Tag not tracked'}
+          {tag?.valid &&
+            ` · ${tag.position.map((v) => v.toFixed(3)).join(', ')} m`}
         </p>
       )}
       <label className="flex items-center gap-2 text-sm">

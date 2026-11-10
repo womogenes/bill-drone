@@ -8,12 +8,14 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from 'react';
 import {
   Activity,
   BatteryMedium,
   Disc,
   LoaderCircle,
+  type LucideIcon,
   Plug,
   Radio,
   RefreshCw,
@@ -27,27 +29,38 @@ import Link from 'next/link';
 import { GamepadView } from '@/components/gamepad';
 import { ControlPanel } from '@/components/control-panel';
 import { HoverPanel } from '@/components/hover-panel';
-import type { CameraStatus, PreviewTag } from '@/components/fpv-panel';
+import type { CameraStatus } from '@/components/fpv-panel';
 import { LastFlight } from '@/components/last-flight';
 import { PreflightPanel } from '@/components/preflight-panel';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ActuatorPanel } from '@/components/actuator-panel';
 import { ADCPanel } from '@/components/adc-panel';
-import { GpsPanel, gpsSolved } from '@/components/gps-panel';
+import { GpsPanel } from '@/components/gps-panel';
 import { ImuPanel } from '@/components/imu-panel';
 import { EspConnection, type DroneRequest } from '@/lib/esp-connection';
+import { gpsSolved } from '@/lib/gps';
 import { createHistory } from '@/lib/history';
-import type {
-  GpsFix,
-  GpsSample,
-  HoverSample,
-  ImuSample,
-  Reading,
-  Side,
-  ControlSettings,
-  Targets,
-  VoltageSample,
+import type { PreviewTag } from '@/lib/multipart';
+import {
+  ARM_MIN_V,
+  HOVER,
+  LINK_MIN_HZ,
+  MANUAL,
+  NO_PACK_V,
+  STATUS_HZ,
+  imuState,
+  rotorTilt,
+  type ControlSettings,
+  type GpsFix,
+  type GpsSample,
+  type HoverSample,
+  type ImuSample,
+  type ImuState,
+  type Reading,
+  type Side,
+  type Targets,
+  type VoltageSample,
 } from '@/lib/telemetry';
 
 const FpvPanel = dynamic(
@@ -70,18 +83,28 @@ const ZERO_TARGETS: Targets = {
   yaw_rate: 0,
   servo: [0, 0],
   throttle: [0, 0],
-  mode: 0,
+  mode: MANUAL,
   nudge: [0, 0, 0],
 };
 const NO_NUDGE: [number, number, number] = [0, 0, 0];
-// The drone accepts 1.5 m each way; the keys stop short of that.
 // As far as the drone takes it (fw/drone/main/flight_rt.c NUDGE_MAX).
 const NUDGE_MAX = 1.5;
-// A steady rotor tilt beyond this (degrees, averaged over TILT_TAU_S seconds) means the CoM is well off centre or moving: by about 15-20 degrees the drone has no pitch authority left.
+// A steady rotor tilt beyond this (degrees, averaged over TILT_TAU_S seconds) means the CoM is well off center or moving: by about 15-20 degrees the drone has no pitch authority left.
 const TILT_WARNING = 10;
 const TILT_TAU_S = 1;
+// Battery voltage EMA time constant; time-based so irregular packet timing doesn't change the smoothing.
+const VOLTAGE_TAU = 1500;
+// A disarmed pack falling faster than DRAIN_V_PER_MIN is being run down on the bench: on 2026-11-02 a half hour of hang tests took a 4S pack from 14.5 V to 9.9 V.
+const DRAIN_V_PER_MIN = 0.3;
+// A gap this long between statuses came before every link timeout on 2026-11-08.
+const LINK_GAP_MS = 300;
+const IMU_TEXT: Record<ImuState, string> = {
+  offline: 'offline',
+  calibrating: 'calibrating',
+  calibrated: 'ready',
+  uncalibrated: 'calibration',
+};
 
-// Updates the steady rotor tilt from a reading and returns it when it is beyond TILT_WARNING, else null; disarmed or without thrust it starts over.
 // The tag relative to the drone (forward, left, up; m) from a preview sighting in the camera frame (right, down, forward), through the camera's mounting (hover_cam_roll, hover_cam_pitch; degrees) as fw/drone/main/hover.c level() turns it, taking the drone as level, as it is on the ground.
 function cameraToBody(
   [right0, down0, ahead]: [number, number, number],
@@ -134,6 +157,7 @@ function batteryWarningFor(
     : null;
 }
 
+// Updates the steady rotor tilt from a reading and returns it when it is beyond TILT_WARNING, else null; disarmed or without thrust it starts over.
 function tiltWarningFor(
   reading: Reading | null,
   steady: { current: { time: number; tilt: number } | null }
@@ -144,12 +168,12 @@ function tiltWarningFor(
     steady.current = null;
     return null;
   }
-  // Left tilts forward with positive angles, right with negative (sw/sim/flight.py MODEL servo directions).
-  const tilt =
-    (actuators.left.servo_angle -
-      control.left_trim -
-      (actuators.right.servo_angle - control.right_trim)) /
-    2;
+  const tilt = rotorTilt(
+    actuators.left.servo_angle,
+    actuators.right.servo_angle,
+    control.left_trim,
+    control.right_trim
+  );
   const last = steady.current;
   const dt = last ? Math.max(0, (reading.time - last.time) / 1000) : 0;
   const mean = last
@@ -158,17 +182,11 @@ function tiltWarningFor(
   steady.current = { time: reading.time, tilt: mean };
   return Math.abs(mean) > TILT_WARNING ? mean : null;
 }
-// Battery voltage EMA time constant; time-based so irregular packet timing doesn't change the smoothing.
-const VOLTAGE_TAU = 1500;
-// The drone refuses to arm under ARM_MIN_V (fw/drone/main/flight_rt.c); NO_PACK_V and below is no pack at all. A disarmed pack falling faster than DRAIN_V_PER_MIN is being run down on the bench: on 2026-11-02 a half hour of hang tests took a 4S pack from 14.5 V to 9.9 V.
-const ARM_MIN_V = 14;
-const NO_PACK_V = 5;
 
 // An RSSI after a space, or nothing when no packet was heard.
 function dbm(rssi: number | null | undefined) {
   return rssi === null || rssi === undefined ? '' : ` ${rssi} dBm`;
 }
-const DRAIN_V_PER_MIN = 0.3;
 
 const statuses = {
   offline: {
@@ -205,6 +223,28 @@ function reuseUnchanged<T extends object>(
   return next;
 }
 
+// One of the header's readouts: an icon and a short value, the details in its title.
+function HeaderItem({
+  title,
+  color,
+  icon: Icon,
+  iconClassName = '',
+  children,
+}: {
+  title: string;
+  color: string;
+  icon: LucideIcon;
+  iconClassName?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span title={title} className={`flex items-center gap-1.5 ${color}`}>
+      <Icon aria-hidden="true" className={`size-4 ${iconClassName}`} />
+      {children}
+    </span>
+  );
+}
+
 export default function Page() {
   const [status, setStatus] = useState<keyof typeof statuses>('offline');
   const [reading, setReading] = useState<Reading | null>(null);
@@ -215,7 +255,7 @@ export default function Page() {
   // The drone's refusal of the last ESC calibration stage, if any.
   const [escError, setEscError] = useState<string | null>(null);
   const latestReading = useRef<Reading | null>(null);
-  // The rotors' steady forward tilt (degrees, positive forward) over the last second of an armed flight: holding the nose against a CoM off centre (negative: forward of it) also points the thrust, and a growing one is a battery sliding (2026-10-31).
+  // The rotors' steady forward tilt (degrees, positive forward) over the last second of an armed flight: holding the nose against a CoM off center (negative: forward of it) also points the thrust, and a growing one is a battery sliding (2026-10-31).
   const steadyTilt = useRef<{ time: number; tilt: number } | null>(null);
   const [tiltWarning, setTiltWarning] = useState<number | null>(null);
   const [batteryWarning, setBatteryWarning] = useState<string | null>(null);
@@ -264,12 +304,12 @@ export default function Page() {
   const packetCount = useRef(0);
   const socket = useRef<EspConnection | null>(null);
   const targets = useRef<Targets>(ZERO_TARGETS);
-  const [mode, setModeState] = useState(0);
+  const [mode, setModeState] = useState(MANUAL);
   const [nudge, setNudgeState] = useState(NO_NUDGE);
 
   const setTargets = useCallback((update: Partial<Targets>) => {
     // Hover entered from manual holds where the drone is, so a nudge never carries over between hops.
-    if (update.mode === 1 && targets.current.mode === 0)
+    if (update.mode === HOVER && targets.current.mode === MANUAL)
       update = { ...update, nudge: NO_NUDGE };
     targets.current = { ...targets.current, ...update };
     socket.current?.targets(targets.current);
@@ -289,7 +329,7 @@ export default function Page() {
     socket.current = null;
     // A new connection starts from zero targets; arming needs an explicit request.
     targets.current = ZERO_TARGETS;
-    setModeState(0);
+    setModeState(MANUAL);
     setNudgeState(NO_NUDGE);
     setStatus('connecting');
     setReading(null);
@@ -308,6 +348,7 @@ export default function Page() {
     let homePending = false;
     let wasArmed = false;
     let lastItow: number | undefined;
+    let armTimer: ReturnType<typeof setTimeout> | undefined;
     function offline() {
       if (socket.current !== ws) return;
       socket.current = null;
@@ -328,8 +369,9 @@ export default function Page() {
           if (message.request === 'calibrate') setCalibrationPending(false);
           // A refused arm ends Arming… now; an accepted one when the drone reports itself enabled, or a moment later if it stopped again at once (its reason then shows under the controls).
           if (message.request === 'arm') {
+            clearTimeout(armTimer);
             if (message.error) setArming(false);
-            else setTimeout(() => setArming(false), 3000);
+            else armTimer = setTimeout(() => setArming(false), 3000);
           }
           if (message.request === 'esc') setEscError(message.error);
           if (message.request === 'zero' && !message.error) {
@@ -413,7 +455,7 @@ export default function Page() {
           session,
           // The status carries the laptop's setpoints, which hover and landing ignore, so they are plotted in manual only.
           target:
-            data.control?.enabled && targets.current.mode === 0
+            data.control?.enabled && targets.current.mode === MANUAL
               ? [data.control.roll, data.control.pitch]
               : undefined,
         });
@@ -506,21 +548,32 @@ export default function Page() {
     [setTargets]
   );
 
+  const escStage = useCallback(
+    (stage: 0 | 1 | 2) => {
+      setEscError(null);
+      request({ type: 'esc', stage });
+    },
+    [request]
+  );
+
+  // Flying free (the GPS hold) is hover_camera 0; 1 holds on the tag.
+  const setFree = useCallback(
+    (free: boolean) => sendControl({ hover_camera: free ? 0 : 1 }),
+    [sendControl]
+  );
+
   // Only Enable arms: hover takes off from an armed drone and does nothing to a disarmed one.
   const hover = useCallback(() => {
-    if (latestReading.current?.control?.enabled) setTargets({ mode: 1 });
+    if (latestReading.current?.control?.enabled) setTargets({ mode: HOVER });
   }, [setTargets]);
 
-  // A drone that disarms itself drops back to manual, so a later Enable never arms straight into hover.
   const armed = reading?.control?.enabled;
   const control = reading?.control;
   const cameraSample: HoverSample | null =
     previewTag === undefined || !control
       ? null
       : {
-          elapsed_us: 0,
-          mode: 0,
-          tracking: false,
+          ...EMPTY_SAMPLE,
           tag: previewTag
             ? cameraToBody(
                 previewTag.position,
@@ -529,18 +582,15 @@ export default function Page() {
               )
             : null,
           tag_age_ms: previewTag ? 0 : null,
-          velocity: [0, 0],
-          height: 0,
-          height_target: 0,
           range_target: control.hover_distance ?? null,
-          arc_deg: null,
           time: reading?.time ?? 0,
-          session: 0,
         };
   const mapState =
     (armed && hoverState) || cameraSample || hoverState || EMPTY_SAMPLE;
+  // A drone that disarms itself drops back to manual, so a later Enable never arms straight into hover.
   useEffect(() => {
-    if (armed === false && targets.current.mode !== 0) setTargets({ mode: 0 });
+    if (armed === false && targets.current.mode !== MANUAL)
+      setTargets({ mode: MANUAL });
   }, [armed, setTargets]);
   // Arming or disarming starts a new hop from the unnudged hold.
   useEffect(() => {
@@ -614,41 +664,46 @@ export default function Page() {
   const recorder = reading?.recorder;
   // The fly-away failsafe outranks the stop reason while it acts; a stopped test pattern shows when nothing else does.
   const guard = reading?.control_status;
-  const failsafe = guard?.failsafe ? `Failsafe (${guard.failsafe_far ? 'too far' : 'flying off'}): ${guard.failsafe === 'brake' ? 'braking' : guard.failsafe === 'hold' ? 'holding, stick to take over' : 'landing'}` : '';
-  const reason = requestError || failsafe || reading?.control_status?.reason || (guard?.pattern_stop ? `Test pattern stopped: ${guard.pattern_stop}` : '');
+  const failsafe = guard?.failsafe
+    ? `Failsafe (${guard.failsafe_far ? 'too far' : 'flying off'}): ${guard.failsafe === 'brake' ? 'braking' : guard.failsafe === 'hold' ? 'holding, stick to take over' : 'landing'}`
+    : '';
+  const reason =
+    requestError ||
+    failsafe ||
+    reading?.control_status?.reason ||
+    (guard?.pattern_stop ? `Test pattern stopped: ${guard.pattern_stop}` : '');
   const controlStatus = useMemo(() => ({ reason }), [reason]);
 
   const { label, icon: StatusIcon, color } = statuses[status];
 
+  const connected = status === 'connected';
   const volts = reading?.voltage_ema;
-  const imuState = !reading?.imu
-    ? 'IMU offline'
-    : reading.imu.calibrating
-      ? 'IMU calibrating'
-      : reading.imu.calibrated
-        ? 'IMU ready'
-        : 'IMU calibration';
+  // No pack: the drone runs from USB.
+  const usb = volts !== undefined && volts <= NO_PACK_V;
+  const imu = imuState(reading?.imu);
   const gps = reading?.gps;
+  const fix = gpsSolved(gps) ? gps : null;
+  const logging = reading?.logging;
   const recorderText =
     recorder?.error ??
-    (reading?.logging?.active
-      ? `Recording · ${reading.logging.samples} samples · ${reading.logging.dropped} dropped`
-      : reading?.logging?.ready
+    (logging?.active
+      ? `Recording · ${logging.samples} samples · ${logging.dropped} dropped`
+      : logging?.ready
         ? recorder?.file
           ? `Saved ${recorder.file}`
           : 'Recorder ready'
         : 'Recorder connecting');
-  const connected = status === 'connected';
   // The bridge's last recording once it has closed it (its stop record written), for the last flight's summary.
   const lastFlight =
     recorder?.file && !recorder.writing
       ? recorder.file.replace(/\.bin$/, '')
       : null;
-  // The radio link over the last second (src/fw/controller/bridge.py decode_link): status messages reaching the laptop of the drone's 20 and the controller's RSSI of them, then the controller's packets reaching the drone and the drone's RSSI of them. Weak: a quarter of the status lost or a 0.3 s gap, which on 2026-11-08 came before every link timeout.
+  // The radio link over the last second (src/fw/controller/bridge.py decode_link): status messages reaching the laptop of the drone's STATUS_HZ and the controller's RSSI of them, then the controller's packets reaching the drone and the drone's RSSI of them. Weak: a quarter of the status lost or a gap of LINK_GAP_MS.
   const link = reading?.link;
   const linkWeak =
     !!link?.bridge &&
-    (link.bridge.statuses < 15 || link.bridge.longest_gap_ms >= 300);
+    (link.bridge.statuses < LINK_MIN_HZ ||
+      link.bridge.longest_gap_ms >= LINK_GAP_MS);
   const linkText = !link?.bridge
     ? 'Radio link'
     : [
@@ -678,109 +733,91 @@ export default function Page() {
         </Tabs>
         {/* What decides whether the drone can fly, as icons; the details are in each one's title. */}
         <div className="flex items-center gap-5 text-sm tabular-nums">
-          <span
+          <HeaderItem
             title={
               volts === undefined
                 ? 'Battery'
-                : volts <= NO_PACK_V
+                : usb
                   ? 'No pack: powered over USB'
                   : `Battery ${volts.toFixed(2)} V`
             }
-            className={`flex items-center gap-1.5 ${
-              connected &&
-              volts !== undefined &&
-              volts > NO_PACK_V &&
-              volts < ARM_MIN_V
+            color={
+              connected && volts !== undefined && !usb && volts < ARM_MIN_V
                 ? 'text-red-700'
                 : 'text-muted-foreground'
-            }`}
+            }
+            icon={connected && usb ? Plug : BatteryMedium}
           >
-            {connected && volts !== undefined && volts <= NO_PACK_V ? (
-              <Plug aria-hidden="true" className="size-4" />
-            ) : (
-              <BatteryMedium aria-hidden="true" className="size-4" />
-            )}
             <span className="min-w-[5ch]">
               {!connected || volts === undefined
                 ? '—'
-                : volts <= NO_PACK_V
+                : usb
                   ? 'USB'
                   : `${volts.toFixed(1)} V`}
             </span>
-          </span>
-          <span
-            title={connected ? imuState : 'IMU'}
-            className={`flex items-center gap-1.5 ${
-              !connected
-                ? 'text-muted-foreground'
-                : imuState === 'IMU ready'
-                  ? 'text-green-700'
-                  : imuState === 'IMU calibrating'
-                    ? 'text-muted-foreground'
-                    : 'text-red-700'
-            }`}
+          </HeaderItem>
+          <HeaderItem
+            title={connected ? `IMU ${IMU_TEXT[imu]}` : 'IMU'}
+            color={
+              connected && imu === 'calibrated'
+                ? 'text-green-700'
+                : !connected || imu === 'calibrating'
+                  ? 'text-muted-foreground'
+                  : 'text-red-700'
+            }
+            icon={Activity}
           >
-            <Activity aria-hidden="true" className="size-4" />
-            {connected ? imuState.replace('IMU ', '') : '—'}
-          </span>
-          <span
+            {connected ? IMU_TEXT[imu] : '—'}
+          </HeaderItem>
+          <HeaderItem
             title={
-              gps?.ok && gps.fix >= 2 && gps.fix <= 4
-                ? `GPS ${gps.fix === 2 ? '2D' : '3D'} fix, ${gps.satellites} satellites, ${gps.horizontal_accuracy.toFixed(1)} m`
+              fix
+                ? `GPS ${fix.fix === 2 ? '2D' : '3D'} fix, ${fix.satellites} satellites, ${fix.horizontal_accuracy.toFixed(1)} m`
                 : gps?.configured
                   ? 'GPS: no fix'
                   : 'GPS: searching for the module'
             }
-            className={`flex items-center gap-1.5 ${
-              connected && gps?.ok && gps.fix >= 2 && gps.fix <= 4
-                ? 'text-green-700'
-                : 'text-muted-foreground'
-            }`}
+            color={
+              connected && fix ? 'text-green-700' : 'text-muted-foreground'
+            }
+            icon={Satellite}
           >
-            <Satellite aria-hidden="true" className="size-4" />
             <span className="min-w-[8ch]">
-              {connected && gps?.ok && gps.fix >= 2 && gps.fix <= 4
-                ? `${gps.satellites} · ${gps.horizontal_accuracy.toFixed(1)} m`
+              {connected && fix
+                ? `${fix.satellites} · ${fix.horizontal_accuracy.toFixed(1)} m`
                 : '—'}
             </span>
-          </span>
-          <span
+          </HeaderItem>
+          <HeaderItem
             title={linkText}
-            className={`flex items-center gap-1.5 ${
+            color={
               !connected || !link?.bridge
                 ? 'text-muted-foreground'
                 : linkWeak
                   ? 'text-red-700'
                   : 'text-green-700'
-            }`}
+            }
+            icon={Radio}
           >
-            <Radio aria-hidden="true" className="size-4" />
-            <span className="min-w-[12ch] tabular-nums">
+            <span className="min-w-[12ch]">
               {connected && link?.bridge
-                ? `${link.bridge.statuses}/20${dbm(link.controller?.rssi)} · ${link.drone ? `${link.drone.rx}/s${dbm(link.drone.rssi)}` : '—'}`
+                ? `${link.bridge.statuses}/${STATUS_HZ}${dbm(link.controller?.rssi)} · ${link.drone ? `${link.drone.rx}/s${dbm(link.drone.rssi)}` : '—'}`
                 : '—'}
             </span>
-          </span>
-          <span
+          </HeaderItem>
+          <HeaderItem
             title={recorderText}
-            className={`flex items-center gap-1.5 ${
+            color={
               // Dropped records warn only while that flight records: the count stays until the next flight starts.
-              recorder?.error ||
-              (reading?.logging?.active && reading.logging.dropped > 0)
+              recorder?.error || (logging?.active && logging.dropped > 0)
                 ? 'text-red-700'
                 : 'text-muted-foreground'
-            }`}
+            }
+            icon={Disc}
+            iconClassName={logging?.active ? 'fill-red-700 text-red-700' : ''}
           >
-            <Disc
-              aria-hidden="true"
-              className={`size-4 ${reading?.logging?.active ? 'fill-red-700 text-red-700' : ''}`}
-            />
-            {reading?.logging?.active
-              ? reading.logging.samples
-              : reading?.logging?.ready
-                ? 'ready'
-                : '—'}
-          </span>
+            {logging?.active ? logging.samples : logging?.ready ? 'ready' : '—'}
+          </HeaderItem>
         </div>
         <div className="ml-auto flex items-center gap-3">
           <Link href="/camera" className="text-sm underline">
@@ -832,8 +869,8 @@ export default function Page() {
             <p>
               Rotors held {Math.abs(tiltWarning).toFixed(0)}°{' '}
               {tiltWarning < 0
-                ? 'back: CoM forward of centre'
-                : 'forward: CoM behind centre'}{' '}
+                ? 'back: CoM forward of center'
+                : 'forward: CoM behind center'}{' '}
               or moving. Land and check the battery.
             </p>
           )}
@@ -853,20 +890,12 @@ export default function Page() {
                 reading.gps.fix === 3 &&
                 (reading.control.hover_gps_tau ?? 0) > 0
               }
-              recorderReady={!!reading.logging?.ready}
+              recorderReady={!!logging?.ready}
               recorderError={recorder?.error ?? undefined}
               status={controlStatus}
               arming={arming}
-              connected={status === 'connected'}
-              imu={
-                !reading.imu
-                  ? 'offline'
-                  : reading.imu.calibrating
-                    ? 'calibrating'
-                    : reading.imu.calibrated
-                      ? 'calibrated'
-                      : 'uncalibrated'
-              }
+              connected={connected}
+              imu={imu}
               mode={mode}
               nudge={nudge}
               onChange={sendControl}
@@ -875,10 +904,7 @@ export default function Page() {
               onNudge={nudgeHold}
               onStop={stopMotors}
               escError={escError}
-              onEscStage={(stage) => {
-                setEscError(null);
-                request({ type: 'esc', stage });
-              }}
+              onEscStage={escStage}
             />
           )}
           <PreflightPanel
@@ -899,7 +925,7 @@ export default function Page() {
               time={reading?.time ?? 0}
               onCalibrate={calibrateImu}
               calibrationPending={calibrationPending}
-              connected={status === 'connected'}
+              connected={connected}
             />
           </Suspense>
         </div>
@@ -912,7 +938,7 @@ export default function Page() {
               history={voltageHistory.read}
               hourHistory={voltageHourHistory.read}
               time={reading?.time ?? 0}
-              connected={status === 'connected'}
+              connected={connected}
             />
             <div className="grid grid-cols-2 divide-x divide-border [&>*:nth-child(-n+2)]:border-b">
               {(['servo', 'throttle'] as const).flatMap((kind) =>
@@ -929,7 +955,7 @@ export default function Page() {
                             10
                         : reading?.actuators?.[side].throttle
                     }
-                    connected={status === 'connected'}
+                    connected={connected}
                     onChange={sendActuator}
                     onZero={zeroServo}
                     zeroDisabled={
@@ -949,7 +975,7 @@ export default function Page() {
             free={
               reading?.control ? reading.control.hover_camera === 0 : undefined
             }
-            onFree={(free) => sendControl({ hover_camera: free ? 0 : 1 })}
+            onFree={setFree}
             roll={reading?.control?.hover_cam_roll}
             onTag={showPreviewTag}
             onStatus={setCameraStatus}
@@ -962,7 +988,7 @@ export default function Page() {
           {/* Always shown, so the layout stays put: without the camera, the GPS map; armed, the flight's map; else the camera's latest sighting, the last flight's map, or an empty one. */}
           {reading?.control?.hover_camera === 0 ? (
             <GpsMap
-              gps={status === 'connected' ? reading.gps : null}
+              gps={connected ? reading.gps : null}
               latest={reading.gps_fix}
               home={reading.gps_home}
               history={gpsHistory.read}
@@ -979,7 +1005,7 @@ export default function Page() {
             baro={reading?.baro}
             report={reading?.gps_report}
             time={reading?.time}
-            connected={status === 'connected'}
+            connected={connected}
           />
         </div>
       </main>

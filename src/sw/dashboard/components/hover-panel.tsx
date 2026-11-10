@@ -29,7 +29,7 @@ function aligned(sample: HoverState): [number, number] | null {
   return [-(x * cos + y * sin), x * sin - y * cos];
 }
 
-// Top-down screen coordinates in metres, tag at the origin and toward the tag up.
+// Top-down screen coordinates in meters, tag at the origin and toward the tag up.
 function screen([toward, left]: [number, number]): [number, number] {
   return [-left, -toward];
 }
@@ -79,7 +79,7 @@ export const HoverPanel = memo(function HoverPanel({
   let maxY = Math.max(...extent.map(([, y]) => y)) + 0.15;
   const plotWidth = width - LEFT - RIGHT;
   const plotHeight = height - TOP - BOTTOM;
-  // Equal scale on both axes: widen the tighter one about its centre.
+  // Equal scale on both axes: widen the tighter one about its center.
   const scale = Math.min(
     plotWidth / Math.max(maxX - minX, 0.6),
     plotHeight / Math.max(maxY - minY, 0.6)
@@ -249,7 +249,7 @@ export const HoverPanel = memo(function HoverPanel({
         </svg>
       </div>
       <p className="text-xs text-muted-foreground">
-        Top down, metres from the tag (■), up toward it. Circle: hold point.
+        Top down, meters from the tag (■), up toward it. Circle: hold point.
       </p>
     </section>
   );

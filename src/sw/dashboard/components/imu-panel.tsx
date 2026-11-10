@@ -1,11 +1,12 @@
 'use client';
 
 import { Activity, LoaderCircle, Unplug } from 'lucide-react';
-import { memo, useEffect, useState } from 'react';
+import { memo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { signed } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 import { AttitudeChart } from '@/components/attitude-chart';
+import { useChartEnd } from '@/components/fast-chart';
 import { ImuAxisChart } from '@/components/imu-axis-chart';
 import {
   Select,
@@ -116,14 +117,10 @@ export function ImuPanel({
 }) {
   const searchParams = useSearchParams();
   const range = Number(searchParams.get('imuRange'));
-  const seconds = [5, 15, 60].includes(range) ? range : 15;
-  const [now, setNow] = useState(0);
-  useEffect(() => {
-    if (connected) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [connected]);
-  const end = Math.max(now, time);
+  const seconds = ranges.some(({ value }) => Number(value) === range)
+    ? range
+    : 15;
+  const end = useChartEnd(connected, time);
   const online = connected && reading != null;
 
   // Each value keeps the width of its widest reading, so the labels beside it don't move as it changes: in tabular nums every digit is 1ch, and the sign and point together about another.
@@ -158,7 +155,7 @@ export function ImuPanel({
             {online ? `${reading.temperature.toFixed(1)} °C` : ''}
           </span>
         </div>
-        <AttitudeChart history={history} end={end} className="h-32" />
+        <AttitudeChart history={history} end={end} />
       </div>
       {(
         [

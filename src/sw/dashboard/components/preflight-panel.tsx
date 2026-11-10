@@ -4,22 +4,35 @@ import { memo, useEffect, useState } from 'react';
 import { CircleCheck, CircleX, TriangleAlert } from 'lucide-react';
 import { readPad } from '@/components/gamepad';
 import type { CameraStatus } from '@/components/fpv-panel';
-import type { Reading } from '@/lib/telemetry';
+import {
+  ARM_MIN_V,
+  LINK_MIN_HZ,
+  NO_PACK_V,
+  STATUS_HZ,
+  imuState,
+  type ImuState,
+  type Reading,
+} from '@/lib/telemetry';
 
-// The drone refuses to arm under ARM_MIN_V (fw/drone/main/flight_rt.c); under LOW_V (3.7 V a cell on 4S) a flight is short. NO_PACK_V and below is USB power alone.
-const ARM_MIN_V = 14;
+// Under LOW_V (3.7 V a cell on 4S) a flight is short.
 const LOW_V = 14.8;
-const NO_PACK_V = 5;
 // The bridge drops the dashboard after 0.5 s without a status (src/fw/controller/bridge.py monitor).
 const LINK_STALE_MS = 500;
-// The status arrives at 20 Hz; well under it the radio is losing packets.
-const LINK_MIN_HZ = 15;
 // The GPS hold takes fixes to 8 m (fw/drone/main/flight_rt.c GPS_MAX_ACCURACY); a good outdoor fix is well inside GOOD_ACCURACY with GOOD_SATELLITES or more.
 const HOLD_ACCURACY = 8;
 const GOOD_ACCURACY = 2;
 const GOOD_SATELLITES = 8;
 // Flying free on the GPS hold, the settings the 2026-11-09 fly-aways are fixed with (src/sw/sim/models/NOTES.md): each with the value to set and whether a value will do. The thrust direction and the damping start at the indoor values in new firmware; the heading search and the return speed start on.
-const OUTDOOR: [string, number, (value: number) => boolean][] = [
+const OUTDOOR: [
+  (
+    | 'hover_thrust_direction'
+    | 'hover_kd'
+    | 'hover_gps_calibrate'
+    | 'hover_return_speed'
+  ),
+  number,
+  (value: number) => boolean,
+][] = [
   ['hover_thrust_direction', 0.8, (value) => value >= 0.5],
   ['hover_kd', 1.5, (value) => value <= 1.5],
   ['hover_gps_calibrate', 5, (value) => value > 0],
@@ -27,12 +40,20 @@ const OUTDOOR: [string, number, (value: number) => boolean][] = [
 ];
 
 type Level = 'go' | 'caution' | 'stop';
+// A check's call and its reason.
+type Verdict = [Level, string];
 type Check = { label: string; level: Level; reason: string };
 
 const LEVELS = {
   go: { icon: CircleCheck, color: 'text-green-700' },
   caution: { icon: TriangleAlert, color: 'text-amber-600' },
   stop: { icon: CircleX, color: 'text-red-700' },
+};
+const IMU: Record<ImuState, Verdict> = {
+  offline: ['stop', 'Offline'],
+  calibrating: ['caution', 'Calibrating'],
+  calibrated: ['go', 'Live and calibrated'],
+  uncalibrated: ['stop', 'Not calibrated'],
 };
 
 function checks(
@@ -44,181 +65,148 @@ function checks(
   now: number
 ): Check[] {
   const age = reading ? now - reading.time : Infinity;
-  const link: Check = !connected
-    ? { label: 'Drone link', level: 'stop', reason: 'Not connected' }
+  const link: Verdict = !connected
+    ? ['stop', 'Not connected']
     : age > LINK_STALE_MS
-      ? {
-          label: 'Drone link',
-          level: 'stop',
-          reason: `No status for ${(age / 1000).toFixed(1)} s`,
-        }
+      ? ['stop', `No status for ${(age / 1000).toFixed(1)} s`]
       : fps !== null && fps < LINK_MIN_HZ
-        ? {
-            label: 'Drone link',
-            level: 'caution',
-            reason: `Status at ${Math.round(fps)} Hz of 20: packets lost`,
-          }
-        : { label: 'Drone link', level: 'go', reason: 'Fresh' };
-  if (!connected || !reading) return [link];
+        ? [
+            'caution',
+            `Status at ${Math.round(fps)} Hz of ${STATUS_HZ}: packets lost`,
+          ]
+        : ['go', 'Fresh'];
+  const rows: [string, Verdict][] = [['Drone link', link]];
+  if (connected && reading) {
+    const control = reading.control;
+    const gps = reading.gps;
+    const baro = reading.baro;
+    const volts = reading.voltage_ema;
+    // Off (0) the hover never reads the barometer, so a missing one only cautions.
+    const baroUsed = control?.hover_baro_tau;
+    const baroMiss: Level = baroUsed ? 'stop' : 'caution';
+    // Free flight (hover_camera 0) holds on the GPS; on the tag it needs the camera instead.
+    const free = control?.hover_camera === 0;
+    const live = !!gps && gps.age_ms !== null && gps.age_ms < 1000;
+    const hold = control?.hover_gps_tau;
+    const recorder = reading.recorder;
+    const unset = OUTDOOR.filter(([key, , fine]) => {
+      const value = control?.[key];
+      return value === undefined || !fine(value);
+    });
 
-  const imu = reading.imu;
-  const control = reading.control;
-  const gps = reading.gps;
-  const baro = reading.baro;
-  const volts = reading.voltage_ema;
-  // Off (0) the hover never reads the barometer, so a missing one only cautions.
-  const baroUsed = control?.hover_baro_tau;
-  const baroMiss: Level = baroUsed ? 'stop' : 'caution';
-  // Free flight (hover_camera 0) holds on the GPS; on the tag it needs the camera instead.
-  const free = control?.hover_camera === 0;
-  const live = !!gps && gps.age_ms !== null && gps.age_ms < 1000;
-  const hold = control?.hover_gps_tau;
-  const recorder = reading.recorder;
-  const values = control as unknown as Record<string, number | undefined>;
-  const unset = OUTDOOR.filter(([key, , fine]) => {
-    const value = values?.[key];
-    return value === undefined || !fine(value);
-  });
-
-  return [
-    link,
-    !imu
-      ? { label: 'IMU', level: 'stop', reason: 'Offline' }
-      : imu.calibrating
-        ? { label: 'IMU', level: 'caution', reason: 'Calibrating' }
-        : imu.calibrated
-          ? { label: 'IMU', level: 'go', reason: 'Live and calibrated' }
-          : { label: 'IMU', level: 'stop', reason: 'Not calibrated' },
-    !baro
-      ? {
-          label: 'Barometer',
-          level: baroMiss,
-          reason: 'No data from this firmware',
-        }
-      : !baro.found
-        ? { label: 'Barometer', level: baroMiss, reason: 'Not found' }
-        : !baro.fresh || baro.altitude === null
-          ? {
-              label: 'Barometer',
-              level: baroMiss,
-              reason: 'Found, readings stale',
-            }
-          : {
-              label: 'Barometer',
-              level: baroUsed ? 'go' : 'caution',
-              reason: baroUsed
-                ? `Fresh, ${baro.altitude.toFixed(1)} m`
-                : 'Fresh, but the hover does not use it (hover_baro_tau 0)',
-            },
-    !gps || !gps.configured
-      ? { label: 'GPS', level: 'stop', reason: 'Module not found' }
-      : !live
-        ? { label: 'GPS', level: 'stop', reason: 'No fresh solution' }
-        : !gps.ok || gps.fix !== 3
-          ? {
-              label: 'GPS',
-              level: 'stop',
-              reason: `No 3D fix (${gps.satellites} satellites)`,
-            }
-          : gps.horizontal_accuracy > HOLD_ACCURACY
-            ? {
-                label: 'GPS',
-                level: 'stop',
-                reason: `3D fix but ${gps.horizontal_accuracy.toFixed(1)} m: the hold ignores it`,
-              }
-            : {
-                label: 'GPS',
-                level:
-                  gps.horizontal_accuracy <= GOOD_ACCURACY &&
-                  gps.satellites >= GOOD_SATELLITES
-                    ? 'go'
-                    : 'caution',
-                reason: `3D fix, ${gps.satellites} satellites, ${gps.horizontal_accuracy.toFixed(1)} m`,
-              },
-    hold === undefined
-      ? { label: 'GPS hold', level: 'caution', reason: 'Not in this firmware' }
-      : hold > 0
-        ? { label: 'GPS hold', level: 'go', reason: `On (${hold} s)` }
-        : {
-            label: 'GPS hold',
-            level: free ? 'stop' : 'caution',
-            reason: 'Off (hover_gps_tau 0)',
-          },
-    ...(free && hold
-      ? [
-          unset.length
-            ? ({
-                label: 'Outdoor hold',
-                level: 'caution',
-                reason: unset.some(([key]) => values[key] === undefined)
-                  ? 'Not in this firmware'
-                  : `Set ${unset.map(([key, value]) => `${key} ${value}`).join(', ')}`,
-              } as Check)
-            : ({
-                label: 'Outdoor hold',
-                level: 'go',
-                reason: 'Thrust direction, heading search and return speed set',
-              } as Check),
-        ]
-      : []),
-    volts === undefined
-      ? { label: 'Battery', level: 'stop', reason: 'No reading' }
-      : volts <= NO_PACK_V
-        ? { label: 'Battery', level: 'stop', reason: 'No pack: USB power' }
-        : volts < ARM_MIN_V
-          ? {
-              label: 'Battery',
-              level: 'stop',
-              reason: `${volts.toFixed(1)} V, under the ${ARM_MIN_V} V arm minimum`,
-            }
-          : {
-              label: 'Battery',
-              level: volts < LOW_V ? 'caution' : 'go',
-              reason:
-                volts < LOW_V
-                  ? `${volts.toFixed(1)} V, close to the ${ARM_MIN_V} V arm minimum`
-                  : `${volts.toFixed(1)} V`,
-            },
-    recorder?.error
-      ? { label: 'Recorder', level: 'stop', reason: recorder.error }
-      : reading.logging?.active
-        ? { label: 'Recorder', level: 'go', reason: 'Recording' }
-        : reading.logging?.ready
-          ? { label: 'Recorder', level: 'go', reason: 'Ready' }
-          : { label: 'Recorder', level: 'stop', reason: 'Not ready' },
-    pad
-      ? { label: 'Gamepad', level: 'go', reason: pad }
-      : {
-          label: 'Gamepad',
-          level: 'caution',
-          reason: 'Not connected: keyboard only',
-        },
-    // The camera's Wi-Fi sits beside the GPS antenna: streaming may jam the GPS.
-    free
-      ? !camera
-        ? { label: 'Camera', level: 'go', reason: 'Not answering (off)' }
-        : {
-            label: 'Camera',
-            level: 'caution',
-            reason: `${camera.state === 'fpv' ? 'FPV streaming' : `On (${camera.state})`}: may jam the GPS`,
-          }
-      : !camera
-        ? {
-            label: 'Camera',
-            level: 'stop',
-            reason: 'Not answering: the tag hover needs it',
-          }
-        : camera.state === 'running'
-          ? { label: 'Camera', level: 'go', reason: 'Tracking' }
-          : {
-              label: 'Camera',
-              level: camera.state === 'fpv' ? 'caution' : 'stop',
-              reason:
-                camera.state === 'fpv'
-                  ? 'FPV streaming: no tag tracking, may jam the GPS'
-                  : `Camera ${camera.state}`,
-            },
-  ];
+    rows.push(
+      ['IMU', IMU[imuState(reading.imu)]],
+      [
+        'Barometer',
+        !baro
+          ? [baroMiss, 'No data from this firmware']
+          : !baro.found
+            ? [baroMiss, 'Not found']
+            : !baro.fresh || baro.altitude === null
+              ? [baroMiss, 'Found, readings stale']
+              : baroUsed
+                ? ['go', `Fresh, ${baro.altitude.toFixed(1)} m`]
+                : [
+                    'caution',
+                    'Fresh, but the hover does not use it (hover_baro_tau 0)',
+                  ],
+      ],
+      [
+        'GPS',
+        !gps || !gps.configured
+          ? ['stop', 'Module not found']
+          : !live
+            ? ['stop', 'No fresh solution']
+            : !gps.ok || gps.fix !== 3
+              ? ['stop', `No 3D fix (${gps.satellites} satellites)`]
+              : gps.horizontal_accuracy > HOLD_ACCURACY
+                ? [
+                    'stop',
+                    `3D fix but ${gps.horizontal_accuracy.toFixed(1)} m: the hold ignores it`,
+                  ]
+                : [
+                    gps.horizontal_accuracy <= GOOD_ACCURACY &&
+                    gps.satellites >= GOOD_SATELLITES
+                      ? 'go'
+                      : 'caution',
+                    `3D fix, ${gps.satellites} satellites, ${gps.horizontal_accuracy.toFixed(1)} m`,
+                  ],
+      ],
+      [
+        'GPS hold',
+        hold === undefined
+          ? ['caution', 'Not in this firmware']
+          : hold > 0
+            ? ['go', `On (${hold} s)`]
+            : [free ? 'stop' : 'caution', 'Off (hover_gps_tau 0)'],
+      ]
+    );
+    if (free && hold)
+      rows.push([
+        'Outdoor hold',
+        !unset.length
+          ? ['go', 'Thrust direction, heading search and return speed set']
+          : [
+              'caution',
+              unset.some(([key]) => control?.[key] === undefined)
+                ? 'Not in this firmware'
+                : `Set ${unset.map(([key, value]) => `${key} ${value}`).join(', ')}`,
+            ],
+      ]);
+    rows.push(
+      [
+        'Battery',
+        volts === undefined
+          ? ['stop', 'No reading']
+          : volts <= NO_PACK_V
+            ? ['stop', 'No pack: USB power']
+            : volts < ARM_MIN_V
+              ? [
+                  'stop',
+                  `${volts.toFixed(1)} V, under the ${ARM_MIN_V} V arm minimum`,
+                ]
+              : volts < LOW_V
+                ? [
+                    'caution',
+                    `${volts.toFixed(1)} V, close to the ${ARM_MIN_V} V arm minimum`,
+                  ]
+                : ['go', `${volts.toFixed(1)} V`],
+      ],
+      [
+        'Recorder',
+        recorder?.error
+          ? ['stop', recorder.error]
+          : reading.logging?.active
+            ? ['go', 'Recording']
+            : reading.logging?.ready
+              ? ['go', 'Ready']
+              : ['stop', 'Not ready'],
+      ],
+      [
+        'Gamepad',
+        pad ? ['go', pad] : ['caution', 'Not connected: keyboard only'],
+      ],
+      [
+        'Camera',
+        // The camera's Wi-Fi sits beside the GPS antenna: streaming may jam the GPS.
+        free
+          ? !camera
+            ? ['go', 'Not answering (off)']
+            : [
+                'caution',
+                `${camera.state === 'fpv' ? 'FPV streaming' : `On (${camera.state})`}: may jam the GPS`,
+              ]
+          : !camera
+            ? ['stop', 'Not answering: the tag hover needs it']
+            : camera.state === 'running'
+              ? ['go', 'Tracking']
+              : camera.state === 'fpv'
+                ? ['caution', 'FPV streaming: no tag tracking, may jam the GPS']
+                : ['stop', `Camera ${camera.state}`],
+      ]
+    );
+  }
+  return rows.map(([label, [level, reason]]) => ({ label, level, reason }));
 }
 
 // Go/no-go before arming: each check green, amber or red with its reason, and the overall call (red anywhere is no-go).
