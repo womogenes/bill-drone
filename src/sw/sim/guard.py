@@ -25,7 +25,7 @@ class Gains(ctypes.Structure):
 
 class State(ctypes.Structure):
     _fields_ = [("failsafe", ctypes.c_int), ("far", ctypes.c_bool), ("phase_time", ctypes.c_float), ("fast", ctypes.c_float), ("quiet", ctypes.c_float), ("anchor", ctypes.c_float * 2),
-                ("started", ctypes.c_bool), ("on_tag", ctypes.c_bool), ("located", ctypes.c_bool), ("stopped", ctypes.c_int), ("origin", ctypes.c_float * 3), ("nudge", ctypes.c_float * 2)]
+                ("started", ctypes.c_bool), ("on_tag", ctypes.c_bool), ("located", ctypes.c_bool), ("stopped", ctypes.c_int), ("origin", ctypes.c_float * 3), ("nudge", ctypes.c_float * 2), ("blind", ctypes.c_float)]
 
 
 if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime for path in [SOURCE, *HEADERS]):

@@ -394,12 +394,15 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 tilt = math.atan2(left_force * math.sin(left_tilt) + right_force * math.sin(right_tilt), up) if up > 0 else 0.0
                 drag = (level_turn(accel_filter, *level_error), tilt)
                 if nudge:
-                    # (start s after liftoff, toward-tag and left speeds in m/s, seconds): the hold point moving as the dashboard's held arrows move it.
-                    start, forward_speed, left_speed, length = nudge
+                    # (start s after liftoff, toward-tag and left speeds in m/s, seconds), or a list of them for a pilot's sequence: the hold point moving as the dashboard's held arrows (and, on the GPS hold, the gamepad's stick) move it.
+                    moves = nudge if isinstance(nudge[0], (list, tuple)) else [nudge]
                     # From liftoff, or from the start for a hover engaged in the air.
                     since = now - lifted if lifted is not None else (now if not liftoff else None)
-                    moving = 0.0 if since is None else min(max(since - start, 0.0), length)
-                    outer.gains.nudge_forward, outer.gains.nudge_left = forward_speed * moving, left_speed * moving
+                    outer.gains.nudge_forward = outer.gains.nudge_left = 0.0
+                    for start, forward_speed, left_speed, length in moves:
+                        moving = 0.0 if since is None else min(max(since - start, 0.0), length)
+                        outer.gains.nudge_forward += forward_speed * moving
+                        outer.gains.nudge_left += left_speed * moving
                     # plant["nudge_wrap"] (m): wrapped at that limit, as the dashboard does without the tag.
                     if plant.get("nudge_wrap"):
                         limit = plant["nudge_wrap"]

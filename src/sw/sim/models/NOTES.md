@@ -386,3 +386,40 @@ The filter's position after a 2 s outage is off 0.3 m median (1.5 worst), after 
 - A sweep with --ekf is not seed-for-seed comparable with one without: the 5 s rest before liftoff moves every random draw. Compare levels 0, 1 and 2 all with --ekf. landing_test.py's run length counts from arming, so the rest has to be added to it (the first level 1 and 2 landing runs ended before 2-3 slow landings did).
 
 **On the drone:** the log record grows from 86 to 108 bytes (ekf_attitude, ekf_velocity, ekf_position, ekf_height, ekf_sd, ekf_flags), so a radio packet carries 4 records instead of 5: about a quarter more log airtime. On the host the filter takes 0.83 µs a tick; on the ESP32 a guess of 100-300 µs against control_us's 617 µs median and 1137 max, to be read off control_us in the first log. bridge.py records the 108-byte records as they are, and needs a restart to chart them. Not flown yet: first flights at hover_ekf 0, compare ekf_* with the hold's own in the log, then 1, then 2.
+
+## The hold before its heading is known, the way back to the hold point, and speed sticks (2026-11-09)
+
+A pre-mortem of the next outdoor session, then what software could take off its list. All of it in sw/sim/outdoor.py with --ekf (every level, so the seeds match), 25 s runs, the 06:38 UTC settings with the thrust-direction hold 0.8 and hover_kd 1.5, on airframe_2026-11-09 and on the fly-away plant (repro: the level-reference error and tilt_push_speed); hands-off 128 runs a wind, sticks 64. hold_fixes_2026-11-09.png has every run before and after.
+
+**Before** (f7eb8cc, hover_gps_calibrate 0 as the firmware defaulted): hands-off 126/126/128/123 of 128 held at 0/1/2/3 m/s on the fly-away plant (126/127/128/124 on the airframe), and the ones that did not hold in still air and 1 m/s went 27-42 m in 25 s with the failsafe silent. Those are runs whose GPS heading never pinned: the hold flies on its drag model, which reads slow and near, and the failsafe read the same estimates.
+
+**Heading evidence less its steady part** (hover.c learn_heading, ekf.c the same): an attitude estimate a few degrees off is a constant acceleration in the inertial velocity that the GPS's does not have (0.9 m/s² in seed 39), and its products with the GPS's noise outweighed two cycles of calibration pulses. Each block's change now counts less its mean over HEADING_STEADY_TAU 5 s, started as HEADING_STEADY_PRIOR 3 blocks at zero so the takeoff's own acceleration still counts (started empty, the 2026-11-09 flights replayed pinned at a median 4.9 s instead of 2.3; with the prior 2.5 s). With hover_gps_calibrate 5 every hands-off run at 0 and 1 m/s then pins (latest 5.6 s after liftoff against 12.6 s and one never) and holds, 256 of 256 on either plant; without the pulses one of 128 in still air still never pins. So hover_gps_calibrate defaults to 5 degrees (it was 0, and a flash keeps a stored value: it was never stored).
+
+**The failsafe on the GPS itself** (guard.c): its speed and its distance from the first fix are the GPS's own (hover.h gps_fix), not the hold's estimates, and a brake without a heading flies the calibration pulses at once whatever the setting, holds only once the heading is pinned, and lands after FAILSAFE_SEARCH 3 s without one. No measurable change hands-off in these sweeps (the pulses and the evidence already pin the runs it was written for); it is there for the flight where they do not.
+
+**hover_return_speed** (hover.h; default 1 m/s). What was left at 2 m/s on the fly-away plant (2 of 128 landed by the failsafe) and some of 3 m/s: the heading pins late, the drone has drifted 3-7 m from its hold point meanwhile, and the position loop then flies back at kp/kd times the distance, 2.5-4.3 m/s at 20-41 degrees of pitch, past the failsafe's 2 m/s. The place term's pull is now capped at what a steady return_speed costs the velocity loop (kd × return_speed, 1.5 m/s² here). Held of 128 at 0/1/2/3 m/s, fly-away plant, hold's own estimates:
+
+| hover_return_speed | 0 m/s | 1 m/s | 2 m/s | 3 m/s | furthest from takeoff at 3 m/s, 90th percentile |
+|---|---|---|---|---|---|
+| 0 (no cap) | 128 | 128 | 126 | 123 | 3.8 m |
+| 0.5 | 126 | 128 | 128 | 119 | 8.6 m |
+| 1 | 128 | 128 | 128 | 124 | 4.7 m |
+| 1.5 | 128 | 128 | 127 | 124 | 3.8 m |
+
+On the airframe and at hover_ekf 1 the same: at 1 m/s no run of 1536 in winds to 2 m/s fails (4 plant and level combinations), against 5 of 1152 uncapped and 1 of 1152 at 1.5. The cost: the cap is also the most the position term can lean into a wind before the push term has learned it, so at 3 m/s the 90th percentile of the furthest distance grows 0.9-1.1 m (medians 2.2-2.4 m unchanged); 0.5 is too weak to hold against 3 m/s (119 held, median 3.9 m away). Nothing changes at 0-2 m/s. Worst distance with everything on: 6.8/6.9/5.0/11.1 m (fly-away plant) against 30.4/42.0/7.7/12.8 before.
+
+**Still open at 3 m/s:** 4 of 128 (5 uncapped). They are lost in the first 2.5 s (25 degrees of pitch 0.6 s after liftoff, the failsafe at 2.3 s), before any of this acts: a liftoff into wind above the 2 m/s limit, not addressed.
+
+**Speed sticks** (outdoor.py --speed-sticks "start,forward,left,seconds;..."; sweep.py plant["nudge"] takes a list): the dashboard's arrows and the gamepad on the GPS hold move the hold point at hover_nudge_speed instead of tilting the drone, so letting go is a hold point that stops, not a drone at 10 degrees left to slow down. Three 3-4 s pushes a run, fly-away plant:
+
+| | held of 64 at 0/1/2/3 m/s | stops after release | within | failsafe fired in |
+|---|---|---|---|---|
+| tilt sticks, 10 degrees | 58/43/41/33 | 2.4-3.3 s | 6.6-7.5 m | 51-58 |
+| speed sticks, 1 m/s | 64/64/64/62 | 1.2-1.3 s | 1.0-1.2 m | 0 to 2 m/s wind |
+| speed sticks, 2 m/s | 64/64/64/58 | 1.4 s | 2.1-2.2 m | 13-21 |
+
+At 2 m/s commanded the speed peaks at 3.2-3.4 m/s (it overshoots to 2.9 and settles at 2.3) and the failsafe firings are all the distance criterion: the drone is more than failsafe_distance 10 m from its first fix when the sticks are let go, so it brakes, holds, and hands back at the next input. By design; raise failsafe_distance for flights that go further.
+
+**Smaller:** hover.py now asserts that flight.py HOVER_GAINS is the number of HoverGains members (adding return_speed shifted every Command field after the gains without an error until the count was fixed). The preflight's 'Outdoor hold' row asks for hover_thrust_direction, hover_kd, hover_gps_calibrate and hover_return_speed. The pre-mortem's "left motor trend" was wrong: it is a step that coincides with the hardware changes, nothing for software.
+
+**Not flown.** After the flash hover_gps_calibrate 5 and hover_return_speed 1 come by default; hover_thrust_direction 0.8 and hover_kd 1.5 (stored 2.5) have to be set.

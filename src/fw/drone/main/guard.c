@@ -18,13 +18,17 @@
 #define FAILSAFE_DRIFT 3.0f
 // The failsafe's landing descends at least this fast (m/s), as the link-loss landing does (flight_rt.c LINK_LAND_RATE): down in seconds, so it drifts less on the way.
 #define FAILSAFE_LAND_RATE 1.0f
+// Braking without a heading (the hold's GPS heading not pinned, hover.h aligned) cannot aim: the hold flies its calibration pulses until it is (hover.c calibrate, state searching), and after this long without one (s) the failsafe lands.
+#ifndef FAILSAFE_SEARCH
+#define FAILSAFE_SEARCH 3.0f
+#endif
 
 int guard_hover(Guard *guard, const GuardGains *g, HoverState *hover, HoverGains *gains, int mode, int64_t now_us, float dt) {
     // A new hover (hover_rest cleared the last): a new failsafe.
     if (!hover->engaged) {
         guard->failsafe = FAILSAFE_OFF;
         guard->far = false;
-        guard->phase_time = guard->fast = guard->quiet = 0;
+        guard->phase_time = guard->fast = guard->quiet = guard->blind = 0;
     }
     // The laptop's horizontal input: a tilt (free flight without the tag) or a hold-point nudge moving (the arrows on the tag, a speed on the GPS hold, a pattern's hold-point channels).
     bool input = gains->stick_pitch || gains->stick_roll || fabsf(gains->nudge_forward - hover->nudge[0]) > NUDGE_STILL || fabsf(gains->nudge_left - hover->nudge[1]) > NUDGE_STILL;
@@ -32,9 +36,10 @@ int guard_hover(Guard *guard, const GuardGains *g, HoverState *hover, HoverGains
     bool seeing = hover->have_pose && now_us - hover->seen_us <= GUARD_LOST_US;
     bool located = gains->gps_tau > 0 && hover->gps_us && now_us - hover->gps_us <= GUARD_GPS_US;
     bool flying = hover->engaged && !hover->landed && hover->lifted >= 0;
-    // Only the GPS-corrected estimate is trusted: the drag model alone read under 0.2 m/s while the drone flew 3 m in 4.5 s (2026-11-02 02:46 UTC).
+    // Only the GPS is trusted: the drag model alone read under 0.2 m/s while the drone flew 3 m in 4.5 s (2026-11-02 02:46 UTC). The speed and the distance from the first fix are the GPS's own (hover.h gps_fix), not the hold's estimates, which the GPS corrects only once the hold's heading is pinned: unpinned they read slow and near while the drone flew off (sw/sim/outdoor.py 2026-11-09: 27 and 41 m in 25 s with no failsafe, and one braked to 0.5 m/s by the estimate at 3.5 m/s over the ground).
     bool watching = mode == HOVER_HOLD && flying && located && !seeing;
-    float speed = hypotf(hover->velocity[0], hover->velocity[1]), distance = hypotf(hover->track[0], hover->track[1]);
+    const float *here = hover->gps_fix + 2;
+    float speed = located ? hypotf(hover->gps_fix[0], hover->gps_fix[1]) : hypotf(hover->velocity[0], hover->velocity[1]), distance = hypotf(here[0], here[1]);
     guard->fast = watching && !input && g->speed > 0 && speed > g->speed ? guard->fast + dt : 0;
     guard->phase_time += dt;
     int was = guard->failsafe;
@@ -47,26 +52,31 @@ int guard_hover(Guard *guard, const GuardGains *g, HoverState *hover, HoverGains
         break;
     case FAILSAFE_BRAKE:
         // A landing asked for while it brakes (the pilot's, or the link-loss one) is the failsafe's: still braking hard and at least FAILSAFE_LAND_RATE. On 2026-11-09 the pilot pressed land at 05:55:49 and 06:39:10 UTC, 3 and 4.5 s after the failsafe would have fired, into a 0.5 m/s descent at 3.5-4.7 m/s.
+        if (!hover->aligned) guard->blind += dt;
         if (!flying) guard->failsafe = FAILSAFE_OFF;
         else if (mode != HOVER_HOLD) guard->failsafe = FAILSAFE_LAND;
-        else if (speed < FAILSAFE_SLOW) guard->failsafe = FAILSAFE_HOLD;
-        // Not slow in time, it lands. Holding instead unless still over failsafe_speed (with a 5 m FAILSAFE_DRIFT) let more drones fly off in sw/sim/outdoor.py (2026-11-09: at 3 m/s of wind 1 of 48 past 10 m against none, worst distance from takeoff p90 26 m against 22, 8 lost against 2).
-        else if (guard->phase_time >= g->land) guard->failsafe = FAILSAFE_LAND;
+        // Slow without a heading is no hold either: it searches on.
+        else if (hover->aligned && speed < FAILSAFE_SLOW) guard->failsafe = FAILSAFE_HOLD;
+        // No heading in FAILSAFE_SEARCH, or with one (the time without it not counted) not slow in time, it lands. Holding instead unless still over failsafe_speed (with a 5 m FAILSAFE_DRIFT) let more drones fly off in sw/sim/outdoor.py (2026-11-09: at 3 m/s of wind 1 of 48 past 10 m against none, worst distance from takeoff p90 26 m against 22, 8 lost against 2).
+        else if (guard->blind >= FAILSAFE_SEARCH || guard->phase_time - guard->blind >= g->land) guard->failsafe = FAILSAFE_LAND;
         break;
     case FAILSAFE_HOLD:
         // The pilot takes over by touching the stick, or by asking for a landing; flying off again from the hold lands.
         if (mode != HOVER_HOLD || !flying || input) guard->failsafe = FAILSAFE_OFF;
-        else if (guard->fast >= g->time || hypotf(hover->track[0] - guard->anchor[0], hover->track[1] - guard->anchor[1]) > FAILSAFE_DRIFT) guard->failsafe = FAILSAFE_LAND;
+        else if (guard->fast >= g->time || (located && hypotf(here[0] - guard->anchor[0], here[1] - guard->anchor[1]) > FAILSAFE_DRIFT)) guard->failsafe = FAILSAFE_LAND;
         break;
     default:
         // Landing: until touchdown, or the hover is switched off (manual flight).
         break;
     }
     if (guard->failsafe != was) {
-        guard->phase_time = guard->fast = 0;
-        guard->anchor[0] = hover->track[0];
-        guard->anchor[1] = hover->track[1];
+        guard->phase_time = guard->fast = guard->blind = 0;
+        guard->anchor[0] = here[0];
+        guard->anchor[1] = here[1];
+        // The search pulses start with the brake.
+        if (guard->failsafe == FAILSAFE_BRAKE) hover->calibrate_time = 0;
     }
+    hover->searching = guard->failsafe == FAILSAFE_BRAKE;
     if (guard->failsafe == FAILSAFE_OFF) return mode;
     // The laptop's stick and horizontal nudge are ignored (the nudge held where it was, so its speed fades to none).
     gains->stick_pitch = gains->stick_roll = 0;

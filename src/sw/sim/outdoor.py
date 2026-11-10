@@ -1,5 +1,5 @@
 """
-Outdoor hovers in the hover sim, without the tag: uv run -m sw.sim.outdoor [--runs 48] [--winds 0,2,4,6] [--seconds 40] [--gps] [--baro [TAU]] [--flow LOW,HIGH] [--set name=value,...] [--settings recording] [--airframe models/airframe_<day>.json] [--nominal] [--sticks 'start,pitch,roll,seconds;...'] [--flyaway m] [--gps-outage start,seconds] [--ekf] [--workers N]
+Outdoor hovers in the hover sim, without the tag: uv run -m sw.sim.outdoor [--runs 48] [--winds 0,2,4,6] [--seconds 40] [--gps] [--baro [TAU]] [--flow LOW,HIGH] [--set name=value,...] [--settings recording] [--airframe models/airframe_<day>.json] [--nominal] [--sticks 'start,pitch,roll,seconds;...'] [--speed-sticks 'start,forward,left,seconds;...'] [--flyaway m] [--gps-outage start,seconds] [--ekf] [--workers N]
 
 Each run takes off in Free mode (hover_camera 0) on a recording's settings (default: the newest 9-inch tag hover), on the 9-inch airframe as calibrated to its closed-loop hovers (calibrate_sim), climbs to --climb and holds for --seconds in the open air: a mean wind of the given speed from a random direction, with turbulence after MIL-F-8785C's low-altitude Dryden scales at the hover height (horizontal RMS 0.2 of the mean wind over 15 m, vertical 0.1 over the height; plus 0.1 m/s of still-air gusts) and the rotors' inflow damping the vertical airspeed. The room's torque drifts stay (the airframe's own noise); its force drifts, the room's recirculation, are replaced by the wind. With --gps the drone's GPS (sweep.run plant["gps"]: 10 Hz, 0.05 m/s velocity noise (--gps-noise), 0.7 m of wandering position error) feeds the hold, its heading belief (hover_gps_heading) off by up to ±30 degrees (--heading-error); held runs also report the hold frame's heading error at the end and when hover.c pinned the heading from the GPS (versions with that gate). With --baro the barometer (BARO: 0.2 m of noise, 0.3 m of drift over a minute, rotor wash near the floor) feeds the height at hover_baro_tau TAU (default 1 s), which also caps the hold at hover_ceiling (here --climb). With --flow the forward camera's optical flow feeds it too (sweep.run plant["flow"]), the scene at a distance drawn per run that the drone only guesses (hover_flow_depth).
 
@@ -7,7 +7,7 @@ Indoors nothing measured the airframe above about 0.5 m/s of airspeed, so every 
 
 The firmware's fly-away failsafe (fw/drone/main/guard.c; on at settings.def's defaults, off with --set failsafe_speed=0,failsafe_distance=0) flies with the hover. A run it lands counts as "failsafe landed" rather than touched down.
 
-It prints, per wind: how many runs lost attitude (past 45 degrees), touched down unasked, were landed by the failsafe or flew off (beyond 10 m), and over the rest the median and 90th percentile of the horizontal distance from the takeoff point and of the height error over the hold, the worst tilt, the pitch RMS and the pitch's RMS in the swing band (0.4-1.6 Hz, as pitch_check measures the swing). With --sticks also the pitch's swing after each release and the braking: peak ground speed, and the time and distance from release until under STOPPED.
+It prints, per wind: how many runs lost attitude (past 45 degrees), touched down unasked, were landed by the failsafe or flew off (beyond 10 m), and over the rest the median and 90th percentile of the horizontal distance from the takeoff point and of the height error over the hold, the worst tilt, the pitch RMS and the pitch's RMS in the swing band (0.4-1.6 Hz, as pitch_check measures the swing). With --sticks (the laptop's tilt held) or --speed-sticks (the hold point flown at a speed, as the gamepad's stick is on the GPS hold) also the pitch's swing after each release and the braking: peak ground speed, and the time and distance from release until under STOPPED.
 """
 
 import argparse
@@ -23,7 +23,7 @@ import numpy as np
 from sw.fit import settings as recording_settings
 from sw.sim import airframe as A
 from sw.sim.pitch_check import SWING, band
-from sw.sim.sweep import BARO, CURRENT, run
+from sw.sim.sweep import BARO, CURRENT, NUDGE_MAX, run
 
 MODELS = Path(__file__).with_name("models")
 RECORDINGS = Path(__file__).parents[1] / "recordings"
@@ -137,6 +137,10 @@ def fly(job):
         s["hover_gps_heading"] = p["gps"]["heading"] + random.Random(seed + 1).uniform(-args.heading_error, args.heading_error)
     if args.sticks:
         p["stick"] = [(SETTLE + start, pitch, roll, length) for start, pitch, roll, length in args.sticks]
+    if args.speed_sticks:
+        # As the dashboard sends it without the tag: the nudge wrapped at its limit, only its speed counting.
+        p["nudge"] = [(SETTLE + start, forward, left, length) for start, forward, left, length in args.speed_sticks]
+        p["nudge_wrap"] = NUDGE_MAX
     if args.gps and args.gps_outage:
         p["gps"]["outage"] = (SETTLE + args.gps_outage[0], args.gps_outage[1])
     if args.ekf or s.get("hover_ekf", 0) > 0:
@@ -188,9 +192,9 @@ def fly(job):
             out["calibrate_distance"] = float(np.hypot(*(position[span, :2] - position[pulsing[0], :2]).T).max())
     held = {"fate": "held", "distance": float(np.median(distance)), "distance_max": float(distance.max()), "height": float(np.sqrt(np.mean(height ** 2))),
             "tilt": float(np.abs(angles[hold]).max()), "pitch_rms": float(np.std(angles[hold, 1])), "swing_band": float(np.sqrt(np.mean(band(angles[:, 1], *SWING)[hold] ** 2)))}
-    if args.sticks:
+    if args.sticks or args.speed_sticks:
         # After each stick is let go (SETTLE + start + length after liftoff, as p["stick"] flies it): the pitch's peak to peak from 0.3 s to 3 s after (the hold braking, and any swing it leaves).
-        releases = [(SETTLE + start, SETTLE + start + length) for start, _, _, length in args.sticks]
+        releases = [(SETTLE + start, SETTLE + start + length) for start, _, _, length in (args.sticks or []) + (args.speed_sticks or [])]
         swings = [float(np.ptp(angles[(t > end + 0.3) & (t < end + 3.0), 1])) for _, end in releases if ((t > end + 0.3) & (t < end + 3.0)).any()]
         held["swing"] = max(swings) if swings else 0.0
         # Braking: the peak ground speed from the stick to STOP_WINDOW after release, how long after release the speed first falls under STOPPED, and how far the drone went from where it was let go by then (NaN if it never stops in the window).
@@ -230,6 +234,7 @@ def main():
     parser.add_argument("--source", help="another copy of hover.c to fly (sw/sim/landing_test.py install), e.g. the previous commit's")
     parser.add_argument("--defines", default="", help="compile-time overrides for --source, space separated")
     parser.add_argument("--sticks", type=lambda text: [tuple(float(v) for v in item.split(",")) for item in text.split(";")], help="a pilot's stick sequence during the hold: start s after settling, pitch and roll degrees, seconds held; ';' between sticks (e.g. '5,10,0,2;12,-10,0,2'); adds each run's largest pitch peak to peak 0.3-3 s after a stick is let go, and the braking: peak ground speed, time and distance from release to under STOPPED")
+    parser.add_argument("--speed-sticks", type=lambda text: [tuple(float(v) for v in item.split(",")) for item in text.split(";")], help="the same as speeds: start s after settling, forward and left m/s, seconds held (the gamepad's right stick on the GPS hold, which moves the hold point at up to hover_nudge_speed); reported as --sticks")
     parser.add_argument("--level-sd", type=float, default=0.0, help="degrees: each run's level-reference error drawn from a normal of this spread in roll and pitch (2026-11-09 flights: about 1.3)")
     parser.add_argument("--gps-outage", type=lambda text: tuple(float(v) for v in text.split(",")), help="start,seconds: the GPS gives no solution for this long, from start s after settling (sweep.run plant[\"gps\"][\"outage\"])")
     parser.add_argument("--ekf", action="store_true", help="run the Kalman filter (fw/drone/main/ekf.c) beside the hover in every run and print its errors against the truth; --set hover_ekf=1 (or 2, its height too) has the hold fly on it")
@@ -257,7 +262,7 @@ def main():
         if held:
             q = lambda key, pct: np.percentile([r[key] for r in held], pct)
             line += f" | distance median {q('distance', 50):.2f} m (p90 {q('distance', 90):.2f}, worst max {max(r['distance_max'] for r in held):.1f}), height rms {q('height', 50):.2f} m (p90 {q('height', 90):.2f}), tilt max {q('tilt', 50):.1f}° (p90 {q('tilt', 90):.1f}), pitch rms {q('pitch_rms', 50):.1f}°, swing band (0.4-1.6 Hz) rms {q('swing_band', 50):.1f}° (p90 {q('swing_band', 90):.1f})"
-            if args.sticks:
+            if args.sticks or args.speed_sticks:
                 line += f", swing after release {q('swing', 50):.1f}° (p90 {q('swing', 90):.1f})"
                 stopped = [r for r in held if not math.isnan(r["stop_time"])]
                 line += f", peak speed {q('peak', 50):.2f} m/s (p90 {q('peak', 90):.2f}), stopped under {STOPPED} m/s in {len(stopped)}/{len(held)}"

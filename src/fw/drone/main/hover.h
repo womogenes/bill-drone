@@ -60,6 +60,8 @@ typedef struct {
     float gps_calibrate;
     // The Kalman filter (ekf.c, hover_estimate): 0 = the hold flies its own estimates and the filter is only logged; 1 = without the tag the hold flies the filter's heading, horizontal velocity and travel wherever the filter is sure of them (HoverEstimate horizontal), its own estimates running underneath for where it is not; 2 = and, while holding, the filter's height and climb rate from liftoff (a landing keeps the hold's own, carried on from the filter's).
     float ekf;
+    // The fastest the hold flies back to its hold point without the tag (m/s; 0 = no limit): the place's pull is capped where the velocity damping meets it at this speed (the offset counts as at most return_speed × kd / kp), so a hold point meters away is flown back to and not lunged at. Uncapped the pull asks for kp / kd of speed per meter (1.3 m/s at kp 2, kd 1.5), more than the drone can stop from: in sw/sim/outdoor.py the hold points left 3-7 m behind by the drift before the heading was pinned were flown back to at 2.5-4.3 m/s and overshot until the fly-away failsafe landed the drone.
+    float return_speed;
 } HoverGains;
 
 // One camera sighting: the tag centre in the camera frame (m; right, down, forward), the wall's normal into it in the camera frame when the camera settled the tag's tilt (zero otherwise), and its capture time.
@@ -183,6 +185,11 @@ typedef struct {
     HoverEstimate estimate;
     bool estimated, flown, flown_tied;
     float flown_position[2], flown_anchor[2];
+    // The heading evidence's steady part: the fading mean of the blocks' changes (GPS north, east; inertial x, y; m/s) and the blocks it is worth, taken off each change before the product.
+    float heading_steady[4], heading_steady_weight;
+    // The newest fix as the GPS gave it, which needs no heading (m/s north, east; m north, east of the first fix), for the fly-away failsafe (guard.c); and whether the failsafe is braking, when the calibration pulses run unasked until the heading is pinned.
+    float gps_fix[4];
+    bool searching;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

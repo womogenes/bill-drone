@@ -61,7 +61,7 @@ const tiltKeys = {
   ArrowRight: { axis: 'roll', direction: 1 },
 } as const;
 const yawKeys = ['KeyA', 'KeyD'];
-// In hover and landing W and S raise and lower the hold point while held, at the drone's hover_climb_rate. On the tag the arrows move it too (toward the tag and to the drone's left: [forward, left]), at hover_nudge_speed, and the map shows it as the target; without the tag they tilt the drone directly (fw/drone/main/hover.c stick).
+// In hover and landing W and S raise and lower the hold point while held, at the drone's hover_climb_rate. On the tag the arrows move it too (toward the tag and to the drone's left: [forward, left]), at hover_nudge_speed, and the map shows it as the target; without the tag but on the GPS hold they fly that speed, as the gamepad's stick does, and without either they tilt the drone directly (fw/drone/main/hover.c stick).
 const NUDGE_TICK_MS = 50;
 const GAMEPAD_TICK_MS = 50;
 const nudgeKeys = { KeyW: 1, KeyS: -1 } as const;
@@ -222,6 +222,41 @@ const gainSections: { title: string; needs?: string; fields: Field[] }[] = [
         min: -180,
         max: 180,
       },
+      {
+        key: 'hover_gps_calibrate',
+        label: 'Heading search tilt (°, 0 off)',
+        min: 0,
+        max: 10,
+      },
+      {
+        key: 'hover_thrust_direction',
+        label: 'Thrust direction share (0 off)',
+        min: 0,
+        max: 1.5,
+      },
+      { key: 'hover_kd', label: 'Velocity damping (1/s)', min: 0 },
+      {
+        key: 'hover_return_speed',
+        label: 'Return speed to the hold point (m/s, 0 no limit)',
+        min: 0,
+        max: 5,
+      },
+      {
+        key: 'hover_ekf',
+        label: 'Kalman filter (0 logged, 1 flown, 2 and its height)',
+        min: 0,
+        max: 2,
+      },
+    ],
+  },
+  {
+    title: 'Fly-away failsafe',
+    fields: [
+      { key: 'failsafe_speed', label: 'Speed (m/s, 0 off)', min: 0 },
+      { key: 'failsafe_distance', label: 'Distance (m, 0 off)', min: 0 },
+      { key: 'failsafe_time', label: 'Time over the speed (s)', min: 0.2 },
+      { key: 'failsafe_land', label: 'Brake before landing (s)', min: 1 },
+      { key: 'failsafe_tilt', label: 'Brake tilt (°)', min: 0, max: 30 },
     ],
   },
   {
@@ -399,7 +434,8 @@ export const ControlPanel = memo(function ControlPanel({
           left += y * keySizes.current.move * tick;
         }
       }
-      if (forward || left || up) onNudge(forward, left, up);
+      if (forward || left || up)
+        onNudge(forward, left, up, freeRef.current && gpsHoldRef.current);
     }
 
     function stopNudging() {
@@ -425,13 +461,13 @@ export const ControlPanel = memo(function ControlPanel({
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat || held.has(event.code)) return;
-      // There is no manual flight: outside hover only L and yaw act. In hover W and S, and on the tag the arrows, move the hold point while held, and are not held flight keys, so their keyup and a blur leave hover alone; without the tag the arrows are held tilt.
+      // There is no manual flight: outside hover only L and yaw act. In hover W and S, and on the tag or the GPS hold the arrows, move the hold point while held, and are not held flight keys, so their keyup and a blur leave hover alone; with neither the arrows are held tilt.
       const hovering = modeRef.current !== MANUAL;
       if (!hovering && (event.code in nudgeKeys || event.code in tiltKeys))
         return;
       if (
         event.code in nudgeKeys ||
-        (event.code in moveKeys && !freeRef.current)
+        (event.code in moveKeys && (!freeRef.current || gpsHoldRef.current))
       ) {
         nudging.add(event.code);
         nudge();

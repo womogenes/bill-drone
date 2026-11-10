@@ -110,8 +110,9 @@ THRUST_VOLTAGE = MODEL_OFFSET + len(MODEL_KEYS)
 YAW_I = THRUST_VOLTAGE + 1
 # The speed moment compensation (rad/s² per m/s, 0 = off; flight_math.c), runtime-only after yaw_i.
 PITCH_SPEED = YAW_I + 1
-# The pitch damping's rate low-pass time constant (s, 0 = raw rate; flight_math.c), the last runtime-only field: after pitch_speed come the 51 hover gains (sw/sim/hover.py GAIN_KEYS; not imported here, since importing hover.py compiles hover.c), hover_camera and auto_trim.
-DAMPING_TAU = PITCH_SPEED + 1 + 51 + 2
+# The pitch damping's rate low-pass time constant (s, 0 = raw rate; flight_math.c), the last runtime-only field: after pitch_speed come the hover gains (HOVER_GAINS of them: sw/sim/hover.py GAIN_KEYS, which checks the count; not imported here, since importing hover.py compiles hover.c), hover_camera and auto_trim.
+HOVER_GAINS = 52
+DAMPING_TAU = PITCH_SPEED + 1 + HOVER_GAINS + 2
 # The roll setpoint's own slew rate (rad/s, 0 = target_rate; flight_math.c), after pitch_damping_tau.
 ROLL_TARGET_RATE = DAMPING_TAU + 1
 
@@ -131,7 +132,7 @@ class Controller:
         # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, the takeoff setpoint state, the upright-takeoff flag, the yaw integrator and the damping's filtered pitch rate.
         self.state = array("f", [0.0] * 18)
         # Motion (6 floats), tuning (TUNING_LAYOUT), then model parameters.
-        # Runtime-only Command fields after the model (thrust_voltage at THRUST_VOLTAGE, yaw_i at YAW_I, hover, the radio settings and the guards' GuardGains, 66 floats in all) start at zero: off unless the caller sets them.
+        # Runtime-only Command fields after the model (thrust_voltage at THRUST_VOLTAGE, yaw_i at YAW_I, hover, the radio settings and the guards' GuardGains, 67 floats in all) start at zero: off unless the caller sets them.
         self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS] + [0.0] * 96)
         for key in THRUST_SCALE_KEYS:
             self.command[6 + TUNING_LAYOUT.index(key)] = 1.0

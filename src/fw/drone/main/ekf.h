@@ -60,6 +60,8 @@ typedef struct {
     int bound;
     // The heading search (as hover.c learn_heading): the horizontal specific force summed since the search began (reckoned, m/s: the velocity the IMU alone would give), the block being averaged (GPS north and west, reckoned's two), the last block's means and middle, and the evidence (the summed products of their changes, the products' weight and squares, reckoned's changes squared, the angle they give and its standard deviation).
     float reckoned[2], block[4], last[4], turn[2], turn_weight, turn_square[2], turn_inertial, evidence, heading_sd;
+    // The steady part of the blocks' changes (their fading mean, and the blocks it is worth), taken off each change before the products.
+    float steady[4], steady_weight;
     int block_count;
     int64_t block_start_us, block_us, search_us;
     // Diagnostics: the last innovations over their standard deviations, and how many GPS solutions (horizontal velocity, position) and barometer readings in a row the gate has refused.

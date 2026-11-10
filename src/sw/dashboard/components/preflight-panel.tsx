@@ -18,6 +18,13 @@ const LINK_MIN_HZ = 15;
 const HOLD_ACCURACY = 8;
 const GOOD_ACCURACY = 2;
 const GOOD_SATELLITES = 8;
+// Flying free on the GPS hold, the settings the 2026-11-09 fly-aways are fixed with (src/sw/sim/models/NOTES.md): each with the value to set and whether a value will do. The thrust direction and the damping start at the indoor values in new firmware; the heading search and the return speed start on.
+const OUTDOOR: [string, number, (value: number) => boolean][] = [
+  ['hover_thrust_direction', 0.8, (value) => value >= 0.5],
+  ['hover_kd', 1.5, (value) => value <= 1.5],
+  ['hover_gps_calibrate', 5, (value) => value > 0],
+  ['hover_return_speed', 1, (value) => value > 0 && value <= 1.5],
+];
 
 type Level = 'go' | 'caution' | 'stop';
 type Check = { label: string; level: Level; reason: string };
@@ -67,6 +74,11 @@ function checks(
   const live = !!gps && gps.age_ms !== null && gps.age_ms < 1000;
   const hold = control?.hover_gps_tau;
   const recorder = reading.recorder;
+  const values = control as unknown as Record<string, number | undefined>;
+  const unset = OUTDOOR.filter(([key, , fine]) => {
+    const value = values?.[key];
+    return value === undefined || !fine(value);
+  });
 
   return [
     link,
@@ -132,6 +144,23 @@ function checks(
             level: free ? 'stop' : 'caution',
             reason: 'Off (hover_gps_tau 0)',
           },
+    ...(free && hold
+      ? [
+          unset.length
+            ? ({
+                label: 'Outdoor hold',
+                level: 'caution',
+                reason: unset.some(([key]) => values[key] === undefined)
+                  ? 'Not in this firmware'
+                  : `Set ${unset.map(([key, value]) => `${key} ${value}`).join(', ')}`,
+              } as Check)
+            : ({
+                label: 'Outdoor hold',
+                level: 'go',
+                reason: 'Thrust direction, heading search and return speed set',
+              } as Check),
+        ]
+      : []),
     volts === undefined
       ? { label: 'Battery', level: 'stop', reason: 'No reading' }
       : volts <= NO_PACK_V

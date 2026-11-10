@@ -112,6 +112,8 @@ enum { TILT = 0, VELOCITY = 3, POSITION = 6, GYRO_BIAS = 9, ACCEL_BIAS = 12, BAR
 #define HEADING_SURE 0.1745f
 #define HEADING_BLOCKS 2
 #define HEADING_NOISE 0.08f
+#define HEADING_STEADY_TAU 5.0f
+#define HEADING_STEADY_PRIOR 3.0f
 #define HEADING_FLOOR 0.05f
 #define MAX_DT 0.05f
 
@@ -277,6 +279,8 @@ static void restart_search(Ekf *ekf) {
     ekf->block_count = 0;
     ekf->block_us = 0;
     ekf->search_us = 0;
+    memset(ekf->steady, 0, sizeof(ekf->steady));
+    ekf->steady_weight = HEADING_STEADY_PRIOR;
     ekf->turn[0] = ekf->turn[1] = ekf->turn_weight = ekf->turn_square[0] = ekf->turn_square[1] = ekf->turn_inertial = 0;
     ekf->heading_sd = PI;
 }
@@ -287,6 +291,8 @@ static bool search(Ekf *ekf, const HoverGps *fix) {
         ekf->block_count = 0;
         ekf->block_us = 0;
         ekf->reckoned[0] = ekf->reckoned[1] = 0;
+        memset(ekf->steady, 0, sizeof(ekf->steady));
+        ekf->steady_weight = HEADING_STEADY_PRIOR;
     }
     ekf->search_us = fix->capture_us;
     if (!ekf->block_count) {
@@ -302,9 +308,18 @@ static bool search(Ekf *ekf, const HoverGps *fix) {
     int64_t middle = (ekf->block_start_us + fix->capture_us) / 2;
     bool sure = false;
     if (ekf->block_us) {
-        float cn = mean[0] - ekf->last[0], cw = mean[1] - ekf->last[1], ax = mean[2] - ekf->last[2], ay = mean[3] - ekf->last[3];
-        float x = cn * ax + cw * ay, y = cw * ax - cn * ay;
         float span = (middle - ekf->block_us) / 1e6f, keep = expf(-span / HEADING_TAU);
+        // Each change less its steady part, as hover.c's (HEADING_STEADY_TAU there).
+        float change[4];
+        ekf->steady_weight = ekf->steady_weight * expf(-span / HEADING_STEADY_TAU) + 1;
+        float share = 1 / ekf->steady_weight, scale = sqrtf(1 - share);
+        for (int i = 0; i < 4; i++) {
+            float beyond = mean[i] - ekf->last[i] - ekf->steady[i];
+            ekf->steady[i] += beyond * share;
+            change[i] = beyond * scale;
+        }
+        float cn = change[0], cw = change[1], ax = change[2], ay = change[3];
+        float x = cn * ax + cw * ay, y = cw * ax - cn * ay;
         ekf->turn[0] = ekf->turn[0] * keep + x;
         ekf->turn[1] = ekf->turn[1] * keep + y;
         ekf->turn_weight = ekf->turn_weight * keep * keep + x * x + y * y;
