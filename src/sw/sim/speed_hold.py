@@ -6,13 +6,12 @@ Forward airspeed pitches this airframe nose-up (the rotors flapping back), and t
 
 import argparse
 import json
-import math
 from pathlib import Path
 
 import numpy as np
 
-from sw.fit import settings as recording_settings
-from sw.flight_log import read_flight
+from sw.flight_log import read_flight, test_pattern
+from sw.flight_log import settings as recording_settings
 from sw.sim import identify_airframe as N
 
 SMOOTH = 2.0
@@ -62,10 +61,9 @@ def simulated(path, airframe, seconds, seed):
     s = recording_settings(path) | {"hover_distance": 2.0}
     plant = CURRENT | {"airframe": airframe | {f"{a}_push": 0.0 for a in ("roll", "pitch", "yaw")}}
     # The recording's test pattern (sw/excite.py speed: the hold point flown out and back at steady speeds), flown the same way.
-    events = path.with_suffix(".jsonl")
-    patterns = [e for e in map(json.loads, events.read_text().splitlines()) if e.get("type") == "pattern"] if events.exists() else []
-    if patterns:
-        plant["excite"] = patterns[-1]
+    played = test_pattern(path)
+    if played:
+        plant["excite"] = played
     log = []
     result = run(s, plant, seconds=seconds, seed=seed, log=log, hover=True)
     if not result["stable"] or result.get("liftoff_s") is None:

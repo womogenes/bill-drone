@@ -8,8 +8,6 @@ The camera timing is the FPV stream's: a frame every PERIOD_S, read out over sce
 """
 
 import argparse
-import json
-import math
 import os
 from pathlib import Path
 
@@ -17,17 +15,20 @@ import numpy as np
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 
+from sw.flight_log import recording  # noqa: E402
+from sw.flight_log import settings as recording_settings  # noqa: E402
 from sw.sim import sweep  # noqa: E402
 from sw.vio import dataset, scene  # noqa: E402
 
 PERIOD_S = 0.026
-RECORDING = Path(__file__).resolve().parents[1] / "recordings/2026-10-29T07-20-47-024Z_2551243463.jsonl"
+# The indoor tag hover of 2026-10-29 07:20 UTC, whose settings the sim flies.
+RECORDING = "2026-10-29T07-20-47"
 GRAVITY = 9.80665
 
 
 def fly(seconds, seed, wind, height):
     """The sim's log: per 10 ms tick, position, roll/pitch/yaw and the IMU as read (gyro rad/s, specific force g)."""
-    settings = json.loads(RECORDING.read_text().splitlines()[0])["settings"] | {"hover_ceiling": 2.0}
+    settings = recording_settings(recording(RECORDING)) | {"hover_ceiling": 2.0}
     plant = sweep.IDENTIFIED_ESC | {"wind": wind, "wind_tau": 2.0, "nudge": (6.0, 0.0, 0.3, 5.0),
                                     "camera": sweep.IDENTIFIED_ESC["camera"] | {"tag": (2.0, 0.1, height)}}
     log = []

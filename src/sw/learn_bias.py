@@ -11,8 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.fit import settings
-from sw.flight_log import read_flight
+from sw.flight_log import read_flight, settings
 
 BRIDGE = "http://127.0.0.1:8765/settings"
 # Airborne samples count as steady when the body rate is below this (deg/s), from this long after liftoff (s).

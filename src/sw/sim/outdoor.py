@@ -20,13 +20,13 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.fit import settings as recording_settings
+from sw.flight_log import recording
+from sw.flight_log import settings as recording_settings
 from sw.sim import airframe as A
 from sw.sim.pitch_check import SWING, band
 from sw.sim.sweep import BARO, CURRENT, NUDGE_MAX, run
 
 MODELS = Path(__file__).with_name("models")
-RECORDINGS = Path(__file__).parents[1] / "recordings"
 SETTINGS = "2026-11-02T08-15-23"
 AIRFRAME = MODELS / "airframe_2026-11-02_9in_calibrated.json"
 DISTURBANCES = MODELS / "disturbances_2026-11-02_9in_calibrated.json"
@@ -242,7 +242,7 @@ def main():
     parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=(0.5, 3.0), help="range the forward speed moment is drawn in, times the airframe's (log-uniform; default 0.5,3 from before any flight measured it; models fitted to the outdoor flights warrant narrower)")
     args = parser.parse_args()
     airframe = json.loads(args.airframe.read_text())
-    flown = recording_settings(next(RECORDINGS.glob(args.settings + "*.bin"))) | {"hover_camera": 0, "hover_center": 0, "hover_climb": args.climb, "hover_ceiling": args.climb}
+    flown = recording_settings(recording(args.settings)) | {"hover_camera": 0, "hover_center": 0, "hover_climb": args.climb, "hover_ceiling": args.climb}
     if args.gps:
         flown |= {"hover_gps_tau": 0.5, "hover_gps_place_tau": 2.0}
     if args.baro:

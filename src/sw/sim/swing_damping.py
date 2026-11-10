@@ -15,10 +15,9 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.signal import welch
 
-from sw.fit import settings as recording_settings
+from sw.flight_log import recording
+from sw.flight_log import settings as recording_settings
 from sw.sim import pitch_check as PC
-
-RECORDINGS = Path(__file__).parents[1] / "recordings"
 BAND = (0.2, 3.0)
 
 
@@ -60,7 +59,7 @@ def main():
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     args = parser.parse_args()
     overrides = {key: float(value) for key, value in (item.split("=") for item in args.set.split(",") if item)}
-    hops = [(path, PC.real(path)) for path in (next(RECORDINGS.glob(name + "*.bin")) for name in args.recordings)]
+    hops = [(path, PC.real(path)) for path in map(recording, args.recordings)]
     for path, real in hops:
         frequency, zeta, swing = resonance(real["pitch"][100:])
         print(f"real {path.name[:19]}: {frequency:.2f} Hz, zeta {zeta:.2f}, swing band rms {swing:.1f}", flush=True)

@@ -15,16 +15,15 @@ It prints per case how the runs ended (played to the end, or stopped and why, wi
 
 import argparse
 import json
-import math
 import os
 from multiprocessing import Pool
 from pathlib import Path
 
 import numpy as np
 
-from sw.fit import settings as recording_settings
+from sw.flight_log import recording, test_pattern
+from sw.flight_log import settings as recording_settings
 
-RECORDINGS = Path(__file__).parents[1] / "recordings"
 TAG_SETTINGS = "2026-10-29T07-20-47"
 GPS_SETTINGS = "2026-11-09T06-38-51"
 AFTER = 12.0
@@ -46,8 +45,7 @@ def plant_for(case, seed):
         p, _ = plant(model("airframe_2026-11-08b.json"), 2.0, seed, True, False, 1.2, speed_draw=(0.7, 1.4), baro=True)
     else:
         p = dict(IDENTIFIED_ESC)
-    events = map(json.loads, next(RECORDINGS.glob(CHIRP_FROM + "*.jsonl")).read_text().splitlines())
-    chirp = next(e for e in events if e["type"] == "pattern") | {"after": AFTER, "repeat": 1}
+    chirp = test_pattern(recording(CHIRP_FROM)) | {"after": AFTER, "repeat": 1}
     p = dict(p) | {"excite": SPEED if case == "speed" else STILL if case == "still" else DOUBLETS if case in ("gps", "tilt") else chirp}
     # The pattern starts about AFTER + 1 s from the run's start (liftoff, then collective reaching integrate_throttle).
     if case == "pushed":
@@ -64,9 +62,9 @@ def fly(job):
 
     case, seed = job
     if case in ("gps", "tilt", "still"):
-        settings = recording_settings(next(RECORDINGS.glob(GPS_SETTINGS + "*.bin"))) | {"hover_camera": 0, "hover_center": 0, "hover_climb": 1.2, "hover_ceiling": 1.2, "hover_gps_tau": 0.5, "hover_gps_place_tau": 2.0, "hover_baro_tau": 2.0}
+        settings = recording_settings(recording(GPS_SETTINGS)) | {"hover_camera": 0, "hover_center": 0, "hover_climb": 1.2, "hover_ceiling": 1.2, "hover_gps_tau": 0.5, "hover_gps_place_tau": 2.0, "hover_baro_tau": 2.0}
     else:
-        settings = recording_settings(next(RECORDINGS.glob(TAG_SETTINGS + "*.bin")))
+        settings = recording_settings(recording(TAG_SETTINGS))
     if case == "tilt":
         settings = settings | {"pattern_tilt": 8.0}
     p = plant_for(case, seed)

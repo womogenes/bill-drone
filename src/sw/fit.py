@@ -4,22 +4,14 @@ Regresses each axis's angular acceleration on its actuator torque term at severa
 """
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
 
-from sw.flight_log import read_flight
+from sw.flight_log import read_flight, settings
 from sw.sim.flight import thrust_table
 
 DEG = np.pi / 180
-
-
-def settings(path):
-    merged = {}
-    for line in path.with_suffix(".jsonl").read_text().splitlines():
-        merged |= json.loads(line).get("settings", {})
-    return merged
 
 
 def acceleration(rate, window):

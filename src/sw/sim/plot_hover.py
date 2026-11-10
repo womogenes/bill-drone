@@ -11,8 +11,7 @@ from pathlib import Path
 import numpy as np
 from scipy.signal import welch
 
-from sw.fit import settings
-from sw.flight_log import read_flight
+from sw.flight_log import read_flight, settings
 from sw.sim.sweep import IDENTIFIED_ESC, run
 
 FS = 100.0

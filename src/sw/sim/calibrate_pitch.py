@@ -14,13 +14,13 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.fit import settings as recording_settings
+from sw.flight_log import RECORDINGS
+from sw.flight_log import settings as recording_settings
 from sw.sim import airframe as A
 from sw.sim import identify_airframe as N
 from sw.sim import pitch_check as C
 
 MODELS = Path(__file__).with_name("models")
-RECORDINGS = Path(__file__).parents[1] / "recordings"
 # The flights matched (drone 1 with 10-inch props): the 2026-11-08 hops at pitch_p 36 and 28 (00:23, 00:28, 00:31, 00:46, 00:52), which the model is for, and the 2026-11-02 chirps flown with one pattern at pitch_damping 6 and 8 (04:23, 04:36), the only record of the shake. Matched together with the 2026-11-02 long tag hovers (04:50, 05:22) the search undershot the 2026-11-08 swing by about half (pitch rate 14-27 against 23-57 deg/s in 0.4-1.5 Hz) and overshot those hovers' (23 against 14): the drone swung harder on 2026-11-08 (heavier by about 3%, the S3 camera and GPS added) than on 2026-11-02, so those hovers are left for checking, with 00:05, 00:09, 00:20 and 00:39 (under 4.5 s).
 FLIGHTS = ("2026-11-08T00-23-19-186Z_3160940019", "2026-11-08T00-28-06-995Z_1030209381", "2026-11-08T00-31-38-601Z_3398894371", "2026-11-08T00-46-21-333Z_1569889667", "2026-11-08T00-52-55-578Z_2701204891",
            "2026-11-02T04-23-35-159Z_4231648877", "2026-11-02T04-36-23-641Z_3729769197")

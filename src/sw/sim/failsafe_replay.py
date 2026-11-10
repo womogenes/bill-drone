@@ -5,15 +5,15 @@ Open loop: each record's hover state as logged (the GPS-corrected velocity, the 
 """
 
 import argparse
-import json
 import math
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 
-from sw.fit import settings as recording_settings
+from sw.flight_log import events as recording_events
 from sw.flight_log import read_flight
+from sw.flight_log import settings as recording_settings
 from sw.sim import hover as H
 from sw.sim.guard import PHASES, STOPS, Guard
 
@@ -25,7 +25,7 @@ def stamp(text):
 def replay(path, overrides=None):
     """Per record: time (s), mode, logged speed (m/s), GPS distance from the engage point (m), whether the laptop's horizontal input was on, the failsafe's phase, and why the test pattern stopped (0 while it plays or never did)."""
     data, _ = read_flight(path)
-    events = [json.loads(line) for line in path.with_suffix(".jsonl").read_text().splitlines()]
+    events = recording_events(path)
     settings = recording_settings(path) | (overrides or {})
     gains = H.gains(settings)
     guard = Guard(settings)

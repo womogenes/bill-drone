@@ -58,13 +58,49 @@ def hover_values(flags, values):
 # The first drone's ID (its station MAC, fw/pairs.h): recordings made before the start records carried one (UTC names before IDS_FROM) are all from it.
 FIRST_DRONE = "20:50:0d:8b:7e:68"
 IDS_FROM = "2026-11-04"
+RECORDINGS = Path(__file__).with_name("recordings")
+
+
+def recording(name):
+    """The recording in sw/recordings whose file name starts with name (its UTC time, e.g. 2026-11-09T06-38-51)."""
+    paths = sorted(RECORDINGS.glob(name + "*.bin"))
+    if not paths:
+        raise FileNotFoundError(f"no recording {name}*.bin in {RECORDINGS}")
+    return paths[0]
+
+
+def events(path):
+    """A recording's events (the .jsonl beside its .bin): the session's start, the drone's metadata, settings changes, commands, GPS solutions, test patterns and the stop."""
+    return [json.loads(line) for line in Path(path).with_suffix(".jsonl").read_text().splitlines()]
+
+
+def metadata(path):
+    """The start event, plus the drone's metadata when it arrived after the session started (as from 2026-11-09)."""
+    merged = {}
+    for event in events(path):
+        if event["type"] in ("start", "metadata"):
+            merged = event | merged
+    return merged
+
+
+def settings(path):
+    """The settings a recording was flown on: the start's, then every change during it."""
+    merged = {}
+    for event in events(path):
+        merged |= event.get("settings", {})
+    return merged
+
+
+def test_pattern(path):
+    """The last test pattern a recording played (sw/excite.py), or None."""
+    patterns = [event for event in events(path) if event.get("type") == "pattern"]
+    return patterns[-1] if patterns else None
 
 
 def drone(path):
     """The physical drone a recording was flown by (its station MAC), from its start record; None when a later recording does not say."""
     path = Path(path)
-    for line in path.with_suffix(".jsonl").read_text().splitlines():
-        event = json.loads(line)
+    for event in events(path):
         if event["type"] == "start":
             return event.get("drone") or (FIRST_DRONE if path.name < IDS_FROM else None)
     return FIRST_DRONE if path.name < IDS_FROM else None
@@ -82,14 +118,9 @@ def ekf_values(values):
 
 
 def read_flight(path):
-    # The start line, plus the drone's metadata when it arrived after the session started.
-    metadata = {}
-    for line in path.with_suffix(".jsonl").read_text().splitlines():
-        event = json.loads(line)
-        if event["type"] in ("start", "metadata"):
-            metadata = event | metadata
-    bias = [math.degrees(value) for value in metadata["gyro_bias_rad_s"]]
-    signs = metadata["sensor_to_body"]
+    meta = metadata(path)
+    bias = [math.degrees(value) for value in meta["gyro_bias_rad_s"]]
+    signs = meta["sensor_to_body"]
     rows = []
     truncated = False
     with path.open("rb") as file:
@@ -98,7 +129,7 @@ def read_flight(path):
                 truncated = True
                 break
             magic, session, count, size = struct.unpack(HEADER_FORMAT, header)
-            if magic != b"FLG1" or session != metadata["session"] or size not in FORMATS or not 1 <= count <= MAX_BATCH:
+            if magic != b"FLG1" or session != meta["session"] or size not in FORMATS or not 1 <= count <= MAX_BATCH:
                 raise ValueError("Invalid flight-log packet")
             payload = file.read(count * size)
             for offset in range(0, len(payload) - size + 1, size):

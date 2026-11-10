@@ -8,19 +8,17 @@ Today's firmware caps the test below 45 degrees: TIP_LIMIT stops the motors ther
 
 import argparse
 import json
-import math
 import os
 from multiprocessing import Pool
-from pathlib import Path
 
 import numpy as np
 
 from sw.excite import SAMPLE_HZ, segments
-from sw.fit import settings as recording_settings
+from sw.flight_log import recording
+from sw.flight_log import settings as recording_settings
 from sw.sim.outdoor import GPS, plant as outdoor_plant
 from sw.sim.sweep import CURRENT_AIRFRAME, run
 
-RECORDINGS = Path(__file__).parents[1] / "recordings"
 # The calm GPS and barometer hover of 2026-11-09 06:25 UTC, as flown.
 SETTINGS = "2026-11-09T06-25-48"
 # The test's settings: high enough to fall from a failed step, the pattern's tilt guard just under the tip cut, room for the steps' sideways travel, the takeoff wiggle that pins the GPS hold's heading (without it a still hover may never pin it, and the hold drifts on its drag model), and the thrust-direction hold (models/NOTES.md 2026-11-09: without it 1 of 16 ladder runs lost its attitude in the hold after its pattern stopped).
@@ -93,7 +91,7 @@ def main():
         for sign in (1, -1):
             steps.append((a, sign, at, at + args.width))
             at += args.width + args.rest
-    settings = recording_settings(next(RECORDINGS.glob(SETTINGS + "*.bin"))) | TEST | {"roll_target_rate": args.roll_rate}
+    settings = recording_settings(recording(SETTINGS)) | TEST | {"roll_target_rate": args.roll_rate}
     with Pool(args.workers) as pool:
         results = pool.map(fly, [(pattern, settings, args.wind, seed, steps) for seed in range(args.seeds)])
     print(f"roll ladder {amplitudes}, {args.width} s steps, {args.rest} s rests, roll_target_rate {args.roll_rate}°/s, wind {args.wind} m/s, {args.seeds} runs")

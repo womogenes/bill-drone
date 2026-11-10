@@ -14,15 +14,13 @@ from pathlib import Path
 import numpy as np
 from scipy.signal import welch
 
-from sw.fit import settings
-from sw.flight_log import read_flight
+from sw.flight_log import RECORDINGS, read_flight, settings
 from sw.sim import airframe as A
 from sw.sim import identify_airframe as N
 from sw.sim import plot_prediction as P
 from sw.sim.sweep import CURRENT, IDENTIFIED_ESC, run
 
 MODELS = Path(__file__).with_name("models")
-RECORDINGS = Path(__file__).parents[1] / "recordings"
 # The camera hovers matched (2026-10-29, after the CoM change: 36-67 s each; 05-56-43, 06-00-33 and 06-13-21 were held out) and the flights for the prediction penalty (those, the short 05-54-54 hover and the PRBS flight 06-17-44). The 2026-10-28 calibration used the morning's 06-59-38 and 07-00-59 hovers and the four hovers after the ESC recalibration.
 HOVERS = ("2026-10-29T05-55-35-441Z_1522028275", "2026-10-29T05-58-40-313Z_2406333111", "2026-10-29T06-04-21-326Z_1382946699")
 FLIGHTS = ("2026-10-29T05-54-54-978Z_2331147759", "2026-10-29T06-17-44-121Z_969844149") + HOVERS

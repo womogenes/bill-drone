@@ -13,16 +13,14 @@ Written 2026-11-09 for drone 1's outdoor flights of that night, 05:38-06:53 UTC 
 """
 
 import argparse
-import json
 import math
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 
-from sw.flight_log import FIRST_DRONE, drone, read_flight
+from sw.flight_log import FIRST_DRONE, RECORDINGS, drone, events, metadata, read_flight, settings
 
-RECORDINGS = Path(__file__).parents[1] / "recordings"
 DEFAULT = ("2026-11-09T05-*.bin", "2026-11-09T06-*.bin")
 # The analysed evening, 05:38-06:53 UTC; recordings from 06:54 on lack the drone's metadata.
 FIRST, LAST = "2026-11-09T05-38", "2026-11-09T06-54"
@@ -53,10 +51,6 @@ STEADY = 3.0
 # Heights below this (m, the hover's estimate) are near-ground for thrust and noise statistics.
 CLEAR = 0.5
 MASS = 1.05
-
-
-def events(path):
-    return [json.loads(line) for line in path.with_suffix(".jsonl").read_text().splitlines()]
 
 
 def stamp(text):
@@ -101,15 +95,8 @@ class Flight:
         self.name = path.name[:19]
         self.time = path.name[11:19].replace("-", ":")
         self.events = events(path)
-        meta = {}
-        for event in self.events:
-            if event["type"] in ("start", "metadata"):
-                meta = event | meta
-        self.meta = meta
-        self.settings = {}
-        for event in self.events:
-            self.settings |= event.get("settings", {})
-        s = self.settings
+        self.meta = meta = metadata(path)
+        self.settings = s = settings(path)
         self.table = np.array(meta["thrust_table"], float)
         self.start_wall = stamp(next(event for event in self.events if event["type"] == "start")["received_at"])
         self.stop = next((event["reason"] for event in self.events if event["type"] == "stop"), "")

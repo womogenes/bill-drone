@@ -10,8 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.fit import DEG, acceleration, settings
-from sw.flight_log import read_flight
+from sw.fit import DEG, acceleration
+from sw.flight_log import read_flight, settings
 from sw.sim.flight import thrust_table
 
 DT = 0.01

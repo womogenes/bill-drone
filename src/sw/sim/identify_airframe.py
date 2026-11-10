@@ -20,8 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.fit import settings as recording_settings
-from sw.flight_log import read_flight
+from sw.flight_log import read_flight, test_pattern
+from sw.flight_log import settings as recording_settings
 from sw.sim import airframe as A
 from sw.sim.flight import MODEL, MODEL_TUNING_KEYS, PITCH_SPEED, THRUST_VOLTAGE, TUNING_LAYOUT, YAW_I, Controller, control_many, thrust_table
 
@@ -113,11 +113,7 @@ def excitation(record, path, keys=("left_servo", "right_servo", "left_motor", "r
     active = flags >> 8 & 1
     if not active.any():
         return out
-    pattern = None
-    for line in path.with_suffix(".jsonl").read_text().splitlines():
-        event = json.loads(line)
-        if event.get("type") == "pattern":
-            pattern = event
+    pattern = test_pattern(path)
     if not pattern or not pattern["segments"]:
         print(f"{path.name}: test pattern played but is not in the events; left out", flush=True)
         return None

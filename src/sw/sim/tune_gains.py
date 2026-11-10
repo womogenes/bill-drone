@@ -13,7 +13,7 @@ import time
 from multiprocessing import Pool
 from pathlib import Path
 
-from sw.fit import settings as recording_settings
+from sw.flight_log import settings as recording_settings
 from sw.sim import airframe as A
 from sw.sim.sweep import IDENTIFIED_ESC, run
 
@@ -93,7 +93,7 @@ def main():
     airframe = json.loads((args.airframe or A.newest_model(A.flown_by([args.recording.with_suffix(".bin")])) or parser.error("no saved airframe model of this drone: pass --airframe")).read_text())
     plants = {name + extra: IDENTIFIED_ESC | {"airframe": airframe | change, "disturbances": IDENTIFIED_ESC["disturbances"] + [{"channel": c, "kind": "constant", "value": v} for c, v in zip(("forward", "left"), push) if v]}
               for name, change in variants(airframe).items() for extra, push in PUSHES.items() if name == "nominal" or not extra}
-    base = recording_settings(args.recording.with_suffix(".jsonl"))
+    base = recording_settings(args.recording)
     flown = {key: base[key] for key in KEYS}
     # Gains at zero are searched from a small floor so the log scale can move them.
     centre = {key: max(value, 0.05) for key, value in flown.items()}

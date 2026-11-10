@@ -17,8 +17,8 @@ from pathlib import Path
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
 
-from sw.fit import settings as recording_settings
-from sw.flight_log import read_flight
+from sw.flight_log import settings as recording_settings
+from sw.flight_log import test_pattern
 
 FS = 100.0
 SWING = (0.4, 1.6)
@@ -57,12 +57,10 @@ def real(path):
         return None
     lift, end = record["lift"], record["end"]
     on = int(np.flatnonzero(record["base_throttle"] > 0)[0])
-    events = path.with_suffix(".jsonl")
-    patterns = [e for e in map(json.loads, events.read_text().splitlines()) if e.get("type") == "pattern"] if events.exists() else []
     x, y = record["hover_x_m"], record["hover_y_m"]
     seen = np.flatnonzero(np.isfinite(x) & ((record["flags"].astype(int) >> 6 & 1) > 0))
     tag = float(np.hypot(x[seen[0]], y[seen[0]])) if len(seen) else record["setting"].get("hover_distance", 2.0)
-    return {"pitch": record["pitch_deg"][lift:end], "rate": record["gy_deg_s"][lift:end], "rest": float(np.median(record["pitch_deg"][max(0, on - 30):on])), "pattern": patterns[-1] if patterns else None, "tag": tag}
+    return {"pitch": record["pitch_deg"][lift:end], "rate": record["gy_deg_s"][lift:end], "rest": float(np.median(record["pitch_deg"][max(0, on - 30):on])), "pattern": test_pattern(path), "tag": tag}
 
 
 def fly(settings, airframe, rest, pattern, tag, seconds, seed):

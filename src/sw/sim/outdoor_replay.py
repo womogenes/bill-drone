@@ -6,19 +6,17 @@ Written 2026-11-09 to check airframe models on what the outer loop must handle: 
 
 import argparse
 import json
-import math
 import os
 from multiprocessing import Pool
 from pathlib import Path
 
 import numpy as np
 
-from sw.fit import settings as recording_settings
+from sw.flight_log import recording
+from sw.flight_log import settings as recording_settings
 from sw.sim.outdoor import GPS
 from sw.sim.outdoor import plant as outdoor_plant
 from sw.sim.swing_damping import resonance
-
-RECORDINGS = Path(__file__).parents[1] / "recordings"
 FS = 100.0
 # Liftoff after the throttle onset (gps_truth.LIFTOFF), to put the real and sim spans on one clock.
 LIFTOFF = 0.35
@@ -87,7 +85,7 @@ def main():
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--save", type=Path, help="write the real and simulated measures and speed traces as JSON")
     args = parser.parse_args()
-    path = next(RECORDINGS.glob(args.recording + "*.bin"))
+    path = recording(args.recording)
     settings = recording_settings(path) | {k: float(v) for k, v in (item.split("=") for item in args.set.split(",") if item)}
     s = np.load(Path(args.truth) / f"{args.recording}.npz")
     end = s["t"][-1] - s["t"][np.flatnonzero(s["left_throttle"] > 0)[0]] - LIFTOFF - 0.3

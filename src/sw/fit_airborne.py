@@ -8,8 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.fit import acceleration, settings, terms
-from sw.flight_log import read_flight
+from sw.fit import acceleration, terms
+from sw.flight_log import read_flight, settings
 
 
 def windows(paths):

@@ -18,7 +18,8 @@ import re
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-RECORDING = Path(__file__).resolve().parents[1] / "recordings/2026-10-29T07-20-47-024Z_2551243463.jsonl"
+# The indoor tag hover of 2026-10-29 07:20 UTC, whose settings the indoor landings fly.
+INDOOR = "2026-10-29T07-20-47"
 # --outdoor: the GPS-held barometer hover drone 1 flew on 2026-11-09 06:19 UTC.
 OUTDOOR = "2026-11-09T06-19-08"
 # The pack's resting extremes (V) and the voltage the thrust table was measured at (the recording's thrust_voltage).
@@ -167,14 +168,15 @@ def fly(case, source=None, defines=()):
     """
     Fly one case; return its touchdown figures (times in s after liftoff).
     """
+    from sw.flight_log import recording
+    from sw.flight_log import settings as recording_settings
     from sw.sim import airframe, sweep
 
     recorded = install(source, list(defines))
     if case.get("outdoor"):
-        from sw.fit import settings as recording_settings
         from sw.sim import outdoor
 
-        settings = recording_settings(next(outdoor.RECORDINGS.glob(case["outdoor"] + "*.bin")))
+        settings = recording_settings(recording(case["outdoor"]))
         recorded.height_error = 0.0
         power = sweep.CURRENT_AIRFRAME["voltage_power"]
         factor = (case["volts"][0] / settings["thrust_voltage"]) ** (power - 2)
@@ -196,7 +198,7 @@ def fly(case, source=None, defines=()):
         settings["hover_gps_heading"] = random.Random(case["seed"] + 1).uniform(-30, 30)
         expected = case["climb"] / case["land_rate"]
     else:
-        settings = json.loads(RECORDING.read_text().splitlines()[0])["settings"]
+        settings = recording_settings(recording(INDOOR))
         recorded.height_error = case["height_error"]
         power = sweep.IDENTIFIED_ESC["airframe"]["voltage_power"]
         # The thrust the compensated motors make per table newton at the pack's starting voltage, so hover_mass is off by mass_error from what this plant needs.
@@ -341,20 +343,16 @@ def replay(recording, contact=None, source=None, defines=()):
     """
     import numpy as np
 
-    from sw.flight_log import read_flight
+    from sw.flight_log import metadata, read_flight
+    from sw.flight_log import settings as recording_settings
     from sw.sim import hover
 
     install(source, list(defines))
     recording = Path(recording)
     data, truncated = read_flight(recording.with_suffix(".bin"))
     # The start record, with the drone's metadata (settings, thrust table) when it arrived after the session started, as from 2026-11-09.
-    start = {}
-    for line in recording.with_suffix(".jsonl").read_text().splitlines():
-        event = json.loads(line)
-        if event["type"] in ("start", "metadata"):
-            start = event | start
-    start["settings"] = {key: value for line in recording.with_suffix(".jsonl").read_text().splitlines() for key, value in json.loads(line).get("settings", {}).items()}
-    settings, table = start["settings"], np.array(start["thrust_table"])
+    start = metadata(recording)
+    settings, table = recording_settings(recording), np.array(start["thrust_table"])
     t = (data.esp_time_us.values - data.esp_time_us.values[0]) / 1e6
     roll, pitch = np.radians(data.roll_deg.values), np.radians(data.pitch_deg.values)
     # The vertical specific force as flight_rt.c takes it (the IMU attitude is the level-referenced one turned back by pose_zero), and the collective thrust from the base throttle.
