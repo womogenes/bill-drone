@@ -10,7 +10,7 @@ import struct
 from pathlib import Path
 
 import pandas as pd
-from fw.controller.log_format import BARO_NONE, HEADER_FORMAT, HEADER_SIZE, FORMATS, MAX_BATCH
+from fw.controller.log_format import BARO_NONE, EKF_FLAGS, HEADER_FORMAT, HEADER_SIZE, FORMATS, MAX_BATCH
 
 # The hover loop's state (fw/drone/main/flight_rt.c Record), NaN in recordings from before it was logged. In the yaw-turned level frame (x forward, y left, z up at hover_yaw_deg 0): the tag position the loop last took and that sighting's age, its velocity estimate; then height above the engage point and climb rate, the height, range and arc targets, the gyro heading, the trim and the drag model's velocity in body axes (x forward, y left). Tag and age are NaN without a sighting, range and arc targets before they are set (flags bit 7), and the drag velocity while the drag model is off (flags bit 5).
 HOVER_COLUMNS = [
@@ -22,6 +22,11 @@ HOVER_COLUMNS = [
 BARO_COLUMNS = ["baro_altitude_m", "baro_valid"]
 # The guards (fw/drone/main/guard.h): the fly-away failsafe's phase (0 off, 1 brake, 2 hold, 3 land; log_format FAILSAFE_PHASES), whether distance set it off, and why the test pattern stopped (0 it did not, 1 distance, 2 tag lost, 3 tilt, 4 stick; PATTERN_STOPS); NaN in recordings from before them.
 GUARD_COLUMNS = ["failsafe", "failsafe_far", "pattern_stop"]
+# The Kalman filter's estimate (fw/drone/main/ekf.h), logged whether or not the hold flew it; NaN in recordings from before it. Roll and pitch as roll_deg and pitch_deg; yaw counterclockwise from north once ekf_aligned (before that from where the nose pointed when it started); velocity north, west and up; position north and west of where it last rested and height above it; the standard deviations of its horizontal velocity and height (2.55 at most); whether its heading is known, it is resting still, it is good enough for the hold to fly horizontally and vertically, and the hold flew on it that tick (hover_ekf); and the GPS solutions it has refused in a row.
+EKF_COLUMNS = [
+    "ekf_roll_deg", "ekf_pitch_deg", "ekf_yaw_deg", "ekf_north_m_s", "ekf_west_m_s", "ekf_up_m_s", "ekf_north_m", "ekf_west_m", "ekf_height_m",
+    "ekf_velocity_sd_m_s", "ekf_height_sd_m", *("ekf_" + name for name in EKF_FLAGS), "ekf_rejected",
+]
 NAN = float("nan")
 
 
@@ -65,6 +70,17 @@ def drone(path):
     return FIRST_DRONE if path.name < IDS_FROM else None
 
 
+def ekf_values(values):
+    """The Kalman filter's columns from a record's raw fields after the guards, or all NaN for an older record without them."""
+    if not values:
+        return [NAN] * len(EKF_COLUMNS)
+    flags = values[11]
+    return [
+        *(value / 100 for value in values[:3]), *(value / 1000 for value in values[3:6]), *(value / 100 for value in values[6:8]), values[8] / 1000,
+        *(value / 100 for value in values[9:11]), *(flags >> bit & 1 for bit in range(len(EKF_FLAGS))), flags >> 8,
+    ]
+
+
 def read_flight(path):
     # The start line, plus the drone's metadata when it arrived after the session started.
     metadata = {}
@@ -101,6 +117,7 @@ def read_flight(path):
                     *hover_values(flags, fields[22:38]),
                     *((fields[38] / 1000, True) if len(fields) > 38 and fields[38] != BARO_NONE else (NAN, False)),
                     *((fields[39] & 3, fields[39] >> 2 & 1, fields[39] >> 3 & 7) if len(fields) > 39 else (NAN, NAN, NAN)),
+                    *ekf_values(fields[40:]),
                 ])
             if len(payload) != count * size:
                 truncated = True
@@ -110,7 +127,7 @@ def read_flight(path):
         "session", "sequence", "esp_time_us", "ax_g", "ay_g", "az_g", "gx_deg_s", "gy_deg_s", "gz_deg_s", "temperature_c",
         "roll_deg", "pitch_deg", "left_throttle", "right_throttle", "left_servo_deg", "right_servo_deg",
         "target_roll_deg", "target_pitch_deg", "target_yaw_deg_s", "base_throttle", "control_us", "flags", "battery_v",
-        *HOVER_COLUMNS, *BARO_COLUMNS, *GUARD_COLUMNS,
+        *HOVER_COLUMNS, *BARO_COLUMNS, *GUARD_COLUMNS, *EKF_COLUMNS,
     ]
     data = pd.DataFrame(rows, columns=columns).drop_duplicates(["session", "sequence"])
     return data, truncated

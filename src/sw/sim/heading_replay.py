@@ -33,8 +33,8 @@ def library_for(source):
     return H.load(target, H.State)
 
 
-def replay(f, align, overrides=None, library=None):
-    """Run hover.c over the flight from engaging; returns a dict of arrays over the engaged ticks: t (s from engaging), error (degrees), sigma (degrees, NaN for an older hover.c), aligned, replayed and logged hold velocity; and nose, the true nose heading at engaging (degrees clockwise from north)."""
+def replay(f, align, overrides=None, library=None, withhold=()):
+    """Run hover.c over the flight from engaging; returns a dict of arrays over the engaged ticks: t (s from engaging), index (their ticks on f.grid), error (degrees), sigma (degrees, NaN for an older hover.c), aligned, replayed and logged hold velocity, frame (the hold frame's true heading, rad counterclockwise from north); and nose, the true nose heading at engaging (degrees clockwise from north). GPS solutions arriving inside any (start, end) of withhold (s on the grid) are kept from it."""
     library = library or H.library
     settings = f.settings | (overrides or {})
     gains = H.gains(settings)
@@ -48,6 +48,8 @@ def replay(f, align, overrides=None, library=None):
     rate = (f.gyro[:, 1] * np.sin(f.roll) + f.gyro[:, 2] * np.cos(f.roll)) / np.cos(f.pitch)
     vertical = f.up / 9.81
     usable = (f.gps_sacc <= GPS_MAX_SPEED_ACCURACY) & (f.gps_hacc <= GPS_MAX_ACCURACY)
+    for low, high in withhold:
+        usable &= ~((f.gps_t >= low) & (f.gps_t < high))
     arrivals = np.searchsorted(f.grid, f.gps_t)
     fix_at = {}
     for index in np.flatnonzero(usable):
@@ -81,7 +83,7 @@ def replay(f, align, overrides=None, library=None):
     frame = align.theta[index] - yaw
     error = np.degrees((heading + frame + math.pi) % (2 * math.pi) - math.pi)
     nose = math.degrees(-align.theta[index[0]]) % 360
-    return {"t": t - t[0], "error": error, "sigma": sigma, "aligned": aligned.astype(bool), "replayed": velocity, "logged": f.hover_v[index], "nose": nose}
+    return {"t": t - t[0], "index": index, "frame": frame, "error": error, "sigma": sigma, "aligned": aligned.astype(bool), "replayed": velocity, "logged": f.hover_v[index], "nose": nose}
 
 
 def summary(r):

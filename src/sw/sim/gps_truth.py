@@ -148,6 +148,7 @@ class Flight:
         offset = np.array([s.get(f"accel_offset_{axis}", 0.0) for axis in "xyz"])
         gain = np.array([s.get(f"accel_gain_{axis}", 1.0) for axis in "xyz"])
         a = (raw - offset) * gain
+        self.accel = a
         zr, zp = (value * DEG for value in meta["pose_zero_deg"])
         y = a[:, 1] * math.cos(zr) - a[:, 2] * math.sin(zr)
         z = a[:, 1] * math.sin(zr) + a[:, 2] * math.cos(zr)
@@ -178,8 +179,8 @@ class Flight:
                 continue
             seen.add(event["itow_ms"])
             # drone_ms is already the solution's arrival on the drone's clock (the bridge subtracts age_ms: fw/controller/bridge.py), the clock started_ticks_us is on.
-            rows.append([event["drone_ms"] / 1000 - started, *event["velocity"], event["latitude"], event["longitude"], event["horizontal_accuracy"], event["speed_accuracy"]])
-        rows = np.array(rows, float).reshape(-1, 8)
+            rows.append([event["drone_ms"] / 1000 - started, *event["velocity"], event["latitude"], event["longitude"], event["horizontal_accuracy"], event["speed_accuracy"], event.get("height", math.nan)])
+        rows = np.array(rows, float).reshape(-1, 9)
         rows = rows[np.argsort(rows[:, 0])]
         self.gps_t = rows[:, 0]
         # Velocity as north + i west, and up (m/s).
@@ -189,6 +190,8 @@ class Flight:
         self.gps_position = (rows[:, 4] - lat0) * 111320.0 - 1j * (rows[:, 5] - (rows[0, 5] if len(rows) else 0.0)) * 111320.0 * math.cos(lat0 * DEG)
         self.gps_hacc = rows[:, 6]
         self.gps_sacc = rows[:, 7]
+        # Height above sea level (m), good to about a meter: nothing on the drone uses it.
+        self.gps_height = rows[:, 8]
 
     def load_sticks(self):
         """The laptop's stick commands as a mask on the session clock (the start record's arrival taken as time 0; good to about 0.1 s), held 1 s past release."""

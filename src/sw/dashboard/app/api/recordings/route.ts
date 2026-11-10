@@ -1,8 +1,9 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { open, readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   analyzeFlight,
   estimateSeconds,
+  RECORDING_HEADER_SIZE,
   recordingStart,
   type RecordingEntry,
 } from '@/lib/flight-report';
@@ -30,8 +31,13 @@ export async function GET(request: Request) {
         const stem = file.slice(0, -4);
         const started = recordingStart(stem);
         if (!file.endsWith('.bin') || !started || !stems.has(stem)) continue;
-        const { size } = await stat(resolve(RECORDINGS, file));
-        const seconds = estimateSeconds(size);
+        const handle = await open(resolve(RECORDINGS, file));
+        const header = new Uint8Array(RECORDING_HEADER_SIZE);
+        const [{ size }, { bytesRead }] = await Promise.all([
+          handle.stat(),
+          handle.read(header, 0, RECORDING_HEADER_SIZE, 0),
+        ]).finally(() => handle.close());
+        const seconds = estimateSeconds(size, header.subarray(0, bytesRead));
         if (seconds >= SHORTEST_S)
           entries.push({ name: stem, started, bytes: size, seconds });
       }

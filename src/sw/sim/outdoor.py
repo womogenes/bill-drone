@@ -1,5 +1,5 @@
 """
-Outdoor hovers in the hover sim, without the tag: uv run -m sw.sim.outdoor [--runs 48] [--winds 0,2,4,6] [--seconds 40] [--gps] [--baro [TAU]] [--flow LOW,HIGH] [--set name=value,...] [--settings recording] [--airframe models/airframe_<day>.json] [--nominal] [--sticks 'start,pitch,roll,seconds;...'] [--flyaway m] [--workers N]
+Outdoor hovers in the hover sim, without the tag: uv run -m sw.sim.outdoor [--runs 48] [--winds 0,2,4,6] [--seconds 40] [--gps] [--baro [TAU]] [--flow LOW,HIGH] [--set name=value,...] [--settings recording] [--airframe models/airframe_<day>.json] [--nominal] [--sticks 'start,pitch,roll,seconds;...'] [--flyaway m] [--gps-outage start,seconds] [--ekf] [--workers N]
 
 Each run takes off in Free mode (hover_camera 0) on a recording's settings (default: the newest 9-inch tag hover), on the 9-inch airframe as calibrated to its closed-loop hovers (calibrate_sim), climbs to --climb and holds for --seconds in the open air: a mean wind of the given speed from a random direction, with turbulence after MIL-F-8785C's low-altitude Dryden scales at the hover height (horizontal RMS 0.2 of the mean wind over 15 m, vertical 0.1 over the height; plus 0.1 m/s of still-air gusts) and the rotors' inflow damping the vertical airspeed. The room's torque drifts stay (the airframe's own noise); its force drifts, the room's recirculation, are replaced by the wind. With --gps the drone's GPS (sweep.run plant["gps"]: 10 Hz, 0.05 m/s velocity noise (--gps-noise), 0.7 m of wandering position error) feeds the hold, its heading belief (hover_gps_heading) off by up to ±30 degrees (--heading-error); held runs also report the hold frame's heading error at the end and when hover.c pinned the heading from the GPS (versions with that gate). With --baro the barometer (BARO: 0.2 m of noise, 0.3 m of drift over a minute, rotor wash near the floor) feeds the height at hover_baro_tau TAU (default 1 s), which also caps the hold at hover_ceiling (here --climb). With --flow the forward camera's optical flow feeds it too (sweep.run plant["flow"]), the scene at a distance drawn per run that the drone only guesses (hover_flow_depth).
 
@@ -42,6 +42,8 @@ FLYAWAY = 10.0
 # Braking after a stick: the ground speed (m/s) that counts as stopped, and how long after release it may take (s).
 STOPPED = 0.3
 STOP_WINDOW = 8.0
+# With the Kalman filter (--ekf, hover_ekf): the rest before liftoff (s). On the drone it runs from boot.
+EKF_REST = 5.0
 
 
 def loguniform(rng, low, high):
@@ -92,6 +94,33 @@ def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwin
     return out, draws
 
 
+def filter_errors(log, t, position, psi):
+    """The Kalman filter's errors against the sim's truth from 1 s after liftoff, beside the hover's own estimates' (the hold's own are the filter's where it flew on it): the heading (degrees RMS once known, and when it was), the horizontal velocity as the hold flies it (m/s RMS, in the hold's frame: the filter's turned by its own heading as hover.c turns it), the height (m RMS above the takeoff point) and the tilt (degrees RMS of roll and pitch; the attitude filter's is the flown estimate's)."""
+    flying = np.flatnonzero(t > 1.0)
+    if not len(flying):
+        return {}
+    e = [log[i] for i in flying]
+    truth = np.array([entry[2] for entry in e])
+    yaw, velocity, height = np.array([entry[14][2] for entry in e]), np.array([entry[14][3] for entry in e]), np.array([entry[14][5] for entry in e])
+    aligned, flown = np.array([entry[14][8] for entry in e], bool), np.array([entry[14][9] for entry in e], bool)
+    own_velocity, own_height = np.array([entry[14][10] for entry in e]), np.array([entry[14][11] for entry in e])
+    gyro_yaw = np.array([entry[13][1] for entry in e])
+    true_velocity = np.gradient(position[:, :2], t, axis=0)[flying]
+    # The hold's frame: where the nose pointed when its gyro yaw was zero, so the world's forward axis turned by the true yaw less the gyro's.
+    frame = truth[:, 2] - gyro_yaw
+    held = np.column_stack([true_velocity[:, 0] * np.cos(frame) + true_velocity[:, 1] * np.sin(frame), -true_velocity[:, 0] * np.sin(frame) + true_velocity[:, 1] * np.cos(frame)])
+    heading = gyro_yaw - yaw
+    turned = np.column_stack([velocity[:, 0] * np.cos(heading) - velocity[:, 1] * np.sin(heading), velocity[:, 0] * np.sin(heading) + velocity[:, 1] * np.cos(heading)])
+    rms = lambda values: float(np.sqrt(np.mean(np.square(values)))) if len(values) else math.nan
+    yaw_error = np.degrees(np.remainder(yaw - (truth[:, 2] - psi) + np.pi, 2 * np.pi) - np.pi)
+    above = position[flying, 2] - position[0, 2]
+    tilt = np.degrees(np.column_stack([[entry[14][0] for entry in e], [entry[14][1] for entry in e]]) - truth[:, :2])
+    own_tilt = np.degrees(np.array([entry[3] for entry in e]) - truth[:, :2])
+    return {"ekf": {"aligned_at": float(t[flying][np.argmax(aligned)]) if aligned.any() else math.nan, "heading": rms(yaw_error[aligned]), "velocity": rms(np.hypot(*(turned - held)[aligned].T)),
+                    "own_velocity": rms(np.hypot(*(own_velocity - held)[aligned].T)), "height": rms(height - above), "own_height": rms(own_height - above), "tilt": rms(np.hypot(*tilt.T)), "own_tilt": rms(np.hypot(*own_tilt.T)),
+                    "flown": float(flown.mean())}}
+
+
 def fly(job):
     airframe, disturbances, flown, wind, seed, args = job
     if args.source:
@@ -108,6 +137,10 @@ def fly(job):
         s["hover_gps_heading"] = p["gps"]["heading"] + random.Random(seed + 1).uniform(-args.heading_error, args.heading_error)
     if args.sticks:
         p["stick"] = [(SETTLE + start, pitch, roll, length) for start, pitch, roll, length in args.sticks]
+    if args.gps and args.gps_outage:
+        p["gps"]["outage"] = (SETTLE + args.gps_outage[0], args.gps_outage[1])
+    if args.ekf or s.get("hover_ekf", 0) > 0:
+        p |= {"ekf": True, "armed_s": EKF_REST}
     log = []
     result = run(s, p, seconds=args.seconds + SETTLE, seed=seed, log=log, hover=True)
     out = {"wind": wind, "seed": seed, "draws": draws}
@@ -121,6 +154,8 @@ def fly(job):
         if failsafe:
             k = min(np.searchsorted(t, failsafe[0][0]), len(t) - 2)
             out |= {"fired_speed": float(np.hypot(*(position[k + 1, :2] - position[k, :2])) / (t[k + 1] - t[k])), "fired_distance": float(np.hypot(*position[k, :2]))}
+        if p.get("ekf") and args.gps:
+            out |= filter_errors(log, t, position, math.radians(p["gps"]["heading"]))
     if not result["stable"]:
         return out | {"fate": "lost", "at": result["fail_s"]}
     if lifted is None:
@@ -196,6 +231,8 @@ def main():
     parser.add_argument("--defines", default="", help="compile-time overrides for --source, space separated")
     parser.add_argument("--sticks", type=lambda text: [tuple(float(v) for v in item.split(",")) for item in text.split(";")], help="a pilot's stick sequence during the hold: start s after settling, pitch and roll degrees, seconds held; ';' between sticks (e.g. '5,10,0,2;12,-10,0,2'); adds each run's largest pitch peak to peak 0.3-3 s after a stick is let go, and the braking: peak ground speed, time and distance from release to under STOPPED")
     parser.add_argument("--level-sd", type=float, default=0.0, help="degrees: each run's level-reference error drawn from a normal of this spread in roll and pitch (2026-11-09 flights: about 1.3)")
+    parser.add_argument("--gps-outage", type=lambda text: tuple(float(v) for v in text.split(",")), help="start,seconds: the GPS gives no solution for this long, from start s after settling (sweep.run plant[\"gps\"][\"outage\"])")
+    parser.add_argument("--ekf", action="store_true", help="run the Kalman filter (fw/drone/main/ekf.c) beside the hover in every run and print its errors against the truth; --set hover_ekf=1 (or 2, its height too) has the hold fly on it")
     parser.add_argument("--flyaway", type=float, default=FLYAWAY, help="m from takeoff that counts as flown off")
     parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=(0.5, 3.0), help="range the forward speed moment is drawn in, times the airframe's (log-uniform; default 0.5,3 from before any flight measured it; models fitted to the outdoor flights warrant narrower)")
     args = parser.parse_args()
@@ -242,6 +279,13 @@ def main():
             if moved:
                 line += f", calibration pulses in {len(moved)} moved it {np.median(moved):.2f} m (p90 {np.percentile(moved, 90):.2f})"
         print(line, flush=True)
+        filtered = [r["ekf"] for r in runs if "ekf" in r]
+        if filtered:
+            # The Kalman filter beside the hover's own estimates, both against the truth: medians over the runs (90th percentile).
+            q = lambda key: f"{np.nanmedian([f[key] for f in filtered]):.2f} ({np.nanpercentile([f[key] for f in filtered], 90):.2f})"
+            known = [f["aligned_at"] for f in filtered if not math.isnan(f["aligned_at"])]
+            print(f"    Kalman filter: heading known in {len(known)}/{len(filtered)}" + (f" at {np.median(known):.1f} s median (p90 {np.percentile(known, 90):.1f}), then {q('heading')}° RMS off" if known else "")
+                  + f"; velocity {q('velocity')} m/s RMS off, the hold's own {q('own_velocity')}; height {q('height')} m, own {q('own_height')}; tilt {q('tilt')}°, attitude filter {q('own_tilt')}; flown on it {100 * np.mean([f['flown'] for f in filtered]):.0f}% of the time", flush=True)
         fired = [r for r in runs if r.get("failsafe")]
         if fired:
             # The failsafe: how many runs it fired in, by what it reached, the true speed and distance where it fired, and the furthest any run got.

@@ -58,6 +58,8 @@ typedef struct {
     float thrust_direction;
     // GPS heading calibration (hover.c CALIBRATE_S): the tilt of the pulses the hold flies while the GPS's heading is not yet pinned (radians; 0 = off): forward and back, then left and back, a pulse pair moving the simulated drone about 0.15 m at 5 degrees. The liftoff alone usually pins the heading (2-13 s after engaging on the 2026-11-09 replays, 2.6 s median in the simulator); the pulses are for a takeoff too gentle to.
     float gps_calibrate;
+    // The Kalman filter (ekf.c, hover_estimate): 0 = the hold flies its own estimates and the filter is only logged; 1 = without the tag the hold flies the filter's heading, horizontal velocity and travel wherever the filter is sure of them (HoverEstimate horizontal), its own estimates running underneath for where it is not; 2 = and, while holding, the filter's height and climb rate from liftoff (a landing keeps the hold's own, carried on from the filter's).
+    float ekf;
 } HoverGains;
 
 // One camera sighting: the tag centre in the camera frame (m; right, down, forward), the wall's normal into it in the camera frame when the camera settled the tag's tilt (zero otherwise), and its capture time.
@@ -89,6 +91,12 @@ typedef struct {
     int64_t capture_us;
     float altitude;
 } HoverBaro;
+
+// The Kalman filter's estimate (ekf.c ekf_estimate) for a hold flown on it (gains ekf): the nose's heading (radians counterclockwise from north), the velocity (m/s; north, west, up), the position (m; north, west, from any fixed point) and the height above the ground it last rested on (m); horizontal while its heading is known and its velocity sure enough to fly on, vertical while its height is.
+typedef struct {
+    float yaw, velocity[3], position[2], height;
+    bool horizontal, vertical;
+} HoverEstimate;
 
 #define HOVER_HISTORY 24
 
@@ -171,6 +179,10 @@ typedef struct {
     float anchor[2];
     // The heading evidence's inertial changes' squared magnitudes summed (m²/s², fading as turn_weight), for its noise floor.
     float heading_inertial;
+    // The Kalman filter's estimate for the coming tick (hover_estimate; estimated until hover_update has taken it), whether the last tick flew its horizontal part (flown), its position at the last tick, for the travel since, and the dead reckoning where its position is zero (flown_anchor, m, yaw-turned frame; flown_tied once known).
+    HoverEstimate estimate;
+    bool estimated, flown, flown_tied;
+    float flown_position[2], flown_anchor[2];
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).
@@ -185,6 +197,8 @@ void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt, co
 // One control tick. mode is HOVER_HOLD, HOVER_LAND or HOVER_LAND_FAST; pose is the newest camera sighting or NULL (camera disabled or no tag); roll and pitch are the measured attitude from level and yaw_rate the measured heading rate (rad/s, positive left); vertical_g is the measured specific force along vertical, in g; force is the collective thrust in N being flown now, so taking over mid-flight is smooth; drag is what the rotor-drag model needs (used when gains->drag is set).
 // A body vector (forward, left, up) in camera axes (right, down, forward): the inverse of the mounting the hover turns sightings by (cam_roll, cam_pitch), for taking the drone's own rotation out of the flow.
 void hover_body_to_camera(const HoverGains *gains, const float *body, float *camera);
+// The Kalman filter's estimate for the next hover_update (gains ekf), passed every tick the filter has one.
+void hover_estimate(HoverState *state, const HoverEstimate *estimate);
 // flow is the newest camera flow measurement, gps the newest GPS solution and baro the newest barometer reading, or NULL (each is passed once).
 void hover_update(HoverState *state, const HoverGains *gains, int mode, const HoverPose *pose, int64_t now_us, float dt,
                   float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,

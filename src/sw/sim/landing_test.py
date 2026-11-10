@@ -94,14 +94,14 @@ def install(source, defines):
             self.landing_us = None
             self.off = 0.0
 
-        def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None, gps=None, baro=None):
+        def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None, gps=None, baro=None, gains=None):
             # The camera's height error near the floor (the drone's attitude error times the 2 m range): from the landing's start the tag's apparent height drifts by height_error (m, positive reads the drone low) over the time the descent should take.
             if mode != hover.HOLD and self.landing_us is None:
                 self.landing_us, self.descent = now_us, max(0.5, self.state.height / self.gains.land_rate)
             if pose and self.landing_us is not None:
                 share = min(1.0, (now_us - self.landing_us) / 1e6 / self.descent)
                 pose.tag[1] += Recorded.height_error * share
-            out = super().update(mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps, baro)
+            out = super().update(mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps, baro, gains)
             state = self.state
             self.off = self.off + dt if state.landed and out.force <= 0 else 0
             if self.off > 1.0:
@@ -187,8 +187,12 @@ def fly(case, source=None, defines=()):
                                         **({"gust": case["gust"], "roll_gust": case["gust"]} if case.get("gust") else {}), **({"baro": sweep.BARO} if case.get("baro") else {}),
                                         "camera": sweep.IDENTIFIED_ESC["camera"] | {"tag": (2.0, 0.1, case["tag_height"]), "fov": FOV}}
         expected = case["tag_height"] / case["land_rate"]
+    if settings.get("hover_ekf", 0) > 0:
+        # The Kalman filter has run since boot on the drone: a rest long enough for it to see the drone rest (as sw/sim/outdoor.py EKF_REST).
+        plant["armed_s"] = 5.0
     thrust_voltage = settings["thrust_voltage"]
-    seconds = 1.5 + case["land_at"] + 2 * expected + 6
+    # sweep.run's seconds count from arming: the rest, the takeoff, the hold, twice the descent and 6 s.
+    seconds = max(plant.get("armed_s", 0.0) - 0.5, 0.0) + 1.5 + case["land_at"] + 2 * expected + 6
     # The pack over the flight, and the firmware's compensation for it (flight_rt.c: thrust_scale times the battery ratio squared): the motors then make the table thrust times ratio^(voltage_power - 2), which the airframe's voltage input gives at this ratio.
     ticks = [0]
     step = airframe.Airframe.step

@@ -18,7 +18,7 @@ DEFINES = os.environ.get("HOVER_DEFINES", "").split()
 LIBRARY = Path(__file__).with_name("libhover" + ("-" + SOURCE.stem if os.environ.get("HOVER_SOURCE") else "") + "".join("-" + define.replace("=", "_") for define in DEFINES) + ".so")
 HISTORY = 24
 HOLD, LAND, LAND_FAST = 1, 2, 3
-GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "view", "gps_tau", "gps_place_tau", "gps_height_tau", "gps_heading", "baro_tau", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll", "thrust_direction", "gps_calibrate")
+GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "view", "gps_tau", "gps_place_tau", "gps_height_tau", "gps_heading", "baro_tau", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll", "thrust_direction", "gps_calibrate", "ekf")
 # Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_cam_roll, hover_drag_tilt) and the attitude controller's pitch_trim.
 ANGULAR_KEYS = ("tilt", "yaw_rate", "cam_pitch", "cam_roll", "drag_tilt", "pitch_trim", "speed_tilt", "speed_takeoff", "view", "gps_heading", "gps_calibrate")
 
@@ -47,6 +47,10 @@ class Baro(ctypes.Structure):
     _fields_ = [("capture_us", ctypes.c_int64), ("altitude", ctypes.c_float)]
 
 
+class Estimate(ctypes.Structure):
+    _fields_ = [("yaw", ctypes.c_float), ("velocity", ctypes.c_float * 3), ("position", ctypes.c_float * 2), ("height", ctypes.c_float), ("horizontal", ctypes.c_bool), ("vertical", ctypes.c_bool)]
+
+
 class State(ctypes.Structure):
     _fields_ = [(name, ctypes.c_bool) for name in ("engaged", "landed", "have_pose", "have_setpoint", "have_normal", "found", "tracking")] + [
         (name, ctypes.c_float) for name in ("bias", "height", "climb_rate", "target", "command", "integral", "force", "yaw")
@@ -65,7 +69,8 @@ class State(ctypes.Structure):
         ("turn_weight", ctypes.c_float), ("gps_velocity", ctypes.c_float * 2), ("gps_inertial", ctypes.c_float * 2), ("origin", ctypes.c_float * 3),
         ("rest", ctypes.c_float * 2), ("lifted", ctypes.c_float), ("shocked", ctypes.c_bool),
         ("baro_ground", ctypes.c_float), ("baro_grounded", ctypes.c_bool), ("baro_us", ctypes.c_int64), ("baro_wait", ctypes.c_float), ("baro_used", ctypes.c_bool), ("settle", ctypes.c_float), ("land_wait", ctypes.c_float), ("flown_pitch", ctypes.c_float), ("direction", ctypes.c_float), ("descended", ctypes.c_bool),
-        ("heading_sum", ctypes.c_float * 4), ("heading_count", ctypes.c_int), ("heading_start_us", ctypes.c_int64), ("heading_block_us", ctypes.c_int64), ("turn_square", ctypes.c_float * 2), ("heading_sigma", ctypes.c_float), ("aligned", ctypes.c_bool), ("calibrate_time", ctypes.c_float), ("anchor", ctypes.c_float * 2), ("heading_inertial", ctypes.c_float)]
+        ("heading_sum", ctypes.c_float * 4), ("heading_count", ctypes.c_int), ("heading_start_us", ctypes.c_int64), ("heading_block_us", ctypes.c_int64), ("turn_square", ctypes.c_float * 2), ("heading_sigma", ctypes.c_float), ("aligned", ctypes.c_bool), ("calibrate_time", ctypes.c_float), ("anchor", ctypes.c_float * 2), ("heading_inertial", ctypes.c_float),
+        ("estimate", Estimate), ("estimated", ctypes.c_bool), ("flown", ctypes.c_bool), ("flown_tied", ctypes.c_bool), ("flown_position", ctypes.c_float * 2), ("flown_anchor", ctypes.c_float * 2)]
 
 
 class Output(ctypes.Structure):
@@ -90,6 +95,10 @@ def load(library, state):
     library.hover_body_to_camera.argtypes = [ctypes.POINTER(Gains), ctypes.c_float * 3, ctypes.c_float * 3]
     library.hover_body_to_camera.restype = None
     library.hover_update.restype = None
+    # Copies older than the Kalman filter's estimate (HOVER_SOURCE) have no hover_estimate.
+    if hasattr(library, "hover_estimate"):
+        library.hover_estimate.argtypes = [ctypes.POINTER(state), ctypes.POINTER(Estimate)]
+        library.hover_estimate.restype = None
     return library
 
 
@@ -126,6 +135,11 @@ class Hover:
         out = (ctypes.c_float * 3)()
         library.hover_body_to_camera(ctypes.byref(self.gains), (ctypes.c_float * 3)(*body), out)
         return list(out)
+
+    def estimate(self, estimate):
+        """The Kalman filter's estimate (an Estimate, from sw.sim.ekf) for the next update."""
+        if hasattr(library, "hover_estimate"):
+            library.hover_estimate(ctypes.byref(self.state), ctypes.byref(estimate))
 
     def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None, gps=None, baro=None, gains=None):
         """

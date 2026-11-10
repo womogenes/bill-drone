@@ -2,11 +2,12 @@
 
 // Each FLG1 batch: magic, session, record count, record size (log_format.py HEADER_FORMAT "<4sIHH").
 const HEADER_SIZE = 12;
-// The record sizes log_format.py FORMATS knows: the 48-byte base record, plus the hover state (80), plus the barometer (84), plus the guards' word (86: fly-away failsafe phase and pattern stop, fw/drone/main/guard.h).
+// The record sizes log_format.py FORMATS knows: the 48-byte base record, plus the hover state (80), plus the barometer (84), plus the guards' word (86: fly-away failsafe phase and pattern stop, fw/drone/main/guard.h), plus the Kalman filter's estimate (108, fw/drone/main/ekf.h; the report does not read it yet).
 const BASE_SIZE = 48;
 const HOVER_SIZE = 80;
 const BARO_SIZE = 84;
-const RECORD_SIZE = 86;
+const GUARD_SIZE = 86;
+const RECORD_SIZE = 108;
 const MAX_BATCH = 8;
 const BARO_NONE = -(2 ** 31);
 // The drone's esp_timer microseconds in the start record wrap at 2^32.
@@ -139,9 +140,14 @@ export function recordingStart(name: string) {
     : null;
 }
 
-export function estimateSeconds(bytes: number) {
-  return bytes / ((RECORD_SIZE + HEADER_SIZE / 5) * RATE_HZ);
+// A recording's length from its size and its first batch header (its records' size; batches run about 4 records).
+export function estimateSeconds(bytes: number, header: Uint8Array) {
+  const size =
+    header.length >= HEADER_SIZE ? header[10] | (header[11] << 8) : 0;
+  return bytes / (((size || RECORD_SIZE) + HEADER_SIZE / 4) * RATE_HZ);
 }
+
+export const RECORDING_HEADER_SIZE = HEADER_SIZE;
 
 function round(value: number, digits: number) {
   if (!Number.isFinite(value)) return null;
@@ -305,7 +311,7 @@ function decodeRecords(bin: Uint8Array, session: number) {
     if (
       magic !== 'FLG1' ||
       batchSession !== session ||
-      ![BASE_SIZE, HOVER_SIZE, BARO_SIZE, RECORD_SIZE].includes(size) ||
+      ![BASE_SIZE, HOVER_SIZE, BARO_SIZE, GUARD_SIZE, RECORD_SIZE].includes(size) ||
       count < 1 ||
       count > MAX_BATCH
     )

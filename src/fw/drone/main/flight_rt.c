@@ -16,12 +16,15 @@
 #include "arming.h"
 #include "baro.h"
 #include "camera.h"
+#include "ekf.h"
 #include "gps.h"
 #include "guard.h"
 #include "hover.h"
 
 #define LOG_CAPACITY 200
 #define DEG (180.0f / 3.14159265358979323846f)
+// One g as the Kalman filter and the hover take it (m/s²).
+#define GRAVITY 9.81f
 // MPU6050 on I2C: SDA, SCL and address.
 #define SDA 19
 #define SCL 22
@@ -73,6 +76,10 @@ typedef struct __attribute__((packed)) {
     int32_t baro;
     // The guards (guard.h): bits 0-1 the fly-away failsafe's phase (FAILSAFE_*), bit 2 set off by distance rather than speed, bits 3-5 why the test pattern stopped (PATTERN_*, 0 while it plays or never did).
     uint16_t guard;
+    // The Kalman filter's estimate (ekf.h), whether or not the hold flies it: roll and pitch as attitude above and yaw (centidegrees; from north once the heading is known, until then from where the nose pointed at the start), velocity north, west and up (mm/s), position north and west of where it last rested (cm) and height above it (mm), the standard deviations of its horizontal velocity (cm/s) and height (cm; 255 at most), and flags: bit 0 the heading is known, bit 1 resting still, bits 2 and 3 good enough for the hold to fly horizontally and vertically (ekf_estimate), bit 4 the hold flew on it this tick (hover.h gains ekf), bits 8-15 the GPS solutions it has refused in a row (255 at most).
+    int16_t ekf_attitude[3], ekf_velocity[3], ekf_position[2], ekf_height;
+    uint8_t ekf_sd[2];
+    uint16_t ekf_flags;
 } Record;
 _Static_assert(sizeof(Record) == RECORD_SIZE, "Flight record layout");
 
@@ -120,7 +127,7 @@ static struct { int64_t us[GYRO_HISTORY]; float rate[GYRO_HISTORY][3]; int next;
 #define GPS_LATENCY_US 60000
 #define EARTH_RADIUS 6371000.0
 
-// The newest GPS solution as the hover takes it (once each): north and east of the first fix taken since boot (m), up above sea level. False without a new, good fix.
+// The newest GPS solution as the Kalman filter and the hover take it (once each): north and east of the first fix taken since boot (m), up above sea level. False without a new, good fix.
 static bool gps_input(HoverGps *out) {
     static int64_t taken_us = -1;
     static int32_t latitude0, longitude0;
@@ -222,6 +229,9 @@ static bool link_landing;
 static int requested_mode;
 static uint64_t link_land_us;
 static HoverState hover;
+// The Kalman filter (ekf.h) and its newest estimate: it runs every tick, armed or not, beside the estimates above, and the hold flies on it only where the hover_ekf setting says (hover.h gains ekf).
+static Ekf ekf;
+static EkfOutput filtered;
 // The fly-away failsafe and the test pattern's limits (guard.h).
 static Guard guard;
 static Command flown;
@@ -448,6 +458,16 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->yaw = scaled(hover.yaw * DEG, 100);
     record->baro = isfinite(baro_altitude) ? (int32_t)lroundf(baro_altitude * 1000) : INT32_MIN;
     record->guard = guard.failsafe | guard.far << 2 | guard.stopped << 3;
+    record->ekf_attitude[0] = scaled((filtered.roll - state.pose_zero.roll) * DEG, 100);
+    record->ekf_attitude[1] = scaled((filtered.pitch - state.pose_zero.pitch) * DEG, 100);
+    record->ekf_attitude[2] = scaled(filtered.yaw * DEG, 100);
+    for (int i = 0; i < 3; i++) record->ekf_velocity[i] = scaled(filtered.velocity[i], 1000);
+    for (int i = 0; i < 2; i++) record->ekf_position[i] = scaled(filtered.position[i], 100);
+    record->ekf_height = scaled(filtered.height, 1000);
+    record->ekf_sd[0] = fminf(filtered.velocity_sd * 100, 255);
+    record->ekf_sd[1] = fminf(filtered.height_sd * 100, 255);
+    record->ekf_flags = filtered.aligned | filtered.still << 1 | hover.estimate.horizontal << 2 | hover.estimate.vertical << 3 | hover.flown << 4 |
+                        (filtered.rejected > 255 ? 255 : filtered.rejected) << 8;
 }
 
 static void reconfigure_sensor(void);
@@ -570,6 +590,8 @@ static void runtime_task(void *arg) {
                 state.controller = (Controller){0};
                 state.calibrated = true;
                 state.calibration_ready = true;
+                // The gyro's zero has just moved, so the filter starts over from this rest.
+                ekf_reset(&ekf);
             }
         }
         for (int i = 0; i < 3; i++) state.gyro[i] -= state.bias[i];
@@ -592,6 +614,17 @@ static void runtime_task(void *arg) {
         HoverBaro baro;
         bool have_baro = baro_input(&baro);
         uint64_t started = esp_timer_get_time();
+        // The Kalman filter takes every tick, GPS solution and barometer reading, flying or not, and hands the hold its estimate.
+        HoverGps gps;
+        bool have_fix = gps_input(&gps);
+        if (have_fix) ekf_gps(&ekf, &gps);
+        if (have_baro) ekf_baro(&ekf, &baro);
+        EkfSample sample = {.time_us = now, .gyro = {state.gyro[0], state.gyro[1], state.gyro[2]},
+                            .accel = {state.accel[0] * GRAVITY, state.accel[1] * GRAVITY, state.accel[2] * GRAVITY}, .dt = dt, .spinning = spinning()};
+        ekf_update(&ekf, &sample, &filtered);
+        HoverEstimate estimate;
+        ekf_estimate(&filtered, &estimate);
+        hover_estimate(&hover, &estimate);
         Attitude pose = relative_attitude(&state);
         if (state.enabled && (fabsf(pose.roll) > TIP_LIMIT / DEG || fabsf(pose.pitch) > TIP_LIMIT / DEG)) stop_locked(4);
         // Measured specific force along vertical, in g: the accelerometer onto the IMU attitude's up axis.
@@ -637,8 +670,7 @@ static void runtime_task(void *arg) {
                 HoverDrag drag = drag_inputs(&state, &command);
                 HoverFlow flow;
                 bool have_flow = gains.flow_depth > 0 && flow_input(&gains, &flow);
-                HoverGps gps;
-                bool have_gps = gains.gps_tau > 0 && gps_input(&gps);
+                bool have_gps = gains.gps_tau > 0 && have_fix;
                 // The fly-away failsafe may ignore the stick, brake harder or land (guard.c).
                 int mode = guard_hover(&guard, &command.guard, &hover, &gains, hover_mode, now, dt);
                 hover_update(&hover, &gains, mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag,

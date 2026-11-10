@@ -15,5 +15,6 @@ src/sw/sim/flight_math.so
 src/sw/sim/rigid_step.so
 src/sw/sim/libhover*.so
 src/sw/sim/libguard.so
+src/sw/sim/libekf*.so
 
 .env

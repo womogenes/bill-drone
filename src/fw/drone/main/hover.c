@@ -170,6 +170,8 @@
 #define REACQUIRE_EASE_US 1000000
 // GPS (take_gps): a fix older than this no longer stands in for the drag model and the speed from the servos (both read airspeed, which outdoors is not the ground speed the hold needs).
 #define GPS_STALE_US 500000
+// Flown on the Kalman filter (gains ekf): its position moving further than this in a tick (m) is the filter starting it over (resting again, or reset to the GPS), which does not move the hold.
+#define ESTIMATE_JUMP 0.5f
 // The heading's evidence: the GPS velocity and the inertial velocity are averaged over blocks of fixes spanning HEADING_BLOCK_US, and each block's change from the previous one (inertial times the GPS's conjugate) is summed, fading over HEADING_TAU (s; the gyro heading drifts under 10 degrees a minute, sw/sim/gps_truth.py). Fix-to-fix changes (0.1 s) were mostly GPS noise: on 2026-11-09 06:34 UTC the evidence pointed within 10 degrees of the truth from 15 s on, but their magnitudes' agreement stayed at 0.34-0.54, under the 0.6 that gate needed, so the heading never left its first guess (off 49 degrees all flight; 05:45, 05:52, 06:14, 06:33, 06:38 alike, sw/sim/heading_replay.py). A gap longer than HEADING_GAP_US starts the blocks over.
 #define HEADING_BLOCK_US 400000
 #define HEADING_GAP_US 500000
@@ -510,6 +512,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
                  const HoverGps *gps, const HoverBaro *baro, HoverOutput *output) {
     float weight = g->mass * GRAVITY;
     bool dragging = g->drag > 0 && drag;
+    bool estimated = state->estimated;
+    state->estimated = false;
     if (!state->engaged) {
         state->engaged = true;
         bool grounded = force < 0.5f * weight;
@@ -527,6 +531,9 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->aligned = false;
         state->calibrate_time = 0;
         state->inertial[0] = state->inertial[1] = state->track[0] = state->track[1] = 0;
+        // The Kalman filter's position is from where the drone rested, where a hold engaged on the ground starts its dead reckoning; one engaged in the air ties the two at its first tick on the filter.
+        state->flown_tied = grounded;
+        state->flown_anchor[0] = state->flown_anchor[1] = 0;
         state->baro_us = 0;
         state->baro_wait = grounded ? BARO_SETTLE_S : 0;
         state->baro_used = false;
@@ -549,6 +556,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         *output = (HoverOutput){.roll = LANDED_ATTITUDE ? roll : 0, .pitch = LANDED_ATTITUDE ? pitch : 0, .force = state->force};
         return;
     }
+    float before[4] = {state->place[0], state->place[1], state->track[0], state->track[1]};
     // Heading from the gyro; horizontal velocity from tilt (g tan(tilt) less the push the trim cancels, once airborne, as on the ground a resting tilt pushes nothing); both recorded with the attitude.
     state->yaw = wrap(state->yaw + yaw_rate * dt);
     float cy = cosf(state->yaw), sy = sinf(state->yaw);
@@ -719,6 +727,48 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     state->height += state->climb_rate * dt;
     state->track[0] += state->velocity[0] * dt;
     state->track[1] += state->velocity[1] * dt;
+    // Flown on the Kalman filter (gains ekf): its heading, velocity and travel this tick take the place of the hold's own, which have run above as ever and carry on from the filter's wherever it is not sure. The heading counts as pinned, so the GPS's own pulls (take_gps) and the calibration pulses rest.
+    const HoverEstimate *e = &state->estimate;
+    bool flown = g->ekf > 0 && estimated && e->horizontal && dragging && !seeing && (state->height >= AIRBORNE || lifting);
+    if (flown) {
+        state->heading = wrap(state->yaw - e->yaw);
+        state->aligned = true;
+        float ch = cosf(state->heading), sh = sinf(state->heading);
+        state->velocity[0] = e->velocity[0] * ch - e->velocity[1] * sh;
+        state->velocity[1] = e->velocity[0] * sh + e->velocity[1] * ch;
+        // The first tick has no travel yet, and a jump is the filter starting its position over, not travel.
+        float north = e->position[0] - state->flown_position[0], west = e->position[1] - state->flown_position[1];
+        if (!state->flown || hypotf(north, west) > ESTIMATE_JUMP) north = west = 0;
+        float moved[2] = {north * ch - west * sh, north * sh + west * ch};
+        for (int i = 0; i < 2; i++) {
+            state->place[i] = before[i] + moved[i];
+            state->track[i] = before[2 + i] + moved[i];
+        }
+        // The filter's position itself moves the dead reckoning, and the place with it, over gps_place_tau (as take_gps's does): the drift flown before the filter knew its heading is flown back, and so is what a jump corrected.
+        float there[2] = {e->position[0] * ch - e->position[1] * sh, e->position[0] * sh + e->position[1] * ch};
+        if (!state->flown_tied) {
+            for (int i = 0; i < 2; i++) state->flown_anchor[i] = state->track[i] - there[i];
+            state->flown_tied = true;
+        }
+        if (g->gps_place_tau > 0) {
+            float place_pull = 1 - expf(-dt / fmaxf(g->gps_place_tau, dt));
+            for (int i = 0; i < 2; i++) {
+                float shift = (state->flown_anchor[i] + there[i] - state->track[i]) * place_pull;
+                state->track[i] += shift;
+                state->place[i] += shift;
+            }
+        }
+    }
+    state->flown = flown;
+    if (estimated) memcpy(state->flown_position, e->position, sizeof(state->flown_position));
+    if (g->ekf >= 2 && estimated && e->vertical && mode == HOVER_HOLD && !seeing && state->lifted >= 0) {
+        // The barometer's and the GPS's references move with the height, so the hold's own carries on from the filter's without a step when a landing takes it back.
+        float shift = e->height - state->height;
+        state->baro_ground -= shift;
+        state->origin[2] -= shift;
+        state->height = e->height;
+        state->climb_rate = e->velocity[2];
+    }
     float smooth = 1 - expf(-dt / NUDGE_TAU), nudge[3] = {g->nudge_forward, g->nudge_left, g->nudge_up};
     for (int i = 0; i < 3; i++) {
         float moved = nudge[i] - state->nudge[i];
@@ -950,6 +1000,11 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         output->pitch = clamp(output->pitch, low, high);
     }
     output->roll = clamp(atanf(-left / GRAVITY), -g->tilt, g->tilt);
+}
+
+void hover_estimate(HoverState *state, const HoverEstimate *estimate) {
+    state->estimate = *estimate;
+    state->estimated = true;
 }
 
 void hover_update(HoverState *state, const HoverGains *g, int mode, const HoverPose *pose, int64_t now_us, float dt,

@@ -57,8 +57,9 @@ static volatile bool radio_ready;
 // An image that is still unconfirmed this long after boot restarts, so the bootloader rolls back to the previous one.
 #define CONFIRM_US 90000000
 // Most records per FLG1 batch (controller/log_format.py MAX_BATCH) and the batch header size: a full batch fits two fragments, so one goes out per tick.
-#define LOG_MAX 5
+#define LOG_MAX 4
 #define LOG_HEADER 12
+_Static_assert(LOG_HEADER + LOG_MAX * RECORD_SIZE <= 2 * PAYLOAD, "A full log batch fits two fragments");
 
 // Request states, each with one owner of the request and reply buffers: the receive callback fills IDLE, the update task handles READY and sends REPLIED.
 enum { IDLE, READY, REPLIED };
