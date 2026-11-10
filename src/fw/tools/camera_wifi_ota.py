@@ -50,9 +50,9 @@ def discover(name):
             return address
     except OSError:
         pass
-    for name, own, network in networks():
+    for interface, own, network in networks():
         hosts = [str(h) for h in network.hosts() if str(h) != own]
-        print(f"scanning {network} on {name} ({len(hosts)} addresses)")
+        print(f"scanning {network} on {interface} ({len(hosts)} addresses)")
         with ThreadPoolExecutor(64) as pool:
             for host, found in zip(hosts, pool.map(lambda host: status(host, name=name), hosts)):
                 if found:

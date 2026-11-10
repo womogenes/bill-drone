@@ -89,7 +89,7 @@ def decode_status(payload, settings):
             camera["age_ms"] = None
     if len(payload) >= STATUS_SIZE + CAMERA_SIZE + GPS_SIZE:
         gps = decode_gps(struct.unpack_from(GPS_FORMAT, payload, STATUS_SIZE + CAMERA_SIZE))
-    if len(payload) == STATUS_SIZE + CAMERA_SIZE + GPS_SIZE + struct.calcsize(BARO_FORMAT):
+    if len(payload) >= STATUS_SIZE + CAMERA_SIZE + GPS_SIZE + struct.calcsize(BARO_FORMAT):
         altitude, baro_flags = struct.unpack_from(BARO_FORMAT, payload, STATUS_SIZE + CAMERA_SIZE + GPS_SIZE)
         # The pressure altitude in the standard atmosphere (m), None without a fresh reading; address 0x76 (SDO low) or 0x77, None while not found. Its own flags: the status's flags (IMU, arming, recording) stay as read.
         baro = {"found": bool(baro_flags & 1), "fresh": bool(baro_flags & 2), "address": (0x77 if baro_flags & 4 else 0x76) if baro_flags & 1 else None,

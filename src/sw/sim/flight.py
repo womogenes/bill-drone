@@ -132,7 +132,7 @@ class Controller:
         # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, the takeoff setpoint state, the upright-takeoff flag, the yaw integrator and the damping's filtered pitch rate.
         self.state = array("f", [0.0] * 18)
         # Motion (6 floats), tuning (TUNING_LAYOUT), then model parameters.
-        # Runtime-only Command fields after the model (thrust_voltage at THRUST_VOLTAGE, yaw_i at YAW_I, hover, the radio settings and the guards' GuardGains, 67 floats in all) start at zero: off unless the caller sets them.
+        # Runtime-only Command fields after the model (thrust_voltage at THRUST_VOLTAGE, yaw_i at YAW_I, hover, the radio settings and the guards' GuardGains) start at zero, off unless the caller sets them; 96 floats is more than they take.
         self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS] + [0.0] * 96)
         for key in THRUST_SCALE_KEYS:
             self.command[6 + TUNING_LAYOUT.index(key)] = 1.0

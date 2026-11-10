@@ -132,8 +132,12 @@ class Disturbances:
                 value = t["state"]
             elif kind == "white":
                 value = t["sd"] * self.rng.normal(0, 1, self.n)
-            else:
+            elif kind == "ramp":
+                value = math.copysign(min(abs(t["rate"]) * max(0.0, self.time - t.get("start", 0.0)), t.get("limit", math.inf)), t["rate"]) * np.ones(self.n)
+            elif kind == "sine":
                 value = t["amplitude"] * math.sin(2 * math.pi * self.time / t["period"] + t.get("phase", 0.0)) * np.ones(self.n)
+            else:
+                raise ValueError(f"unknown disturbance kind {kind!r}")
             out[:, CHANNELS.index(t["channel"])] += value
         return out * self.strength[:, None]
 

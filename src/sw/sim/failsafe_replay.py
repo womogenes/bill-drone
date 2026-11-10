@@ -97,12 +97,13 @@ def main():
         import matplotlib.pyplot as plt
 
         flying = mode > 0
+        limits = Guard(recording_settings(args.file) | overrides).gains
         figure, axes = plt.subplots(2, 1, sharex=True, figsize=(10, 6))
         axes[0].plot(t[flying], speed[flying], label="hover speed estimate (GPS-corrected)")
-        axes[0].axhline(overrides.get("failsafe_speed", 2.0), color="gray", ls="--", lw=0.8, label="failsafe_speed")
+        axes[0].axhline(limits.speed, color="gray", ls="--", lw=0.8, label="failsafe_speed")
         axes[0].set_ylabel("m/s")
         axes[1].plot(t[flying], distance[flying], color="C1", label="GPS distance from engage point")
-        axes[1].axhline(overrides.get("failsafe_distance", 10.0), color="gray", ls="--", lw=0.8, label="failsafe_distance")
+        axes[1].axhline(limits.distance, color="gray", ls="--", lw=0.8, label="failsafe_distance")
         axes[1].set_ylabel("m")
         axes[1].set_xlabel("s from the recording's start")
         colors = {1: "tab:orange", 2: "tab:green", 3: "tab:red"}

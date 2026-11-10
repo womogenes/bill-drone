@@ -19,7 +19,7 @@ from sw.sim.sweep import IDENTIFIED_ESC, run
 
 KEYS = ("pitch_p", "pitch_damping", "pitch_i", "roll_p", "roll_damping", "roll_i", "hover_kp", "hover_kd", "hover_kside", "hover_kyaw", "hover_tilt", "hover_trim_tau", "hover_trim_max")
 # The settings' ranges in the firmware (settings.def), which the search stays within.
-LIMITS = {"hover_kp": (0, 20), "hover_kd": (0, 20), "hover_kside": (0, 5), "hover_kyaw": (0, 10), "hover_tilt": (0, 15), "hover_trim_tau": (0.1, 20), "hover_trim_max": (0, 3)}
+LIMITS = {"hover_kp": (0, 20), "hover_kd": (0, 20), "hover_kside": (0, 5), "hover_kyaw": (0, 10), "hover_tilt": (0, 30), "hover_trim_tau": (0.1, 20), "hover_trim_max": (0, 3)}
 SEEDS = (0, 1, 2)
 # The steady torque of a CoM shift the gains must absorb without retrimming (rad/s²): on 2026-10-28 moving the battery changed the trim biases learn_bias found by up to ~5 in pitch and roll.
 COM_PUSH = 5.0

@@ -73,7 +73,8 @@ def main():
         phases[name] = (up, error)
     # A floor read more than MAX_DRIFT from the takeoff's is a glitch (05:41: 12 m).
     landings = [e for e in flights if e["landing"] and abs(e["floor_drift"]) < MAX_DRIFT]
-    phases["landing (against the floor after)"] = (np.concatenate([e["height_back"] for e in landings]), np.concatenate([e["floor_error"] for e in landings]))
+    if landings:
+        phases["landing (against the floor after)"] = (np.concatenate([e["height_back"] for e in landings]), np.concatenate([e["floor_error"] for e in landings]))
     for name, (up, error) in phases.items():
         print("%s: barometer error (m) by height: median [p10, p90] (samples)" % name)
         for low, high, count, median, p10, p90 in binned(up, error, HEIGHTS):
