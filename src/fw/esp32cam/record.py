@@ -166,16 +166,16 @@ def analyze(path):
     skipped = np.round(gaps / FRAME_US).astype(int) - 1
     found, valid = d["found"] > 0, d["valid"] > 0
     corners = d["corners"].reshape(-1, 4, 2)
-    centre = corners.mean(axis=1)
+    center = corners.mean(axis=1)
     both = found[1:] & found[:-1]
-    speed = np.linalg.norm(np.diff(centre, axis=0), axis=1)[both]  # px per frame
+    speed = np.linalg.norm(np.diff(center, axis=0), axis=1)[both]  # px per frame
     # Tag losses: found then not found, with the corner speed just before.
     losses = np.flatnonzero(found[:-1] & ~found[1:])
-    pre = [np.linalg.norm(centre[i] - centre[i - 1]) if i > 0 and found[i - 1] else np.nan for i in losses]
+    pre = [np.linalg.norm(center[i] - center[i - 1]) if i > 0 and found[i - 1] else np.nan for i in losses]
     position = d["position"][valid]
     step = np.linalg.norm(np.diff(position, axis=0), axis=1) if len(position) > 1 else np.array([0.0])
     flow = d["flow"][1:][both & (d["flow_interval_us"][1:] > 0)]
-    motion = np.diff(centre, axis=0)[both & (d["flow_interval_us"][1:] > 0)]
+    motion = np.diff(center, axis=0)[both & (d["flow_interval_us"][1:] > 0)]
     print(json.dumps({
         "frames": n, "seconds": round(seconds, 1), "rate_hz": round(n / seconds, 1) if seconds else None,
         "records_lost": int(d["sequence"][-1] - d["sequence"][0] + 1 - n),

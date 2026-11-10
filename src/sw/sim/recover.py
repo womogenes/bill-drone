@@ -18,6 +18,8 @@ import numpy as np
 
 from sw.sim import rigid as R
 
+# The tuned controller (sw/sim/tune_recover.py), which the flip, the toss and the fall map fly by default.
+PARAMS = R.A.MODELS / "recover_params.json"
 DEFAULTS = {
     "kp": 6.0, "brake": 15.0, "max_rate": 5.0, "k_roll": 8.0, "k_pitch": 12.0, "kd_yaw": 4.0,
     "kv": 3.0, "kh": 1.0, "descent": 0.5, "flip_thrust": 0.35, "right_angle": 45.0, "tilt_max": 15.0,
@@ -51,7 +53,7 @@ class Controller:
         self.thrust = np.zeros((self.sim.n, 2))
         self.phase = np.full(self.sim.n, RIGHT)
         self.low_time = np.zeros(self.sim.n)
-        # Wanted descent speed per env (negative climbs), and an optional manoeuvre that takes over the wanted angular accelerations and collective (sw/sim/flip.py).
+        # Wanted descent speed per env (negative climbs), and an optional maneuver that takes over the wanted angular accelerations and collective (sw/sim/flip.py).
         self.descent = np.full(self.sim.n, self.p["descent"])
         # Envs holding a height (sw/sim/toss.py): their descent is a plain wanted sink rate, not a landing's.
         self.hold = np.zeros(self.sim.n, bool)
@@ -76,7 +78,7 @@ class Controller:
         upright = up_body[:, 2]
         # Wanted thrust direction (world): straight up while righting; afterwards to stop the fall and drift.
         a_xy = np.clip(-p["kh"] * self.v[:, :2], -R.G * math.tan(math.radians(p["tilt_max"])), R.G * math.tan(math.radians(p["tilt_max"])))
-        # Landing (descent > 0) comes down faster while high; a manoeuvre's hold or climb (descent <= 0) is kept as it is.
+        # Landing (descent > 0) comes down faster while high; a maneuver's hold or climb (descent <= 0) is kept as it is.
         sink = np.where((self.descent > 0) & ~self.hold, np.clip(self.descent + p["k_alt"] * (self.h - p["flare"]), self.descent, FAST), self.descent)
         a_z = -p["kv"] * (self.v[:, 2] + sink)
         arresting = self.phase == ARREST

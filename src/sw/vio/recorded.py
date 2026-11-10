@@ -3,7 +3,7 @@ A recording of the camera's FPV frames with the drone's IMU (sw/vio/record_camer
 
 uv run --with opencv-python-headless -m sw.vio.recorded --footage ~/sw/vio/footage/room_imu --log sw/recordings/<flight>.csv --out ~/sw/vio/data/room_imu [--offset S]
 
-offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to FPV's 480x320, which takes the array's full width and its middle 2/3 of the height; its distortion coefficients act on normalised coordinates, so they carry over.
+offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to FPV's 480x320, which takes the array's full width and its middle 2/3 of the height; its distortion coefficients act on normalized coordinates, so they carry over.
 """
 
 import argparse
@@ -35,10 +35,10 @@ def find_offset(footage, frames, log):
     t = np.array([int(f["capture_us"]) for f in frames]) / 1e6
     shift, previous = [], None
     for frame in frames:
-        grey = cv2.resize(cv2.imread(str(footage / frame["file"]), cv2.IMREAD_GRAYSCALE), (160, 106))
-        flow = None if previous is None else cv2.calcOpticalFlowFarneback(previous, grey, None, 0.5, 2, 9, 2, 5, 1.1, 0)
+        gray = cv2.resize(cv2.imread(str(footage / frame["file"]), cv2.IMREAD_GRAYSCALE), (160, 106))
+        flow = None if previous is None else cv2.calcOpticalFlowFarneback(previous, gray, None, 0.5, 2, 9, 2, 5, 1.1, 0)
         shift.append((np.nan, np.nan) if flow is None else (np.median(flow[..., 0]), np.median(flow[..., 1])))
-        previous = grey
+        previous = gray
     dt = np.diff(t, prepend=np.nan)
     ok = np.isfinite(dt) & (dt < 0.07)
     middle = t - dt / 2
@@ -84,8 +84,8 @@ def main():
     for frame in frames:
         time = int(frame["capture_us"]) / 1e6 + offset + scene.READOUT_S / 2
         if start < time < end:
-            grey = cv2.rotate(cv2.imread(str(footage / frame["file"]), cv2.IMREAD_GRAYSCALE), cv2.ROTATE_180)
-            out.frame(time, cv2.imencode(".png", grey)[1].tobytes())
+            gray = cv2.rotate(cv2.imread(str(footage / frame["file"]), cv2.IMREAD_GRAYSCALE), cv2.ROTATE_180)
+            out.frame(time, cv2.imencode(".png", gray)[1].tobytes())
     out.close()
     print(configure.write(args.out.expanduser(), GYRO_NOISE, ACCEL_NOISE, camera=camera(), dynamic=True), f"{len(out.frames)} frames, {len(out.imu)} IMU samples")
 

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sw.flight_log import parse_settings
 from sw.sim import airframe as A
 from sw.sim import identify_airframe as I
 from sw.sim import validate_model as V
@@ -25,7 +26,7 @@ KICK_EVERY = 50
 
 
 def overrides(text):
-    return {} if text == "logged" else {key: float(value) for key, value in (item.split("=") for item in text.split(",") if item)}
+    return {} if text == "logged" else parse_settings(text)
 
 
 def fly(params, data, lanes, settings, kick=0.0, hold=False, horizon=int(LONGEST / I.DT)):

@@ -19,7 +19,6 @@ from sw.sim import identify_airframe as N
 
 CUTOFF = 2.0
 SMOOTH = 0.5
-MODELS = Path(__file__).with_name("models")
 
 
 def drift(series, dt=A.DT):

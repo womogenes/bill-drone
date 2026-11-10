@@ -1,5 +1,5 @@
 """
-Calibrate the hover sim to the real camera hovers' closed-loop behaviour: uv run --with scipy --with cma -m sw.sim.calibrate_sim [--generations 30] [--workers 90] [--hovers name,...] [--flights glob,...] [--airframe models/airframe_<day>.json] [--disturbances models/disturbances_<day>.json] [--hold name,...] [--rotor-drag forward,left] [--report]
+Calibrate the hover sim to the real camera hovers' closed-loop behavior: uv run --with scipy --with cma -m sw.sim.calibrate_sim [--generations 30] [--workers 90] [--hovers name,...] [--flights glob,...] [--airframe models/airframe_<day>.json] [--disturbances models/disturbances_<day>.json] [--hold name,...] [--rotor-drag forward,left] [--report]
 
 identify_airframe fits the airframe to short-horizon prediction, which the attitude controller's feedback dominates: it pins the plant above about 2 Hz but barely constrains its low-frequency gain, while fit_disturbances only sizes the torque residual's drift. Flown in closed loop, the sim then wobbles at the wrong frequency (0.7 Hz in pitch against the real 0.9-1 Hz). This CMA-ES search sets what both leave loose so that the sim flying each camera hover's settings (sweep.run with hover=True) matches the hover's statistics: the pitch and roll attitude spectra in three bands (0.3-0.8, 0.8-1.5, 1.5-3 Hz) and their rates below 5 Hz, the range error and sideways RMS (from the hover's own position estimate on both sides) and how fast they fade. Searched: scales on the tilt's pitch torque (through wash_z, so its lagged share pitch_wake scales with it), on the lagged share and its lag, on the roll authority (differential_slope), on the attitude terms (roll_pendulum, pitch_pendulum), on the sideways speed's roll moment (drag_z_y's height above the CoM: the prediction fit leaves it loose, but it damps the hover loop's sideways swing), and on the calibrated disturbances (roll and pitch torque drift size and correlation time, forward force drift size, sideways force drift size and correlation time). The prediction error on the logs (identify_airframe's closed-loop free runs at 250 ms, 500 ms and 1 s, all flights) is kept within reach by a penalty on its growth. Writes the scaled airframe and disturbances next to the sources (--out-airframe, --out-disturbances). Sim runs whose IMU height hold lets the drone down onto the floor (sweep.run's "touched") are left out of the statistics, as no real camera hover did that. --report prints each hover's real and simulated statistics for the starting plant and stops, for scoring held-out hovers. --hold keeps the named scales at their start (from 2026-10-29b the roll authority and pendulums, which the PRBS flights measure), and --rotor-drag sets the plant's rotor drag (from 2026-10-29b the camera's measurement).
 """
@@ -20,7 +20,6 @@ from sw.sim import identify_airframe as N
 from sw.sim import plot_prediction as P
 from sw.sim.sweep import CURRENT, IDENTIFIED_ESC, run
 
-MODELS = Path(__file__).with_name("models")
 # The camera hovers matched (2026-10-29, after the CoM change: 36-67 s each; 05-56-43, 06-00-33 and 06-13-21 were held out) and the flights for the prediction penalty (those, the short 05-54-54 hover and the PRBS flight 06-17-44). The 2026-10-28 calibration used the morning's 06-59-38 and 07-00-59 hovers and the four hovers after the ESC recalibration.
 HOVERS = ("2026-10-29T05-55-35-441Z_1522028275", "2026-10-29T05-58-40-313Z_2406333111", "2026-10-29T06-04-21-326Z_1382946699")
 FLIGHTS = ("2026-10-29T05-54-54-978Z_2331147759", "2026-10-29T06-17-44-121Z_969844149") + HOVERS
@@ -191,8 +190,8 @@ def main():
     parser.add_argument("--report", action="store_true", help="print each hover's real and simulated statistics at the start and stop")
     parser.add_argument("--hold", default="", help="SPACE names held at their start instead of searched (e.g. roll_gain, when the roll authority is measured)")
     parser.add_argument("--rotor-drag", help="forward,left rotor drag (1/s) for the plant (default: sweep.IDENTIFIED_ESC's)")
-    parser.add_argument("--out-airframe", type=Path, default=MODELS / "airframe_2026-10-29_calibrated.json")
-    parser.add_argument("--out-disturbances", type=Path, default=MODELS / "disturbances_2026-10-29_calibrated.json")
+    parser.add_argument("--out-airframe", type=Path, default=A.MODELS / "airframe_2026-10-29_calibrated.json")
+    parser.add_argument("--out-disturbances", type=Path, default=A.MODELS / "disturbances_2026-10-29_calibrated.json")
     args = parser.parse_args()
     global HOVERS, FLIGHTS, BASE
     if args.hovers:

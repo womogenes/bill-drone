@@ -30,10 +30,10 @@ def trims(p, data, flights):
     return np.array([level for level, _ in pairs]), np.array([mean for _, mean in pairs])
 
 
-def initialise(mass, *args):
+def initialize(mass, *args):
     MASS.update(mass)
     I.trims = trims
-    I.initialise(*args)
+    I.initialize(*args)
 
 
 def evaluate(params, data, flights):
@@ -102,8 +102,8 @@ def main():
             start[key] = start[other]
     base = {key: start[key] for key in A.KEYS}
     setup = (mass, data, free, base, None, 0.0, geometry, args.instrument)
-    initialise(*setup)
-    with Pool(max(1, min(args.workers, len(free))), initializer=initialise, initargs=setup) as pool:
+    initialize(*setup)
+    with Pool(max(1, min(args.workers, len(free))), initializer=initialize, initargs=setup) as pool:
         x = np.array([start[key] for key in free])
         cost = None
         if free:

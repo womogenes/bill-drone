@@ -12,17 +12,12 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.sim.hover import Baro, Estimate, Gps, build
+from sw.sim.hover import BARO_LATENCY, GPS_LATENCY, Baro, Estimate, Gps, build
 
 SOURCE = Path(os.environ.get("EKF_SOURCE", Path(__file__).resolve().parents[2] / "fw/drone/main/ekf.c"))
 HEADERS = [Path(__file__).resolve().parents[2] / "fw/drone/main" / name for name in ("ekf.h", "hover.h")]
 LIBRARY = Path(__file__).with_name("libekf.so")
 G = 9.81
-# flight_rt.c: GPS_LATENCY_US, GPS_MAX_SPEED_ACCURACY, GPS_MAX_ACCURACY, BARO_LATENCY_US.
-GPS_LATENCY = 0.06
-GPS_MAX_SPEED_ACCURACY = 0.6
-GPS_MAX_ACCURACY = 8.0
-BARO_LATENCY = 0.075
 
 
 class Sample(ctypes.Structure):
@@ -98,13 +93,7 @@ VECTORS = ("velocity", "position", "gyro_bias", "accel_bias", "gps_innovation")
 def replay(f, library=library, withhold=(), baro=True, rest=5.0, mend=True):
     """The filter over the whole recording; returns a dict of arrays on f.grid, one per Output member. GPS solutions arriving inside any (start, end) of withhold (s on the grid) are kept from it, and the barometer with baro False. A recording starts 1-4 s before its motors, and the drone has by then sat still since boot with the filter running, so the filter first gets rest s of that: the recording's own ticks before the motors start, played back and forth. mend False leaves the gyro in dropped batches as the Flight interpolated it: a test of how the filter comes back from a wrong attitude."""
     ekf = Ekf(library)
-    usable = (f.gps_sacc <= GPS_MAX_SPEED_ACCURACY) & (f.gps_hacc <= GPS_MAX_ACCURACY)
-    for start, end in withhold:
-        usable &= ~((f.gps_t >= start) & (f.gps_t < end))
-    arrivals = np.searchsorted(f.grid, f.gps_t)
-    fix_at = {}
-    for index in np.flatnonzero(usable):
-        fix_at.setdefault(int(arrivals[index]), index)
+    fix_at = f.fixes(withhold)
     spinning = (f.left > 0) | (f.right > 0)
     accel = f.accel * G
     gyro = gap_gyro(f) if mend else f.gyro

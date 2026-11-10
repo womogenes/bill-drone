@@ -33,7 +33,7 @@ LOST_CONFIGS = {
     "tilt dead reckoning (hover_drag 0)": {"velocity_damping": 0, "hover_camera": 1, "hover_ceiling": 1.5},
     "drag estimator": DRAG | {"velocity_damping": 0, "hover_camera": 1, "hover_ceiling": 1.5},
 }
-# The tag a metre up, so the camera hold flies high enough that its own height error at the loss does not put the drone on the floor.
+# The tag a meter up, so the camera hold flies high enough that its own height error at the loss does not put the drone on the floor.
 LOST_PLANT = {"camera_lost": LOST_AFTER, "camera": {"tag": (2.3, 0.0, 1.0)}}
 CASES = {
     "nominal": {},

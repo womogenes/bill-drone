@@ -18,7 +18,7 @@ import numpy as np
 from scipy.signal import butter, sosfiltfilt
 
 from sw.flight_log import settings as recording_settings
-from sw.flight_log import test_pattern
+from sw.flight_log import parse_settings, test_pattern
 
 FS = 100.0
 SWING = (0.4, 1.6)
@@ -103,7 +103,7 @@ def main():
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     args = parser.parse_args()
     airframe = json.loads(args.airframe.read_text()) if args.airframe else None
-    overrides = {key: float(value) for key, value in (item.split("=") for item in args.set.split(",") if item)}
+    overrides = parse_settings(args.set)
     hops = [(path, r) for path in args.recordings if (r := real(path)) is not None]
     span = lambda r: args.seconds or max(3.0, len(r["pitch"]) / FS)
     jobs = [(recording_settings(path) | overrides, airframe, r["rest"], r["pattern"], r["tag"], span(r), seed) for path, r in hops for seed in range(args.seeds)]

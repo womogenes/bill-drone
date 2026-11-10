@@ -38,10 +38,10 @@ def fractal(size, octaves, seed, base=4):
     return out / out.max()
 
 
-def texture(path, size, colours, octaves, seed, grain=0.0):
-    """A noise texture blended between two RGB colours, with optional fine grain, written as PNG."""
+def texture(path, size, colors, octaves, seed, grain=0.0):
+    """A noise texture blended between two RGB colors, with optional fine grain, written as PNG."""
     mix = fractal(size, octaves, seed)[..., None]
-    low, high = np.array(colours[0], np.float32), np.array(colours[1], np.float32)
+    low, high = np.array(colors[0], np.float32), np.array(colors[1], np.float32)
     image = low * (1 - mix) + high * mix
     if grain:
         image += np.random.default_rng(seed + 1).normal(0, grain, image.shape)
@@ -130,7 +130,7 @@ class Camera:
         return self.renderer.render()
 
     def frame(self, start, pose):
-        """The grey frame whose first row starts reading out at start (s): each band at its own time, then sensor noise."""
+        """The gray frame whose first row starts reading out at start (s): each band at its own time, then sensor noise."""
         rows = np.empty((HEIGHT, WIDTH), np.float32)
         for band in range(BANDS):
             top, bottom = band * HEIGHT // BANDS, (band + 1) * HEIGHT // BANDS
@@ -146,8 +146,8 @@ class Jpeg:
     def __init__(self, target, quality=60):
         self.target, self.quality = target, quality
 
-    def __call__(self, grey):
-        data = cv2.imencode(".jpg", grey, [cv2.IMWRITE_JPEG_QUALITY, self.quality])[1].tobytes()
+    def __call__(self, gray):
+        data = cv2.imencode(".jpg", gray, [cv2.IMWRITE_JPEG_QUALITY, self.quality])[1].tobytes()
         if len(data) > self.target:
             self.quality = max(5, self.quality - 1)
         elif len(data) < self.target * 3 // 4:

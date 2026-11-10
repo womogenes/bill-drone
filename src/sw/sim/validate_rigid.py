@@ -80,7 +80,7 @@ def scores(prediction, data, horizons):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recordings", nargs="*", default=FLIGHTS)
-    parser.add_argument("--airframe", type=Path, default=Path(__file__).with_name("models") / "airframe_2026-10-28.json")
+    parser.add_argument("--airframe", type=Path, default=A.MODELS / "airframe_2026-10-28.json")
     parser.add_argument("--stride", type=int, default=25)
     args = parser.parse_args()
     saved = json.loads(args.airframe.read_text())

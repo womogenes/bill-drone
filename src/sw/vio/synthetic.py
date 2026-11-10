@@ -76,8 +76,8 @@ def main():
     camera = scene.Camera(out_dir / "scene", 0)
     t = start + 0.05
     while t + scene.READOUT_S < start + args.seconds:
-        grey = camera.frame(t, pose)
-        out.frame(t + scene.READOUT_S / 2, cv2.imencode(".png", grey)[1].tobytes())
+        gray = camera.frame(t, pose)
+        out.frame(t + scene.READOUT_S / 2, cv2.imencode(".png", gray)[1].tobytes())
         t += 1 / FPS
     camera.close()
     out.close()

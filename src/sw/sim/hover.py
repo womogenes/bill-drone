@@ -20,6 +20,11 @@ DEFINES = os.environ.get("HOVER_DEFINES", "").split()
 LIBRARY = Path(__file__).with_name("libhover" + ("-" + SOURCE.stem if os.environ.get("HOVER_SOURCE") else "") + "".join("-" + define.replace("=", "_") for define in DEFINES) + ".so")
 HISTORY = 24
 HOLD, LAND, LAND_FAST = 1, 2, 3
+# What flight_rt.c assumes of its sensors (GPS_LATENCY_US, GPS_MAX_SPEED_ACCURACY, GPS_MAX_ACCURACY, BARO_LATENCY_US): a GPS solution is this old when it arrives (s) and counts only inside these speed and position accuracies (m/s, m); a barometer reading is this old (s).
+GPS_LATENCY = 0.06
+GPS_MAX_SPEED_ACCURACY = 0.6
+GPS_MAX_ACCURACY = 8.0
+BARO_LATENCY = 0.075
 GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "view", "gps_tau", "gps_place_tau", "gps_height_tau", "gps_heading", "baro_tau", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll", "thrust_direction", "gps_calibrate", "ekf", "return_speed")
 # flight.py counts these to find the Command fields after them: a gain added here and not there shifts every one of them (the pitch damping's filter, the guards' gains) without an error.
 assert len(GAIN_KEYS) == flight.HOVER_GAINS, "sw/sim/flight.py HOVER_GAINS must be the number of hover.h HoverGains members"

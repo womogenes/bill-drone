@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.flight_log import recording
+from sw.flight_log import parse_settings, recording
 from sw.flight_log import settings as recording_settings
 from sw.sim.outdoor import GPS
 from sw.sim.outdoor import plant as outdoor_plant
@@ -86,7 +86,7 @@ def main():
     parser.add_argument("--save", type=Path, help="write the real and simulated measures and speed traces as JSON")
     args = parser.parse_args()
     path = recording(args.recording)
-    settings = recording_settings(path) | {k: float(v) for k, v in (item.split("=") for item in args.set.split(",") if item)}
+    settings = recording_settings(path) | parse_settings(args.set)
     s = np.load(Path(args.truth) / f"{args.recording}.npz")
     end = s["t"][-1] - s["t"][np.flatnonzero(s["left_throttle"] > 0)[0]] - LIFTOFF - 0.3
     span = args.span or (5.0, end)

@@ -9,7 +9,6 @@ Backends: the per-tick physics runs in C (sw/sim/rigid_step.c, compiled on first
 """
 
 import ctypes
-import json
 import math
 import os
 import subprocess
@@ -38,7 +37,6 @@ SPEED_RANGE = 1.5
 SLIP = 0.15
 # Quadratic air drag (N per (m/s)²) for falls; the rotor drag at hover speeds is the calibrated linear term.
 AIR_DRAG = 0.03
-MODELS = Path(__file__).with_name("models")
 SOURCE = Path(__file__).with_name("rigid_step.c")
 LIBRARY = Path(__file__).with_name("rigid_step.so")
 # The scalar parameters in rigid_step.c's Params order (airframe parameters, then the geometry's constants as airframe.resolve gives them, then the thrust trim, then this sim's constants, then HULL).
@@ -66,8 +64,8 @@ def library():
 
 def load_plant(airframe="airframe_2026-10-28.json", disturbances="disturbances_2026-10-28_calibrated.json"):
     """The default plant: the identified airframe at its geometry, its calibrated disturbances and drag (sw/sim/sweep.py IDENTIFIED_ESC)."""
-    params = json.loads((MODELS / airframe).read_text())
-    return {"airframe": params, "geometry": A.geometry_of(params), "disturbances": json.loads((MODELS / disturbances).read_text()) if disturbances else [], "rotor_drag": (0.58, 0.34)}
+    params = A.model(airframe)
+    return {"airframe": params, "geometry": A.geometry_of(params), "disturbances": A.model(disturbances) if disturbances else [], "rotor_drag": (0.58, 0.34)}
 
 
 def throttle_for(force):

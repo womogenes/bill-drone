@@ -444,7 +444,9 @@ def main():
     if args.replay:
         replay(args.replay, args.contact, args.source, defines)
         return
-    overrides = {name: float(value) for name, value in (pair.split("=") for pair in args.set)}
+    from sw.flight_log import parse_settings
+
+    overrides = parse_settings(",".join(args.set))
     cases = [draw(args.seed + i, args.outdoor) | {"camera": not args.no_camera, "baro": args.baro, "gust": args.gust, "settings": overrides} for i in range(args.runs)]
     for case in cases:
         if args.tray:

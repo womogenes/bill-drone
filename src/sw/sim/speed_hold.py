@@ -128,7 +128,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("recordings", nargs="+")
     parser.add_argument("--sim", action="store_true")
-    parser.add_argument("--airframe", type=Path, default=Path(__file__).with_name("models") / "airframe_2026-11-02_9in.json")
+    parser.add_argument("--airframe", type=Path, default=N.A.MODELS / "airframe_2026-11-02_9in.json")
     parser.add_argument("--seconds", type=float, default=50.0)
     parser.add_argument("--seeds", type=int, default=3)
     parser.add_argument("--static", type=lambda text: [float(v) for v in text.split(",")], help="airspeeds (m/s): the static balance in a steady headwind on each recording's settings instead (static)")

@@ -1,12 +1,12 @@
 """
-The airframe's attitude dynamics as identified from flight logs (sw/sim/identify_airframe.py), shared by the identification (vectorised over many prediction lanes), the hover simulation (sw/sim/sweep.py, one lane through Airframe) and the full-attitude sim (sw/sim/rigid.py, ported to rigid_step.c).
+The airframe's attitude dynamics as identified from flight logs (sw/sim/identify_airframe.py), shared by the identification (vectorized over many prediction lanes), the hover simulation (sw/sim/sweep.py, one lane through Airframe) and the full-attitude sim (sw/sim/rigid.py, ported to rigid_step.c).
 
-The geometry is an explicit input (models/geometry_<day>.json; metres from the tube midpoint, body x forward, y left, z up; kg and kg·m²): mass, com, arm (the motor axes' |y|), pivot_z (the tilt axes), rotor_z (the prop plane at zero tilt), the body's roll, pitch and yaw inertia about the CoM, and each motor assembly's mass, CoM distance above its pivot and inertia about its tilt axis. Every body term is a torque from a fitted coefficient and the geometry, divided by the geometry's inertia, so a chassis change (battery, CoM, arm, pivot height, motor mass, legs) reaches the dynamics through the geometry alone: derive_geometry builds one from a parts list, cad_geometry from bicopter.xml's parts, and shifted applies CAD differences to a reference. The fitted coefficients are meant not to change with the geometry:
+The geometry is an explicit input (models/geometry_<day>.json; meters from the tube midpoint, body x forward, y left, z up; kg and kg·m²): mass, com, arm (the motor axes' |y|), pivot_z (the tilt axes), rotor_z (the prop plane at zero tilt), the body's roll, pitch and yaw inertia about the CoM, and each motor assembly's mass, CoM distance above its pivot and inertia about its tilt axis. Every body term is a torque from a fitted coefficient and the geometry, divided by the geometry's inertia, so a chassis change (battery, CoM, arm, pivot height, motor mass, legs) reaches the dynamics through the geometry alone: derive_geometry builds one from a parts list, cad_geometry from bicopter.xml's parts, and shifted applies CAD differences to a reference. The fitted coefficients are meant not to change with the geometry:
 - motors: dead time, then a first-order lag on the thrust (the thrust table, times battery voltage over thrust_voltage to voltage_power; the right motor can differ in dead time, lag and gain). The "right" terms are the right motor's. A motor started from standstill makes no thrust for motor_start after its throttle turns positive (the ESC's start-up; the takeoffs show it, the airborne fit cannot). The level is pinned to the weight (each flight's trim: its airborne median table thrust times thrust level carries mass × g), and differential_slope is the share of a differential throttle step's table thrust the motors deliver (roll authority; the common part follows the table; from 2026-10-29b it is held at 1, which the ±1.5-3° PRBS flights measure, instead of fitted);
 - servos: dead time, then a second-order position loop (servo_wn, servo_zeta) whose horn speed is limited to servo_slew and which yields to the link's load by servo_compliance (rad per N·m: the horn's static deflection under load, the servo's finite stiffness; 0 is a horn that holds its position whatever the load, as every model before 2026-11-08); the horn drives the motor assembly through a link with play, as torques on the assembly's effective inertia (its CAD inertia about the tilt axis, its mass × CoM offset × pivot height, and servo_inertia, the servo's reflected rotor): link_k (N·m/rad), link_c (N·m·s/rad), a forward band preload (N·m) less band_k per radian of tilt. What the link does to the assembly it does the other way to the body;
 - props: prop_torque (m: reaction torque per newton along each tilted shaft, opposite spins, so it acts in yaw and, tilted, in roll), prop_momentum (N·m·s per √N, for the gyroscopic roll torque of the props as they tilt);
 - rotors: inflow_damping (s/m: roll damping as thrust lost per newton per m/s of axial inflow at the arm), edgewise_damping (s/m: the H-force per newton per m/s, for pitch at the rotors' height above the CoM and yaw at the arm);
-- the slipstream: a share wash of the tilted thrust's horizontal force is cancelled by its slipstream on the airframe, acting at wash_z above the tube, so yaw tilt authority is 1 - wash of the geometric, the pitch tilt torque is (pivot height - wash × (wash_z - CoM height)) × T sin(tilt), and a tilt pushes the drone forward tilt_push as hard as the same body pitch (1 - wash in models saved without it; the camera measures about 0.66); a share pitch_wake of that torque builds up with lag wake_tau (the tilt is less effective held than swung);
+- the slipstream: a share wash of the tilted thrust's horizontal force is canceled by its slipstream on the airframe, acting at wash_z above the tube, so yaw tilt authority is 1 - wash of the geometric, the pitch tilt torque is (pivot height - wash × (wash_z - CoM height)) × T sin(tilt), and a tilt pushes the drone forward tilt_push as hard as the same body pitch (1 - wash in models saved without it; the camera measures about 0.66); a share pitch_wake of that torque builds up with lag wake_tau (the tilt is less effective held than swung);
 - lumped terms, as torques so they scale with the geometry: roll_pendulum and pitch_pendulum (m: the attitude stiffness as an effective length times the thrust; free flight has no attitude spring, so this stands for something unmodelled), drag_z_x and drag_z_y (m above the tube: where the horizontal drag acts, so the speed moments follow the CoM height; from 2026-10-29b roll_pendulum is held at 0, and drag_z_y is set by the hovers' closed-loop statistics, where it damps the hover loop's sideways swing: the camera sees no sideways drag force, so its roll moment is better read as the downwind rotor losing thrust in the upwind one's wake), roll_from_yaw and yaw_from_roll (N·m per rad/s), and a constant push per flight;
 - com_x is geometry the hovers calibrate (the hang test is its prior): the pushes absorb any steady torque, so only the thrust's variation sees it.
 Angles are radians; servo commands, horn and tilt are degrees, positive forward (the right servo mirrored, as in the logs); velocity is forward and left in m/s.
@@ -49,6 +49,8 @@ KEYS = list(PARAMS)
 OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed")
 # The running time (s) of a motor that has long been spinning.
 RUNNING = 10.0
+
+
 def flown_by(recordings):
     """The one physical drone that flew all of the recordings (sw/flight_log.py drone); stops with what is wrong when they are from several or one does not say."""
     drones = {}
@@ -77,8 +79,13 @@ def motor_terms(p, n):
     return tuple(np.tile(v, (n, 1)) for v in (delay, tau, gain))
 
 
+def model(name):
+    """A saved model file from sw/sim/models: an airframe's parameters, a geometry or a list of disturbances."""
+    return json.loads((MODELS / name).read_text())
+
+
 def load_geometry(name=GEOMETRY_FILE):
-    geometry = json.loads((MODELS / name).read_text())
+    geometry = model(name)
     geometry["com"] = tuple(geometry["com"])
     return geometry
 
@@ -88,7 +95,7 @@ GEOMETRY = load_geometry()
 
 def derive_geometry(parts, assembly, arm, pivot_z, rotor_z):
     """
-    A geometry from parts (each {"mass", "pos": (x, y, z), optional "inertia": (Ixx, Iyy, Izz) about its own centre}) rigidly fixed to the body, both motor assemblies at zero tilt among them, and one assembly's {"mass", "com" (above its pivot), "inertia" (about its tilt axis)}.
+    A geometry from parts (each {"mass", "pos": (x, y, z), optional "inertia": (Ixx, Iyy, Izz) about its own center}) rigidly fixed to the body, both motor assemblies at zero tilt among them, and one assembly's {"mass", "com" (above its pivot), "inertia" (about its tilt axis)}.
     """
     mass = sum(p["mass"] for p in parts)
     com = np.sum([p["mass"] * np.asarray(p["pos"], float) for p in parts], 0) / mass

@@ -104,8 +104,8 @@ def score(f, library, durations):
     row["flight"] = {"ekf": (rms(out["height"][air] - s["up"][air]), rms(out["velocity"][air, 2] - s["climb"][air])),
                      "hover": (rms(height[air] - s["up"][air]), rms(climb[air] - s["climb"][air]))}
     # Against the GPS's height at each solution's own moment, from 3 s after liftoff.
-    k = np.flatnonzero((f.gps_t >= f.liftoff + 3) & (f.gps_t <= f.end - 1) & (f.gps_t - ekf.GPS_LATENCY < t[m - 1]) & np.isfinite(f.gps_height))
-    at = np.searchsorted(t, f.gps_t[k] - ekf.GPS_LATENCY)
+    k = np.flatnonzero((f.gps_t >= f.liftoff + 3) & (f.gps_t <= f.end - 1) & (f.gps_t - hover.GPS_LATENCY < t[m - 1]) & np.isfinite(f.gps_height))
+    at = np.searchsorted(t, f.gps_t[k] - hover.GPS_LATENCY)
     size = int(2 * GPS_HEIGHT_S * 10) | 1
     row["gps_height"] = (wander(out["height"][at] - f.gps_height[k], size), wander(height[at] - f.gps_height[k], size)) if len(k) > size else (np.zeros(0), np.zeros(0))
     used = f.air & aligned

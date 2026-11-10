@@ -11,14 +11,12 @@ import math
 
 import numpy as np
 
+from sw.flight_log import parse_settings
 from sw.sim import gps_truth as T
 from sw.sim.landing_test import install
 
 TAKEOFF_S = 2.5
 LANDING_S = 2.0
-# flight_rt.c: GPS_LATENCY_US and BARO_LATENCY_US, as the firmware dates the fixes and readings.
-GPS_LATENCY = 0.06
-BARO_LATENCY = 0.075
 
 
 def replay(f, hover, settings):
@@ -29,11 +27,8 @@ def replay(f, hover, settings):
     height, climb = np.full(n, np.nan), np.full(n, np.nan)
     # A takeoff engages with the motors off (flight_rt.c passes the collective before the hover's first tick, zero on the floor); once engaged hover.c uses its own.
     # GPS fixes by the grid tick they arrive on; north and east from the first fix (m), up from the drone's vertical velocity sign.
-    arrive = np.searchsorted(f.grid, f.gps_t)
     position = np.column_stack([f.gps_position.real, -f.gps_position.imag])
-    fixes = {}
-    for k, i in enumerate(arrive):
-        fixes.setdefault(int(i), k)
+    fixes = f.fixes()
     raw = np.array(f.baro)
     previous = None
     thrust = np.where(f.left > 0, f.thrust_z, 0.0)
@@ -42,7 +37,7 @@ def replay(f, hover, settings):
         reading = None
         if np.isfinite(raw[i]) and raw[i] != previous:
             previous = raw[i]
-            reading = hover.Baro(capture_us=int((now - BARO_LATENCY) * 1e6), altitude=float(raw[i]))
+            reading = hover.Baro(capture_us=int((now - hover.BARO_LATENCY) * 1e6), altitude=float(raw[i]))
         vertical = float(f.up[i] / T.G)
         if f.mode[i] == 0 or not f.armed[i]:
             hover.library.hover_rest(state, vertical, bool(f.left[i] > 0), T.DT, reading if reading else None)
@@ -50,7 +45,7 @@ def replay(f, hover, settings):
         fix = None
         if i in fixes:
             k = fixes[i]
-            fix = hover.Gps(capture_us=int((f.gps_t[k] - GPS_LATENCY) * 1e6), velocity=(f.gps_u[k].real, -f.gps_u[k].imag, f.gps_up[k]), position=(position[k, 0], position[k, 1], 0.0))
+            fix = hover.Gps(capture_us=int((f.gps_t[k] - hover.GPS_LATENCY) * 1e6), velocity=(f.gps_u[k].real, -f.gps_u[k].imag, f.gps_up[k]), position=(position[k, 0], position[k, 1], 0.0))
         drag = hover.Drag(specific=tuple(float(v) for v in f.specific[i]), tilt=float(f.tilt[i]))
         heading_rate = float((f.gyro[i, 1] * math.sin(f.roll[i]) + f.gyro[i, 2] * math.cos(f.roll[i])) / math.cos(f.pitch[i]))
         hover.library.hover_update(state, gains, int(f.mode[i]), None, int(now * 1e6), T.DT, float(f.roll[i]), float(f.pitch[i]), heading_rate, vertical, float(thrust[i]) if state.engaged else 0.0,
@@ -70,7 +65,7 @@ def main():
     from sw.sim import hover
 
     install(args.source, args.defines.split())
-    overrides = {name: float(value) for name, value in (pair.split("=") for pair in args.set)}
+    overrides = parse_settings(",".join(args.set))
     rows = []
     for path in T.flights(args.recordings):
         f = T.Flight(path)

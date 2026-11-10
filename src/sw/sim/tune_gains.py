@@ -21,7 +21,6 @@ KEYS = ("pitch_p", "pitch_damping", "pitch_i", "roll_p", "roll_damping", "roll_i
 # The settings' ranges in the firmware (settings.def), which the search stays within.
 LIMITS = {"hover_kp": (0, 20), "hover_kd": (0, 20), "hover_kside": (0, 5), "hover_kyaw": (0, 10), "hover_tilt": (0, 15), "hover_trim_tau": (0.1, 20), "hover_trim_max": (0, 3)}
 SEEDS = (0, 1, 2)
-MODELS = Path(__file__).with_name("models")
 # The steady torque of a CoM shift the gains must absorb without retrimming (rad/s²): on 2026-10-28 moving the battery changed the trim biases learn_bias found by up to ~5 in pitch and roll.
 COM_PUSH = 5.0
 # Share of a candidate's worst run in its score, on top of the mean of all its runs.
@@ -96,10 +95,10 @@ def main():
     base = recording_settings(args.recording)
     flown = {key: base[key] for key in KEYS}
     # Gains at zero are searched from a small floor so the log scale can move them.
-    centre = {key: max(value, 0.05) for key, value in flown.items()}
+    center = {key: max(value, 0.05) for key, value in flown.items()}
 
     def gains(x):
-        return {key: min(max(centre[key] * args.range ** max(-1.0, min(1.0, v)), LIMITS.get(key, (0, math.inf))[0]), LIMITS.get(key, (0, math.inf))[1]) for key, v in zip(KEYS, x)}
+        return {key: min(max(center[key] * args.range ** max(-1.0, min(1.0, v)), LIMITS.get(key, (0, math.inf))[0]), LIMITS.get(key, (0, math.inf))[1]) for key, v in zip(KEYS, x)}
 
     with Pool(args.workers) as pool:
         def evaluate(candidates):

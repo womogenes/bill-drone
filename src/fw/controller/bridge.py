@@ -165,7 +165,7 @@ def decode_link(payload):
 
 def decode_gps(fields):
     """
-    The status message's GPS fields (drone/main/runtime.h Status) in SI units: degrees, metres above sea level, m/s north, east and down.
+    The status message's GPS fields (drone/main/runtime.h Status) in SI units: degrees, meters above sea level, m/s north, east and down.
     """
     messages, corrupt, skipped, age, itow, fix, flags, satellites, configured, lat, lon, height, *rest = fields
     velocity, (horizontal, vertical, speed) = rest[:3], rest[3:]
@@ -534,7 +534,7 @@ class Service:
         try:
             while time.monotonic() < deadline:
                 if generation != self.link_generation or session != self.session:
-                    raise RuntimeError("Drone link changed; request cancelled")
+                    raise RuntimeError("Drone link changed; request canceled")
                 await self.send_message(6, identifier + op + body, identifier)
                 try:
                     data = await asyncio.wait_for(asyncio.shield(reply), 0.2)

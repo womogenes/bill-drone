@@ -2,12 +2,11 @@
 The host flight simulation: run() flies the drone's C attitude estimator and controller (via sw.sim.flight), and with hover its camera-hover loop (via sw.sim.hover), against a lean 6-DOF rigid-body plant with actuator delay, lag, servo backlash/slew, IMU noise, drag and landing-leg ground contact; uv run -m sw.sim.sweep flies NOMINAL once with the flown gains. Free flight starts at hover in the air; a plant with "liftoff" starts on the ground at the dashboard's T collective instead, level or resting at "ground_pitch" degrees on its "feet" (contact points relative to the CoM, default FEET).
 """
 
-import json
 import math
 import random
 from collections import deque
-from pathlib import Path
 
+from sw.sim.airframe import Airframe, model
 from sw.sim.disturbance import Disturbances
 from sw.sim.flight import MODEL, PITCH_SPEED, YAW_I, Attitude, Controller, throttle, thrust
 
@@ -33,7 +32,7 @@ SLIP = 0.05  # m/s; friction is viscous below this so the integration stays stab
 DRAG = 0.03  # N/(m/s)², rough bluff-body estimate
 ACCEL_NOISE = 0.0004 * math.sqrt(44)  # g RMS: MPU6050 noise density × DLPF bandwidth
 GYRO_REST_NOISE = math.radians(0.07)  # rad/s per sample with the motors off (0.05 degrees/s RMS after the filter)
-# The ESP32-CAM tag sighting (fw/esp32cam/README.md): the tag centre's world position (m; forward, left, up from the takeoff point), the field of view from the camera axis (degrees; half across, above, below: the central 1536x1152 window, fx 493 px and cy 108 at 320x240), frame rate, capture-to-use latency (s), and position noise as a fraction of range.
+# The ESP32-CAM tag sighting (fw/esp32cam/README.md): the tag center's world position (m; forward, left, up from the takeoff point), the field of view from the camera axis (degrees; half across, above, below: the central 1536x1152 window, fx 493 px and cy 108 at 320x240), frame rate, capture-to-use latency (s), and position noise as a fraction of range.
 # Rate, delay and noise as flown on 2026-10-28 (06:55-07:01 hovers): 21-22 sightings a second, 50 ms median age at use (90th percentile 70), range noise 0.5% of range about a 9-frame mean.
 # noise is the measured 0.5% range noise; lateral_noise from the camera hovers' sideways spectrum above 2 Hz, about 100x below the range noise in power.
 CAMERA = {"tag": (2.0, 0.0, 0.5), "fov": (18.0, 12.4, 15.0), "fps": 22.0, "latency": 0.045, "noise": 0.005, "lateral_noise": 0.0005}
@@ -86,7 +85,7 @@ def level_turn(vector, roll, pitch):
 
 def sighting(camera, position, angles, cam_pitch, rng, cam_roll=0.0):
     """
-    The tag centre in the camera frame (m; right, down, forward) as a camera rolled by cam_roll about its axis reports it (hover.c level turns it back), or None when it is outside the field of view.
+    The tag center in the camera frame (m; right, down, forward) as a camera rolled by cam_roll about its axis reports it (hover.c level turns it back), or None when it is outside the field of view.
     """
     offset = [t - p for t, p in zip(camera["tag"], position)]
     x, y, z = apply(rotation(*angles), offset, transpose=True)
@@ -95,7 +94,7 @@ def sighting(camera, position, angles, cam_pitch, rng, cam_roll=0.0):
     across, above, below = camera["fov"]
     if ahead <= 0 or abs(math.atan2(right, ahead)) > math.radians(across) or not -math.radians(above) <= math.atan2(down, ahead) <= math.radians(below):
         return None
-    # Range noise (along the line of sight) is the tag size's pixel error; across the image the tag centre is far more precise ("lateral_noise", default the same).
+    # Range noise (along the line of sight) is the tag size's pixel error; across the image the tag center is far more precise ("lateral_noise", default the same).
     distance = math.sqrt(x * x + y * y + z * z)
     spread, lateral = camera["noise"] * distance, camera.get("lateral_noise", camera["noise"]) * distance
     right, down, ahead = right + rng.gauss(0, lateral), down + rng.gauss(0, lateral), ahead + rng.gauss(0, spread)
@@ -216,7 +215,6 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     commanded = (0.0, 0.0, 0.0, 0.0)
     airframe = None
     if plant.get("airframe"):
-        from sw.sim.airframe import Airframe
         airframe = Airframe(plant["airframe"])
         ground_by = plant["airframe"].get("ground_by")
         # The airframe's accelerations come at its geometry; the body takes the other torques (contact, disturbances) with the same inertia.
@@ -245,7 +243,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     # Landing (plant["land_at"]): when the hover's touchdown flag set and collective reached zero (s after liftoff), the descent speed, the horizontal speed and the largest tilt from level in the 1 s before and after the feet came back.
     landing = {"landed_s": None, "off_s": None, "contact_speed": None, "contact_drift": None, "contact_tilt": 0.0}
     if hover:
-        from sw.sim.hover import HOLD, LAND, LAND_FAST, Hover, Pose
+        from sw.sim.hover import BARO_LATENCY, GPS_LATENCY, HOLD, LAND, LAND_FAST, Hover, Pose
         use_camera = settings.get("hover_camera", 1)
         if not use_camera:
             settings["hover_center"] = 0
@@ -329,7 +327,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 period = 1 / flow_plant.get("fps", 43.0)
                 flow_ticks.append((now, outer.body_to_camera(rate), outer.body_to_camera(apply(matrix, velocity, transpose=True)), outer.body_to_camera(gyro_filter)))
                 while flow_capture <= now:
-                    # The true image motion of a scene at depth over the frame interval: the body's rotation sweeps the centre (-W_down, +W_right) and its velocity across the camera (-v / depth); the shift gets pixel noise; the firmware takes the mean measured rotation over the interval back out (flight_rt.c flow_input).
+                    # The true image motion of a scene at depth over the frame interval: the body's rotation sweeps the center (-W_down, +W_right) and its velocity across the camera (-v / depth); the shift gets pixel noise; the firmware takes the mean measured rotation over the interval back out (flight_rt.c flow_input).
                     ticks = [tick for tick in flow_ticks if flow_capture - period < tick[0] <= flow_capture] or [flow_ticks[-1]]
                     w, v, measured = [[sum(tick[part][axis] for tick in ticks) / len(ticks) for axis in range(3)] for part in (1, 2, 3)]
                     depth = flow_plant["depth"]
@@ -363,7 +361,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 while gps_fixes and gps_fixes[0][0] <= now:
                     arrived, speed, place = gps_fixes.popleft()
                     # Stamped as flight_rt.c gps_input does: its arrival less the latency it assumes.
-                    gps = (round((arrived - 0.06 + 1) * 1e6), speed, place)
+                    gps = (round((arrived - GPS_LATENCY + 1) * 1e6), speed, place)
                     # An outage (the camera's transmitter jammed the receiver on 2026-11-09): no solutions arrive for a while.
                     outage = gps_plant.get("outage")
                     if outage and lifted is not None and outage[0] <= now - lifted < outage[0] + outage[1]:
@@ -383,7 +381,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 while baro_readings and baro_readings[0][0] <= now:
                     arrived, altitude = baro_readings.popleft()
                     # Stamped as flight_rt.c baro_input does: its arrival less the latency it assumes.
-                    baro = (round((arrived - 0.075 + 1) * 1e6), altitude)
+                    baro = (round((arrived - BARO_LATENCY + 1) * 1e6), altitude)
             # Like camera_candidates: the newest delivered frame's tag, if it saw one and was captured at most 150 ms ago.
             pose = None
             lost = camera_lost is not None and lifted is not None and now - lifted >= camera_lost
@@ -625,11 +623,6 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     return result
 
 
-def model(name):
-    """A saved model file from sw/sim/models (an airframe's parameters or a list of disturbances)."""
-    return json.loads((Path(__file__).with_name("models") / name).read_text())
-
-
 # Plant as measured (2026-10-21): pivot 20 mm above the CoM, pitch inertia 0.00161 kg m^2, thrust 1.09x the table at ~16 V.
 NOMINAL = {"thrust_k": 1.09, "height": 0.0234 / MODEL["pivot_height"], "roll_inertia": 1.0, "pitch_inertia": 0.00161 / MODEL["pitch_inertia"], "yaw_inertia": 1.0, "motor_delay": 0.02, "motor_tau": 0.05,
            "servo_delay": 0.04, "servo_tau": 0.06, "backlash": 0.5, "deadband": 0.45, "servo_slew": 600, "imbalance": 0.06, "com_x": 0.002, "gyro_noise": 2.0}
@@ -639,7 +632,7 @@ FITTED = {"thrust_k": 1.03, "mass": 0.86, "height": 1.42 * 0.03 / MODEL["pivot_h
           "motor_delay": 0.02, "motor_tau": 0.05, "servo_delay": 0.07, "servo_tau": 0.01, "backlash": 0.3, "left_backlash": 0.5, "right_backlash": 0.3,
           "deadband": 0.1, "servo_slew": 340, "imbalance": 0.03, "com_x": 0.0, "disturbance": -10.6, "angle_moment": -3.9, "velocity_moment": -4.0,
           "gust": 5.0, "gust_tau": 0.7, "gyro_noise": 2.0, "camera": {"tag": (2.3, 0.0, 0.3)}, "rotor_drag": 0.5, "vibration": (0.1, 0.1, 0.05)}
-# Identified from the 34 hover flights of 2026-10-27 (both rubber bands on, the ESCs' earlier range: fly it with flight.PRE_RECALIBRATION_TABLE in mind) by closed-loop multi-step prediction with the firmware controller in the loop (sw/sim/identify_airframe.py, parameters in models/airframe_2026-10-27.json, refit 2026-10-28 in the geometry-explicit form). Held out by flight it predicts roll to 1.3° and pitch to 3.7° a second ahead (yaw rate R² 0.55) from the logged references alone. Rotor drag is from the camera velocity over 0.25-1 s against thrust through the logged attitude and modelled tilts (gain within 10 % of 1). The random disturbance is what of the one-step residual lies below 2 Hz (the rest, mostly 10-50 Hz in pitch, does not move the attitude): 0.89 rad/s² RMS in roll and 0.49 in pitch at 0.5 s.
+# Identified from the 34 hover flights of 2026-10-27 (both rubber bands on, the ESCs' earlier range: fly it with flight.PRE_RECALIBRATION_TABLE in mind) by closed-loop multi-step prediction with the firmware controller in the loop (sw/sim/identify_airframe.py, parameters in models/airframe_2026-10-27.json, refit 2026-10-28 in the geometry-explicit form). Held out by flight it predicts roll to 1.3° and pitch to 3.7° a second ahead (yaw rate R² 0.55) from the logged references alone. Rotor drag is from the camera velocity over 0.25-1 s against thrust through the logged attitude and modeled tilts (gain within 10 % of 1). The random disturbance is what of the one-step residual lies below 2 Hz (the rest, mostly 10-50 Hz in pitch, does not move the attitude): 0.89 rad/s² RMS in roll and 0.49 in pitch at 0.5 s.
 AIRFRAME = model("airframe_2026-10-27.json")
 # Refit 2026-10-28 on the four hovers after both ESCs were recalibrated (06:54-07:01 UTC, 170 s, the rescaled thrust table), at models/geometry_2026-10-28.json, and calibrated to the camera hovers' spectra (sw/sim/calibrate_sim.py); roll authority is poorly pinned by hover (see models/NOTES.md).
 AIRFRAME_ESC = model("airframe_2026-10-28.json")
@@ -665,14 +658,14 @@ def in_room(airframe, room):
 # The current plant, 2026-10-29b (see models/NOTES.md): the airframe refit on every 9-inch flight after the CoM change (05:53-07:43, runaways cut, the ESC swap at 06:45 followed) with the roll actuator pinned by the PRBS flights (table authority, about 11 ms dead time and 50 ms lag) and no roll attitude spring, an ESC start-up time from standstill and the servo tilt's measured forward push; the sideways speed's roll moment (loose in the fit) at the 2026-10-29 fit's value, and the 2026-10-29 disturbances and rotor drag (recalibrating them to the hovers' statistics traded that moment against the roll drift and broke the PRBS and hover_kd checks). It flies hover_kd the right way round (calm at 2.0, the 0.4 Hz swing at 0.81 that the ±3° PRBS grows). Its liftoff kick peaks too late at pitch_bias 3.9 (0.4-0.6 s against 0.2 s).
 IDENTIFIED_ESC = in_room(model("airframe_2026-10-29b.json"), "2026-10-29")
 # The 10-inch drone as the camera measured it on 2026-10-31 (the tag hover 20:57 UTC): almost no forward rotor drag (0.04/s, its drag model's forward reading uncorrelated with the real speed) and about 0.1/s sideways, the room's drifts as real forces the accelerometer feels, and no steady room push (each flight's push depends on where the CoM sits; give one with a constant or ramping pitch term). Fly tag-free hovers and manual flights on this one: the earlier rooms' 0.58/s forward drag let the drag model see a speed the real drone cannot.
-# Its airframe carries no steady push of its own (the zero-fit's were the 10-29 flights' CoM): a centred CoM, as the redesign intends; scenarios add an offset (a constant pitch term) or a slide (a ramp). Even so a tag-free hover on it runs away forward (9.5 m in 8 s from takeoff, the servos holding 8 degrees forward): the forward speed's nose-up moment (drag_z_x, the rotors flapping back, fitted on the 10-29 hovers at their small speeds) grows with a speed the drag model cannot see, and the forward tilt that holds it adds speed; without that moment it drifts 2 m. The real tag-free hops were stopped within seconds of drifting, so nothing yet says which is right at higher speed.
+# Its airframe carries no steady push of its own (the zero-fit's were the 10-29 flights' CoM): a centered CoM, as the redesign intends; scenarios add an offset (a constant pitch term) or a slide (a ramp). Even so a tag-free hover on it runs away forward (9.5 m in 8 s from takeoff, the servos holding 8 degrees forward): the forward speed's nose-up moment (drag_z_x, the rotors flapping back, fitted on the 10-29 hovers at their small speeds) grows with a speed the drag model cannot see, and the forward tilt that holds it adds speed; without that moment it drifts 2 m. The real tag-free hops were stopped within seconds of drifting, so nothing yet says which is right at higher speed.
 # Until 2026-11-08 its airframe was the 10-inch zero-fit (airframe_2026-10-29_10in_zerofit.json): that and the 2026-11-02 fit flew drone 1's hop settings calm (pitch 18-30 degrees peak to peak, decaying) where the real hops swung at 0.6-0.9 Hz to 20-48 degrees, and did not shake at pitch_damping 8 (5-8 against the real 67 deg/s in 2.2-3.5 Hz).
 # Now drone 1 as flown on 2026-11-02 and 2026-11-08 (models/airframe_2026-11-08.json, models/NOTES.md 2026-11-08): the pitch path calibrated to the hops' closed-loop pitch spectra (sw/sim/calibrate_pitch.py: a fast, overdamped servo with a heavier reflected inertia and a little compliance, the forward speed's moment, the held tilt's lagged share), the rest refit on every 10-inch flight. Its mass is the model's geometry's (1.0 kg, the camera and GPS on): the airframe's thrust trim carries that weight, so a lighter body would hover at less thrust and less tilt authority than identified. Check pitch gain and filter changes with sw/sim/pitch_check.py on it before flying.
 # From 2026-11-08 night (models/airframe_2026-11-08b.json, models/NOTES.md "Fewer parameters, held out by session"): the 10-inch zero-fit with the pitch inertia doubled (geometry_2026-11-08b.json, 1.05 kg) and only the forward speed's moment fitted, which predicts the held-out outdoor and indoor 2026-11-08 flights best and swings at the 2026-11-02 hovers' damping at their hardware's 1.5x. The calibrated airframe_2026-11-08.json predicted held-out flights worse than no fit; it stays as the check for the 2.6 Hz shake (pitch_check --airframe models/airframe_2026-11-08.json), which only it reproduces.
 # From 2026-11-09 (models/airframe_2026-11-09.json, models/NOTES.md 2026-11-09): 11-08b with the GPS-measured tilt push, drags and voltage law, and the forward speed moment set to the measured static balance (7.8 degrees of servo tilt per m/s, where 11-08b held 14.6 and was blown off from 2.5 m/s of headwind).
 CURRENT_AIRFRAME = model("airframe_2026-11-09.json")
 CURRENT = in_room(CURRENT_AIRFRAME | {f"{axis}_push": 0.0 for axis in ("roll", "pitch", "yaw")}, "2026-10-29") | {
-    "rotor_drag": (0.04, 0.1), "sensed_disturbances": True, "mass": json.loads((Path(__file__).with_name("models") / CURRENT_AIRFRAME["geometry"]).read_text())["mass"],
+    "rotor_drag": (0.04, 0.1), "sensed_disturbances": True, "mass": model(CURRENT_AIRFRAME["geometry"])["mass"],
     "disturbances": [d for d in ROOMS["2026-10-29"]["disturbances"] if d["kind"] != "constant"]}
 
 

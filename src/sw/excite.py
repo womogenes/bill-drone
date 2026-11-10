@@ -28,7 +28,7 @@ URL = "http://127.0.0.1:8765/pattern"
 
 
 def segments(values, hold):
-    """Segments from per-tick channel values ([tick] of {channel: value}), merging equal neighbours; hold scales ticks (1 = one control sample each)."""
+    """Segments from per-tick channel values ([tick] of {channel: value}), merging equal neighbors; hold scales ticks (1 = one control sample each)."""
     out = []
     for value in values:
         value = {key: round(v, 2) for key, v in value.items() if v}

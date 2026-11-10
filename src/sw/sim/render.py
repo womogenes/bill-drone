@@ -31,7 +31,7 @@ MEASURED_TILT = 35.0
 
 
 def big_floor(xml):
-    """The model with a floor large enough for falls from several metres, and a sky; without its landing legs, as the drone now flies."""
+    """The model with a floor large enough for falls from several meters, and a sky; without its landing legs, as the drone now flies."""
     xml = xml.replace('size="3 3 0.1" rgba="0.85 0.85 0.85 1"', 'size="30 30 0.1" material="grid" rgba="1 1 1 1"')
     for legs in ("front_legs", "rear_legs"):
         xml = xml.replace(f'<geom name="{legs}" class="cad"', f'<geom name="{legs}" class="cad" rgba="0 0 0 0"')
@@ -119,7 +119,7 @@ def main():
     args = parser.parse_args()
     if args.flip:
         from sw.sim import flip as F
-        recovery = json.loads((Path(__file__).with_name("models") / "recover_params.json").read_text())
+        recovery = json.loads(F.C.PARAMS.read_text())
         result, trace = F.run(json.loads(args.params.read_text()) if args.params else {}, recovery, n=args.episodes, seed=args.seed, record=True)
         parts = []
         for env in range(args.episodes):

@@ -6,7 +6,7 @@ With --ground, the tilt's pitch torque grows near the floor (sw/sim/airframe.py 
 Recordings in EXCLUDED are skipped, and flights in UNTIL are used only up to their runaway. Recordings with dropped records (radio loss) are put on the grid of their sequence numbers (on_sequence_grid); only windows clear of a dropped record are scored.
 On flights with a roll or pitch test pattern the fit adds an instrumented one-step cost (--instrument, its weight): the pattern's target steps, independent of the disturbances, as the instrument for the plant's frequency response from the logged state and commands to the angular acceleration, 0.5-6 Hz (see instrumented). The closed-loop multi-step cost alone leaves the actuators' authority and lag loose (a weaker, laggier roll actuator with a stiffer lumped attitude term predicts hover nearly as well, and flies the hover loop wrongly); the instrument pins them. Parameters in TIED are held at physical or measured values unless --free releases them.
 Flights with the identification test pattern (sw/excite.py) need nothing special: its target and collective steps are in the logged references, and its servo and motor steps are added back to the replayed controller's outputs from the pattern (the recording's "pattern" event) and the segment logged in each sample's flags.
-The per-flight push absorbs any steady torque, so the right motor's static thrust gain is not identifiable from the motion: it is pinned to the airborne thrust split (median left over right table thrust, taking the CoM as centred between the motors, as measured), and only the motors' dead times and lags may differ. Each flight's thrust level is pinned to the geometry's weight (airframe.trim_for); the saved model keeps the flights' median level and hover thrusts for the simulation.
+The per-flight push absorbs any steady torque, so the right motor's static thrust gain is not identifiable from the motion: it is pinned to the airborne thrust split (median left over right table thrust, taking the CoM as centered between the motors, as measured), and only the motors' dead times and lags may differ. Each flight's thrust level is pinned to the geometry's weight (airframe.trim_for); the saved model keeps the flights' median level and hover thrusts for the simulation.
 With --prior, the parameters the motors do not set (servos, links, play, bands, slipstream, damping and attitude terms) are pulled toward an earlier model's values, each by the residual (value - prior) / max(0.2 |prior|, 2% of its range) times --prior-weight times the square root of the data residuals' count over the prior terms' count: a few flights then refine rather than refit what earlier flights pinned down (after the 2026-10-28 ESC recalibration, the 2026-10-27 model's servos and body).
 The recordings must all be from one physical drone (their start records' drone ID, sw/flight_log.py drone), and the model is saved with it. It starts from that drone's newest saved model (sw/sim/models/airframe_*.json; the plant's defaults when it has none), so after a hardware change a few flights refit what changed. Then each of --folds groups of flights is predicted by a fit to the others, and the held-out frame-by-frame scores (R² of the rates, attitude error and R² of the attitude change at 10 ms to 1 s) are printed, closed loop and on the logged commands.
 """
@@ -34,7 +34,6 @@ WINDOW = 32
 INDEX = {key: 6 + TUNING_LAYOUT.index(key) for key in TUNING_LAYOUT}
 VOLTAGE_TAU = 0.3  # the runtime's battery smoothing for thrust compensation (flight_rt.c)
 VOLTAGE_RANGE = 0.15
-MODELS = Path(__file__).with_name("models")
 # Recordings that are not the airframe flying normally: left out entirely.
 EXCLUDED = {"2026-10-29T07-19-14": "servos not plugged in"}
 # Flights used only up to here (s from the recording's start): the right side lost thrust at a throttle change (probably a slipping prop or the weak ESC), and the motion after is not the airframe's.
@@ -471,7 +470,7 @@ def residuals(x, flights, stride=10, closed=True):
     return np.concatenate([data, [weight * (p[key] - PRIOR[key][0]) / PRIOR[key][1] for key in pulled]])
 
 
-def initialise(data, free, base, prior=None, weight=0.0, geometry=None, instrument=0.0):
+def initialize(data, free, base, prior=None, weight=0.0, geometry=None, instrument=0.0):
     global DATA, FREE, BASE, PRIOR, PRIOR_WEIGHT, GEOM, INSTRUMENT_WEIGHT
     DATA, FREE, BASE, PRIOR, PRIOR_WEIGHT, INSTRUMENT_WEIGHT = data, free, base, prior or {}, weight, instrument
     GEOM = geometry or A.GEOMETRY
@@ -576,10 +575,10 @@ def main():
         prior = {key: (earlier[key], max(0.2 * abs(earlier[key]), 0.02 * (A.PARAMS[key][1] - A.PARAMS[key][0]))) for key in SHARED}
         print(f"pulled toward {args.prior} with weight {args.prior_weight}", flush=True)
     weight = args.prior_weight if args.prior else 0.0
-    initialise(data, free, base, prior, weight, geometry, args.instrument)
+    initialize(data, free, base, prior, weight, geometry, args.instrument)
     everything = list(range(len(records)))
-    out = Path(args.out) if args.out else MODELS / f"airframe_{max(r['name'] for r in records)[:10]}_{flown.replace(':', '')[6:]}.json"
-    with Pool(args.workers, initializer=initialise, initargs=(data, free, base, prior, weight, geometry, args.instrument)) as pool:
+    out = Path(args.out) if args.out else A.MODELS / f"airframe_{max(r['name'] for r in records)[:10]}_{flown.replace(':', '')[6:]}.json"
+    with Pool(args.workers, initializer=initialize, initargs=(data, free, base, prior, weight, geometry, args.instrument)) as pool:
         x, cost = fit(pool, np.array([start[key] for key in free]), everything, args.evaluations)
         params = unpack(x)
         _, push, trim = teacher(params, data, everything)

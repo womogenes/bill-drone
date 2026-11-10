@@ -72,7 +72,7 @@ def throttle(force):
     return interpolate(force, THRUST_TABLE[:PEAK + 1], input_column=1)
 
 
-# Geometry and inertia of the current 900 g drone, in metres and kg·m².
+# Geometry and inertia of the current 900 g drone, in meters and kg·m².
 MODEL = {
     "arm": 0.172,
     "pivot_height": 0.0253692458911615,

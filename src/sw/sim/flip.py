@@ -1,5 +1,5 @@
 """
-A roll flip in the full-attitude simulation (sw/sim/rigid.py), flown by the recovery controller (sw/sim/recover.py) with a manoeuvre on top: uv run -m sw.sim.flip [--params flip_params.json] [--n 256]
+A roll flip in the full-attitude simulation (sw/sim/rigid.py), flown by the recovery controller (sw/sim/recover.py) with a maneuver on top: uv run -m sw.sim.flip [--params flip_params.json] [--n 256]
 
 From a hover at 3 m: hold, punch up at climb_thrust times the weight for climb_time s (level; the motors' 0.2 s response makes a speed loop too slow for this), so the drone is rising when it starts to turn and the turn's fall is spent climbing, then spin about the roll axis (the strong one: differential thrust) toward spin_rate rad/s with the collective at spin_thrust of the weight, counting the rotation from the gyro; with handoff rad of the turn left, the recovery controller takes over to brake, level and hold. The flip's parameters may also carry recovery-controller ones (any key of recover.DEFAULTS), which override the recovery parameters for the flip: the hold after it can be tuned apart from the fall recovery. A flip is clean when the drone never touches the ground, ends within 10° of upright and still, and loses little height.
 """
@@ -84,7 +84,7 @@ def summary(r):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--params", type=Path)
-    parser.add_argument("--recovery", type=Path, default=Path(__file__).with_name("models") / "recover_params.json")
+    parser.add_argument("--recovery", type=Path, default=C.PARAMS)
     parser.add_argument("--n", type=int, default=256)
     parser.add_argument("--nominal", action="store_true")
     args = parser.parse_args()

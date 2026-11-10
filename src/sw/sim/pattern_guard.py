@@ -39,8 +39,8 @@ def plant_for(case, seed):
     from sw.sim.sweep import IDENTIFIED_ESC
 
     if case in ("gps", "tilt", "still"):
+        from sw.sim.airframe import model
         from sw.sim.outdoor import plant
-        from sw.sim.sweep import model
 
         p, _ = plant(model("airframe_2026-11-08b.json"), 2.0, seed, True, False, 1.2, speed_draw=(0.7, 1.4), baro=True)
     else:
@@ -117,7 +117,7 @@ def main():
                 line, = ax.plot(t - t[k0], distance, lw=1)
                 if r["stop"]:
                     ax.axvline(r["stop"][0] + r["lifted"] - t[k0], color=line.get_color(), ls=":", lw=1)
-            ax.axhline(0.7, color="grey", ls="--", lw=0.8)
+            ax.axhline(0.7, color="gray", ls="--", lw=0.8)
             ax.axvspan(0, 12.0 if case == "speed" else 11.2 if case in ("gps", "tilt", "still") else 8.0, color="tab:blue", alpha=0.07)
             ax.set_ylabel("m")
             ax.set_title(f"{case}: distance from the pattern's start (dotted: the guard stopped it; dashed: pattern_distance)", fontsize=9)

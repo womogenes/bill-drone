@@ -3,7 +3,7 @@ Ground truth for a recorded visual-inertial dataset (sw/vio/recorded.py) from th
 
 uv run --with opencv-contrib-python-headless -m sw.vio.tags <dataset> [--size 0.150] [--estimate <dataset>/estimate.txt]
 
-Finds every tag16h5 tag in the frames; calibrates the camera from their corners, starting from the dataset's own calibration; places the tags relative to the most-seen one from frames that see two; and gives the camera's pose in that tag's frame wherever a placed tag is in view (truth.csv: time, camera position in metres, camera-to-world quaternion w, x, y, z). With an estimate (OpenVINS's IMU poses, sw/vio/openvins/run_euroc.cpp), the estimate's camera positions are aligned to the truth by the rotation and translation that fit best (no scale) and the position error is reported over time.
+Finds every tag16h5 tag in the frames; calibrates the camera from their corners, starting from the dataset's own calibration; places the tags relative to the most-seen one from frames that see two; and gives the camera's pose in that tag's frame wherever a placed tag is in view (truth.csv: time, camera position in meters, camera-to-world quaternion w, x, y, z). With an estimate (OpenVINS's IMU poses, sw/vio/openvins/run_euroc.cpp), the estimate's camera positions are aligned to the truth by the rotation and translation that fit best (no scale) and the position error is reported over time.
 """
 
 import argparse
@@ -30,8 +30,8 @@ def detect(folder):
     detector = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(DICTIONARY), parameters)
     found = []
     for ns, name in dataset.read(folder, "cam0/data.csv"):
-        grey = cv2.imread(str(Path(folder) / "mav0/cam0/data" / name), cv2.IMREAD_GRAYSCALE)
-        corners, ids, _ = detector.detectMarkers(grey)
+        gray = cv2.imread(str(Path(folder) / "mav0/cam0/data" / name), cv2.IMREAD_GRAYSCALE)
+        corners, ids, _ = detector.detectMarkers(gray)
         for corner, tag in zip(corners or [], [] if ids is None else ids.ravel()):
             c = corner[0]
             if np.mean(np.linalg.norm(c - np.roll(c, 1, axis=0), axis=1)) >= MIN_SIDE_PX:
@@ -129,7 +129,7 @@ def main():
         if abs(refined[0, 2] - width / 2) < width / 8 and abs(refined[1, 2] - height / 2) < height / 8:
             matrix, distortion = refined, refined_distortion
         else:
-            print(f"calibration rejected: principal point ({refined[0, 2]:.0f}, {refined[1, 2]:.0f}) too far from the centre")
+            print(f"calibration rejected: principal point ({refined[0, 2]:.0f}, {refined[1, 2]:.0f}) too far from the center")
     else:
         error = float("nan")
         print("too few tags to calibrate: the dataset's calibration stays")

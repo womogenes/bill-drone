@@ -147,7 +147,7 @@ def main():
         data.measured_input = args.measured_input
         params["right_thrust_gain"] = I.thrust_split(records)
         base = {key: params[key] for key in A.KEYS}
-        I.initialise(data, [], base, geometry=geometry)
+        I.initialize(data, [], base, geometry=geometry)
         everything = list(range(len(records)))
         I.report([I.score(np.array([]), everything, True)], f"\n{model_path}: closed loop on the logged references")
         # Every step, flown from its start for as long as its target holds.

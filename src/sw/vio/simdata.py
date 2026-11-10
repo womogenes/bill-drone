@@ -88,8 +88,8 @@ def main():
     sizes = []
     start = times[0]
     while start + scene.READOUT_S < times[-1]:
-        grey = camera.frame(start, pose)
-        data = jpeg(grey)
+        gray = camera.frame(start, pose)
+        data = jpeg(gray)
         sizes.append(len(data))
         if rng.random() >= args.drop:
             import cv2

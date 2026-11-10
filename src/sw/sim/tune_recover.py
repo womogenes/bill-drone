@@ -86,7 +86,7 @@ def main():
     parser.add_argument("--flip", action="store_true")
     parser.add_argument("--current", action="store_true", help="with --flip: fly drone 1 as of 2026-11-09 (sw/sim/toss.py plant) instead of rigid.load_plant's 2026-10-28 airframe")
     parser.add_argument("--toss", action="store_true", help="tune for sw/sim/toss.py's throws, starting from --recovery's parameters")
-    parser.add_argument("--recovery", type=Path, default=Path(__file__).with_name("models") / "recover_params.json")
+    parser.add_argument("--recovery", type=Path, default=C.PARAMS)
     parser.add_argument("--out", type=Path, default=Path("recover_params.json"))
     args = parser.parse_args()
     import cma

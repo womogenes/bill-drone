@@ -18,7 +18,6 @@ import numpy as np
 from sw.sim import recover as C
 from sw.sim import rigid as R
 
-MODELS = Path(__file__).with_name("models")
 AIRFRAME = "airframe_2026-11-09.json"
 # The GPS-measured rotor drag (1/s, forward and sideways; sw/sim/gps_truth.py), in place of the indoor calibration's.
 ROTOR_DRAG = (0.07, 0.2)
@@ -48,7 +47,7 @@ def quat_from_euler(roll, pitch, yaw):
 
 
 def plant():
-    params = json.loads((MODELS / AIRFRAME).read_text())
+    params = R.A.model(AIRFRAME)
     return {"airframe": params, "geometry": R.A.geometry_of(params), "disturbances": [], "rotor_drag": ROTOR_DRAG}
 
 
@@ -105,7 +104,7 @@ def run(params, scenario, n=64, seed=0, seconds=SECONDS, randomize=True, record=
     obs = sim.reset(position, velocity, quat, omega)
     control = Throw(sim, C.DEFAULTS | params | {"engage": 0.0})
     control.reset(C.estimate(quat, rng), velocity + rng.normal(0, VELOCITY_ERROR, (n, 3)), position[:, 2] + rng.normal(0, C.HEIGHT_ERROR, n))
-    trace, peak, lowest_before_land = [], position[:, 2].copy(), np.full(n, np.inf)
+    trace, peak = [], position[:, 2].copy()
     first_touch = np.full(n, np.nan)
     tilt_max = np.zeros(n)
     hold_tilt, hold_samples = np.zeros(n), np.zeros(n)
@@ -150,7 +149,7 @@ def summary(result):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    parser.add_argument("--params", type=Path, default=MODELS / "recover_params.json")
+    parser.add_argument("--params", type=Path, default=C.PARAMS)
     parser.add_argument("--n", type=int, default=256)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--nominal", action="store_true")
@@ -164,7 +163,7 @@ def main():
         print(f"{name:18s} {summary(result)}", flush=True)
     if args.render:
         from sw.sim import render
-        # One throw per scenario that held (the first seed whose nominal throw does), labelled with the scenario's rate over the randomized throws, then the least reliable scenario's first failure.
+        # One throw per scenario that held (the first seed whose nominal throw does), labeled with the scenario's rate over the randomized throws, then the least reliable scenario's first failure.
         clips, failure = [], None
         for i, name in enumerate(SCENARIOS):
             for k in range(50):
@@ -187,6 +186,7 @@ def main():
             render.render(trace, 0, part, label=label, slow=2.0, phases=render.TOSS_PHASES, props=True)
             parts.append(part)
         render.concat(parts, args.render)
+
 
 if __name__ == "__main__":
     main()

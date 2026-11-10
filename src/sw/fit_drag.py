@@ -132,7 +132,7 @@ def drag_velocity(flight, k, offset):
 
 def camera_velocity(path, flight, cam_pitch):
     """
-    Ground truth from the camera's black box (fw/esp32cam/blackbox.py --fetch): each trusted sighting's tag centre (camera frame) levelled by the logged attitude at its capture, differenced into the drone's velocity in body heading axes and smoothed over 0.3 s. The CAM clock is matched to the drone's by the shift (±5 s) that best lines the sightings up with the log's tag-seen flag. Returns (sample index, forward, left) rows.
+    Ground truth from the camera's black box (fw/esp32cam/blackbox.py --fetch): each trusted sighting's tag center (camera frame) leveled by the logged attitude at its capture, differenced into the drone's velocity in body heading axes and smoothed over 0.3 s. The CAM clock is matched to the drone's by the shift (±5 s) that best lines the sightings up with the log's tag-seen flag. Returns (sample index, forward, left) rows.
     """
     import sys
 
@@ -150,8 +150,8 @@ def camera_velocity(path, flight, cam_pitch):
         inside = (index > 0) & (index < len(times))
         return seen[index[inside]].sum() - (~seen[index[inside]]).sum()
 
-    centre = times[np.flatnonzero(seen)].mean() - capture.mean() if seen.any() else times.mean() - capture.mean()
-    shift = max((centre + step for step in np.arange(-5e6, 5e6, 5e3)), key=agreement)
+    center = times[np.flatnonzero(seen)].mean() - capture.mean() if seen.any() else times.mean() - capture.mean()
+    shift = max((center + step for step in np.arange(-5e6, 5e6, 5e3)), key=agreement)
     index = np.clip(np.searchsorted(times, capture + shift), 0, len(times) - 1)
     ca, sa = np.cos(cam_pitch), np.sin(cam_pitch)
     x, y, z = tag[:, 1] * sa + tag[:, 2] * ca, -tag[:, 0], tag[:, 2] * sa - tag[:, 1] * ca
@@ -196,7 +196,7 @@ def main():
     residual = rows[:, 0] - rows[:, 1]
     offset = np.average(residual, weights=rows[:, 4])
     missing = -np.average(rows[:, 2] + rows[:, 3], weights=rows[:, 4])
-    print(f"steady: forward force = {slope:.2f} x vector + {intercept:+.3f} g across flights; with gain 1 the offset is {offset:+.3f} ± {residual.std():.3f} g ({np.degrees(np.arcsin(offset)):.1f}° of extra forward thrust tilt), and pitch + commanded tilt averages {-missing:+.1f}° (thrust {missing:.1f}° further forward than modelled would zero it)")
+    print(f"steady: forward force = {slope:.2f} x vector + {intercept:+.3f} g across flights; with gain 1 the offset is {offset:+.3f} ± {residual.std():.3f} g ({np.degrees(np.arcsin(offset)):.1f}° of extra forward thrust tilt), and pitch + commanded tilt averages {-missing:+.1f}° (thrust {missing:.1f}° further forward than modeled would zero it)")
     k = regress([block for flight in flights for block in blocks(flight, length=150, step=75, samples=50, trim=30)], gain=1.0)["forward"]["k"]
     for flight, row in zip(flights, rows):
         velocity = drag_velocity(flight, k, offset)[flight["lift"] + 20:flight["end"] - 5].mean(0)

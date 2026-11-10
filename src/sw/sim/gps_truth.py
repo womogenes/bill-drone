@@ -22,7 +22,7 @@ import numpy as np
 from sw.flight_log import FIRST_DRONE, RECORDINGS, drone, events, metadata, read_flight, settings
 
 DEFAULT = ("2026-11-09T05-*.bin", "2026-11-09T06-*.bin")
-# The analysed evening, 05:38-06:53 UTC; recordings from 06:54 on lack the drone's metadata.
+# The analyzed evening, 05:38-06:53 UTC; recordings from 06:54 on lack the drone's metadata.
 FIRST, LAST = "2026-11-09T05-38", "2026-11-09T06-54"
 # Foam over the barometer from this flight on.
 FOAM_FROM = "2026-11-09T06-25"
@@ -206,6 +206,19 @@ class Flight:
         self.air = (self.grid > self.liftoff + SETTLE) & (self.grid < self.end - BEFORE_END) & ~self.gap
         self.flown = self.air.sum() > 3 * FS
 
+    def fixes(self, withhold=()):
+        """The GPS solutions the firmware takes (flight_rt.c gps_input: inside its accuracy masks), as {grid tick it arrives on: its index}. Those arriving inside any (start, end) of withhold (s on the grid) are left out."""
+        from sw.sim.hover import GPS_MAX_ACCURACY, GPS_MAX_SPEED_ACCURACY
+
+        usable = (self.gps_sacc <= GPS_MAX_SPEED_ACCURACY) & (self.gps_hacc <= GPS_MAX_ACCURACY)
+        for start, end in withhold:
+            usable &= ~((self.gps_t >= start) & (self.gps_t < end))
+        arrivals = np.searchsorted(self.grid, self.gps_t)
+        fix_at = {}
+        for index in np.flatnonzero(usable):
+            fix_at.setdefault(int(arrivals[index]), index)
+        return fix_at
+
     def has_gps(self):
         return self.flown and np.count_nonzero((self.gps_t > self.liftoff) & (self.gps_t < self.end)) > 50
 
@@ -344,7 +357,7 @@ def fit_thrust(data, share, isotropic=True, bias=False, roll_gain=1.0, iteration
     n = len(data)
     if isotropic:
         # Isotropic drag is linear: c times minus the ground speed, plus c times the wind as a constant per flight.
-        columns, rows = [], []
+        columns = []
         for i, d in enumerate(data):
             columns.append(-d.mean(d.align.velocity))
         X = [np.concatenate(columns)]
@@ -515,7 +528,7 @@ def moment_fit(blocks, pick, speed="ground"):
     X = np.column_stack([ones, forward])
     coef = lstsq(X, tilt)
     residual = tilt - X @ coef
-    # Blocks overlap by half and the swing correlates neighbours: the standard error is optimistic by about 2x.
+    # Blocks overlap by half and the swing correlates neighbors: the standard error is optimistic by about 2x.
     se = math.sqrt((np.linalg.inv(X.T @ X) * residual.var())[1, 1])
     full = np.column_stack([ones, forward, pitch, accel])
     rich = lstsq(full, tilt)
@@ -1025,7 +1038,6 @@ def main():
     sd = X[:, 1:].std(0)
     print(f"Left-right throttle {d.mean():.0f} counts mean (sd {d.std():.0f}) over {len(d)} blocks; regressed on (GPS flights, {len(y)} blocks, R² {r2(y, y - X @ coef):.2f}): " + ", ".join(f"{n} {c:+.1f} (x sd {c * s:+.1f})" for n, c, s in zip(names[1:], coef[1:], sd)))
 
-
     print("\n== 6. Smoother (forward Kalman + RTS): residuals of each sensor against the reconstructed trajectory ==")
     rows, climbs = [], []
     for f, a in zip(fs, aligns):
@@ -1051,6 +1063,7 @@ def main():
             continue
         rows.append([f.time, f"{c['goal']:.1f}", f"{c['peak']:.2f}", f"{c['time']:.1f}", f"{c['target']:.2f}", f"{c['hover']:.2f}", f"{c['baro_peak']:.2f}", f"{c['then']:.2f}", f"{c['climb_peak']:.2f}", f"{c['hover_climb_peak']:.2f}", f"{c['excess']:+.2f}", f"{c['tilt']:.0f}", f"{c['battery']:.2f}"])
     table(["flight", "climb goal m", "peak m", "at s from onset", "hover target then", "hover height then", "baro peak", "lowest 4-8 s", "peak climb m/s", "hover's climb peak", "1st s up force -1 (g)", "liftoff tilt deg", "battery V"], rows)
+
 
 if __name__ == "__main__":
     main()

@@ -91,6 +91,11 @@ def settings(path):
     return merged
 
 
+def parse_settings(text):
+    """Settings given on a command line as name=value,name=value."""
+    return {name: float(value) for name, value in (item.split("=") for item in text.split(",") if item)}
+
+
 def test_pattern(path):
     """The last test pattern a recording played (sw/excite.py), or None."""
     patterns = [event for event in events(path) if event.get("type") == "pattern"]

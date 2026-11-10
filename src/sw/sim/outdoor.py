@@ -20,16 +20,15 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.flight_log import recording
+from sw.flight_log import parse_settings, recording
 from sw.flight_log import settings as recording_settings
 from sw.sim import airframe as A
 from sw.sim.pitch_check import SWING, band
 from sw.sim.sweep import BARO, CURRENT, NUDGE_MAX, run
 
-MODELS = Path(__file__).with_name("models")
 SETTINGS = "2026-11-02T08-15-23"
-AIRFRAME = MODELS / "airframe_2026-11-02_9in_calibrated.json"
-DISTURBANCES = MODELS / "disturbances_2026-11-02_9in_calibrated.json"
+AIRFRAME = A.MODELS / "airframe_2026-11-02_9in_calibrated.json"
+DISTURBANCES = A.MODELS / "disturbances_2026-11-02_9in_calibrated.json"
 # At the GPS-held liftoffs of 2026-11-09 (05:45, 05:50, 06:19, 06:25 UTC) the GPS's climb rate read 0.5-1.2 m/s down for 0.3-0.5 s while the drone climbed at up to 1 m/s (sw/sim/gps_truth.py); in flight it is 0.18-0.39 m/s RMS off.
 GPS = {"rate": 10.0, "latency": 0.06, "velocity_noise": 0.05, "vertical_noise": 0.25, "position_noise": 0.7, "position_tau": 30.0, "liftoff_descent": (0.5, 1.2), "liftoff_s": 0.4}
 # Ground effect: 10-inch rotors (0.127 m radius) 0.115 m above the floor at rest (geometry_2026-11-08b rotor_z 0.094 m above the tube, the body's underside 0.02 m below it).
@@ -130,7 +129,7 @@ def fly(job):
     p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind, args.flow, args.baro, args.speed_draw, args.gps_noise, args.level_sd)
     s = dict(flown)
     if args.preload:
-        # The wind's expected nose-up moment at liftoff, cancelled by pitch_bias (rad/s², ramped in once airborne): preload per m/s of the wind.
+        # The wind's expected nose-up moment at liftoff, canceled by pitch_bias (rad/s², ramped in once airborne): preload per m/s of the wind.
         s["pitch_bias"] = args.preload * wind
     if args.gps:
         # The drone's belief about where its nose points at takeoff: the truth give or take --heading-error degrees (30: a phone compass and eyeballing; 180: hover_gps_heading left at 0 whichever way the nose points).
@@ -247,7 +246,7 @@ def main():
         flown |= {"hover_gps_tau": 0.5, "hover_gps_place_tau": 2.0}
     if args.baro:
         flown |= {"hover_baro_tau": args.baro}
-    flown |= {k: float(v) for k, v in (item.split("=") for item in args.set.split(",") if item)}
+    flown |= parse_settings(args.set)
     winds = [float(w) for w in args.winds.split(",")]
     disturbances = json.loads(args.disturbances.read_text())
     jobs = [(airframe, disturbances, flown, wind, 1000 * k + seed, args) for k, wind in enumerate(winds) for seed in range(args.runs)]

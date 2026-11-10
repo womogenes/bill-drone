@@ -13,8 +13,6 @@ import numpy as np
 from sw.sim import airframe as A
 from sw.sim import identify_airframe as N
 
-MODELS = Path(__file__).with_name("models")
-
 
 def runs(params, data, horizon, every, flights=None):
     """Free runs from every start (of the flights, default all): lanes' flights and starts, and the predicted attitudes [step, lane, axis] (radians)."""
@@ -45,7 +43,7 @@ def errors(data, F, S0, attitudes, horizon):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("recordings", nargs="+")
-    parser.add_argument("--airframe", type=Path, default=MODELS / "airframe_2026-10-29.json")
+    parser.add_argument("--airframe", type=Path, default=A.MODELS / "airframe_2026-10-29.json")
     parser.add_argument("--compare", type=Path, help="a second model to draw alongside")
     parser.add_argument("--horizon", type=float, default=1.0, help="length of each free run (s)")
     parser.add_argument("--every", type=float, default=1.0, help="seconds between starts")

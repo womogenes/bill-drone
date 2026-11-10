@@ -7,19 +7,14 @@ Each GPS-held flight of drone 1 (default: 2026-11-09's, as gps_truth) runs throu
 import argparse
 import ctypes
 import math
-import subprocess
 from pathlib import Path
 
 import numpy as np
 
+from sw.flight_log import parse_settings
 from sw.sim import hover as H
 from sw.sim.gps_truth import DEFAULT, FS, Alignment, Flight, flights
 
-# flight_rt.c: GPS_LATENCY_US, GPS_MAX_SPEED_ACCURACY, GPS_MAX_ACCURACY, BARO_LATENCY_US.
-GPS_LATENCY = 0.06
-GPS_MAX_SPEED_ACCURACY = 0.6
-GPS_MAX_ACCURACY = 8.0
-BARO_LATENCY = 0.075
 # Times from engaging the table samples (s), and the error that counts as acquired (degrees).
 SAMPLES = (2, 5, 10, 15, 20, 30, 45, 60)
 ACQUIRED = 20.0
@@ -29,7 +24,7 @@ def library_for(source):
     """hover.c at source compiled into its own library beside it (with this tree's hover.h, whose additions are all at the structures' ends), loaded with this tree's State layout."""
     target = Path(source).with_suffix(".so")
     if not target.exists() or target.stat().st_mtime < max(Path(source).stat().st_mtime, H.HEADER.stat().st_mtime):
-        subprocess.run(["cc", "-O2", "-fPIC", "-shared", "-iquote", str(H.HEADER.parent), str(source), "-o", str(target), "-lm"], check=True)
+        H.build(Path(source), target, [])
     return H.load(target, H.State)
 
 
@@ -47,20 +42,14 @@ def replay(f, align, overrides=None, library=None, withhold=()):
     tilt = np.arctan2(f.left_n * np.sin(lt) + f.right_n * np.sin(rt), np.maximum(f.left_n * np.cos(lt) + f.right_n * np.cos(rt), 1e-6))
     rate = (f.gyro[:, 1] * np.sin(f.roll) + f.gyro[:, 2] * np.cos(f.roll)) / np.cos(f.pitch)
     vertical = f.up / 9.81
-    usable = (f.gps_sacc <= GPS_MAX_SPEED_ACCURACY) & (f.gps_hacc <= GPS_MAX_ACCURACY)
-    for low, high in withhold:
-        usable &= ~((f.gps_t >= low) & (f.gps_t < high))
-    arrivals = np.searchsorted(f.grid, f.gps_t)
-    fix_at = {}
-    for index in np.flatnonzero(usable):
-        fix_at.setdefault(int(arrivals[index]), index)
+    fix_at = f.fixes(withhold)
     rows = []
     dt = 1 / FS
     for i in range(len(f.grid)):
         now_us = int(round(f.grid[i] * 1e6))
         baro = None
         if i % 2 == 0 and np.isfinite(f.baro[i]):
-            baro = H.Baro(capture_us=now_us - int(BARO_LATENCY * 1e6), altitude=f.baro[i])
+            baro = H.Baro(capture_us=now_us - int(H.BARO_LATENCY * 1e6), altitude=f.baro[i])
         if i < start:
             library.hover_rest(ctypes.byref(state), float(vertical[i]), bool(f.left[i] > 0), dt, ctypes.byref(baro) if baro else None)
             continue
@@ -70,7 +59,7 @@ def replay(f, align, overrides=None, library=None, withhold=()):
         k = fix_at.get(i)
         if k is not None:
             u, p = f.gps_u[k], f.gps_position[k]
-            gps = H.Gps(capture_us=int(round((f.gps_t[k] - GPS_LATENCY) * 1e6)), velocity=(u.real, -u.imag, f.gps_up[k]), position=(p.real, -p.imag, 0.0))
+            gps = H.Gps(capture_us=int(round((f.gps_t[k] - H.GPS_LATENCY) * 1e6)), velocity=(u.real, -u.imag, f.gps_up[k]), position=(p.real, -p.imag, 0.0))
         drag = H.Drag(specific=tuple(f.specific[i]), tilt=float(tilt[i]))
         force = state.force if state.engaged else float(f.thrust_z[i])
         library.hover_update(ctypes.byref(state), ctypes.byref(gains), int(f.mode[i]), None, now_us, dt, float(f.roll[i]), float(f.pitch[i]), float(rate[i]),
@@ -137,7 +126,7 @@ def main():
     parser.add_argument("--plot", type=Path, help="write the per-flight error plot here (PNG)")
     parser.add_argument("--verbose", action="store_true", help="the error every 2 s")
     args = parser.parse_args()
-    overrides = {k: float(v) for k, v in (item.split("=") for item in args.set.split(",") if item)}
+    overrides = parse_settings(args.set)
     old = library_for(args.compare) if args.compare else None
     print(" | ".join(["flight", "version", "engaged s", "nose cw of N deg", "logged vs replay rms m/s"] + [f"{s}s" for s in SAMPLES] + ["within 20 from s", "rms after 10 s", "pinned at s"]))
     results, totals = {}, {}

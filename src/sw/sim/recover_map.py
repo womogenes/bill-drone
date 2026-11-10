@@ -38,7 +38,7 @@ def cell_runs(job):
     n = envs * len(TILTS)
     tilt = np.radians(np.repeat(TILTS, envs))
 
-    def scenarios(count, s, height_range=None):
+    def scenarios(count, s):
         rng = np.random.default_rng(s)
         position = np.column_stack([np.zeros(count), np.zeros(count), np.full(count, height)])
         velocity = rng.normal(0, 1.0, (count, 3)) if moving else np.zeros((count, 3))
@@ -54,7 +54,7 @@ def cell_runs(job):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--params", type=Path, default=Path(__file__).with_name("models") / "recover_params.json")
+    parser.add_argument("--params", type=Path, default=C.PARAMS)
     parser.add_argument("--envs", type=int, default=64)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--out", type=Path, default=Path("recover_map.png"))

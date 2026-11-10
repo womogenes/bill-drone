@@ -6,7 +6,6 @@ The IMU noise densities are not the MPU6050's datasheet figures (about 1e-4 rad/
 """
 
 import argparse
-import math
 from pathlib import Path
 
 import numpy as np

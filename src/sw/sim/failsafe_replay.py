@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from sw.flight_log import events as recording_events
-from sw.flight_log import read_flight
+from sw.flight_log import parse_settings, read_flight
 from sw.flight_log import settings as recording_settings
 from sw.sim import hover as H
 from sw.sim.guard import PHASES, STOPS, Guard
@@ -82,7 +82,7 @@ def main():
     parser.add_argument("--set", default="", help="setting overrides, name=value,...")
     parser.add_argument("--plot", type=Path, help="save speed, distance, input and phase against time")
     args = parser.parse_args()
-    overrides = {k: float(v) for k, v in (item.split("=") for item in args.set.split(",") if item)}
+    overrides = parse_settings(args.set)
     rows = replay(args.file, overrides)
     t, mode, speed, distance, active, phase, stopped = rows.T
     print(args.file.name)
@@ -99,10 +99,10 @@ def main():
         flying = mode > 0
         figure, axes = plt.subplots(2, 1, sharex=True, figsize=(10, 6))
         axes[0].plot(t[flying], speed[flying], label="hover speed estimate (GPS-corrected)")
-        axes[0].axhline(overrides.get("failsafe_speed", 2.0), color="grey", ls="--", lw=0.8, label="failsafe_speed")
+        axes[0].axhline(overrides.get("failsafe_speed", 2.0), color="gray", ls="--", lw=0.8, label="failsafe_speed")
         axes[0].set_ylabel("m/s")
         axes[1].plot(t[flying], distance[flying], color="C1", label="GPS distance from engage point")
-        axes[1].axhline(overrides.get("failsafe_distance", 10.0), color="grey", ls="--", lw=0.8, label="failsafe_distance")
+        axes[1].axhline(overrides.get("failsafe_distance", 10.0), color="gray", ls="--", lw=0.8, label="failsafe_distance")
         axes[1].set_ylabel("m")
         axes[1].set_xlabel("s from the recording's start")
         colors = {1: "tab:orange", 2: "tab:green", 3: "tab:red"}

@@ -1,5 +1,5 @@
 """
-Calibrate the airframe's pitch path to the hops' closed-loop pitch behaviour: uv run --with scipy --with cma -m sw.sim.calibrate_pitch --airframe models/airframe_<day>.json --recordings <file listing the identification's recordings> [--generations 30] [--workers 90] [--out file]
+Calibrate the airframe's pitch path to the hops' closed-loop pitch behavior: uv run --with scipy --with cma -m sw.sim.calibrate_pitch --airframe models/airframe_<day>.json --recordings <file listing the identification's recordings> [--generations 30] [--workers 90] [--out file]
 
 identify_airframe's multi-step prediction pins the pitch plant at the horizons the attitude controller dominates but leaves loose what decides whether the closed loop swings or shakes: on drone 1 as flown on 2026-11-02 and 2026-11-08 the identified model flew the hops' settings calm (pitch 18-30 degrees peak to peak, decaying), where the real hops swung at 0.7-0.9 Hz to 35-44 degrees and grew, and it did not shake at pitch_damping 8 where the real drone shook at 2.66 Hz (67 deg/s RMS in 2.2-3.5 Hz, 2026-11-02 04:36 UTC). Probing one term at a time (2026-11-08): the servo's damping alone brings the shake (servo_zeta 0.5: 2.62 Hz, 96 deg/s at pitch_damping 8, none at 6), and the low-frequency pitch path (the forward speed's moment drag_z_x, the held tilt's lagged share pitch_wake) the growing swing.
 This CMA-ES search sets those terms so that the hover sim (sweep.run, hover=True, sweep.CURRENT's room with this airframe) flying each matched flight's settings from its resting attitude, with its test pattern, matches the flight's pitch-rate RMS in three bands (SWING, MIDDLE, SHAKE; over the flight's airborne time, median over SEEDS runs), with a penalty on the identification's multi-step cost growing (PENALTY per 100% growth). Searched (SPACE): the servo's damping ratio and natural frequency (both sides scaled together), its reflected inertia, its compliance, the tilt's pitch authority (through wash_z), the held tilt's lagged share and lag, and the forward speed's moment height. Every other term stays as identified; refit them afterwards with identify_airframe --start <this output> --freeze <the searched keys>.SWING, MIDDLE, SHAKE; over the flight's airborne time, median over SEEDS runs), with a penalty on the identification's multi-step cost growing (PENALTY per 100% growth). Searched (SPACE): the servo's damping ratio and natural frequency (both sides scaled together), its reflected inertia, its compliance, the tilt's pitch authority (through wash_z), the held tilt's lagged share and lag, and the forward speed's moment height. Every other term stays as identified; refit them afterwards with identify_airframe --start <this output> --freeze <the searched keys>.
@@ -20,7 +20,6 @@ from sw.sim import airframe as A
 from sw.sim import identify_airframe as N
 from sw.sim import pitch_check as C
 
-MODELS = Path(__file__).with_name("models")
 # The flights matched (drone 1 with 10-inch props): the 2026-11-08 hops at pitch_p 36 and 28 (00:23, 00:28, 00:31, 00:46, 00:52), which the model is for, and the 2026-11-02 chirps flown with one pattern at pitch_damping 6 and 8 (04:23, 04:36), the only record of the shake. Matched together with the 2026-11-02 long tag hovers (04:50, 05:22) the search undershot the 2026-11-08 swing by about half (pitch rate 14-27 against 23-57 deg/s in 0.4-1.5 Hz) and overshot those hovers' (23 against 14): the drone swung harder on 2026-11-08 (heavier by about 3%, the S3 camera and GPS added) than on 2026-11-02, so those hovers are left for checking, with 00:05, 00:09, 00:20 and 00:39 (under 4.5 s).
 FLIGHTS = ("2026-11-08T00-23-19-186Z_3160940019", "2026-11-08T00-28-06-995Z_1030209381", "2026-11-08T00-31-38-601Z_3398894371", "2026-11-08T00-46-21-333Z_1569889667", "2026-11-08T00-52-55-578Z_2701204891",
            "2026-11-02T04-23-35-159Z_4231648877", "2026-11-02T04-36-23-641Z_3729769197")
@@ -82,7 +81,7 @@ def prediction_init(recordings, geometry):
     global PREDICTION
     records = [r for r in (N.load(p) for p in recordings) if r]
     PREDICTION = N.Data(records)
-    N.initialise(PREDICTION, [], {}, geometry=geometry)
+    N.initialize(PREDICTION, [], {}, geometry=geometry)
 
 
 def prediction_cost(airframe):
