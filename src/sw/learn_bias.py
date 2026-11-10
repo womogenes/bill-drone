@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.flight_log import read_flight, settings
+from sw.flight_log import RECORDINGS, read_flight, settings
 
 BRIDGE = "http://127.0.0.1:8765/settings"
 # Airborne samples count as steady when the body rate is below this (deg/s), from this long after liftoff (s).
@@ -64,7 +64,7 @@ def main():
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--gain", type=float, default=0.7)
     args = parser.parse_args()
-    path = args.file or max(Path(__file__).parent.joinpath("recordings").glob("*.bin"), key=lambda p: p.stat().st_mtime)
+    path = args.file or max(RECORDINGS.glob("*.bin"), key=lambda p: p.stat().st_mtime)
     result = learn(path)
     print(json.dumps(result, indent=1))
     if not result or not args.apply:

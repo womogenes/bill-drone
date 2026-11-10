@@ -42,9 +42,14 @@ def wrap(angle):
     return (angle + np.pi) % (2 * np.pi) - np.pi
 
 
+def outage_windows(f, engaged, duration):
+    """The (start, end) of each stretch the GPS is withheld for, s on the flight's grid: duration long, from OUTAGE_AFTER after the hold engaged, OUTAGE_REST apart."""
+    return [(start, start + duration) for start in np.arange(engaged + OUTAGE_AFTER, f.end - duration - 1, duration + OUTAGE_REST)]
+
+
 def outages(f, align, engaged, duration, library, climb):
     """The GPS withheld for duration s at a time: a list per window of (end time, the filter's velocity error, hover.c's, the filter's position error over the window), m/s and m, and the climb-rate errors against every withheld solution's (the filter's, then hover.c's from climb, which never takes the GPS's while the barometer holds the height)."""
-    windows = [(start, start + duration) for start in np.arange(engaged + OUTAGE_AFTER, f.end - duration - 1, duration + OUTAGE_REST)]
+    windows = outage_windows(f, engaged, duration)
     if not windows:
         return [], np.zeros((0, 2))
     out = ekf.replay(f, library, withhold=windows)
@@ -231,7 +236,7 @@ def main():
         row["f"] = f
         if args.plot:
             # The withheld replays again for the example trace.
-            row["windows"] = {d: [(start, start + d) for start in np.arange(row["engaged"] + OUTAGE_AFTER, f.end - d - 1, d + OUTAGE_REST)] for d in args.outage}
+            row["windows"] = {d: outage_windows(f, row["engaged"], d) for d in args.outage}
             row["withheld"] = {d: (ekf.replay(f, library, withhold=w), heading_replay.replay(f, row["align"], withhold=w)) for d, w in row["windows"].items() if w}
         rows.append(row)
         gaps = "  ".join(f"{d:g} s: {np.median([w[1] for w in ws]):.2f}/{np.median([w[2] for w in ws]):.2f} worst {max(w[1] for w in ws):.2f}/{max(w[2] for w in ws):.2f} moved {np.median([w[3] for w in ws]):.1f} m ({len(ws)})" if ws else f"{d:g} s: none" for d, ws in row["outages"].items())
