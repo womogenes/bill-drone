@@ -127,6 +127,11 @@ def fly(job):
 
         install(args.source, args.defines.split())
     p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind, args.flow, args.baro, args.speed_draw, args.gps_noise, args.level_sd)
+    # The servos' real tilt behind their commands and the accelerometer's in-flight forward bias (2026-11-11's rubber bands; sw/sim/band_hold.py).
+    if args.tilt_offset:
+        p["tilt_offset"] = args.tilt_offset
+    if args.flight_accel_bias:
+        p["flight_accel_bias"] = (args.flight_accel_bias, 0.0, 0.0)
     s = dict(flown)
     if args.preload:
         # The wind's expected nose-up moment at liftoff, canceled by pitch_bias (rad/s², ramped in once airborne): preload per m/s of the wind.
@@ -239,6 +244,8 @@ def main():
     parser.add_argument("--ekf", action="store_true", help="run the Kalman filter (fw/drone/main/ekf.c) beside the hover in every run and print its errors against the truth; --set hover_ekf=1 (or 2, its height too) has the hold fly on it")
     parser.add_argument("--flyaway", type=float, default=FLYAWAY, help="m from takeoff that counts as flown off")
     parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=(0.5, 3.0), help="range the forward speed moment is drawn in, times the airframe's (log-uniform; default 0.5,3 from before any flight measured it; models fitted to the outdoor flights warrant narrower)")
+    parser.add_argument("--tilt-offset", type=float, default=0.0, help="degrees the servos' physical tilt sits forward of their commands (sweep.py tilt_offset; the 2026-11-11 rubber bands about -2.5)")
+    parser.add_argument("--flight-accel-bias", type=float, default=0.0, help="g the accelerometer reads forward while the motors run (sweep.py flight_accel_bias; the 2026-11-11 rubber bands about 0.025)")
     args = parser.parse_args()
     airframe = json.loads(args.airframe.read_text())
     flown = recording_settings(recording(args.settings)) | {"hover_camera": 0, "hover_center": 0, "hover_climb": args.climb, "hover_ceiling": args.climb}
