@@ -1,6 +1,6 @@
 """
 Pitch actuator system identification from airborne recordings: uv run -m sw.fit_actuator sw/recordings/<flight>.bin [...]
-Each servo's logged command goes through a model of the real servo (dead time, first-order lag, slew limit, backlash, each side its own backlash) to a physical tilt; pitch acceleration is then regressed on the tilted thrust's torque, a constant push and the pitch rate (aerodynamic damping). The actuator parameters are searched on a grid and scored by leave-one-flight-out prediction, against the plain linear model of sw.fit_airborne.
+Each servo's logged command goes through a model of the real servo (dead time, first-order lag, slew limit, backlash, each side its own backlash) to a physical tilt; pitch acceleration is then regressed on the tilted thrust's torque, a constant push and the pitch rate (aerodynamic damping). The actuator parameters are searched on a grid and scored by leave-one-flight-out prediction, against the plain linear model (linear below).
 """
 
 import itertools
@@ -127,7 +127,7 @@ def evaluate(flights, params, damping=True):
 
 def linear(flights):
     """
-    The sw.fit_airborne model, scored the same way: logged commands shifted by the best whole-sample delay, no lag, play or damping.
+    The plain linear model, scored the same way: logged commands shifted by the best whole-sample delay, no lag, play or damping.
     """
     return max((evaluate(flights, (delay, 0.0, 0, 0.0, 0.0), damping=False) + (delay,) for delay in range(21)), key=lambda result: result[0])
 

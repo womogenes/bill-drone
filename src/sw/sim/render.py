@@ -1,7 +1,7 @@
 """
 Render full-attitude simulation runs (sw/sim/rigid.py traces) as video with MuJoCo, on the drone's own model (models/bicopter.xml): the body's pose and each motor's tilt are played back kinematically, the camera following the drone.
 
-uv run --with mujoco --with pillow -m sw.sim.render --out falls.mp4 [--params recover_params.json] [--episodes 4] [--seed 3]
+uv run -m sw.sim.render --out falls.mp4 [--params recover_params.json] [--episodes 4] [--seed 3]
 Needs ffmpeg; renders offscreen (MUJOCO_GL=egl, or osmesa without a GPU).
 """
 

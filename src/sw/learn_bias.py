@@ -1,6 +1,6 @@
 """
-Learn roll_bias and pitch_bias from a flight: uv run -m sw.learn_bias [sw/recordings/<flight>.bin] [--apply] [--gain 0.7]
-Rebuilds the attitude controller's integrators and pitch-bias fade-in from the log (flight_math.c), finds the airborne stretches where the attitude stopped moving, and takes the controller's total angular-acceleration command there as the steady disturbance the bias should cancel. --apply moves each bias that fraction of the way and stores it through the running bridge.
+Learn roll_bias from a flight: uv run -m sw.learn_bias [sw/recordings/<flight>.bin] [--apply] [--gain 0.7]
+Rebuilds the attitude controller's integrators and pitch-bias fade-in from the log (flight_math.c), finds the airborne stretches where the attitude stopped moving, and takes the controller's total angular-acceleration command there as the steady disturbance the bias should cancel. --apply moves roll_bias that fraction of the way and stores it through the running bridge. Pitch's steady push is printed too, for moving the center of mass: pitch_bias stays 0, since a stale one lurches the liftoff.
 """
 
 import argparse
@@ -69,15 +69,13 @@ def main():
     print(json.dumps(result, indent=1))
     if not result or not args.apply:
         return
-    update = {}
-    for axis in ("roll", "pitch"):
-        if "needed" in result[axis]:
-            old = result[axis]["bias"]
-            update[f"{axis}_bias"] = round(old + args.gain * (result[axis]["needed"] - old), 2)
-    if update:
-        request = urllib.request.Request(BRIDGE, json.dumps({"settings": update}).encode(), {"Content-Type": "application/json"})
-        stored = json.load(urllib.request.urlopen(request, timeout=5))["settings"]
-        print("stored", {k: stored[k] for k in update})
+    roll = result["roll"]
+    if "needed" not in roll:
+        return
+    update = {"roll_bias": round(roll["bias"] + args.gain * (roll["needed"] - roll["bias"]), 2)}
+    request = urllib.request.Request(BRIDGE, json.dumps({"settings": update}).encode(), {"Content-Type": "application/json"})
+    stored = json.load(urllib.request.urlopen(request, timeout=5))["settings"]
+    print("stored", {k: stored[k] for k in update})
 
 
 if __name__ == "__main__":

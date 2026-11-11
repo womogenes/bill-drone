@@ -1,5 +1,5 @@
 """
-Tune the recovery controller (sw/sim/recover.py), or with --flip the roll flip on top of it (sw/sim/flip.py), by CMA-ES over randomized runs: uv run --with cma -m sw.sim.tune_recover [--flip] [--generations 60] [--n 256] [--workers N] [--out params.json]
+Tune the recovery controller (sw/sim/recover.py), or with --flip the roll flip on top of it (sw/sim/flip.py), by CMA-ES over randomized runs: uv run -m sw.sim.tune_recover [--flip] [--generations 60] [--n 256] [--workers N] [--out params.json]
 
 Every candidate flies the same n falls (heights, orientations, rates and velocities from recover.scenarios, plants randomized by recover.randomization) for 20 s; its cost is the mean over falls of how far each missed a safe landing: the tilt at first touch over 30°, the descent speed over 1.5 m/s, the contact force over 300 N, the final uprightness, and a penalty for never touching. Each generation draws new falls, so the result generalizes rather than fitting one set.
 """

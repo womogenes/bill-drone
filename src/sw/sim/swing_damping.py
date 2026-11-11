@@ -1,5 +1,5 @@
 """
-The pitch swing's frequency and damping, sim against real: uv run --with scipy -m sw.sim.swing_damping --recordings <names> --models models/airframe_A.json [...] [--set key=value,...] [--seconds 30] [--seeds 6] [--workers N]
+The pitch swing's frequency and damping, sim against real: uv run -m sw.sim.swing_damping --recordings <names> --models models/airframe_A.json [...] [--set key=value,...] [--seconds 30] [--seeds 6] [--workers N]
 
 Fits a second-order resonance driven by white torque (its frequency, damping ratio and level) to the pitch spectrum (0.2-3 Hz, quadratic trend removed) of each recording's hover (named by its UTC start, e.g. 2026-11-02T05-22-01) and of the hover sim (pitch_check.fly) flying the same settings for --seconds, and prints the frequency, the damping ratio and the RMS of the pitch's 0.4-1.6 Hz swing band, with how many runs were lost. --set overrides settings (gains) on every run; the real lines stay the recordings'.
 Added 2026-11-08: the long tag hovers of 2026-11-02 swing at 0.80 Hz with a damping ratio of 0.12-0.28, which a model must reproduce at their gains before its gain predictions are trusted (the multi-step prediction alone did not: the best predicting model of the first outdoor flights swung at a damping ratio of 0.5). Long hovers (20 s or more) give usable fits; a few seconds of hop do not.

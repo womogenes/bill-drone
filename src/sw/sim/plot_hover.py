@@ -1,5 +1,5 @@
 """
-The camera hover, sim against real: uv run --with scipy --with matplotlib -m sw.sim.plot_hover <recordings> [--seeds 4] [--out plot.png]
+The camera hover, sim against real: uv run -m sw.sim.plot_hover <recordings> [--seeds 4] [--out plot.png]
 
 Each recording's camera hover (its own settings, tracking the tag) next to the sim (sweep.run with hover=True on IDENTIFIED_ESC, the identified airframe with its calibrated disturbances) flying the same settings for --seconds. A random disturbance cannot be replayed sample for sample, so the plot compares what the disturbances should reproduce: the traces' size and pace (top: range error and sideways wander, real and one sim run), their spectra and the rates' spectra (bottom: real per flight, sim averaged over --seeds runs), with each panel's RMS (the sim's the median over its runs). Both positions are the hover's own camera-based estimate, so both carry the camera's noise and lag.
 """

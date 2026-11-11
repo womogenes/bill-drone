@@ -1,7 +1,7 @@
 """
 A simulated flight as a visual-inertial dataset (sw/vio/dataset.py): the identified airframe (sw/sim/sweep.py IDENTIFIED_ESC) flown by the firmware's hover, in wind, its hold moved sideways partway, with the drone's IMU as it reads it and its FPV camera rendered in an outdoor scene (sw/vio/scene.py).
 
-uv run --with mujoco -m sw.vio.simdata --out /tmp/vio/sim0 [--seconds 40] [--seed 0] [--wind 1.0] [--sync-ms 0] [--jitter-ms 1] [--drop 0.01] [--bytes 5000]
+uv run -m sw.vio.simdata --out /tmp/vio/sim0 [--seconds 40] [--seed 0] [--wind 1.0] [--sync-ms 0] [--jitter-ms 1] [--drop 0.01] [--bytes 5000]
 Needs MUJOCO_GL=egl (set here) for offscreen rendering.
 
 The camera timing is the FPV stream's: a frame every PERIOD_S, read out over scene.READOUT_S, JPEG at about --bytes (5000 over UDP, 2600 through fw/fpv_rx), --drop of them lost. Each frame is stamped at the middle of its readout on the drone's clock plus --sync-ms (the error of mapping the camera's clock onto the drone's) and Gaussian --jitter-ms.

@@ -1,5 +1,5 @@
 """
-Predicted against real attitude: uv run --with scipy --with matplotlib -m sw.sim.plot_prediction <recordings> [--airframe models/airframe_<day>.json] [--compare another.json] [--held-out] [--out plot.png]
+Predicted against real attitude: uv run -m sw.sim.plot_prediction <recordings> [--airframe models/airframe_<day>.json] [--compare another.json] [--held-out] [--out plot.png]
 
 Every --every seconds of each flight's airborne window, the firmware controller (with its replayed state at that sample) flies the airframe model (sw/sim/airframe.py) on the logged references alone for --horizon seconds from the logged attitude, rates and actuator states, as identify_airframe scores it. Each free run is drawn over the logged roll and pitch, so the plot shows how far the model's own closed-loop motion follows the drone's from each start. With --compare a second model's runs are drawn too. The model was fitted on these flights unless they are new ones: its held-out errors are in models/NOTES.md. With --held-out, a model saved with its folds (identify_airframe) flies each flight with the fold's parameters that left that flight out.
 """

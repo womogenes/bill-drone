@@ -3,15 +3,21 @@ name = "src"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
+    "cma>=4.5.0",
     "ipykernel>=7.4.0",
     "matplotlib>=3.11.2",
     "mujoco>=3.16.0",
+    "numpy>=2.5.3",
     "opencv-python>=5.0.0.93",
     "pandas>=3.0.6",
+    "pillow>=12.3.0",
     "pyserial>=3.5",
     "pyubx2>=1.4.1",
+    "pyyaml>=6.0.3",
     "requests>=2.34.2",
+    "scipy>=1.18.1",
     "websocket-client>=1.9.2",
+    "websockets>=17.2",
 ]
 
 [build-system]

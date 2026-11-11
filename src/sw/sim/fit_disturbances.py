@@ -1,5 +1,5 @@
 """
-Fit the sim's disturbances (sw/sim/disturbance.py) from hover recordings: uv run --with scipy -m sw.sim.fit_disturbances <recordings> [--airframe models/airframe_<day>.json] [--out disturbances.json]
+Fit the sim's disturbances (sw/sim/disturbance.py) from hover recordings: uv run -m sw.sim.fit_disturbances <recordings> [--airframe models/airframe_<day>.json] [--out disturbances.json]
 
 Torques: the airframe model (sw/sim/airframe.py) is run one step ahead along each flight's logged commands, as identify_airframe's teacher does; what it leaves of each axis's angular acceleration, below CUTOFF Hz (the rest is vibration and sensor noise that does not move the attitude), is a drift whose standard deviation and correlation time are fitted. Its mean is the airframe's push, already in the model, so no constant is added.
 Forces: the horizontal acceleration the camera saw (toward the tag and to the left, from the range and the place on the circle, smoothed over SMOOTH s) less what thrust tilt and the airframe's drag explain (g tan of body pitch plus the motors' mean tilt, or of roll), split into a constant (the room's wash, or a thrust the servos do not report) and a drift.

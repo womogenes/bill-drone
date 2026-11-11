@@ -1,7 +1,7 @@
 """
 A synthetic visual-inertial dataset (sw/vio/dataset.py) on a smooth, lively path through the simulated outdoor scene (sw/vio/scene.py), with the IMU computed exactly from the path: a check of the estimator, its configuration and the dataset conventions, where the simulated hover (sw/vio/simdata.py) moves too little to initialize.
 
-uv run --with mujoco --with opencv-python-headless -m sw.vio.synthetic --out ~/sw/vio/data/synthetic [--seconds 40] [--noise]
+uv run --with opencv-python-headless -m sw.vio.synthetic --out ~/sw/vio/data/synthetic [--seconds 40] [--noise]
 """
 
 import argparse

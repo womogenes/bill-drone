@@ -1,5 +1,5 @@
 """
-Cross-check of the full-attitude sim's ground contact (sw/sim/rigid.py: a spring-damper at each HULL point, friction viscous below SLIP) against MuJoCo's own contact physics: uv run --with mujoco python -m sw.sim.validate_contact [--seconds 2]
+Cross-check of the full-attitude sim's ground contact (sw/sim/rigid.py: a spring-damper at each HULL point, friction viscous below SLIP) against MuJoCo's own contact physics: uv run python -m sw.sim.validate_contact [--seconds 2]
 
 The same body touches down in both, motors off: rigid.py's mass and inertia (or, with --cad, the CAD inertia of models/bicopter.xml), contact at rigid.py's HULL points (MuJoCo: 1 mm spheres there, with friction FRICTION, elliptic cones and its default soft contact), dropped onto a plane from 1 mm above it over a grid of vertical speeds, horizontal speeds, tilts and directions: tilted in roll or pitch, the horizontal velocity toward the low side ("downhill") or away from it. For each case: whether it ends upright (body z within 37° of up after --seconds) and the peak contact force (the sum over points of each point's force magnitude). Printed: the agreement, the tip-over boundary from each (the lowest horizontal speed that tips it, by tilt and vertical speed), and the peak forces.
 """

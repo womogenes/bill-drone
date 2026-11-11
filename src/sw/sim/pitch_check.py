@@ -1,5 +1,5 @@
 """
-The pitch modes, sim against real: uv run --with scipy -m sw.sim.pitch_check <recordings> [--airframe models/airframe_<day>.json] [--seconds 6] [--seeds 8] [--set key=value,...] [--workers N]
+The pitch modes, sim against real: uv run -m sw.sim.pitch_check <recordings> [--airframe models/airframe_<day>.json] [--seconds 6] [--seeds 8] [--set key=value,...] [--workers N]
 
 Each recording's hover hop and the hover sim (sweep.run with hover=True on sweep.CURRENT, or CURRENT with --airframe swapped in) flying the same settings from the same resting attitude, with the recording's test pattern if it played one, are measured alike from liftoff:
 - the swing: the pitch's strongest frequency in 0.4-1.6 Hz, its peak-to-peak, and its growth (the RMS of the pitch's 0.4-1.6 Hz band over the window's last third over its first third);
