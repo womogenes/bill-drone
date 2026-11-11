@@ -694,7 +694,12 @@ export default function Page() {
     (guard?.pattern_stop ? `Test pattern stopped: ${guard.pattern_stop}` : '');
   const controlStatus = useMemo(() => ({ reason }), [reason]);
 
-  const { label, icon: StatusIcon, color } = statuses[status];
+  // A retry while the service names a broken hop keeps showing that hop: it is retried every second, and "Connecting" says nothing of what is missing.
+  const shown =
+    status === 'connecting' && chain && chain.state !== 'online'
+      ? 'offline'
+      : status;
+  const { label, icon: StatusIcon, color } = statuses[shown];
 
   // connected: readings arrive; piloting: this tab's controls reach the drone.
   const piloting = status === 'connected';
@@ -865,10 +870,10 @@ export default function Page() {
           <Status
             role="status"
             icon={StatusIcon}
-            iconClassName={status === 'connecting' ? 'animate-spin' : ''}
+            iconClassName={shown === 'connecting' ? 'animate-spin' : ''}
             className={color}
           >
-            {status === 'offline' ? offlineText(chain) : label}
+            {shown === 'offline' ? offlineText(chain) : label}
           </Status>
           <Button
             variant="ghost"
