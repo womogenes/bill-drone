@@ -57,6 +57,8 @@ def hover_values(flags, values):
 
 # The first drone's ID (its station MAC, fw/pairs.h): recordings made before the start records carried one (UTC names before IDS_FROM) are all from it.
 FIRST_DRONE = "20:50:0d:8b:7e:68"
+# Flight controllers that replaced another on the same airframe (2026-11-10: the first drone's): their recordings are that drone's.
+REPLACED = {"20:50:0d:2a:3d:cc": FIRST_DRONE}
 IDS_FROM = "2026-11-04"
 RECORDINGS = Path(__file__).with_name("recordings")
 
@@ -103,11 +105,11 @@ def test_pattern(path):
 
 
 def drone(path):
-    """The physical drone a recording was flown by (its station MAC), from its start record; None when a later recording does not say."""
+    """The physical drone a recording was flown by (its first flight controller's station MAC), from its start record; None when a later recording does not say."""
     path = Path(path)
     for event in events(path):
         if event["type"] == "start":
-            return event.get("drone") or (FIRST_DRONE if path.name < IDS_FROM else None)
+            return REPLACED.get(event.get("drone"), event.get("drone")) or (FIRST_DRONE if path.name < IDS_FROM else None)
     return FIRST_DRONE if path.name < IDS_FROM else None
 
 
