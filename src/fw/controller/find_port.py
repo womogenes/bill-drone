@@ -1,42 +1,65 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["esptool>=4.7,<6"]
+# dependencies = ["pyserial>=3.5"]
 # ///
 """
-Prints the USB serial device of the ESP32 with the given MAC (by default any controller in fw/pairs.h), for the bridge's service (sw/bill-drone-bridge.service): the device names follow plug order, and the controller came up as each of /dev/ttyUSB0 and 1 on 2026-10-30 and 31. Asking each board for its MAC resets it, the drone too when it is on USB.
+Finds the controller's USB serial device by listening: a controller sends its link report in the bridge's framing every 250 ms, whether or not it hears a drone, and nothing else on USB does. The device names follow plug order (the controller came up as each of /dev/ttyUSB0 and 1 on 2026-10-30 and 31), and the boards' USB chips all carry the same serial number, so neither names it. No board is reset: until 2026-11-10 this asked each board's bootloader for its MAC, which reset every ESP32 on USB, the drone too, each time the bridge's service restarted.
 
-uv run src/fw/controller/find_port.py [--mac aa:bb:cc:dd:ee:ff]
+The bridge (bridge.py) looks for its controller with this and keeps looking while there is none. Alone it prints the device, or nothing when no controller is heard: uv run src/fw/controller/find_port.py
 """
 
-import argparse
 import glob
-import re
-import subprocess
-import sys
-from pathlib import Path
+import time
 
-PAIRS = Path(__file__).parent.parent / "pairs.h"
+import serial
 
+from wire import SerialDecoder, unpack
 
-def controllers():
-    """The controllers' MACs in fw/pairs.h: the second of each pair's two."""
-    pairs = re.findall(r"\{\{([^}]*)\}, \{([^}]*)\}\}", PAIRS.read_text())
-    return [":".join(byte.strip()[2:] for byte in controller.split(",")) for _, controller in pairs]
+BAUD = 921600
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    parser.add_argument("--mac")
-    args = parser.parse_args()
-    wanted = [args.mac.lower()] if args.mac else controllers()
-    for port in sorted(glob.glob("/dev/ttyUSB*")):
-        result = subprocess.run([sys.executable, "-m", "esptool", "--no-stub", "--port", port, "--after", "hard_reset", "read_mac"],
-                                capture_output=True, text=True, timeout=30)
-        if any(mac in (result.stdout + result.stderr).lower() for mac in wanted):
-            print(port)
-            return
-    sys.exit(f"No ESP32 with MAC {' or '.join(wanted)} on /dev/ttyUSB*")
+def open_port(path, baud=BAUD):
+    """The device opened for the bridge: non-blocking, locked against a second bridge, its reset lines released (pyserial's defaults hold the board in reset)."""
+    port = serial.Serial()
+    port.port, port.baudrate = path, baud
+    port.timeout = port.write_timeout = 0
+    port.exclusive = True
+    port.dtr = port.rts = False
+    port.open()
+    return port
+
+
+def listen(path, seconds=1.0, baud=BAUD):
+    """The device, open, if a controller's packet arrives on it within seconds; else None (another board, a controller still booting, or a device something else holds)."""
+    try:
+        port = open_port(path, baud)
+    except (OSError, serial.SerialException):
+        return None
+    decoder = SerialDecoder()
+    deadline = time.monotonic() + seconds
+    try:
+        while time.monotonic() < deadline:
+            for packet in decoder.feed(port.read(4096)):
+                try:
+                    unpack(packet)
+                except ValueError:
+                    continue
+                return port
+            time.sleep(0.02)
+    except (OSError, serial.SerialException):
+        pass
+    port.close()
+    return None
+
+
+def candidates():
+    return sorted(glob.glob("/dev/ttyUSB*"))
 
 
 if __name__ == "__main__":
-    main()
+    for path in candidates():
+        port = listen(path)
+        if port is not None:
+            port.close()
+            print(path)
+            break

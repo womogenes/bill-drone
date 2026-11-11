@@ -5,6 +5,7 @@
 """
 The laptop's drone service. It owns the controller's USB port and serves, on 127.0.0.1 only:
 
+- GET /status: {"online", "state", ...}. state says which part of the chain is missing: "controller_missing" (no controller heard on USB; the service keeps looking), "drone_silent" (the controller is there, the drone's status is not arriving) or "online". The dashboard shows it while it cannot connect.
 - /ws: the dashboard. The drone's status as JSON readings; the browser streams targets (including the manual/hover/land mode) every 50 ms and sends stop, arm, calibrate, zero and tune requests.
 - /update: raw id-tagged requests (tools/ota_direct.py, the dashboard's camera requests), from any number of clients at once; each reply goes to the client that sent its id.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
@@ -28,6 +29,7 @@ import time
 from aiohttp import WSMsgType, web
 import serial
 
+from find_port import candidates, listen
 from log_format import FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, PATTERN_CHANNELS, STOP_REASONS, guard_state
 from wire import LINK_CHANNEL, PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
@@ -427,8 +429,12 @@ class ClientSender:
 
 
 class Service:
-    def __init__(self, port, recordings):
-        self.port = port
+    def __init__(self, recordings):
+        # The controller's open USB device, None while there is none (main's search attaches it).
+        self.port = None
+        # Packets this service could not take (read), since it started.
+        self.errors = 0
+        self.error_at = 0
         self.decoder = SerialDecoder()
         self.outgoing = deque()
         self.target = None
@@ -441,7 +447,7 @@ class Service:
         self.last_status = 0
         # The link's quality: the newest report from each end (decode_link) and this service's own counts over the last second; status_at is the last status's arrival, kept through a timeout, and timed_out says the timeout was announced.
         self.link = {"drone": None, "controller": None, "bridge": None}
-        self.link_window = {"statuses": 0, "longest_gap_ms": 0, "late": 0, "timeouts": 0}
+        self.link_window = {"statuses": 0, "longest_gap_ms": 0, "late": 0, "timeouts": 0, "errors": 0}
         self.status_at = None
         self.timed_out = False
         self.radio_waiters = []
@@ -676,14 +682,46 @@ class Service:
             if client is not None:
                 asyncio.create_task(client.close(code=1012, message=reason.encode()))
 
+    def attach(self, port):
+        self.port = port
+        self.decoder = SerialDecoder()
+        asyncio.get_running_loop().add_reader(port.fileno(), self.read)
+        print(f"Controller on {port.port}; waiting for drone", flush=True)
+
+    def detach(self, reason):
+        """
+        The controller's device failed (unplugged, mostly): close it and leave main's search to find the controller again. The clients close as for any lost link (monitor). The service used to exit here, and each restart reset every board on USB.
+        """
+        if self.port is None:
+            return
+        print(f"Controller lost: {reason}", flush=True)
+        asyncio.get_running_loop().remove_reader(self.port.fileno())
+        self.port.close()
+        self.port = None
+        self.link["controller"] = None
+
+    def state(self):
+        """Which part of the chain to the drone is missing, for GET /status."""
+        if self.port is None:
+            return "controller_missing"
+        return "online" if self.fresh() else "drone_silent"
+
     def read(self):
         try:
             data = self.port.read(max(1, self.port.in_waiting))
         except (OSError, serial.SerialException) as error:
-            self.fail(str(error))
+            self.detach(str(error))
             return
         for packet in self.decoder.feed(data):
-            self.receive(packet)
+            # A packet this service cannot take is counted and passed over, whatever the error, so it costs neither the packets behind it in this read nor the service: 2026-11-10 each GPS report, decoded as a status message by mistake, raised from here once a second, and only the journal showed it.
+            try:
+                self.receive(packet)
+            except Exception as error:
+                self.errors += 1
+                self.link_window["errors"] += 1
+                if time.monotonic() - self.error_at > 10:
+                    self.error_at = time.monotonic()
+                    print(f"Packet not taken ({self.errors} so far): {type(error).__name__}: {error}", flush=True)
 
     def receive(self, packet):
         channel, session, sequence, token, index, count, payload = unpack(packet)
@@ -794,16 +832,17 @@ class Service:
                     self.link_window["late"] += 1
                     continue
                 offset = 0
-                while offset < len(packet):
+                # A packet the controller's device does not take is dropped with the device (detach), like a late one.
+                while self.port is not None and offset < len(packet):
                     try:
                         offset += self.port.write(packet[offset:])
                     except (OSError, serial.SerialException) as error:
-                        self.fail(str(error))
-                        return
+                        self.detach(str(error))
+                        break
                     if offset < len(packet):
                         if time.monotonic() - started > 2:
-                            self.fail("USB write stalled for 2 s")
-                            return
+                            self.detach("USB write stalled for 2 s")
+                            break
                         await asyncio.sleep(0.001)
 
     async def monitor(self):
@@ -817,12 +856,12 @@ class Service:
                 self.link_window["timeouts"] += 1
             ticks += 1
             if ticks % 20 == 0:
-                # This service's view of the last second: status messages received (the drone sends 20), the longest gap between them, including one still running, packets dropped here for waiting over 0.1 s, and link timeouts.
+                # This service's view of the last second: status messages received (the drone sends 20), the longest gap between them, including one still running, packets dropped here for waiting over 0.1 s, link timeouts, and packets this service could not take (read).
                 window = self.link_window
                 if self.status_at is not None:
                     window["longest_gap_ms"] = max(window["longest_gap_ms"], round((time.monotonic() - self.status_at) * 1000))
                 self.link["bridge"] = {"source": "bridge", **window}
-                self.link_window = {"statuses": 0, "longest_gap_ms": 0, "late": 0, "timeouts": 0}
+                self.link_window = {"statuses": 0, "longest_gap_ms": 0, "late": 0, "timeouts": 0, "errors": 0}
                 if self.session:
                     self.queue_record("link", {"type": "link", **self.link["bridge"]})
                 # The recorder subscription; the drone arms only while it is fresh. The G asks for its GPS report (decode_gps_report), which older drones ignore.
@@ -831,7 +870,7 @@ class Service:
 
     async def connect(self, request, slot=None):
         if (slot and getattr(self, slot) is not None) or not self.fresh() or self.failed.is_set():
-            raise web.HTTPServiceUnavailable(text="Drone link unavailable or endpoint in use")
+            raise web.HTTPServiceUnavailable(text="Endpoint in use" if self.fresh() else f"Drone link unavailable ({self.state()})")
         ws = web.WebSocketResponse(max_msg_size=8192, compress=False)
         if slot:
             setattr(self, slot, ws)
@@ -966,7 +1005,10 @@ class Service:
         return web.json_response({"controller": report})
 
     async def status(self, request):
-        return web.json_response({"online": self.fresh(), "reading": self.reading})
+        # heard_s: since the drone's last status (None before the first); controller: its newest link report, whose rx and rejected counts say whether it hears a drone at all, or one that is not its own; in_use: a dashboard holds /ws.
+        heard = None if self.status_at is None else round(time.monotonic() - self.status_at, 1)
+        return web.json_response({"online": self.fresh(), "state": self.state(), "port": self.port and self.port.port, "heard_s": heard,
+                                  "controller": self.link["controller"], "in_use": self.dashboard is not None, "errors": self.errors, "reading": self.reading})
 
     async def get_settings(self, request):
         return web.json_response({"settings": self.settings})
@@ -1011,16 +1053,36 @@ class Service:
         return web.json_response({"settings": [dict(zip(keys, entry)) for entry in entries]})
 
 
+async def search(service, first, baud):
+    """
+    Attach the controller whenever the service has none: listen on each USB serial device (find_port.py) once a second, first the one named. A device that is not the controller is listened to three times and then left alone until it is plugged in again, so a drone on USB is free for flashing.
+    """
+    tried = {}
+    while True:
+        if service.port is None:
+            paths = candidates()
+            for path in sorted(paths, key=lambda path: path != first):
+                try:
+                    plugged = os.stat(path).st_ctime
+                except OSError:
+                    continue
+                if tried.get(path, (None, 0))[0] != plugged:
+                    tried[path] = (plugged, 0)
+                if tried[path][1] >= 3:
+                    continue
+                port = await asyncio.to_thread(listen, path, 1.0, baud)
+                if port is not None:
+                    del tried[path]
+                    service.attach(port)
+                    break
+                tried[path] = (plugged, tried[path][1] + 1)
+            for path in set(tried) - set(paths):
+                del tried[path]
+        await asyncio.sleep(1)
+
+
 async def main(args):
-    port = serial.Serial()
-    port.port, port.baudrate = args.port, args.baud
-    port.timeout = port.write_timeout = 0
-    port.exclusive = True
-    port.dtr = port.rts = False
-    port.open()
-    service = Service(port, args.recordings)
-    loop = asyncio.get_running_loop()
-    loop.add_reader(port.fileno(), service.read)
+    service = Service(args.recordings)
     app = web.Application()
     app.add_routes([
         web.get("/ws", service.dashboard_socket),
@@ -1036,28 +1098,27 @@ async def main(args):
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", args.listen).start()
     record_task = asyncio.create_task(service.record())
-    tasks = [asyncio.create_task(service.write()), asyncio.create_task(service.monitor())]
-    print(f"USB {args.port} → http://127.0.0.1:{args.listen}; waiting for drone", flush=True)
+    tasks = [asyncio.create_task(service.write()), asyncio.create_task(service.monitor()), asyncio.create_task(search(service, args.port, args.baud))]
+    print(f"http://127.0.0.1:{args.listen}; looking for the controller on USB", flush=True)
     try:
         await service.failed.wait()
     finally:
         service.failed.set()
         await asyncio.gather(*(sender.close() for sender in tuple(service.senders.values())))
-        loop.remove_reader(port.fileno())
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        service.detach("Service stopped")
         await runner.cleanup()
         await service.record_queue.put(("close", ("Service stopped",)))
         await service.record_queue.join()
         record_task.cancel()
         await asyncio.gather(record_task, return_exceptions=True)
-        port.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--port", required=True, help="Controller USB serial device")
+    parser.add_argument("--port", default="", help="The USB serial device to try first; the controller is found on any (find_port.py)")
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument("--listen", type=int, default=8765)
     parser.add_argument("--recordings", type=Path, default=RECORDINGS)

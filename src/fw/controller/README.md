@@ -26,7 +26,7 @@ Each drone and its controller are a line in `../pairs.h` (their station MACs). A
 | Controller radio channel | `native/main/relay.c`: `CHANNEL` |
 | Drone radio channel | `../drone/main/radio.c`: `WIFI_CHANNEL` |
 
-A new or replaced board needs its line in `../pairs.h` and both boards' firmware rebuilt and flashed. A replaced controller needs only itself flashed over USB: its relay beacons to the drone its table names, and a disarmed drone that has heard nothing from its own controller for 5 s takes the beaconing relay as its controller and stores it (`../drone/main/radio.c` adopt; drone firmware from 2026-11-10), after which `make deploy` gives the drone the new table. Keep the channels equal, or let the drone follow (Radio options below). Inspect a board's MAC with `esptool read-mac` while its serial port is free. `find_port.py` finds any listed controller.
+A new or replaced board needs its line in `../pairs.h` and both boards' firmware rebuilt and flashed. A replaced controller needs only itself flashed over USB: its relay beacons to the drone its table names, and a disarmed drone that has heard nothing from its own controller for 5 s takes the beaconing relay as its controller and stores it (`../drone/main/radio.c` adopt; drone firmware from 2026-11-10), after which `make deploy` gives the drone the new table. Keep the channels equal, or let the drone follow (Radio options below). Inspect a board's MAC with `esptool read-mac` while its serial port is free. The bridge finds the controller by listening on each USB serial port for its link report (`find_port.py`), which resets no board.
 
 ## Transport
 
