@@ -692,6 +692,7 @@ class Service:
                 report = decode_gps_report(payload)
                 self.gps_report = {key: value for key, value in report.items() if key != "satellites"}
                 self.queue_record("gps", {"type": "gps_report", "drone_ms": report["time"], **report})
+            return
         if channel == LINK_CHANNEL:
             report = decode_link(payload)
             if report is not None:
