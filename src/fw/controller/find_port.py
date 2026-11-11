@@ -29,11 +29,13 @@ def open_port(path, baud=BAUD):
     return port
 
 
-def listen(path, seconds=1.0, baud=BAUD):
-    """The device, open, if a controller's packet arrives on it within seconds; else None (another board, a controller still booting, or a device something else holds)."""
+def listen(path, seconds=1.0, baud=BAUD, busy=False):
+    """The device, open, if a controller's packet arrives on it within seconds; else None (another board, a controller still booting, or a device something else holds: with busy, one that cannot be opened raises instead)."""
     try:
         port = open_port(path, baud)
     except (OSError, serial.SerialException):
+        if busy:
+            raise
         return None
     decoder = SerialDecoder()
     deadline = time.monotonic() + seconds

@@ -1077,9 +1077,13 @@ class Service:
         return web.json_response({"settings": [dict(zip(keys, entry)) for entry in entries]})
 
 
+# A silent device is listened to again this often (s) after its first three tries.
+RETRY_S = 15.0
+
+
 async def search(service, first, baud):
     """
-    Attach the controller whenever the service has none: listen on each USB serial device (find_port.py) once a second, first the one named. A device that is not the controller is listened to three times and then left alone until it is plugged in again, so a drone on USB is free for flashing.
+    Attach the controller whenever the service has none: listen on each USB serial device (find_port.py) once a second, first the one named. A device that is silent is listened to three times and then once every RETRY_S, so a drone on USB is nearly always free for flashing; one that cannot be opened yet (just plugged in, or held a moment by the dashboard's search for the video receiver) does not count as heard. On 2026-11-11 the controller, plugged in again, failed its three tries within seconds and was then left alone for good.
     """
     tried = {}
     while True:
@@ -1090,16 +1094,20 @@ async def search(service, first, baud):
                     plugged = os.stat(path).st_ctime
                 except OSError:
                     continue
-                if tried.get(path, (None, 0))[0] != plugged:
-                    tried[path] = (plugged, 0)
-                if tried[path][1] >= 3:
+                if tried.get(path, (None, 0, 0.0))[0] != plugged:
+                    tried[path] = (plugged, 0, 0.0)
+                count, last = tried[path][1:]
+                if count >= 3 and time.monotonic() - last < RETRY_S:
                     continue
-                port = await asyncio.to_thread(listen, path, 1.0, baud)
+                try:
+                    port = await asyncio.to_thread(listen, path, 1.0, baud, True)
+                except (OSError, serial.SerialException):
+                    continue
                 if port is not None:
                     del tried[path]
                     service.attach(port)
                     break
-                tried[path] = (plugged, tried[path][1] + 1)
+                tried[path] = (plugged, count + 1, time.monotonic())
             for path in set(tried) - set(paths):
                 del tried[path]
         await asyncio.sleep(1)
