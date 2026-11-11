@@ -12,6 +12,10 @@
 // The push observer: each camera velocity correction, spread over PUSH_TAU (s), moves the push estimate (critically damped with VELOCITY_TAU at 4 VELOCITY_TAU), up to MAX_PUSH (m/s²).
 #define PUSH_TAU 1.6f
 #define MAX_PUSH 3.0f
+// With the drag model the velocity runs on the measured specific force, which already carries every real push (a thrust tilt the servo command does not show, the room's flow), so what the camera keeps correcting is that level acceleration's own error (the attitude estimate against the accelerometer): with DRAG_CAMERA_BIAS the corrections teach it as the drag model's bias, which the dead reckoning takes off, instead of the push, which it does not, so the push only ever grew. On 2026-11-11 with rubber bands on the servos the level acceleration read 0.1-0.4 m/s² forward, the push ran to -2.9 m/s² within 25 s, and the hold, cancelling it outright, leaned the drone at the tag 1-1.5 m inside its range target (sw/sim/hold_replay.py, sw/sim/band_hold.py).
+#ifndef DRAG_CAMERA_BIAS
+#define DRAG_CAMERA_BIAS 1
+#endif
 // Without the tag the dead-reckoned velocity leaks toward zero over this long (s), as the trim never quite matches the push it cancels.
 #define DRIFT_TAU 3.0f
 // Each sighting with a settled tilt moves the wall-normal estimate this fraction of the way to its own.
@@ -302,12 +306,20 @@ static void take(HoverState *state, const HoverGains *g, const HoverPose *pose) 
         float interval = interval_us / 1e6f, keep = expf(-interval / VELOCITY_TAU);
         // The tag stands still, so its apparent motion is the drone's, reversed: the average velocity over the interval, compared with the estimate at its middle. The horizontal estimate runs on tilt between sightings, so the correction moves it and its recorded past alike.
         float *then = state->history[recorded(state, pose->capture_us - interval_us / 2)];
+        float correction[2];
+        bool biased = DRAG_CAMERA_BIAS && state->dragging;
         for (int i = 0; i < 2; i++) {
-            float correction = (1 - keep) * ((state->position[i] - position[i]) / interval - then[3 + i]);
-            state->velocity[i] += correction;
-            for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3 + i] += correction;
+            correction[i] = (1 - keep) * ((state->position[i] - position[i]) / interval - then[3 + i]);
+            state->velocity[i] += correction[i];
+            for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3 + i] += correction[i];
             // A velocity the tilt keeps getting wrong the same way is a push it does not know about: learn it (only once flying on the tag, so the takeoff's ground contact does not teach it).
-            if (state->tracking) state->push[i] = clamp(state->push[i] + correction / PUSH_TAU, -MAX_PUSH, MAX_PUSH);
+            if (state->tracking && !biased) state->push[i] = clamp(state->push[i] + correction[i] / PUSH_TAU, -MAX_PUSH, MAX_PUSH);
+        }
+        // With the drag model it is the level acceleration's bias instead, in body axes as the drag model keeps it.
+        if (state->tracking && biased) {
+            float cy = cosf(state->yaw), sy = sinf(state->yaw);
+            state->drag_bias[0] = clamp(state->drag_bias[0] - (correction[0] * cy + correction[1] * sy) / PUSH_TAU, -MAX_BIAS, MAX_BIAS);
+            state->drag_bias[1] = clamp(state->drag_bias[1] - (-correction[0] * sy + correction[1] * cy) / PUSH_TAU, -MAX_BIAS, MAX_BIAS);
         }
         state->velocity[2] = keep * state->velocity[2] + (1 - keep) * (state->position[2] - position[2]) / interval;
     } else {

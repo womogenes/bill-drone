@@ -1,7 +1,7 @@
 """
 The tag hold with the rubber bands on the servos, in the hover sim: uv run -m sw.sim.band_hold [--recording 2026-11-11T23-35] [--seeds 16] [--seconds 30] [--workers 40] [--cases name,...] [--set name=value,...]
 
-Each case flies a recording's settings (drone 1 on 2026-11-11) on sweep.CURRENT from its resting pitch with the tag ahead, as the hops did, for --seconds after liftoff, and reports over the last half: the range error from the target (median of the runs' means), the camera's speed toward the tag, and at the end the hold's push and carry (what the drone logs as its trim), and runs lost. A case is a plant (bands or not) and a firmware (hover.c as it is, or with HOVER_DEFINES):
+Each case flies a recording's settings (drone 1 on 2026-11-11) on sweep.CURRENT from its resting pitch with the tag ahead, as the hops did, for --seconds after liftoff, and reports over the last half: the range error from the target (median of the runs' means, and of their RMS), the camera's speed toward the tag, and at the end the hold's push and carry (what the drone logs as its trim), and runs lost. A case is a plant (bands or not) and a firmware (hover.c as it is, or with HOVER_DEFINES):
 - the bands, as measured on 2026-11-11 (models/NOTES.md): the assemblies' real tilt behind the command (plant tilt_offset), and the accelerometer in flight reading forward of the attitude estimate (plant flight_accel_bias forward), which the hold's level acceleration then reads as a steady forward push;
 - without them, the same plant with neither.
 Run per case in a worker pool; the same seeds in every case.
@@ -44,6 +44,9 @@ def fly(job):
     if lifted is None:
         return name, seed, None
     late = (t >= lifted + seconds / 2) & (t <= lifted + seconds)
+    # Lost before the measured half began.
+    if not late.any():
+        return name, seed, {"lost": True}
     position = np.array([e[1][:2] for e in log])
     distance = np.hypot(tag - position[:, 0], position[:, 1])
     target = np.array([e[8][2] if e[8] else np.nan for e in log]) - flown.get("nudge_forward", 0.0)
@@ -51,6 +54,7 @@ def fly(job):
     extra = log[np.flatnonzero(late)[-1]][15]
     return name, seed, {
         "error": float(np.nanmean(distance[late] - target[late])),
+        "rms": float(np.sqrt(np.nanmean((distance[late] - target[late]) ** 2))),
         "closing": float(np.mean(closing[late])),
         "push": float(extra[0][0]), "carry": float(extra[1][0]), "drag_bias": float(extra[2][0]),
         "lost": not result["stable"],
@@ -88,13 +92,13 @@ def main():
     with Pool(min(args.workers, len(jobs))) as pool:
         runs = pool.map(fly, jobs)
     print(f"{args.recording} settings{' with ' + args.set if args.set else ''}{' and ' + args.define if args.define else ''}, {args.seeds} seeds, last {args.seconds / 2:.0f} of {args.seconds:.0f} s")
-    print(f"{'case':<20} {'range error m':>14} {'closing m/s':>12} {'push':>6} {'carry':>6} {'drag_bias':>9} {'lost':>5}")
+    print(f"{'case':<20} {'range error m':>14} {'RMS m':>6} {'closing m/s':>12} {'push':>6} {'carry':>6} {'drag_bias':>9} {'lost':>5}")
     for name in names:
         measured = [m for n, _, m in runs if n == name and m is not None]
         kept = [m for m in measured if not m["lost"]]
         def med(key):
             return np.median([m[key] for m in kept]) if kept else float("nan")
-        print(f"{name:<20} {med('error'):>+14.2f} {med('closing'):>+12.3f} {med('push'):>+6.2f} {med('carry'):>+6.2f} {med('drag_bias'):>+9.2f} {len(measured) - len(kept):>3}/{len(measured)}")
+        print(f"{name:<20} {med('error'):>+14.2f} {med('rms'):>6.2f} {med('closing'):>+12.3f} {med('push'):>+6.2f} {med('carry'):>+6.2f} {med('drag_bias'):>+9.2f} {len(measured) - len(kept):>3}/{len(measured)}")
 
 
 if __name__ == "__main__":
