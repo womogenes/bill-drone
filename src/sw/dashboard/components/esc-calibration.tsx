@@ -70,7 +70,7 @@ export function EscCalibration({
         <DialogHeader>
           <DialogTitle>Calibrate ESCs</DialogTitle>
         </DialogHeader>
-        <p className="text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           Step {step + 1} of {steps.length}
         </p>
         <p>{current.text}</p>

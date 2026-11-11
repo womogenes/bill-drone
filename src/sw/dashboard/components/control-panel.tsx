@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Kbd, KbdGroup } from '@/components/ui/kbd';
 import { EscCalibration } from '@/components/esc-calibration';
+import { Panel } from '@/components/panel';
 import { BUTTONS, readPad, stick } from '@/components/gamepad';
 import {
   Dialog,
@@ -648,151 +649,149 @@ export const ControlPanel = memo(function ControlPanel({
   }, [available, open, onChange, setMode, onNudge, onStop, onHover]);
 
   return (
-    <section
-      className="space-y-4 border-b px-4 py-4"
-      aria-labelledby="control-heading"
-    >
-      <div className="flex items-center gap-2">
-        <h2 id="control-heading" className="mr-auto font-semibold">
-          Flight control
-        </h2>
-        <Dialog
-          open={open}
-          onOpenChange={(value) => {
-            setOpen(value);
-            if (value)
-              setGains(
-                Object.fromEntries(
-                  gainKeys
-                    .filter((key) => setting(key) !== undefined)
-                    .map((key) => [
-                      key,
-                      String(Number(setting(key)!.toPrecision(5))),
-                    ])
-                )
-              );
-          }}
-        >
-          <EscCalibration
-            disabled={!available || settings.enabled}
-            error={escError}
-            onStage={onEscStage}
-          />
-          <DialogTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Control gains"
-                disabled={!available || settings.enabled}
-              />
-            }
-          >
-            <Settings2 />
-          </DialogTrigger>
-          <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-6xl">
-            <DialogHeader>
-              <DialogTitle>Control gains</DialogTitle>
-            </DialogHeader>
-            <form
-              className="space-y-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                onChange(
+    <Panel
+      title="Flight control"
+      header={
+        <div className="ml-auto flex items-center gap-2">
+          <Dialog
+            open={open}
+            onOpenChange={(value) => {
+              setOpen(value);
+              if (value)
+                setGains(
                   Object.fromEntries(
-                    Object.entries(gains).map(([key, value]) => [
-                      key,
-                      Number(value),
-                    ])
+                    gainKeys
+                      .filter((key) => setting(key) !== undefined)
+                      .map((key) => [
+                        key,
+                        String(Number(setting(key)!.toPrecision(5))),
+                      ])
                   )
                 );
-                setOpen(false);
-              }}
+            }}
+          >
+            <EscCalibration
+              disabled={!available || settings.enabled}
+              error={escError}
+              onStage={onEscStage}
+            />
+            <DialogTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Control gains"
+                  disabled={!available || settings.enabled}
+                />
+              }
             >
-              <div className="grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
-                {gainSections
-                  .filter(
-                    ({ fields, needs }) =>
-                      (!needs || setting(needs) !== undefined) &&
-                      fields.some(({ key }) => setting(key) !== undefined)
-                  )
-                  .map(({ title, fields }) => (
-                    <section key={title} className="space-y-2">
-                      <h3 className="border-b pb-1 font-medium">{title}</h3>
-                      {fields
-                        .filter(({ key }) => setting(key) !== undefined)
-                        .map(({ key, label, min, max }) => (
-                          <label
-                            key={key}
-                            className="flex items-center justify-between gap-3"
-                          >
-                            <span className="text-muted-foreground">
-                              {label}
-                            </span>
-                            <Input
-                              className="w-28 shrink-0 tabular-nums"
-                              aria-label={`${title}: ${label}`}
-                              type="number"
-                              min={min}
-                              max={max}
-                              step="any"
-                              required
-                              value={gains[key] ?? ''}
-                              onChange={(event) =>
-                                setGains({
-                                  ...gains,
-                                  [key]: event.target.value,
-                                })
-                              }
-                            />
-                          </label>
-                        ))}
-                    </section>
-                  ))}
-              </div>
-              <Button
-                type="submit"
-                variant="outline"
-                disabled={!available || settings.enabled}
+              <Settings2 />
+            </DialogTrigger>
+            <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-6xl">
+              <DialogHeader>
+                <DialogTitle>Control gains</DialogTitle>
+              </DialogHeader>
+              <form
+                className="space-y-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onChange(
+                    Object.fromEntries(
+                      Object.entries(gains).map(([key, value]) => [
+                        key,
+                        Number(value),
+                      ])
+                    )
+                  );
+                  setOpen(false);
+                }}
               >
-                Apply
-              </Button>
-            </form>
-          </DialogContent>
-        </Dialog>
-        <span
-          className={`text-sm tabular-nums ${mode === MANUAL ? 'text-muted-foreground' : 'font-medium text-blue-700 dark:text-blue-400'}`}
-          aria-label="Flight mode"
-        >
-          {FLIGHT_MODES[mode] ?? `Mode ${mode}`}
-        </span>
-        <Button
-          variant={settings.enabled || arming ? 'destructive' : 'outline'}
-          disabled={!connected || arming || (!settings.enabled && !ready)}
-          aria-pressed={settings.enabled}
-          onClick={() =>
-            settings.enabled
-              ? onStop()
-              : onChange({
-                  enabled: true,
-                  base_throttle: 0,
-                  roll: 0,
-                  pitch: 0,
-                  yaw_rate: 0,
-                })
-          }
-        >
-          {settings.enabled ? 'Disable' : arming ? 'Arming…' : 'Enable'}
-        </Button>
-        <Button
-          variant="outline"
-          size="icon"
-          aria-label="Stop motors"
-          onClick={onStop}
-        >
-          <Square />
-        </Button>
-      </div>
+                <div className="grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
+                  {gainSections
+                    .filter(
+                      ({ fields, needs }) =>
+                        (!needs || setting(needs) !== undefined) &&
+                        fields.some(({ key }) => setting(key) !== undefined)
+                    )
+                    .map(({ title, fields }) => (
+                      <section key={title} className="space-y-2">
+                        <h3 className="border-b pb-1 font-medium">{title}</h3>
+                        {fields
+                          .filter(({ key }) => setting(key) !== undefined)
+                          .map(({ key, label, min, max }) => (
+                            <label
+                              key={key}
+                              className="flex items-center justify-between gap-3"
+                            >
+                              <span className="text-sm text-muted-foreground">
+                                {label}
+                              </span>
+                              <Input
+                                className="w-28 shrink-0 tabular-nums"
+                                aria-label={`${title}: ${label}`}
+                                type="number"
+                                min={min}
+                                max={max}
+                                step="any"
+                                required
+                                value={gains[key] ?? ''}
+                                onChange={(event) =>
+                                  setGains({
+                                    ...gains,
+                                    [key]: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                          ))}
+                      </section>
+                    ))}
+                </div>
+                <Button
+                  type="submit"
+                  variant="outline"
+                  disabled={!available || settings.enabled}
+                >
+                  Apply
+                </Button>
+              </form>
+            </DialogContent>
+          </Dialog>
+          <span
+            className={`text-sm tabular-nums ${mode === MANUAL ? 'text-muted-foreground' : 'font-medium text-blue-700 dark:text-blue-400'}`}
+            aria-label="Flight mode"
+          >
+            {FLIGHT_MODES[mode] ?? `Mode ${mode}`}
+          </span>
+          <Button
+            variant={settings.enabled || arming ? 'destructive' : 'outline'}
+            disabled={!connected || arming || (!settings.enabled && !ready)}
+            aria-pressed={settings.enabled}
+            onClick={() =>
+              settings.enabled
+                ? onStop()
+                : onChange({
+                    enabled: true,
+                    base_throttle: 0,
+                    roll: 0,
+                    pitch: 0,
+                    yaw_rate: 0,
+                  })
+            }
+          >
+            {settings.enabled ? 'Disable' : arming ? 'Arming…' : 'Enable'}
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label="Stop motors"
+            onClick={onStop}
+          >
+            <Square />
+          </Button>
+        </div>
+      }
+    >
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
         {[
           { keys: ['T', 'H'], label: 'Take off' },
@@ -834,6 +833,6 @@ export const ControlPanel = memo(function ControlPanel({
       >
         {problem || 'Good to fly.'}
       </p>
-    </section>
+    </Panel>
   );
 });

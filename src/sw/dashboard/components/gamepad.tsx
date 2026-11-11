@@ -186,13 +186,11 @@ export const GamepadView = memo(function GamepadView() {
   );
 
   return (
-    <div
-      className={`flex items-center gap-4 text-sm text-muted-foreground transition-opacity ${name ? '' : 'opacity-40'}`}
-    >
+    <div className="flex items-center gap-4 text-sm text-muted-foreground">
       <svg
         ref={svg}
         viewBox="0 0 240 156"
-        className="h-24 w-auto shrink-0"
+        className={`h-24 w-auto shrink-0 transition-opacity ${name ? '' : 'opacity-40'}`}
         role="img"
         aria-label="Controller state"
       >
@@ -252,7 +250,7 @@ export const GamepadView = memo(function GamepadView() {
         <p className="truncate font-medium text-foreground">
           {name?.replace(/\s*\(.*vendor.*\)/i, '') ?? 'No controller'}
         </p>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-2 text-xs">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-2">
           {[
             ['L stick', 'Climb / yaw'],
             ['R stick', 'Tilt'],

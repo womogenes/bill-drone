@@ -1,6 +1,7 @@
 'use client';
 
 import { memo } from 'react';
+import { Panel } from '@/components/panel';
 import { clock } from '@/lib/format';
 import { useFlightReport } from '@/hooks/use-flight-report';
 
@@ -8,23 +9,19 @@ import { useFlightReport } from '@/hooks/use-flight-report';
 export const LastFlight = memo(function LastFlight({ name }: { name: string }) {
   const { report: shown, error } = useFlightReport(name);
   return (
-    <section
-      className="space-y-2 px-4 py-3"
-      aria-labelledby="last-flight-heading"
-    >
-      <div className="flex items-center gap-2">
-        <h2 id="last-flight-heading" className="mr-auto font-semibold">
-          Last flight
-        </h2>
+    <Panel
+      title="Last flight"
+      header={
         <a
           href={`/flights?name=${encodeURIComponent(name)}`}
           target="_blank"
           rel="noopener"
-          className="text-sm underline"
+          className="ml-auto text-sm underline"
         >
           Report
         </a>
-      </div>
+      }
+    >
       {error ? (
         <p className="text-sm text-red-700">{error}</p>
       ) : shown ? (
@@ -53,6 +50,6 @@ export const LastFlight = memo(function LastFlight({ name }: { name: string }) {
       ) : (
         <p className="text-sm text-muted-foreground">Loading</p>
       )}
-    </section>
+    </Panel>
   );
 });

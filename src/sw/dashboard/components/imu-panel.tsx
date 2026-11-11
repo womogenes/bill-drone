@@ -1,13 +1,15 @@
 'use client';
 
 import { Activity, LoaderCircle, Unplug } from 'lucide-react';
-import { memo } from 'react';
+import { memo, useRef, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { signed } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 import { AttitudeChart } from '@/components/attitude-chart';
 import { useChartEnd } from '@/components/fast-chart';
 import { ImuAxisChart } from '@/components/imu-axis-chart';
+import { Panel } from '@/components/panel';
+import { Status } from '@/components/status';
 import {
   Select,
   SelectContent,
@@ -35,10 +37,7 @@ const ImuRange = memo(function ImuRange({ seconds }: { seconds: number }) {
         window.history.replaceState(null, '', url);
       }}
     >
-      <SelectTrigger
-        aria-label="IMU history range"
-        className="w-44 cursor-pointer"
-      >
+      <SelectTrigger aria-label="IMU history range" className="w-44">
         <SelectValue />
       </SelectTrigger>
       <SelectContent align="start" alignItemWithTrigger={false}>
@@ -66,19 +65,15 @@ const ImuHeader = memo(function ImuHeader({
   onCalibrate: () => void;
 }) {
   const busy = online && (pending || calibrating);
-  const StatusIcon = online ? Activity : Unplug;
   return (
-    <div className="flex items-center gap-4">
-      <h2 id="imu-heading" className="font-semibold">
-        IMU
-      </h2>
-      <span
+    <>
+      <Status
         role="status"
-        className={`flex items-center gap-2 ${online ? 'text-green-700' : 'text-red-700'}`}
+        icon={online ? Activity : Unplug}
+        className={online ? 'text-green-700' : 'text-red-700'}
       >
-        <StatusIcon className="size-4" aria-hidden="true" />
         {online ? 'Online' : 'Offline'}
-      </span>
+      </Status>
       <div className="ml-auto flex items-center gap-2">
         {busy && (
           <LoaderCircle
@@ -88,7 +83,6 @@ const ImuHeader = memo(function ImuHeader({
         )}
         <Button
           variant="outline"
-          className="cursor-pointer"
           disabled={!online || busy}
           title="Keep the IMU still for two seconds"
           onClick={onCalibrate}
@@ -96,9 +90,30 @@ const ImuHeader = memo(function ImuHeader({
           Calibrate
         </Button>
       </div>
-    </div>
+    </>
   );
 });
+
+// A chart under its name and its series' latest readings, each in its line's color.
+function Readings({
+  label,
+  children,
+  chart,
+}: {
+  label: string;
+  children: ReactNode;
+  chart: ReactNode;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline gap-4 text-sm whitespace-nowrap tabular-nums">
+        <h3 className="text-muted-foreground">{label}</h3>
+        {children}
+      </div>
+      {chart}
+    </div>
+  );
+}
 
 export function ImuPanel({
   reading,
@@ -123,73 +138,90 @@ export function ImuPanel({
   const end = useChartEnd(connected, time);
   const online = connected && reading != null;
 
-  // Each value keeps the width of its widest reading, so the labels beside it don't move as it changes: in tabular nums every digit is 1ch, and the sign and point together about another.
-  const value = (number: number | undefined, digits: number, whole: number) => (
-    <span
-      className="inline-block text-right"
-      style={{ width: `${whole + digits + 1}ch` }}
-    >
-      {online && number !== undefined ? signed(number, digits) : '—'}
-    </span>
-  );
+  // The three charts' value axes take the width of the widest one's labels.
+  const gutter = useRef(48);
+
+  // Each value keeps the width of its widest reading, so the labels beside it don't move as it changes: in tabular nums every digit is 1ch, and the sign and point together about another. With nothing to show, a dash right after its label.
+  const value = (number: number | undefined, digits: number, whole: number) =>
+    online && number !== undefined ? (
+      <span
+        className="inline-block text-right"
+        style={{ width: `${whole + digits + 1}ch` }}
+      >
+        {signed(number, digits)}
+      </span>
+    ) : (
+      '—'
+    );
   return (
-    <section aria-labelledby="imu-heading" className="space-y-3 px-4 py-4">
-      <ImuHeader
-        online={online}
-        calibrating={reading?.calibrating ?? false}
-        pending={calibrationPending}
-        onCalibrate={onCalibrate}
-      />
-      <div className="space-y-1">
-        <div className="flex items-baseline gap-4 tabular-nums">
-          <h3 className="text-sm whitespace-nowrap text-muted-foreground">
-            Attitude
-          </h3>
-          <span className="text-red-700">
-            Roll {value(reading?.roll, 1, 3)}°
-          </span>
-          <span className="text-green-700">
-            Pitch {value(reading?.pitch, 1, 2)}°
-          </span>
-          <span className="ml-auto text-sm text-muted-foreground">
-            {online ? `${reading.temperature.toFixed(1)} °C` : ''}
-          </span>
-        </div>
-        <AttitudeChart history={history} end={end} />
-      </div>
+    <Panel
+      title="IMU"
+      header={
+        <ImuHeader
+          online={online}
+          calibrating={reading?.calibrating ?? false}
+          pending={calibrationPending}
+          onCalibrate={onCalibrate}
+        />
+      }
+    >
+      <Readings
+        label="Attitude"
+        chart={
+          <AttitudeChart
+            history={history}
+            end={end}
+            gutter={gutter}
+            className="h-28"
+          />
+        }
+      >
+        <span className="text-red-700">
+          Roll {value(reading?.roll, 1, 3)}
+          {online && '°'}
+        </span>
+        <span className="text-green-700">
+          Pitch {value(reading?.pitch, 1, 2)}
+          {online && '°'}
+        </span>
+        <span className="ml-auto text-muted-foreground">
+          {online ? `${reading.temperature.toFixed(1)} °C` : ''}
+        </span>
+      </Readings>
       {(
         [
           ['Acceleration', 'g', 'accel', 3, 1],
           ['Gyro', '°/s', 'gyro', 2, 3],
         ] as const
       ).map(([label, unit, key, digits, whole]) => (
-        <div key={key} className="space-y-1">
-          <div className="flex items-baseline gap-4 tabular-nums">
-            <h3 className="text-sm whitespace-nowrap text-muted-foreground">
-              {label} ({unit})
-            </h3>
-            {['X', 'Y', 'Z'].map((axis, index) => (
-              <span
-                key={axis}
-                className={
-                  ['text-red-700', 'text-green-700', 'text-blue-700'][index]
-                }
-              >
-                {axis} {value(reading?.[key][index], digits, whole)}
-              </span>
-            ))}
-          </div>
-          <ImuAxisChart
-            history={history}
-            field={key}
-            start={end - seconds * 1000}
-            end={end}
-            digits={digits}
-            className="h-32"
-          />
-        </div>
+        <Readings
+          key={key}
+          label={`${label} (${unit})`}
+          chart={
+            <ImuAxisChart
+              history={history}
+              field={key}
+              start={end - seconds * 1000}
+              end={end}
+              digits={digits}
+              gutter={gutter}
+              className="h-28"
+            />
+          }
+        >
+          {['X', 'Y', 'Z'].map((axis, index) => (
+            <span
+              key={axis}
+              className={
+                ['text-red-700', 'text-green-700', 'text-blue-700'][index]
+              }
+            >
+              {axis} {value(reading?.[key][index], digits, whole)}
+            </span>
+          ))}
+        </Readings>
       ))}
       <ImuRange seconds={seconds} />
-    </section>
+    </Panel>
   );
 }

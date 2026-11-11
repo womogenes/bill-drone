@@ -46,6 +46,7 @@ export function FastChart<T>({
   range,
   minSpan,
   label,
+  gutter: shared,
   className = 'h-40',
 }: {
   history: (start: number, end: number) => readonly T[];
@@ -60,6 +61,8 @@ export function FastChart<T>({
   // The smallest span of the value axis, so sensor noise on a still drone stays flat instead of filling the chart.
   minSpan?: number;
   label: string;
+  // The width of the value axis's labels, shared by the charts given the same one: stacked charts' plots then start at the same x.
+  gutter?: { current: number };
   // Sets the chart's height.
   className?: string;
 }) {
@@ -91,7 +94,7 @@ export function FastChart<T>({
     let colors: string[] = [];
     let font = '';
     // The plot's left edge only moves out, so changing tick labels don't shift the trace back and forth.
-    let gutter = 48;
+    const gutter = shared ?? { current: 48 };
     let styleDirty = true;
 
     function draw() {
@@ -166,13 +169,13 @@ export function FastChart<T>({
         { length: count },
         (_, index) => low + ((high - low) * index) / (count - 1)
       );
-      gutter = Math.max(
-        gutter,
+      gutter.current = Math.max(
+        gutter.current,
         ...ticks.map(
           (value) => context.measureText(formatValue(value)).width + 12
         )
       );
-      const left = gutter;
+      const left = gutter.current;
       const right = width - 12;
       const top = 8;
       const bottom = height - 36;
@@ -307,7 +310,7 @@ export function FastChart<T>({
       surface.removeEventListener('pointermove', move);
       surface.removeEventListener('pointerleave', leave);
     };
-  }, []);
+  }, [shared]);
 
   useEffect(() => {
     current.current = {

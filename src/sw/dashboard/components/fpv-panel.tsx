@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { Panel } from '@/components/panel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { typing } from '@/lib/keys';
@@ -26,17 +27,15 @@ function save(key: string, value: string) {
 }
 
 // The camera's own state through the drone (running, fpv, stalled or stopped) and the FPV frame rate, or null while it does not answer.
-export type CameraStatus = { state: string; fps?: number } | null;
+type CameraStatus = { state: string; fps?: number } | null;
 
 // Rendered in the browser only (the page loads it without server rendering), so the saved address is there from the start. Always streams, by the drone's hover_camera setting: the tracking preview (the flow's 80x60 reduction, tracking undisturbed, over the camera's network) or FPV, the camera's own 480x320 video over the radio to the FPV receiver or over its network, during which it does not track the tag, so camera hover has no sightings; it resumes tracking 3 s after FPV ends.
 export function FpvPanel({
   free,
   onFree,
   onTag,
-  onStatus,
   roll = 0,
 }: {
-  onStatus?: (status: CameraStatus) => void;
   // Each shown tag-mode frame's tag, or null when it has none.
   onTag?: (tag: PreviewTag | null) => void;
   // The camera's roll on its mount (the drone's hover_cam_roll, degrees): the picture is turned back by it, so it shows upright.
@@ -58,11 +57,6 @@ export function FpvPanel({
     rollRef.current = roll;
   }, [roll]);
   const [status, setStatus] = useState<CameraStatus>(null);
-  const onStatusRef = useRef(onStatus);
-  useEffect(() => {
-    onStatusRef.current = onStatus;
-  }, [onStatus]);
-  useEffect(() => onStatusRef.current?.(status), [status]);
   const where = host ? `&host=${encodeURIComponent(host)}` : '';
 
   useEffect(() => {
@@ -214,53 +208,53 @@ export function FpvPanel({
   }, [free, onFree]);
 
   return (
-    <section aria-labelledby="camera-heading" className="space-y-2 px-4 py-3">
-      <div className="flex items-center gap-2">
-        <h2 id="camera-heading" className="font-semibold">
-          Camera
-        </h2>
-        <span
-          className={`text-sm tabular-nums ${status ? 'text-muted-foreground' : 'text-red-700'}`}
-        >
-          {status
-            ? status.fps === undefined
-              ? status.state
-              : `${status.state} · ${Math.round(status.fps)} fps`
-            : 'Offline'}
-        </span>
-        <Input
-          aria-label="Camera address"
-          className="ml-auto h-8 w-28"
-          placeholder="auto"
-          value={host}
-          onChange={(event) => {
-            setHost(event.target.value);
-            save(HOST_KEY, event.target.value);
-          }}
-        />
-        <div className="flex gap-1" role="group" aria-label="Camera mode (F)">
-          {(['tag', 'fpv'] as const).map((choice) => (
-            <Button
-              key={choice}
-              size="sm"
-              variant={
-                free !== undefined && mode === choice ? 'default' : 'outline'
-              }
-              aria-pressed={free !== undefined && mode === choice}
-              disabled={free === undefined}
-              title="F"
-              onClick={() => onFree(choice === 'fpv')}
-            >
-              {choice === 'tag' ? 'Tag' : 'Free'}
-            </Button>
-          ))}
-        </div>
-      </div>
+    <Panel
+      title="Camera"
+      header={
+        <>
+          <span
+            className={`text-sm tabular-nums ${status ? 'text-muted-foreground' : 'text-red-700'}`}
+          >
+            {status
+              ? status.fps === undefined
+                ? status.state
+                : `${status.state} · ${Math.round(status.fps)} fps`
+              : 'Offline'}
+          </span>
+          <Input
+            aria-label="Camera address"
+            className="ml-auto w-28"
+            placeholder="auto"
+            value={host}
+            onChange={(event) => {
+              setHost(event.target.value);
+              save(HOST_KEY, event.target.value);
+            }}
+          />
+          <div className="flex gap-1" role="group" aria-label="Camera mode (F)">
+            {(['tag', 'fpv'] as const).map((choice) => (
+              <Button
+                key={choice}
+                variant={
+                  free !== undefined && mode === choice ? 'default' : 'outline'
+                }
+                aria-pressed={free !== undefined && mode === choice}
+                disabled={free === undefined}
+                title="F"
+                onClick={() => onFree(choice === 'fpv')}
+              >
+                {choice === 'tag' ? 'Tag' : 'Free'}
+              </Button>
+            ))}
+          </div>
+        </>
+      }
+    >
       <canvas
         ref={canvas}
         aria-label={mode === 'fpv' ? 'Live camera video' : 'Tracking preview'}
         className="aspect-[3/2] max-h-[calc(100dvh-10rem)] w-full bg-black object-contain"
       />
-    </section>
+    </Panel>
   );
 }

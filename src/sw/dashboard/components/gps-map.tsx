@@ -3,6 +3,9 @@
 import 'leaflet/dist/leaflet.css';
 import * as L from 'leaflet';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { Panel } from '@/components/panel';
+import { Stat, Stats } from '@/components/stat';
+import { useSize } from '@/hooks/use-size';
 import { gpsSolved, local } from '@/lib/gps';
 import type {
   GpsFix,
@@ -25,10 +28,10 @@ const TRAIL_GAP_MS = 2000;
 // Drawn points per trail: the history holds minutes at the GPS's 10 Hz.
 const TRAIL_POINTS = 600;
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-const WIDTH = 400;
-const HEIGHT = 300;
+// The fallback plot is drawn at its real pixel size, so its text stays text-xs however wide the panel is.
 const LEFT = 48;
-const RIGHT = 8;
+// Room for half of a tick label at the right edge.
+const RIGHT = 16;
 const TOP = 8;
 const BOTTOM = 36;
 const STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
@@ -121,7 +124,7 @@ export const GpsMap = memo(function GpsMap({
   fill?: boolean;
   // The smallest view around the start (m): a report zooms to a hop's few meters.
   minSpan?: number;
-  // The title and the distance and height rows; a report shows its own.
+  // The title and the distance and height readings; a report shows its own.
   heading?: boolean;
 }) {
   // Rebuilt per fix (10 Hz), not per status (20 Hz).
@@ -138,6 +141,11 @@ export const GpsMap = memo(function GpsMap({
   const bearing = offset && Math.atan2(offset[0], offset[1]);
 
   const container = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const size = useSize(box);
+  // At least a small plot, so a hidden panel (no size) still has a scale.
+  const width = Math.max(200, size.width);
+  const height = Math.max(150, size.height);
   const layers = useRef<Layers | null>(null);
   // Offline in the field: the local plot until a tile arrives.
   const [tiles, setTiles] = useState(false);
@@ -299,8 +307,8 @@ export const GpsMap = memo(function GpsMap({
   let maxX = Math.max(...extent.map(([x]) => x));
   let minY = Math.min(...extent.map(([, y]) => y));
   let maxY = Math.max(...extent.map(([, y]) => y));
-  const plotWidth = WIDTH - LEFT - RIGHT;
-  const plotHeight = HEIGHT - TOP - BOTTOM;
+  const plotWidth = width - LEFT - RIGHT;
+  const plotHeight = height - TOP - BOTTOM;
   // Equal scale on both axes, with a margin: widen the tighter one about its center.
   const scale =
     0.9 * Math.min(plotWidth / (maxX - minX), plotHeight / (maxY - minY));
@@ -322,45 +330,10 @@ export const GpsMap = memo(function GpsMap({
     return values;
   };
 
-  return (
-    <section
-      className={
-        fill
-          ? 'flex min-h-0 flex-1 flex-col gap-2 px-4 py-2'
-          : 'space-y-3 px-4 py-4'
-      }
-      aria-labelledby="gps-map-heading"
-    >
-      <h2
-        id="gps-map-heading"
-        className={heading ? 'font-semibold' : 'sr-only'}
-      >
-        {title}
-      </h2>
-      <dl
-        className={`grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums ${heading ? '' : 'hidden'}`}
-      >
-        {[
-          [
-            'From takeoff',
-            distance === null || bearing === null
-              ? '—'
-              : `${distance.toFixed(1)} m ${COMPASS[Math.round((bearing * 4) / Math.PI + 8) % 8]}`,
-          ],
-          [
-            'Height',
-            hover
-              ? `${hover.height.toFixed(2)} / ${hover.height_target.toFixed(2)} m`
-              : '—',
-          ],
-        ].map(([label, value]) => (
-          <div key={label} className="contents">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd>{value}</dd>
-          </div>
-        ))}
-      </dl>
+  const map = (
+    <>
       <div
+        ref={box}
         className={
           fill
             ? 'relative isolate min-h-48 flex-1'
@@ -370,8 +343,9 @@ export const GpsMap = memo(function GpsMap({
         <div ref={container} className="absolute inset-0 z-0 bg-muted!" />
         {!tiles && (
           <svg
-            viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-            className="absolute inset-0 size-full bg-background"
+            width={width}
+            height={height}
+            className="absolute inset-0 bg-background"
             role="img"
             aria-label="Drone position from the takeoff point, north up, with its accuracy and recent track"
           >
@@ -381,12 +355,12 @@ export const GpsMap = memo(function GpsMap({
                   x1={px(value)}
                   x2={px(value)}
                   y1={TOP}
-                  y2={HEIGHT - BOTTOM}
+                  y2={height - BOTTOM}
                   className="stroke-border"
                 />
                 <text
                   x={px(value)}
-                  y={HEIGHT - BOTTOM + 14}
+                  y={height - BOTTOM + 14}
                   textAnchor="middle"
                   className="fill-muted-foreground text-xs"
                 >
@@ -398,7 +372,7 @@ export const GpsMap = memo(function GpsMap({
               <g key={`y${value}`}>
                 <line
                   x1={LEFT}
-                  x2={WIDTH - RIGHT}
+                  x2={width - RIGHT}
                   y1={py(value)}
                   y2={py(value)}
                   className="stroke-border"
@@ -416,7 +390,7 @@ export const GpsMap = memo(function GpsMap({
             ))}
             <text
               x={LEFT + plotWidth / 2}
-              y={HEIGHT - 4}
+              y={height - 4}
               textAnchor="middle"
               className="fill-muted-foreground text-xs"
             >
@@ -479,6 +453,37 @@ export const GpsMap = memo(function GpsMap({
           </span>
         ))}
       </div>
-    </section>
+    </>
+  );
+  // A report shows its own title and the distance and height readings.
+  if (!heading)
+    return (
+      <section
+        aria-label={title}
+        className={
+          fill
+            ? 'flex min-h-0 flex-1 flex-col gap-2 px-4 py-3'
+            : 'space-y-2 px-4 py-3'
+        }
+      >
+        {map}
+      </section>
+    );
+  return (
+    <Panel title={title}>
+      <Stats>
+        <Stat label="From takeoff">
+          {distance === null || bearing === null
+            ? '—'
+            : `${distance.toFixed(1)} m ${COMPASS[Math.round((bearing * 4) / Math.PI + 8) % 8]}`}
+        </Stat>
+        <Stat label="Height">
+          {hover
+            ? `${hover.height.toFixed(2)} / ${hover.height_target.toFixed(2)} m`
+            : '—'}
+        </Stat>
+      </Stats>
+      {map}
+    </Panel>
   );
 });

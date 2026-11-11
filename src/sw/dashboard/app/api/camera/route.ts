@@ -366,7 +366,7 @@ function receiver() {
   });
   monitor.on('error', () => {});
   monitor.bind(5602, '127.0.0.1');
-  // The port is opened again, with its settings, after an error or 5 s without a whole shard: the bridge's service finds the controller by asking each USB board for its MAC (fw/controller/find_port.py), which resets the receiver and leaves its port at the bootloader's baud, and an error ended the old stream for good.
+  // The port is opened again, with its settings, after an error or 5 s without a whole shard: another program opening the port (a flash, a serial monitor) can reset the receiver or leave the port at another baud, and an error ended the old stream for good.
   let port: tty.ReadStream | undefined;
   let portPath: string | undefined;
   let heard = 0;

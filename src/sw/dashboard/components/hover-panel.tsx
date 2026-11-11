@@ -1,6 +1,9 @@
 'use client';
 
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useRef } from 'react';
+import { Panel } from '@/components/panel';
+import { Stat, Stats } from '@/components/stat';
+import { useSize } from '@/hooks/use-size';
 import type { HoverSample, HoverState } from '@/lib/telemetry';
 
 const TRAIL_MS = 10_000;
@@ -10,7 +13,8 @@ const STALE_MS = 150;
 const TRAIL_GAP_MS = 500;
 // The plot is drawn at its real pixel size, so its text stays text-xs however wide the panel is (a viewBox scaled the labels up to 24 px on a wide screen).
 const LEFT = 40;
-const RIGHT = 8;
+// Room for half of a tick label at the right edge.
+const RIGHT = 16;
 const TOP = 8;
 const BOTTOM = 22;
 const MAX_HEIGHT = 360;
@@ -53,16 +57,7 @@ export const HoverPanel = memo(function HoverPanel({
     distance !== null && range !== null ? distance - range : null;
   const sidewaysError = state.tag && drone ? drone[1] : null;
   const box = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(400);
-  useEffect(() => {
-    const element = box.current;
-    if (!element) return;
-    const resize = new ResizeObserver(() =>
-      setWidth(Math.max(200, element.clientWidth))
-    );
-    resize.observe(element);
-    return () => resize.disconnect();
-  }, []);
+  const width = Math.max(200, useSize(box).width);
   const height = Math.min(MAX_HEIGHT, Math.round(width * 0.75));
 
   const points = trail.map((sample) => {
@@ -105,40 +100,35 @@ export const HoverPanel = memo(function HoverPanel({
     (Math.abs(value) < 1e-9 ? 0 : value).toFixed(step < 0.5 ? 2 : 1);
 
   return (
-    <section className="space-y-3 px-4 py-4" aria-labelledby="hover-heading">
-      <h2 id="hover-heading" className="font-semibold">
-        Tag position
-      </h2>
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
-        <dt className="text-muted-foreground">Distance</dt>
-        <dd>
-          {distance === null
-            ? '—'
-            : `${distance.toFixed(2)} m${range !== null ? ` (hold ${range.toFixed(2)} m)` : ''}`}
-        </dd>
-        <dt className="text-muted-foreground">Distance error</dt>
-        <dd>
+    <Panel title="Tag position">
+      <Stats>
+        <Stat
+          label="Distance"
+          note={
+            distance !== null && range !== null && `hold ${range.toFixed(2)} m`
+          }
+        >
+          {distance === null ? '—' : `${distance.toFixed(2)} m`}
+        </Stat>
+        <Stat label="Distance error">
           {distanceError === null
             ? '—'
             : `${Math.abs(distanceError).toFixed(2)} m ${distanceError > 0 ? 'too far' : 'too close'}`}
-        </dd>
-        <dt className="text-muted-foreground">Sideways error</dt>
-        <dd>
+        </Stat>
+        <Stat label="Sideways error">
           {sidewaysError === null
             ? '—'
             : `${Math.abs(sidewaysError).toFixed(2)} m ${sidewaysError > 0 ? 'left' : 'right'}`}
-        </dd>
-        <dt className="text-muted-foreground">Height</dt>
-        <dd>
+        </Stat>
+        <Stat label="Height">
           {state.height.toFixed(2)} / {state.height_target.toFixed(2)} m
-        </dd>
-        <dt className="text-muted-foreground">Tag</dt>
-        <dd className={stale ? 'text-red-700' : undefined}>
+        </Stat>
+        <Stat label="Tag" valueClassName={stale ? 'text-red-700' : undefined}>
           {state.tag_age_ms === null || !state.tag
             ? 'Lost'
             : `${stale ? 'Stale · ' : ''}${state.tag_age_ms} ms`}
-        </dd>
-      </dl>
+        </Stat>
+      </Stats>
       <div ref={box} className="w-full">
         <svg
           width={width}
@@ -248,9 +238,9 @@ export const HoverPanel = memo(function HoverPanel({
           )}
         </svg>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-sm text-muted-foreground">
         Top down, meters from the tag (■), up toward it. Circle: hold point.
       </p>
-    </section>
+    </Panel>
   );
 });

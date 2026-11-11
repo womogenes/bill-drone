@@ -33,6 +33,7 @@ export const ImuAxisChart = memo(function ImuAxisChart({
   start,
   end,
   digits,
+  gutter,
   className,
 }: {
   history: (start: number, end: number) => ImuSample[];
@@ -40,6 +41,7 @@ export const ImuAxisChart = memo(function ImuAxisChart({
   start: number;
   end: number;
   digits: number;
+  gutter?: { current: number };
   className?: string;
 }) {
   return (
@@ -54,6 +56,7 @@ export const ImuAxisChart = memo(function ImuAxisChart({
       formatValue={formats[digits]}
       // A still drone's noise stays flat: 0.2 g and 4 degrees/s at least.
       minSpan={field === 'accel' ? 0.2 : 4}
+      gutter={gutter}
       className={className}
       label={
         field === 'accel'

@@ -45,9 +45,13 @@ const formatValue = (value: number) => signed(value, 1);
 export const AttitudeChart = memo(function AttitudeChart({
   history,
   end,
+  gutter,
+  className,
 }: {
   history: (start: number, end: number) => ImuSample[];
   end: number;
+  gutter?: { current: number };
+  className?: string;
 }) {
   return (
     <FastChart
@@ -61,7 +65,8 @@ export const AttitudeChart = memo(function AttitudeChart({
       formatValue={formatValue}
       label="Roll and pitch over the last 15 seconds in degrees, with the targets dashed while armed"
       minSpan={4}
-      className="h-32"
+      gutter={gutter}
+      className={className}
     />
   );
 });

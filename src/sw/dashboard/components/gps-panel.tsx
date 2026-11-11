@@ -1,7 +1,8 @@
 'use client';
 
 import { memo } from 'react';
-import { Stat } from '@/components/stat';
+import { Panel } from '@/components/panel';
+import { Stat, Stats } from '@/components/stat';
 import { gpsSolved } from '@/lib/gps';
 import type { BaroReading, GpsReading, GpsReport } from '@/lib/telemetry';
 
@@ -88,11 +89,8 @@ export const GpsPanel = memo(function GpsPanel({
         .map(([group, state]) => `${group} ${state}`)
     : [];
   return (
-    <section aria-labelledby="gps-heading" className="space-y-2 px-4 py-3">
-      <h2 id="gps-heading" className="font-semibold">
-        GPS
-      </h2>
-      <dl className="grid grid-cols-3 gap-4 tabular-nums">
+    <Panel title="GPS">
+      <Stats>
         <Stat
           label="Fix"
           valueClassName={
@@ -168,7 +166,7 @@ export const GpsPanel = memo(function GpsPanel({
                 ? 'Stale'
                 : `${baro.altitude.toFixed(1)} m pressure altitude`}
         </Stat>
-      </dl>
-    </section>
+      </Stats>
+    </Panel>
   );
 });

@@ -9,6 +9,7 @@ import {
   sampleTime,
   type ChartSeries,
 } from '@/components/fast-chart';
+import { Stat } from '@/components/stat';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -169,18 +170,20 @@ function Chart<T extends { time: number }>({
   const history = useMemo(() => () => points, [points]);
   return (
     <section
-      className="flex min-h-0 flex-col gap-1.5 px-5 py-3 lg:flex-1"
+      className="flex min-h-0 flex-col gap-2 px-4 py-3 lg:flex-1"
       aria-label={title}
     >
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-        <h2 className="mr-auto text-sm font-medium">
+        <h2 className="mr-auto font-semibold">
           {title}{' '}
-          <span className="font-normal text-muted-foreground">{unit}</span>
+          <span className="text-sm font-normal text-muted-foreground">
+            {unit}
+          </span>
         </h2>
         {series.map((line) => (
           <span
             key={line.label}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground"
+            className="flex items-center gap-1.5 text-sm text-muted-foreground"
           >
             <Swatch color={line.color} dash={line.dash} />
             {line.label}
@@ -259,7 +262,7 @@ export function FlightReportView({ report }: { report: FlightReport }) {
   return (
     <div className="flex flex-col divide-y divide-border lg:min-h-0 lg:flex-1">
       <section
-        className="flex shrink-0 flex-wrap items-center gap-x-10 gap-y-3 px-5 py-3"
+        className="flex shrink-0 flex-wrap items-center gap-x-10 gap-y-3 px-4 py-3"
         aria-labelledby="summary-heading"
       >
         <h2 id="summary-heading" className="sr-only">
@@ -267,10 +270,9 @@ export function FlightReportView({ report }: { report: FlightReport }) {
         </h2>
         <dl className="flex flex-wrap gap-x-8 gap-y-2 tabular-nums">
           {stats.map(([label, value]) => (
-            <div key={label}>
-              <dt className="text-xs text-muted-foreground">{label}</dt>
-              <dd className="font-medium">{value}</dd>
-            </div>
+            <Stat key={label} label={label}>
+              {value}
+            </Stat>
           ))}
         </dl>
         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -287,7 +289,7 @@ export function FlightReportView({ report }: { report: FlightReport }) {
             GPS hold {report.gps_hold ? 'on' : 'off'}
           </Badge>
           {report.drone && (
-            <span className="text-xs text-muted-foreground tabular-nums">
+            <span className="text-sm text-muted-foreground tabular-nums">
               {report.drone}
             </span>
           )}
@@ -372,10 +374,10 @@ export function FlightReportView({ report }: { report: FlightReport }) {
             />
           )}
           <section
-            className="max-h-48 shrink-0 space-y-1.5 overflow-y-auto px-5 py-3"
+            className="max-h-48 shrink-0 space-y-2 overflow-y-auto px-4 py-3"
             aria-labelledby="spans-heading"
           >
-            <h2 id="spans-heading" className="text-sm font-medium">
+            <h2 id="spans-heading" className="font-semibold">
               Hands-off hover
             </h2>
             {report.spans.length ? (
@@ -402,7 +404,7 @@ export function FlightReportView({ report }: { report: FlightReport }) {
                 </TableBody>
               </Table>
             ) : (
-              <p className="text-muted-foreground">None</p>
+              <p className="text-sm text-muted-foreground">None</p>
             )}
           </section>
         </div>

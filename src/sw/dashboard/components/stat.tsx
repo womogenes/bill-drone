@@ -1,6 +1,15 @@
 import type { ReactNode } from 'react';
 
-// One labeled reading in a panel's <dl> grid; note is a second, quieter line under the value.
+// A panel's readings, three to a row.
+export function Stats({ children }: { children: ReactNode }) {
+  return (
+    <dl className="grid grid-cols-3 gap-x-4 gap-y-2 tabular-nums">
+      {children}
+    </dl>
+  );
+}
+
+// One labeled reading in a panel's Stats; note is a second, quieter line under the value.
 export function Stat({
   label,
   className,

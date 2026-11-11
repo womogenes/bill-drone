@@ -10,7 +10,8 @@ import {
   useChartEnd,
   type ChartSeries,
 } from '@/components/fast-chart';
-import { Stat } from '@/components/stat';
+import { Panel } from '@/components/panel';
+import { Stat, Stats } from '@/components/stat';
 import type { VoltageSample } from '@/lib/telemetry';
 
 // The minute view shows every reading; the hour view one a second, to watch discharge over a session.
@@ -60,20 +61,17 @@ export const ADCPanel = memo(function ADCPanel({
   const { range, gap } = SPANS[span];
 
   return (
-    <section aria-labelledby="adc-heading" className="space-y-2 px-4 py-3">
-      <div className="flex items-center gap-2">
-        <h2 id="adc-heading" className="font-semibold">
-          ADC
-        </h2>
+    <Panel
+      title="ADC"
+      header={
         <div
-          className="ml-auto flex gap-2"
+          className="ml-auto flex gap-1"
           role="group"
           aria-label="Chart span"
         >
           {(Object.keys(SPANS) as Span[]).map((key) => (
             <Button
               key={key}
-              size="sm"
               variant={span === key ? 'default' : 'outline'}
               aria-pressed={span === key}
               onClick={() => setSpan(key)}
@@ -82,9 +80,10 @@ export const ADCPanel = memo(function ADCPanel({
             </Button>
           ))}
         </div>
-      </div>
-      <dl className="grid grid-cols-3 gap-4 tabular-nums">
-        <Stat label="Voltage" valueClassName="font-medium">
+      }
+    >
+      <Stats>
+        <Stat label="Voltage">
           {connected && ema !== undefined ? `${ema.toFixed(2)} V` : '—'}
         </Stat>
         <Stat label="Raw voltage">
@@ -93,7 +92,7 @@ export const ADCPanel = memo(function ADCPanel({
         <Stat label="Raw ADC">
           {connected && raw !== undefined ? raw.toLocaleString() : '—'}
         </Stat>
-      </dl>
+      </Stats>
       <FastChart
         history={span === 'minute' ? history : hourHistory}
         series={series}
@@ -107,6 +106,6 @@ export const ADCPanel = memo(function ADCPanel({
         label={`Battery voltage over the last ${span}, raw and smoothed, in volts`}
         className="h-24"
       />
-    </section>
+    </Panel>
   );
 });

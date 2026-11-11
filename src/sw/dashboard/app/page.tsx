@@ -8,14 +8,12 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from 'react';
 import {
   Activity,
   BatteryMedium,
   Disc,
   LoaderCircle,
-  type LucideIcon,
   Plug,
   Radio,
   RefreshCw,
@@ -29,9 +27,8 @@ import Link from 'next/link';
 import { GamepadView } from '@/components/gamepad';
 import { ControlPanel } from '@/components/control-panel';
 import { HoverPanel } from '@/components/hover-panel';
-import type { CameraStatus } from '@/components/fpv-panel';
 import { LastFlight } from '@/components/last-flight';
-import { PreflightPanel } from '@/components/preflight-panel';
+import { Status } from '@/components/status';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ActuatorPanel } from '@/components/actuator-panel';
@@ -223,28 +220,6 @@ function reuseUnchanged<T extends object>(
   return next;
 }
 
-// One of the header's readouts: an icon and a short value, the details in its title.
-function HeaderItem({
-  title,
-  color,
-  icon: Icon,
-  iconClassName = '',
-  children,
-}: {
-  title: string;
-  color: string;
-  icon: LucideIcon;
-  iconClassName?: string;
-  children: ReactNode;
-}) {
-  return (
-    <span title={title} className={`flex items-center gap-1.5 ${color}`}>
-      <Icon aria-hidden="true" className={`size-4 ${iconClassName}`} />
-      {children}
-    </span>
-  );
-}
-
 export default function Page() {
   const [status, setStatus] = useState<keyof typeof statuses>('offline');
   const [reading, setReading] = useState<Reading | null>(null);
@@ -269,8 +244,6 @@ export default function Page() {
     []
   );
   const latestHover = useRef<HoverSample | null>(null);
-  // The camera's state as the camera panel last polled it, for the preflight check.
-  const [cameraStatus, setCameraStatus] = useState<CameraStatus>(null);
   const [hoverHistory] = useState(() =>
     createHistory<HoverSample>(20_000, 1000)
   );
@@ -715,12 +688,18 @@ export default function Page() {
           ? `Drone: hears controller ${link.drone.rx}/s${dbm(link.drone.rssi)} (min${dbm(link.drone.rssi_min)}, noise ${link.drone.noise_floor} dBm), ${link.drone.gaps} missed, ${link.drone.rejected} stale, longest silence ${link.drone.silence_ms} ms; sends ${link.drone.tx_ok} ok, ${link.drone.tx_fail} failed, ${link.drone.refused} refused, slowest ${link.drone.latency_ms} ms; ch ${link.drone.channel}${link.drone.hopping ? ' (searching)' : ''}, ${link.drone.rate_name}, ${link.drone.power} dBm`
           : 'Drone: no link report (older firmware)',
       ].join('\n');
+  // Drawn whether or not the drone is connected, so the controller can be checked on its own.
+  const controller = (
+    <section className="px-4 py-3" aria-label="Controller">
+      <GamepadView />
+    </section>
+  );
   return (
     <div className="flex flex-col lg:h-dvh">
       {(arming || armed) && (
         <div className="pointer-events-none fixed inset-0 z-50 border-4 border-destructive" />
       )}
-      <header className="flex h-14 shrink-0 items-center gap-6 border-b px-6">
+      <header className="flex h-14 shrink-0 items-center gap-6 border-b px-4">
         <h1 className="font-semibold">Drone dashboard</h1>
         <Tabs
           value={bench ? 'bench' : 'fly'}
@@ -732,8 +711,8 @@ export default function Page() {
           </TabsList>
         </Tabs>
         {/* What decides whether the drone can fly, as icons; the details are in each one's title. */}
-        <div className="flex items-center gap-5 text-sm tabular-nums">
-          <HeaderItem
+        <div className="flex items-center gap-4 tabular-nums">
+          <Status
             title={
               volts === undefined
                 ? 'Battery'
@@ -741,24 +720,22 @@ export default function Page() {
                   ? 'No pack: powered over USB'
                   : `Battery ${volts.toFixed(2)} V`
             }
-            color={
+            className={
               connected && volts !== undefined && !usb && volts < ARM_MIN_V
                 ? 'text-red-700'
                 : 'text-muted-foreground'
             }
             icon={connected && usb ? Plug : BatteryMedium}
           >
-            <span className="min-w-[5ch]">
-              {!connected || volts === undefined
-                ? '—'
-                : usb
-                  ? 'USB'
-                  : `${volts.toFixed(1)} V`}
-            </span>
-          </HeaderItem>
-          <HeaderItem
+            {!connected || volts === undefined
+              ? '—'
+              : usb
+                ? 'USB'
+                : `${volts.toFixed(1)} V`}
+          </Status>
+          <Status
             title={connected ? `IMU ${IMU_TEXT[imu]}` : 'IMU'}
-            color={
+            className={
               connected && imu === 'calibrated'
                 ? 'text-green-700'
                 : !connected || imu === 'calibrating'
@@ -768,8 +745,8 @@ export default function Page() {
             icon={Activity}
           >
             {connected ? IMU_TEXT[imu] : '—'}
-          </HeaderItem>
-          <HeaderItem
+          </Status>
+          <Status
             title={
               fix
                 ? `GPS ${fix.fix === 2 ? '2D' : '3D'} fix, ${fix.satellites} satellites, ${fix.horizontal_accuracy.toFixed(1)} m`
@@ -777,20 +754,18 @@ export default function Page() {
                   ? 'GPS: no fix'
                   : 'GPS: searching for the module'
             }
-            color={
+            className={
               connected && fix ? 'text-green-700' : 'text-muted-foreground'
             }
             icon={Satellite}
           >
-            <span className="min-w-[8ch]">
-              {connected && fix
-                ? `${fix.satellites} · ${fix.horizontal_accuracy.toFixed(1)} m`
-                : '—'}
-            </span>
-          </HeaderItem>
-          <HeaderItem
+            {connected && fix
+              ? `${fix.satellites} · ${fix.horizontal_accuracy.toFixed(1)} m`
+              : '—'}
+          </Status>
+          <Status
             title={linkText}
-            color={
+            className={
               !connected || !link?.bridge
                 ? 'text-muted-foreground'
                 : linkWeak
@@ -799,15 +774,13 @@ export default function Page() {
             }
             icon={Radio}
           >
-            <span className="min-w-[12ch]">
-              {connected && link?.bridge
-                ? `${link.bridge.statuses}/${STATUS_HZ}${dbm(link.controller?.rssi)} · ${link.drone ? `${link.drone.rx}/s${dbm(link.drone.rssi)}` : '—'}`
-                : '—'}
-            </span>
-          </HeaderItem>
-          <HeaderItem
+            {connected && link?.bridge
+              ? `${link.bridge.statuses}/${STATUS_HZ}${dbm(link.controller?.rssi)} · ${link.drone ? `${link.drone.rx}/s${dbm(link.drone.rssi)}` : '—'}`
+              : '—'}
+          </Status>
+          <Status
             title={recorderText}
-            color={
+            className={
               // Dropped records warn only while that flight records: the count stays until the next flight starts.
               recorder?.error || (logging?.active && logging.dropped > 0)
                 ? 'text-red-700'
@@ -817,7 +790,7 @@ export default function Page() {
             iconClassName={logging?.active ? 'fill-red-700 text-red-700' : ''}
           >
             {logging?.active ? logging.samples : logging?.ready ? 'ready' : '—'}
-          </HeaderItem>
+          </Status>
         </div>
         <div className="ml-auto flex items-center gap-3">
           <Link href="/camera" className="text-sm underline">
@@ -840,16 +813,14 @@ export default function Page() {
               {Math.round(fps)} Hz
             </span>
           )}
-          <span
+          <Status
             role="status"
-            className={`flex items-center gap-2 text-sm ${color}`}
+            icon={StatusIcon}
+            iconClassName={status === 'connecting' ? 'animate-spin' : ''}
+            className={color}
           >
-            <StatusIcon
-              aria-hidden="true"
-              className={`size-4 ${status === 'connecting' ? 'animate-spin' : ''}`}
-            />
             {label}
-          </span>
+          </Status>
           <Button
             variant="ghost"
             size="icon"
@@ -863,7 +834,7 @@ export default function Page() {
         </div>
       </header>
       {(batteryWarning || tiltWarning !== null) && (
-        <div className="shrink-0 space-y-1 border-b px-6 py-2 font-medium text-red-700">
+        <div className="shrink-0 space-y-1 border-b px-4 py-2 font-medium text-red-700">
           {batteryWarning && <p>{batteryWarning}</p>}
           {tiltWarning !== null && (
             <p>
@@ -876,7 +847,7 @@ export default function Page() {
           )}
         </div>
       )}
-      {/* Fly: what you fly with (controls, then the drone's own readings), the camera, and where the drone is against the tag. Bench adds the servo and ESC panels. */}
+      {/* Fly, three columns of about one height, so nothing scrolls on a laptop: the controls with the drone's attitude under them; the camera with the GPS under it; where the drone is against the tag (or on the map), with the controller under it. Bench puts the servo and ESC panels in the third column's place, and the controller at the foot of the first. */}
       <main
         className={`grid divide-y divide-border lg:min-h-0 lg:flex-1 lg:grid-cols-[26rem_minmax(0,1fr)_minmax(0,1fr)] lg:divide-x lg:divide-y-0 lg:overflow-hidden`}
       >
@@ -907,17 +878,7 @@ export default function Page() {
               onEscStage={escStage}
             />
           )}
-          <PreflightPanel
-            reading={reading}
-            connected={connected}
-            fps={fps}
-            camera={cameraStatus}
-          />
           {lastFlight && <LastFlight name={lastFlight} />}
-          {/* Drawn whether or not the drone is connected, so the controller can be checked on its own. */}
-          <section className="px-4 py-3" aria-label="Controller">
-            <GamepadView />
-          </section>
           <Suspense>
             <ImuPanel
               reading={reading?.imu}
@@ -928,6 +889,7 @@ export default function Page() {
               connected={connected}
             />
           </Suspense>
+          {bench && controller}
         </div>
         {bench && (
           <div className="order-last min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
@@ -970,7 +932,7 @@ export default function Page() {
             </div>
           </div>
         )}
-        <div className="min-h-0 min-w-0 lg:overflow-y-auto lg:overscroll-contain">
+        <div className="min-h-0 min-w-0 divide-y divide-border lg:overflow-y-auto lg:overscroll-contain">
           <FpvPanel
             free={
               reading?.control ? reading.control.hover_camera === 0 : undefined
@@ -978,7 +940,13 @@ export default function Page() {
             onFree={setFree}
             roll={reading?.control?.hover_cam_roll}
             onTag={showPreviewTag}
-            onStatus={setCameraStatus}
+          />
+          <GpsPanel
+            gps={reading?.gps}
+            baro={reading?.baro}
+            report={reading?.gps_report}
+            time={reading?.time}
+            connected={connected}
           />
         </div>
         {/* On the bench the servo and ESC panels take its place. */}
@@ -1000,13 +968,7 @@ export default function Page() {
               history={mapState === hoverState ? hoverHistory.read : noHistory}
             />
           )}
-          <GpsPanel
-            gps={reading?.gps}
-            baro={reading?.baro}
-            report={reading?.gps_report}
-            time={reading?.time}
-            connected={connected}
-          />
+          {!bench && controller}
         </div>
       </main>
     </div>
