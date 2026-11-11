@@ -1,4 +1,4 @@
-// FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB at 1 Mbaud (this board's CP2102 stops there, about 98 KB/s of chunks) as [length u16][rssi i8][chunk], the shard starting with its FPV2 header. Every camera sends with the same BSSID and its own MAC as the frame's sender, so once the laptop names its camera (FPVF and the six bytes of its MAC, written to this port) only that camera's frames pass and steady the channel search; until then every camera's do. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
+// FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB at 1 Mbaud (this board's CP2102 stops there, about 98 KB/s of chunks) as [length u16][rssi i8][chunk], the shard starting with its FPV2 header. While no chunks arrive it sends FPVR twice a second, by which the laptop knows this port from the other boards' (every CP2102 here has the same USB serial number). Every camera sends with the same BSSID and its own MAC as the frame's sender, so once the laptop names its camera (FPVF and the six bytes of its MAC, written to this port) only that camera's frames pass and steady the channel search; until then every camera's do. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
 #include <string.h>
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -68,12 +68,14 @@ static void forward(void *unused) {
     }
 }
 
-// The LED: solid while a camera's chunks arrive (within LOST_US), blinking at 1 Hz while none do.
+// The LED: solid while a camera's chunks arrive (within LOST_US), blinking at 1 Hz while none do, with FPVR to the laptop at each change.
 static void blink(void *unused) {
     gpio_reset_pin(LED);
     gpio_set_direction(LED, GPIO_MODE_OUTPUT);
     for (bool lit = false;; vTaskDelay(pdMS_TO_TICKS(500))) {
-        lit = esp_timer_get_time() - heard_us < LOST_US || !lit;
+        const bool hearing = esp_timer_get_time() - heard_us < LOST_US;
+        if (!hearing) xRingbufferSend(chunks, "FPVR", 4, 0);
+        lit = hearing || !lit;
         gpio_set_level(LED, lit);
     }
 }

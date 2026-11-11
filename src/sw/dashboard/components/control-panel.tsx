@@ -295,6 +295,7 @@ export const ControlPanel = memo(function ControlPanel({
   status,
   arming,
   connected,
+  viewing,
   mode,
   nudge,
   onChange,
@@ -321,13 +322,16 @@ export const ControlPanel = memo(function ControlPanel({
   onHover: () => void;
   onNudge: (forward: number, left: number, up: number, wrap?: boolean) => void;
   onStop: () => void;
+  viewing: boolean;
   escError: string | null;
   onEscStage: (stage: 0 | 1 | 2) => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
   const ready = available && recorderReady && imu === 'calibrated';
   const problem = !connected
-    ? 'Disconnected'
+    ? viewing
+      ? 'View only: another tab has control'
+      : 'Disconnected'
     : !available
       ? 'Firmware update required'
       : imu === 'calibrating'

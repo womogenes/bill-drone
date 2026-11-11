@@ -105,7 +105,7 @@ function Readings({
   chart: ReactNode;
 }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       <div className="flex items-baseline gap-4 text-sm whitespace-nowrap tabular-nums">
         <h3 className="text-muted-foreground">{label}</h3>
         {children}

@@ -31,7 +31,8 @@ export class EspConnection {
   private worker: Worker;
 
   constructor(
-    address: string,
+    // ws://…/ws flies the drone; /view only watches.
+    url: string,
     targets: Targets,
     onOpen: () => void,
     onMessage: (message: ServiceMessage) => void,
@@ -57,7 +58,7 @@ export class EspConnection {
     };
     this.worker.postMessage({
       type: 'connect',
-      url: `ws://${address}/ws`,
+      url,
       targets,
     } satisfies EspWorkerCommand);
   }

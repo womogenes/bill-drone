@@ -1,6 +1,15 @@
 import { execFile, execFileSync } from 'node:child_process';
 import dgram from 'node:dgram';
-import { closeSync, constants, existsSync, openSync, writeSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  openSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  writeSync,
+} from 'node:fs';
 import tty from 'node:tty';
 import { resolve } from 'node:path';
 import { decode } from '@/lib/fec';
@@ -285,8 +294,35 @@ async function reportedHost() {
   return host;
 }
 
-// FPV over the radio, needing no network, comes from the monitor-mode Wi-Fi adapter's reader (sw/fpv_monitor.py) as UDP datagrams to 127.0.0.1:5602, with FPVM every 500 ms while it runs, or from the ESP32 receiver (fw/fpv_rx) on one of the serial ports FPV_RX names (space separated, the first present one the bridge has not locked). Those ports are never guessed: the receiver's CP2102 has the same USB serial number as the drone's and the controller's, and a port path once picked the controller after the boards moved; the bridge holds the controller's port with an exclusive lock, which rules it out even if the boards swap places. Both are opened once and kept for as long as the server runs, their chunks going to whichever FPV stream is running: closing the serial port after each stream left it open in the process, and the stale readers took a share of the bytes.
+// FPV over the radio, needing no network, comes from the monitor-mode Wi-Fi adapter's reader (sw/fpv_monitor.py) as UDP datagrams to 127.0.0.1:5602, with FPVM every 500 ms while it runs, or from the ESP32 receiver (fw/fpv_rx) on a USB serial port: one FPV_RX names (space separated, where it has been plugged in before) or, failing those, any other /dev/ttyUSB*. USB cannot tell the boards apart (the receiver's CP2102 has the same serial number as the drone's and the controller's), so a port is the receiver's once it sends what a receiver sends, video or the FPVR it sends twice a second without any (firmware from 2026-11-10): while nothing is heard the ports are tried in turn for 5 s each, the listed ones for as long as it takes and any other once per plug-in, so a drone on USB is opened once and then left alone. The bridge holds the controller's port with an exclusive lock, which rules it out wherever the boards are. Both are opened once and kept for as long as the server runs, their chunks going to whichever FPV stream is running: closing the serial port after each stream left it open in the process, and the stale readers took a share of the bytes.
 const RECEIVERS = (process.env.FPV_RX ?? '').split(/\s+/).filter(Boolean);
+// The USB serial ports present, FPV_RX's first, each once.
+function serialPorts() {
+  const ports = new Map<string, string>();
+  for (const path of [
+    ...RECEIVERS,
+    ...readdirSync('/dev')
+      .filter((name) => name.startsWith('ttyUSB'))
+      .map((name) => `/dev/${name}`),
+  ]) {
+    if (!existsSync(path)) continue;
+    const device = realpathSync(path);
+    if (!ports.has(device)) ports.set(device, path);
+  }
+  return [...ports.values()];
+}
+// When each unlisted port was tried, as its device node's creation time: one try per plug-in.
+const tried = new Map<string, number>();
+let turn = 0;
+// The ports to try now, starting one further round than last time.
+function candidates() {
+  const ports = serialPorts().filter(
+    (path) =>
+      RECEIVERS.includes(path) || tried.get(path) !== statSync(path).ctimeMs
+  );
+  turn++;
+  return ports.map((_, index) => ports[(index + turn) % ports.length]);
+}
 // The receiver's port raw at 1 Mbaud: input and output flushed, output resumed, settings applied now (TCSANOW). Exits with 3, touching nothing, if another process (the bridge, on the controller) holds the port's lock.
 const TERMIOS = `import fcntl, os, sys, termios
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
@@ -301,12 +337,13 @@ a[6][termios.VMIN], a[6][termios.VTIME] = 1, 0
 termios.tcflush(fd, termios.TCIOFLUSH)
 termios.tcsetattr(fd, termios.TCSANOW, a)
 termios.tcflow(fd, termios.TCOON)`;
-// copies: every chunk copy heard, chunks: the first of each, signal: the monitor's last (dBm), for the status.
+// heard: when the monitor last said anything, serial: when the ESP32 receiver did; copies: every chunk copy heard, chunks: the first of each, signal: the monitor's last (dBm), for the status.
 // choose: takes only this camera's shards from now on (its MAC, as K N reports it).
 type Receiver = {
   listeners: Set<(chunk: Buffer) => void>;
   choose: (mac: string) => void;
   heard: number;
+  serial: number;
   copies: number;
   chunks: number;
   signal?: number;
@@ -342,6 +379,7 @@ function receiver() {
     },
     listeners: new Set(),
     heard: 0,
+    serial: 0,
     copies: 0,
     chunks: 0,
   };
@@ -374,7 +412,7 @@ function receiver() {
     port?.destroy();
     port = undefined;
     portPath = undefined;
-    for (const path of RECEIVERS.filter((path) => existsSync(path))) {
+    for (const path of candidates()) {
       try {
         // Not stty: it applies settings only once the output has drained, and a port left at its defaults echoes the receiver's bytes back while a 0x13 among them (XOFF) holds the output, so it waited forever and froze the server (2026-10-31). This flushes and applies at once, and the timeout bounds it anyway.
         execFileSync('python3', ['-c', TERMIOS, path], { timeout: 3000 });
@@ -382,9 +420,12 @@ function receiver() {
           openSync(path, constants.O_RDONLY | constants.O_NOCTTY)
         );
         portPath = path;
+        if (!RECEIVERS.includes(path)) tried.set(path, statSync(path).ctimeMs);
         break;
       } catch (error) {
-        console.error(`FPV receiver ${path}: ${error}`);
+        // 3: the bridge has it.
+        if ((error as { status?: number }).status !== 3)
+          console.error(`FPV receiver ${path}: ${error}`);
       }
     }
     if (!port) return;
@@ -394,6 +435,7 @@ function receiver() {
     let buffer = Buffer.alloc(0);
     port.on('data', (data: Buffer) => {
       buffer = Buffer.concat([buffer, data]);
+      if (buffer.includes('FPVR')) opened.serial = heard = Date.now();
       for (;;) {
         const at = buffer.indexOf('FPV2', 3);
         if (at < 0) {
@@ -406,19 +448,17 @@ function receiver() {
           continue;
         }
         if (buffer.length < at + length) break;
-        heard = Date.now();
+        opened.serial = heard = Date.now();
         deliver(buffer.subarray(at, at + length));
         buffer = buffer.subarray(at + length);
       }
     });
     port.on('error', () => port?.destroy());
   };
-  if (RECEIVERS.length) {
-    open();
-    setInterval(() => {
-      if (Date.now() - heard > 5000) open();
-    }, 5000);
-  }
+  open();
+  setInterval(() => {
+    if (Date.now() - heard > 5000) open();
+  }, 5000);
   return (store.fpvReceiver = opened);
 }
 
@@ -428,10 +468,11 @@ function radioBudget() {
   return [kilobytes & 0xff, kilobytes >> 8];
 }
 
-// A receiver is there: the monitor heard from lately, or the ESP32 receiver's port.
+// A receiver is there: the monitor or the ESP32 receiver heard from lately, or a port a receiver has been on (one from before FPVR is silent until video comes).
 function radioUp() {
   return (
     Date.now() - receiver().heard < 2000 ||
+    Date.now() - receiver().serial < 2000 ||
     RECEIVERS.some((path) => existsSync(path))
   );
 }

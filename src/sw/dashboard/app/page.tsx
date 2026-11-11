@@ -13,6 +13,7 @@ import {
   Activity,
   BatteryMedium,
   Disc,
+  Eye,
   LoaderCircle,
   Plug,
   Radio,
@@ -201,7 +202,32 @@ const statuses = {
     icon: Wifi,
     color: 'text-green-700',
   },
+  // Another tab flies; this one watches (the service's /view) and takes over when that one closes.
+  viewing: {
+    label: 'View only: another tab has control',
+    icon: Eye,
+    color: 'text-muted-foreground',
+  },
 };
+
+// What the service says of the chain (app/api/link/route.ts).
+type Chain = {
+  state: 'bridge_down' | 'controller_missing' | 'drone_silent' | 'online';
+  heard_s?: number | null;
+  in_use?: boolean;
+  errors?: number;
+};
+
+// Why the page is offline, in the chain's own words.
+function offlineText(chain: Chain | null) {
+  if (chain?.state === 'bridge_down') return 'Drone service not running';
+  if (chain?.state === 'controller_missing') return 'Controller not plugged in';
+  if (chain?.state === 'drone_silent')
+    return chain.heard_s == null
+      ? 'Drone not answering'
+      : `Drone not answering for ${chain.heard_s < 60 ? `${chain.heard_s.toFixed(0)} s` : `${(chain.heard_s / 60).toFixed(0)} min`}`;
+  return 'Offline';
+}
 
 function reuseUnchanged<T extends object>(
   previous: T | undefined,
@@ -223,6 +249,9 @@ function reuseUnchanged<T extends object>(
 export default function Page() {
   const [status, setStatus] = useState<keyof typeof statuses>('offline');
   const [reading, setReading] = useState<Reading | null>(null);
+  const [chain, setChain] = useState<Chain | null>(null);
+  const latestChain = useRef<Chain | null>(null);
+  const viewing = useRef(false);
   const [requestError, setRequestError] = useState('');
   const [calibrationPending, setCalibrationPending] = useState(false);
   // Set as an arm request goes out, before the drone's reply and the reading that confirms it.
@@ -298,6 +327,9 @@ export default function Page() {
     if (displayFrame.current !== undefined)
       cancelAnimationFrame(displayFrame.current);
     displayFrame.current = undefined;
+    // A tab that had control asks for it again; any other watches while one has it.
+    const view = !!latestChain.current?.in_use && !socket.current?.connected;
+    viewing.current = view;
     socket.current?.close();
     socket.current = null;
     // A new connection starts from zero targets; arming needs an explicit request.
@@ -331,10 +363,10 @@ export default function Page() {
     }
 
     const ws = new EspConnection(
-      SERVICE,
+      `ws://${SERVICE}/${view ? 'view' : 'ws'}`,
       targets.current,
       () => {
-        if (socket.current === ws) setStatus('connected');
+        if (socket.current === ws) setStatus(view ? 'viewing' : 'connected');
       },
       (message) => {
         if (socket.current !== ws) return;
@@ -459,7 +491,22 @@ export default function Page() {
   }, [connect]);
 
   useEffect(() => {
-    if (status !== 'connected') return;
+    const timer = setInterval(async () => {
+      const next: Chain = await fetch('/api/link')
+        .then((response) => response.json())
+        .catch(() => ({ state: 'bridge_down' }));
+      latestChain.current = next;
+      // Whole seconds, so the page redraws for it once a second at most, and not at all while nothing changes.
+      if (next.heard_s != null) next.heard_s = Math.round(next.heard_s);
+      setChain((previous) => reuseUnchanged(previous ?? undefined, next)!);
+      // The tab that had control has gone: this one takes it.
+      if (viewing.current && next.in_use === false) connect();
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [connect]);
+
+  useEffect(() => {
+    if (status === 'offline' || status === 'connecting') return;
     const marks = [{ time: performance.now(), count: packetCount.current }];
     const timer = setInterval(() => {
       const time = performance.now();
@@ -649,7 +696,9 @@ export default function Page() {
 
   const { label, icon: StatusIcon, color } = statuses[status];
 
-  const connected = status === 'connected';
+  // connected: readings arrive; piloting: this tab's controls reach the drone.
+  const piloting = status === 'connected';
+  const connected = piloting || status === 'viewing';
   const volts = reading?.voltage_ema;
   // No pack: the drone runs from USB.
   const usb = volts !== undefined && volts <= NO_PACK_V;
@@ -680,7 +729,7 @@ export default function Page() {
   const linkText = !link?.bridge
     ? 'Radio link'
     : [
-        `Laptop: ${link.bridge.statuses} status/s, longest gap ${link.bridge.longest_gap_ms} ms, ${link.bridge.late} late, ${link.bridge.timeouts} timeouts`,
+        `Laptop: ${link.bridge.statuses} status/s, longest gap ${link.bridge.longest_gap_ms} ms, ${link.bridge.late} late, ${link.bridge.timeouts} timeouts${chain?.errors ? `, ${chain.errors} packets not decoded since the service started` : ''}`,
         link.controller
           ? `Controller: hears drone ${link.controller.rx}/s${dbm(link.controller.rssi)} (min${dbm(link.controller.rssi_min)}, noise ${link.controller.noise_floor} dBm), ${link.controller.gaps} missed; sends ${link.controller.tx_ok} ok, ${link.controller.tx_fail} failed, ${link.controller.refused} refused, ${link.controller.rejected} dropped; ch ${link.controller.channel}, ${link.controller.rate_name}, ${link.controller.power} dBm`
           : 'Controller: no link report (older firmware)',
@@ -819,7 +868,7 @@ export default function Page() {
             iconClassName={status === 'connecting' ? 'animate-spin' : ''}
             className={color}
           >
-            {label}
+            {status === 'offline' ? offlineText(chain) : label}
           </Status>
           <Button
             variant="ghost"
@@ -865,7 +914,8 @@ export default function Page() {
               recorderError={recorder?.error ?? undefined}
               status={controlStatus}
               arming={arming}
-              connected={connected}
+              connected={piloting}
+              viewing={status === 'viewing'}
               imu={imu}
               mode={mode}
               nudge={nudge}
@@ -917,7 +967,7 @@ export default function Page() {
                             10
                         : reading?.actuators?.[side].throttle
                     }
-                    connected={connected}
+                    connected={piloting}
                     onChange={sendActuator}
                     onZero={zeroServo}
                     zeroDisabled={

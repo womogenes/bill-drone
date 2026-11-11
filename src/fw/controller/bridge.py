@@ -7,6 +7,7 @@ The laptop's drone service. It owns the controller's USB port and serves, on 127
 
 - GET /status: {"online", "state", ...}. state says which part of the chain is missing: "controller_missing" (no controller heard on USB; the service keeps looking), "drone_silent" (the controller is there, the drone's status is not arriving) or "online". The dashboard shows it while it cannot connect.
 - /ws: the dashboard. The drone's status as JSON readings; the browser streams targets (including the manual/hover/land mode) every 50 ms and sends stop, arm, calibrate, zero and tune requests.
+- /view: a dashboard that only watches (a second tab while the first has /ws): the same readings; what it sends is ignored.
 - /update: raw id-tagged requests (tools/ota_direct.py, the dashboard's camera requests), from any number of clients at once; each reply goes to the client that sent its id.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
 - POST /radio {"rate": i, "power": dBm, "channel": c}: the controller's sending rate (fw/link.h link_rates index), maximum transmit power (0 = the driver's own) and channel until it resets, each optional; only while the drone is disarmed, and another channel than 6 only to a drone that follows its controller (its radio_follow setting). Replies with the controller's next link report.
@@ -464,6 +465,7 @@ class Service:
         self.dashboard = None
         # Update clients (tools/ota_direct.py, the dashboard's camera requests), any number at once; each drone reply goes to the client that sent its id.
         self.updaters = set()
+        self.viewers = set()
         self.update_owner = {}
         self.recorder = Recorder(recordings)
         # The dashboard's last targets as recorded (Recorder.command).
@@ -619,13 +621,20 @@ class Service:
         flags = fields[20]
         x, y, z, age = fields[22:26]
         targeted = flags >> 7 & 1
-        self.push(self.dashboard, {
+        self.show({
             "type": "hover", "elapsed_us": fields[0], "mode": flags >> 1 & 3, "tracking": bool(flags >> 6 & 1),
             "tag": [x / 1000, y / 1000, z / 1000] if age != 65535 else None, "tag_age_ms": age if age != 65535 else None,
             "velocity": [fields[26] / 1000, fields[27] / 1000], "height": fields[28] / 1000, "height_target": fields[30] / 1000,
             "range_target": fields[31] / 1000 if targeted else None, "arc_deg": fields[32] / 100 if targeted else None,
             **(guard_state(fields[39]) if len(fields) > 39 else {}),
         })
+
+    def show(self, data):
+        """
+        To the dashboard in control and every one watching.
+        """
+        for ws in (self.dashboard, *self.viewers):
+            self.push(ws, data)
 
     def push(self, ws, data, binary=False):
         sender = self.senders.get(ws)
@@ -678,7 +687,7 @@ class Service:
                 reply.set_exception(RuntimeError(reason))
         if self.dashboard is not None:
             self.dropped.add(self.dashboard)
-        for client in (self.dashboard, *self.updaters):
+        for client in (self.dashboard, *self.updaters, *self.viewers):
             if client is not None:
                 asyncio.create_task(client.close(code=1012, message=reason.encode()))
 
@@ -780,7 +789,7 @@ class Service:
                     and time.monotonic() >= self.firmware_retry
                     and (self.firmware_task is None or self.firmware_task.done())):
                 self.firmware_task = asyncio.create_task(self.refresh_firmware(session))
-            self.push(self.dashboard, {"type": "reading", **self.reading})
+            self.show({"type": "reading", **self.reading})
             return
         if session != self.session or channel not in (2, 3, 6):
             return
@@ -849,7 +858,7 @@ class Service:
         ticks = 0
         while True:
             await asyncio.sleep(0.05)
-            if self.session and time.monotonic() - self.last_status > 0.5 and (self.dashboard or self.updaters):
+            if self.session and time.monotonic() - self.last_status > 0.5 and (self.dashboard or self.updaters or self.viewers):
                 self.disconnect("Direct radio link timed out; waiting for drone")
                 self.last_status = 0
                 self.timed_out = True
@@ -903,6 +912,21 @@ class Service:
                 self.dropped.discard(ws)
             else:
                 self.stop()
+            await self.senders.pop(ws).close()
+        return ws
+
+    async def view_socket(self, request):
+        """
+        A dashboard that only watches, as a second tab does while the first has control: it gets the readings and the hover state, and nothing it sends is taken.
+        """
+        ws = await self.connect(request)
+        self.viewers.add(ws)
+        try:
+            async for message in ws:
+                pass
+        finally:
+            self.viewers.discard(ws)
+            del self.transactions[ws]
             await self.senders.pop(ws).close()
         return ws
 
@@ -1086,6 +1110,7 @@ async def main(args):
     app = web.Application()
     app.add_routes([
         web.get("/ws", service.dashboard_socket),
+        web.get("/view", service.view_socket),
         web.get("/update", service.update_socket),
         web.get("/status", service.status),
         web.get("/settings", service.get_settings),
