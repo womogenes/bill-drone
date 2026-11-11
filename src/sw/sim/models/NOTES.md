@@ -443,3 +443,26 @@ Every landing of 2026-11-09 ended tipped at least 20 degrees (15 nose-down, 3 no
 ## Random streams separated (2026-11-10)
 
 Three pairs of random streams in the hover sim shared a seed, so their draws were the same numbers. The GPS noise shared `seed + 6000` with the gyro vibration (in every run with both, which is every outdoor GPS run), the optical-flow noise shared `seed + 4000` with the wind, and the flow scene depth (`outdoor.py`) shared `seed + 7000` with the drifting disturbances. The GPS noise is now `seed + 11000`, the flow noise `seed + 10000` and the scene depth `seed + 12000`. Sims without GPS or flow print what they printed before. Sims with GPS draw different GPS noise, so the seeds cited above for outdoor GPS runs (0, 39, 1037) name those flights only up to commit dfa8839. The statistics hold: on the 2026-11-09 fly-away plant (25 s, 16 runs each at 0 and 1 m/s) the recommended settings held 32/32 before and after (furthest from takeoff, median 1.4 → 1.5 and 1.4 → 1.7 m, worst 3.6 → 3.6 and 3.0 → 3.7 m), and the settings as flown lost 3/32 before (2 flew off, 1 failsafe landing) and 2/32 after (1 and 1).
+
+## Roll steps in a 2 m room: doublets on the tag (2026-11-10)
+
+How much roll a step test can reach indoors, where the room is about 2 m by 2 m: the drone is 0.6 m across its prop tips, so it may move 0.7 m to each side of the hold point. `tilt_ladder.py --tag` flies the ladder on the tag hold (sweep.IDENTIFIED_ESC on the 2026-10-29 07:20 UTC camera hover's settings, 0.5 m up, 1.9 m from the tag, as pattern_guard.py flies its patterns; that is the drone as it was then) and `--doublet` follows each step at once with its opposite. All at roll_target_rate 360 deg/s, 4 s rests, 32 runs each, pattern_distance 10 so the guard does not hide the travel:
+
+| pattern | target | true roll at the peak (median, max) | furthest to the side of the hold point (median, max) |
+|---|---|---|---|
+| step, 0.3 s | 10 | 9.3 (12.5) | 0.21 m (0.32) |
+| step, 0.3 s | 20 | 17.9 (21.9) | 0.38 m (0.52) |
+| step, 0.3 s | 30 | 25.9 (28.5) | 0.63 m (0.79) |
+| step, 0.4 s | 10 | 10.3 (14.2) | 0.28 m (0.47) |
+| step, 0.4 s | 20 | 19.1 (22.6) | 0.54 m (0.68) |
+| doublet, 0.2 s each way | 35 | 22.6 (26.1) | 0.39 m (0.52) |
+| doublet, 0.3 s each way | 20 | 24.6 (26.5) | 0.29 m (0.43) |
+| doublet, 0.3 s each way | 25 | 28.6 (30.6) | 0.37 m (0.54) |
+| doublet, 0.4 s each way | 15 | 24.3 (26.4) | 0.30 m (0.47) |
+| doublet, 0.4 s each way | 20 | 30.7 (34.2) | 0.42 m (0.53) |
+
+A single step leaves its sideways speed for the hold to brake (0.9 m/s after 20 degrees for 0.3 s), so with margin a 2 m room fits single steps to about 10 degrees. A doublet takes the speed out at the step's own tilt, and its second half overshoots the target (the swing from one side to the other), so a 20-degree doublet of 0.3 s each way reaches 24 degrees of true roll in 0.3 m. The estimate is off by 0.6-1.0 degrees at the peak (median; 3.9 max) and the height lost is 0.01-0.04 m (0.32 max). Wider or larger doublets run into the pattern's tilt guard (42 degrees): the 0.4 s ladder to 30 degrees was stopped for tilt in 11 of 32 runs, and 0.4 s at 40 degrees passed the 45-degree tip cut.
+
+With the distance guard on, as it would be flown (`--tag --doublet --amplitudes 20 --width 0.3 --roll-rate 360`, 32 runs): at pattern_distance 0.4 the guard stopped 2 runs, at 0.5 none (peak roll 24.1 degrees, 26.7 max; 0.28 m to the side, 0.38 max), so `--tag` sets 0.5. A doublet cut between its halves (the guard, a lost tag, a dropped link) travels like the single step: up to 0.68 m for 20 degrees, which is the room's edge. In 3 of the 32 runs the hold lost the tag by itself within a minute (the same seeds whatever the pattern), which stops the pattern too.
+
+The plant is the October one because sweep.CURRENT on drone 1's hop settings loses the tag every few seconds in the sim; the numbers are for the pattern's shape and the room it takes, not for today's drone, and nothing here has been flown.
