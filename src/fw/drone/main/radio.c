@@ -16,6 +16,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "mbedtls/sha256.h"
+#include "nvs.h"
 #include "gps.h"
 #include "baro.h"
 #include "runtime.h"
@@ -24,8 +25,12 @@
 #include "../../pairs.h"
 #include "../../link.h"
 
-// The paired controller's station MAC (fw/pairs.h); the drone answers nothing else. own is this drone's, its ID.
+// The paired controller's station MAC (the one adopted last, else fw/pairs.h's); the drone answers nothing else. own is this drone's, its ID.
 static uint8_t peer[ESP_NOW_ETH_ALEN], own[ESP_NOW_ETH_ALEN];
+// A replaced controller needs no USB flash of the drone: a relay whose fw/pairs.h names this drone beacons its link report here every 250 ms, and once the drone is disarmed and has heard nothing from its own controller for ADOPT_AFTER_US, that relay becomes its controller, stored in NVS (radio/controller) so it is from boot too. Never while armed, and never while the controller it has still talks. claimant is the relay whose beacon came last, at claimed_us.
+#define ADOPT_AFTER_US 5000000
+static uint8_t claimant[ESP_NOW_ETH_ALEN];
+static int64_t claimed_us;
 // The channel at boot; with radio_follow on, a disarmed drone that hears nothing from its controller for FOLLOW_AFTER_US tries the others in link.h link_channels, FOLLOW_DWELL_US each, and stays where it hears it (the relay beacons its link report every 250 ms), so a controller moved to another channel takes the drone along and one back on 6 brings it back.
 #define WIFI_CHANNEL 6
 #define FOLLOW_AFTER_US 2000000
@@ -141,6 +146,36 @@ static void follow(int64_t now) {
     hopped_us = now;
 }
 
+// Takes the relay that claims this drone as its controller (ADOPT_AFTER_US above); from the update task only. The NVS write stalls flash access, so it runs as maintenance, like the settings'.
+static void adopt(int64_t now) {
+    uint8_t relay[ESP_NOW_ETH_ALEN];
+    portENTER_CRITICAL(&lock);
+    bool claimed = claimed_us && now - claimed_us < 1000000;
+    memcpy(relay, claimant, sizeof(relay));
+    portEXIT_CRITICAL(&lock);
+    if (!claimed || now - peer_us < ADOPT_AFTER_US || !flight_runtime_begin_maintenance()) return;
+    esp_now_peer_info_t peer_info = {.ifidx = WIFI_IF_STA};
+    memcpy(peer_info.peer_addr, relay, sizeof(relay));
+    if (esp_now_add_peer(&peer_info) == ESP_OK) {
+        esp_now_del_peer(peer);
+        portENTER_CRITICAL(&lock);
+        memcpy(peer, relay, sizeof(peer));
+        claimed_us = 0;
+        portEXIT_CRITICAL(&lock);
+        peer_us = now;
+        set_rate(false);
+        nvs_handle_t handle;
+        esp_err_t error = nvs_open("radio", NVS_READWRITE, &handle);
+        if (!error) {
+            error = nvs_set_blob(handle, "controller", peer, sizeof(peer));
+            if (!error) error = nvs_commit(handle);
+            nvs_close(handle);
+        }
+        printf("Controller is now %02x:%02x:%02x:%02x:%02x:%02x%s%s\n", peer[0], peer[1], peer[2], peer[3], peer[4], peer[5], error ? ", not stored: " : "", error ? esp_err_to_name(error) : "");
+    }
+    flight_runtime_end_maintenance();
+}
+
 static uint32_t now_ms(void) {
     return esp_timer_get_time() / 1000;
 }
@@ -244,7 +279,18 @@ bool radio_connected(void) { return esp_timer_get_time() - heard_us < 2000000; }
 
 // Runs in the Wi-Fi task: parse, check freshness and order, and queue; never sends.
 static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, int size) {
-    if (memcmp(info->src_addr, peer, ESP_NOW_ETH_ALEN) || size < HEADER || size > HEADER + PAYLOAD ||
+    if (memcmp(info->src_addr, peer, ESP_NOW_ETH_ALEN)) {
+        // Another relay's beacon addressed to this drone: its claim, for adopt().
+        if (size == HEADER + sizeof(LinkReport) && !memcmp(packet, "DC1", 3) && packet[3] == LINK_CHANNEL && !memcmp(packet + HEADER, "RLY1", 4) &&
+            !memcmp(info->des_addr, own, ESP_NOW_ETH_ALEN)) {
+            portENTER_CRITICAL(&lock);
+            memcpy(claimant, info->src_addr, ESP_NOW_ETH_ALEN);
+            claimed_us = esp_timer_get_time();
+            portEXIT_CRITICAL(&lock);
+        }
+        return;
+    }
+    if (size < HEADER || size > HEADER + PAYLOAD ||
         memcmp(packet, "DC1", 3) || (packet[3] >= CHANNELS && packet[3] != LINK_CHANNEL) || packet[17] > 32 || packet[16] >= packet[17])
         return;
     uint8_t channel = packet[3], index = packet[16], count = packet[17];
@@ -800,6 +846,7 @@ static void update_loop(void *arg) {
         if (fast && esp_timer_get_time() > fast_until) set_rate(false);
         apply_radio_settings();
         follow(esp_timer_get_time());
+        adopt(esp_timer_get_time());
         store_settings();
         portENTER_CRITICAL(&lock);
         int state = request_state;
@@ -838,6 +885,13 @@ static void update_loop(void *arg) {
 
 void radio_start(void) {
     pair_find(true, own, peer);
+    // An adopted controller (adopt) stands in for the table's.
+    nvs_handle_t stored;
+    if (nvs_open("radio", NVS_READONLY, &stored) == ESP_OK) {
+        size_t size = sizeof(peer);
+        nvs_get_blob(stored, "controller", peer, &size);
+        nvs_close(stored);
+    }
     esp_now_peer_info_t peer_info = {.ifidx = WIFI_IF_STA};
     memcpy(peer_info.peer_addr, peer, sizeof(peer));
     session = esp_random() | 1;
@@ -869,7 +923,7 @@ void radio_start(void) {
     esp_timer_handle_t timer;
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(timer, 10000));
-    printf("Radio on channel %d, transmit power %d (0.25 dBm); reset reason %d\n", WIFI_CHANNEL, power_boot, esp_reset_reason());
+    printf("Radio on channel %d, transmit power %d (0.25 dBm), controller %02x:%02x:%02x:%02x:%02x:%02x; reset reason %d\n", WIFI_CHANNEL, power_boot, peer[0], peer[1], peer[2], peer[3], peer[4], peer[5], esp_reset_reason());
 }
 
 bool radio_log_meta(const char *data, size_t length) {

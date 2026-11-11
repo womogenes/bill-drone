@@ -1,4 +1,4 @@
-// Which drone talks to which controller (fw/drone/main/radio.c, fw/controller/native/main/relay.c): each board finds its own station MAC here and answers only its partner, so one image serves every drone and every controller. The drone's MAC is also its ID in the recordings. A new drone or controller is a new line; a board that is not listed stops at boot and prints its MAC.
+// Which drone talks to which controller (fw/drone/main/radio.c, fw/controller/native/main/relay.c): each board finds its own station MAC here and answers only its partner, so one image serves every drone and every controller. The drone's MAC is also its ID in the recordings. A new drone or controller is a new line; a board that is not listed stops at boot and prints its MAC. A replaced controller is flashed with its line over USB and the drone then takes it by itself (fw/drone/main/radio.c adopt), so the drone gets the new table by a normal update.
 #pragma once
 
 #include <stdbool.h>
