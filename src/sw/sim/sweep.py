@@ -262,10 +262,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         cam_pitch, cam_roll = math.radians(settings.get("hover_cam_pitch", 0.0)), math.radians(settings.get("hover_cam_roll", 0.0))
         # Frames waiting out their latency (ready time, capture time, sighting or None), the newest delivered one, and the next capture time.
         frames, newest, capture, sequence, missing_frames = deque(), None, 0.0, 0, 0
-        flow_plant, flows, flow_capture, flow_rng = plant.get("flow"), deque(), 0.0, random.Random(seed + 4000)
+        flow_plant, flows, flow_capture, flow_rng = plant.get("flow"), deque(), 0.0, random.Random(seed + 10000)
         # Each tick's true rotation and velocity in camera axes and measured rotation, for the means over a frame interval.
         flow_ticks = deque(maxlen=16)
-        gps_plant, gps_fixes, gps_capture, gps_rng = plant.get("gps"), deque(), 0.0, random.Random(seed + 6000)
+        gps_plant, gps_fixes, gps_capture, gps_rng = plant.get("gps"), deque(), 0.0, random.Random(seed + 11000)
         gps_error = [0.0, 0.0, 0.0]
         baro_plant, baro_readings, baro_capture, baro_rng, baro_drift = plant.get("baro"), deque(), 0.0, random.Random(seed + 8000), 0.0
         baro_kick = baro_rng.gauss(0, baro_plant.get("kick", 0.0)) if baro_plant else 0.0

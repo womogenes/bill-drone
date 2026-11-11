@@ -81,7 +81,7 @@ def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwin
     }
     if flow:
         # The forward camera's scene: trees, buildings or open field, its distance unknown to the drone (hover_flow_depth is its guess), drawn per run with more pixel noise than indoors (grass and leaves moving, the sky's low texture).
-        out["flow"] = {"depth": loguniform(random.Random(seed + 7000), *flow), "noise_px": 0.6, "fps": 28.0, "latency": 0.045, "max_px": 14.0}
+        out["flow"] = {"depth": loguniform(random.Random(seed + 12000), *flow), "noise_px": 0.6, "fps": 28.0, "latency": 0.045, "max_px": 14.0}
     if gps:
         out["gps"] = GPS | {"latency": draws["latency"], "heading": rng.uniform(-180, 180)} | ({"velocity_noise": gps_noise} if gps_noise else {})
     if baro:
