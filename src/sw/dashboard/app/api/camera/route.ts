@@ -7,7 +7,6 @@ import {
   openSync,
   readdirSync,
   realpathSync,
-  statSync,
   writeSync,
 } from 'node:fs';
 import tty from 'node:tty';
@@ -294,7 +293,7 @@ async function reportedHost() {
   return host;
 }
 
-// FPV over the radio, needing no network, comes from the monitor-mode Wi-Fi adapter's reader (sw/fpv_monitor.py) as UDP datagrams to 127.0.0.1:5602, with FPVM every 500 ms while it runs, or from the ESP32 receiver (fw/fpv_rx) on a USB serial port: one FPV_RX names (space separated, where it has been plugged in before) or, failing those, any other /dev/ttyUSB*. USB cannot tell the boards apart (the receiver's CP2102 has the same serial number as the drone's and the controller's), so a port is the receiver's once it sends what a receiver sends, video or the FPVR it sends twice a second without any (firmware from 2026-11-10): while nothing is heard the ports are tried in turn for 5 s each, the listed ones for as long as it takes and any other once per plug-in, so a drone on USB is opened once and then left alone. The bridge holds the controller's port with an exclusive lock, which rules it out wherever the boards are. Both are opened once and kept for as long as the server runs, their chunks going to whichever FPV stream is running: closing the serial port after each stream left it open in the process, and the stale readers took a share of the bytes.
+// FPV over the radio, needing no network, comes from the monitor-mode Wi-Fi adapter's reader (sw/fpv_monitor.py) as UDP datagrams to 127.0.0.1:5602, with FPVM every 500 ms while it runs, or from the ESP32 receiver (fw/fpv_rx) on a USB serial port: one FPV_RX names (space separated, where it has been plugged in before) or, failing those, any other /dev/ttyUSB*. USB cannot tell the boards apart (the receiver's CP2102 has the same serial number as the drone's and the controller's), so a port is the receiver's once it sends what a receiver sends, video or the FPVR it sends twice a second without any (firmware from 2026-11-10): while nothing is heard the ports are tried in turn for 5 s each, each again 15 s after it was last found silent (opening a drone's port this way does not reset it). The bridge holds the controller's port with an exclusive lock, which rules it out wherever the boards are. Both are opened once and kept for as long as the server runs, their chunks going to whichever FPV stream is running: closing the serial port after each stream left it open in the process, and the stale readers took a share of the bytes.
 const RECEIVERS = (process.env.FPV_RX ?? '').split(/\s+/).filter(Boolean);
 // The USB serial ports present, FPV_RX's first, each once.
 function serialPorts() {
@@ -311,14 +310,14 @@ function serialPorts() {
   }
   return [...ports.values()];
 }
-// When each unlisted port was tried, as its device node's creation time: one try per plug-in.
+// When each port was last opened and found silent. A silent port is opened again every RETRY_MS: one try per plug-in left the receiver unread for good when its try came while it was restarting or before the camera sent (2026-11-11: the drone sat on a port FPV_RX lists and the receiver, on an unlisted one, was never opened again).
+const RETRY_MS = 15000;
 const tried = new Map<string, number>();
 let turn = 0;
 // The ports to try now, starting one further round than last time.
 function candidates() {
   const ports = serialPorts().filter(
-    (path) =>
-      RECEIVERS.includes(path) || tried.get(path) !== statSync(path).ctimeMs
+    (path) => Date.now() - (tried.get(path) ?? 0) > RETRY_MS
   );
   turn++;
   return ports.map((_, index) => ports[(index + turn) % ports.length]);
@@ -420,7 +419,7 @@ function receiver() {
           openSync(path, constants.O_RDONLY | constants.O_NOCTTY)
         );
         portPath = path;
-        if (!RECEIVERS.includes(path)) tried.set(path, statSync(path).ctimeMs);
+        tried.set(path, Date.now());
         break;
       } catch (error) {
         // 3: the bridge has it.
