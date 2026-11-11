@@ -19,6 +19,7 @@ import {
   Radio,
   RefreshCw,
   Satellite,
+  TriangleAlert,
   Wifi,
   WifiOff,
 } from 'lucide-react';
@@ -28,7 +29,6 @@ import Link from 'next/link';
 import { GamepadView } from '@/components/gamepad';
 import { ControlPanel } from '@/components/control-panel';
 import { HoverPanel } from '@/components/hover-panel';
-import { LastFlight } from '@/components/last-flight';
 import { Status } from '@/components/status';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -720,11 +720,6 @@ export default function Page() {
           ? `Saved ${recorder.file}`
           : 'Recorder ready'
         : 'Recorder connecting');
-  // The bridge's last recording once it has closed it (its stop record written), for the last flight's summary.
-  const lastFlight =
-    recorder?.file && !recorder.writing
-      ? recorder.file.replace(/\.bin$/, '')
-      : null;
   // The radio link over the last second (src/fw/controller/bridge.py decode_link): status messages reaching the laptop of the drone's STATUS_HZ and the controller's RSSI of them, then the controller's packets reaching the drone and the drone's RSSI of them. Weak: a quarter of the status lost or a gap of LINK_GAP_MS.
   const link = reading?.link;
   const linkWeak =
@@ -772,10 +767,10 @@ export default function Page() {
                 ? 'Battery'
                 : usb
                   ? 'No pack: powered over USB'
-                  : `Battery ${volts.toFixed(2)} V`
+                  : (batteryWarning ?? `Battery ${volts.toFixed(2)} V`)
             }
             className={
-              connected && volts !== undefined && !usb && volts < ARM_MIN_V
+              connected && batteryWarning
                 ? 'text-red-700'
                 : 'text-muted-foreground'
             }
@@ -785,7 +780,7 @@ export default function Page() {
               ? '—'
               : usb
                 ? 'USB'
-                : `${volts.toFixed(1)} V`}
+                : `${volts.toFixed(1)} V${batteryWarning && volts >= ARM_MIN_V ? ', falling' : ''}`}
           </Status>
           <Status
             title={connected ? `IMU ${IMU_TEXT[imu]}` : 'IMU'}
@@ -845,6 +840,17 @@ export default function Page() {
           >
             {logging?.active ? logging.samples : logging?.ready ? 'ready' : '—'}
           </Status>
+          {/* Warnings show here, last in the row, so nothing on the page moves when one appears. */}
+          {tiltWarning !== null && (
+            <Status
+              title={`Rotors held ${Math.abs(tiltWarning).toFixed(0)}° ${tiltWarning < 0 ? 'back: CoM forward of center' : 'forward: CoM behind center'} or moving. Land and check the battery.`}
+              className="font-medium text-red-700"
+              icon={TriangleAlert}
+            >
+              Rotors {Math.abs(tiltWarning).toFixed(0)}°{' '}
+              {tiltWarning < 0 ? 'back' : 'forward'}
+            </Status>
+          )}
         </div>
         <div className="ml-auto flex items-center gap-3">
           <Link href="/camera" className="text-sm underline">
@@ -887,20 +893,6 @@ export default function Page() {
           </Button>
         </div>
       </header>
-      {(batteryWarning || tiltWarning !== null) && (
-        <div className="shrink-0 space-y-1 border-b px-4 py-2 font-medium text-red-700">
-          {batteryWarning && <p>{batteryWarning}</p>}
-          {tiltWarning !== null && (
-            <p>
-              Rotors held {Math.abs(tiltWarning).toFixed(0)}°{' '}
-              {tiltWarning < 0
-                ? 'back: CoM forward of center'
-                : 'forward: CoM behind center'}{' '}
-              or moving. Land and check the battery.
-            </p>
-          )}
-        </div>
-      )}
       {/* Fly, three columns of about one height, so nothing scrolls on a laptop: the controls with the drone's attitude under them; the camera with the GPS under it; where the drone is against the tag (or on the map), with the controller under it. Bench puts the servo and ESC panels in the third column's place, and the controller at the foot of the first. */}
       <main
         className={`grid divide-y divide-border lg:min-h-0 lg:flex-1 lg:grid-cols-[26rem_minmax(0,1fr)_minmax(0,1fr)] lg:divide-x lg:divide-y-0 lg:overflow-hidden`}
@@ -933,7 +925,6 @@ export default function Page() {
               onEscStage={escStage}
             />
           )}
-          {lastFlight && <LastFlight name={lastFlight} />}
           <Suspense>
             <ImuPanel
               reading={reading?.imu}
