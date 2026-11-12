@@ -247,7 +247,7 @@ static EkfOutput filtered;
 static Guard guard;
 // The roll flip (flip.h), started only by flight_runtime_flip.
 static FlipRun flip;
-// Tumble recovery and the pilot's level-and-hold (recover.h). held: since a recovery or a level-and-hold began, the hover holds whatever mode the laptop streams, until the laptop asks for another mode than held_from, the one it streamed then (the pilot's next H, L or manual); meanwhile the laptop's tilt is dropped.
+// Tumble recovery and the pilot's level-and-hold (recover.h). held: since a recovery or a level-and-hold began, the hover holds whatever mode the laptop streams, until the laptop asks for another mode than held_from, the one it streamed then (the pilot's L, or manual); the laptop's tilt is dropped only while the recovery and its grace run, so the pilot steers the hold again after it.
 static RecoverRun recovery;
 static bool held;
 static int held_from;
@@ -730,8 +730,8 @@ static void runtime_task(void *arg) {
                 gains.nudge_left = held_nudge(1);
                 gains.nudge_up = held_nudge(2);
                 // Without the tag the laptop's tilt (the arrows, A and D) flies the drone directly (on the tag they move the hold point instead); a link-loss landing ignores what the lost laptop last sent.
-                gains.stick_pitch = command.hover_camera || link_landing || stale || held ? 0 : command.target_pitch;
-                gains.stick_roll = command.hover_camera || link_landing || stale || held ? 0 : command.target_roll;
+                gains.stick_pitch = command.hover_camera || link_landing || stale || recover_gyro_only(&recovery) ? 0 : command.target_pitch;
+                gains.stick_roll = command.hover_camera || link_landing || stale || recover_gyro_only(&recovery) ? 0 : command.target_roll;
                 if (link_landing && !hover.tracking) gains.drag = fmaxf(gains.drag, LINK_LAND_DRAG);
                 if (link_landing) gains.land_rate = fmaxf(gains.land_rate, LINK_LAND_RATE);
                 HoverOutput out;

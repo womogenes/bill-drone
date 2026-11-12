@@ -23,14 +23,14 @@ from sw.flight_log import parse_settings, recording, settings as recording_setti
 from sw.sim import flight
 from sw.sim import recover as C
 from sw.sim import rigid as R
-from sw.sim.hover import GAIN_KEYS, GPS_LATENCY, BARO_LATENCY, HOLD, Gains, Hover, State as HoverState
+from sw.sim.hover import GAIN_KEYS, GPS_LATENCY, BARO_LATENCY, HOLD, LAND, Gains, Hover, State as HoverState
 from sw.sim.guard import Guard
 from sw.sim.outdoor import GPS
 from sw.sim.sweep import BARO
 
 MAIN = Path(__file__).resolve().parents[2] / "fw/drone/main"
-SOURCES = [MAIN / "flip.c", MAIN / "flight_math.c"]
-HEADERS = [MAIN / "flip.h", MAIN / "flight_math.h", MAIN / "hover.h", MAIN / "guard.h"]
+SOURCES = [MAIN / "flip.c", MAIN / "recover.c", MAIN / "flight_math.c"]
+HEADERS = [MAIN / "flip.h", MAIN / "recover.h", MAIN / "flight_math.h", MAIN / "hover.h", MAIN / "guard.h"]
 LIBRARY = Path(__file__).with_name("libflip.so")
 # The GPS hold as the roll-step ladder was cleared with on 2026-11-12 (sw/flight_steps.py ladder), held at 3 m (hover_climb and hover_ceiling as settings.def now allows), the flip allowed from 2.5 m.
 FLIGHT = {"hover_camera": 0, "hover_center": 0, "hover_gps_tau": 0.5, "hover_gps_place_tau": 2.0, "hover_tilt": 10.0, "hover_kd": 1.5, "hover_thrust_direction": 0.8, "pitch_damping": 6.0,
@@ -41,6 +41,11 @@ LOST_WINDOW = 4.0
 BELLY = 0.035
 # A fresh pack under load (V), for flip_refusal's battery check.
 BATTERY = 16.0
+# recover.h's limits on when a tumble is recovered rather than cut, and flight_rt.c's wait before a link-loss landing in the hold (s).
+RECOVER_MAX = 3
+RECOVER_AIRBORNE_S = 1.0
+RECOVER_LAND_HEIGHT = 1.0
+LINK_HOLD_S = 2.0
 
 
 class Params(ctypes.Structure):
@@ -68,6 +73,24 @@ class Run(ctypes.Structure):
     _fields_ = [("flip", Flip), ("authority", Authority), ("done", ctypes.c_bool), ("since", ctypes.c_float), ("saved", ctypes.c_float * 18), ("height_integral", ctypes.c_float)]
 
 
+class RecoverParams(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_float) for name in ("kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "roll_over", "servo_max", "kv", "floor", "idle", "right_angle", "right_rate", "right_time", "level_angle", "level_rate", "level_time")]
+
+
+class RecoverRun(ctypes.Structure):
+    _fields_ = ([(name, ctypes.c_int) for name in ("stage", "cause", "recoveries")] + [("q", ctypes.c_float * 4)] + [(name, ctypes.c_float) for name in ("time", "righting", "thrust", "vertical", "settled", "since")]
+                + [("abort", ctypes.c_bool), ("saved", ctypes.c_float * 18), ("height_integral", ctypes.c_float)])
+
+
+class RecoverInput(ctypes.Structure):
+    _fields_ = ([(name, ctypes.c_bool) for name in ("enabled", "tipped", "allowed")] + [("gyro", ctypes.POINTER(ctypes.c_float)), ("accel", ctypes.POINTER(ctypes.c_float))] + [(name, ctypes.c_float) for name in ("dt", "tip_limit")]
+                + [("flip_active", ctypes.c_bool), ("flip_gyro_only", ctypes.c_bool), ("flip_phase", ctypes.c_int), ("climb_rate", ctypes.c_float), ("collective", ctypes.c_float), ("authority", Authority)])
+
+
+class RecoverOutput(ctypes.Structure):
+    _fields_ = [("cut", ctypes.c_int), ("cancel_flip", ctypes.c_bool), ("owned", ctypes.c_bool), ("level", ctypes.c_bool), ("motors", Output)]
+
+
 if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime for path in SOURCES + HEADERS):
     scratch = LIBRARY.with_suffix(".%d.tmp" % os.getpid())
     subprocess.run(["cc", "-O2", "-fPIC", "-shared", "-iquote", str(MAIN), *map(str, SOURCES), "-o", str(scratch), "-lm"], check=True)
@@ -85,8 +108,16 @@ for name in ("flip_active", "flip_gyro_only", "flip_tip_exempt"):
     getattr(library, name).restype = ctypes.c_bool
 library.flip_phase.argtypes = [ctypes.POINTER(Run)]
 library.flip_tick.argtypes = [ctypes.POINTER(Run), ctypes.c_float * 3, ctypes.c_float * 3, ctypes.c_float, ctypes.c_void_p, ctypes.c_void_p, FLOATS, ctypes.POINTER(Output)]
+library.flip_cancel.argtypes = [ctypes.POINTER(Run)]
+library.recover_reset.argtypes = [ctypes.POINTER(RecoverRun)]
+library.recover_abort.argtypes = [ctypes.POINTER(RecoverRun)]
+for name in ("recover_active", "recover_gyro_only"):
+    getattr(library, name).argtypes = [ctypes.POINTER(RecoverRun)]
+    getattr(library, name).restype = ctypes.c_bool
+library.recover_tick.argtypes = [ctypes.POINTER(RecoverRun), ctypes.POINTER(RecoverParams), ctypes.POINTER(RecoverInput), ctypes.c_void_p, ctypes.c_void_p, FLOATS, ctypes.POINTER(RecoverOutput)]
 library.flip_actuators.argtypes = [ctypes.POINTER(Output), ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float * 2, ctypes.c_float * 2]
 DEFAULTS = Params.in_dll(library, "flip_defaults")
+RECOVER_DEFAULTS = RecoverParams.in_dll(library, "recover_defaults")
 # Command fields flight.Controller's configure leaves alone: the base throttle and attitude targets (radians), the thrust scales, and the hover gains' mass (flip_begin's weight).
 BASE, ROLL, PITCH, YAW = (6 + flight.TUNING_LAYOUT.index(key) for key in ("base_throttle", "roll", "pitch", "yaw_rate"))
 SCALES = [6 + flight.TUNING_LAYOUT.index(key) for key in ("left_thrust_scale", "right_thrust_scale")]
@@ -138,11 +169,20 @@ class Sensors:
 
 
 def fly(job):
-    """One batch of runs on the same drawn plants: per run, whether and when the flip started, why it was refused, and the measures."""
-    settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping = job
+    """One batch of runs on the same drawn plants: per run, whether and when the flip started, why it was refused, and the measures. job's optional tenth item, options, adds what sw/sim/recover_firmware.py tests: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up), "deadband" (per run, the throttle under which an ESC stops its motor) and "roll_thrust" (the roll authority's range, as recover.randomization's)."""
+    settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping, *rest = job
+    options = rest[0] if rest else {}
     from sw.sim import toss
     plant = toss.plant() | {"tilt_offset": offset, "accel_bias": (0.025 if offset else 0.0, 0.0, 0.0)}
-    sim = R.Sim(n, plant, seed=seed, scale=C.randomization(n, seed))
+    for key, factor in options.get("airframe", {}).items():
+        plant["airframe"] = plant["airframe"] | {key: plant["airframe"][key] * factor}
+    scale = C.randomization(n, seed)
+    rng = np.random.default_rng(seed + 31)
+    if "roll_thrust" in options:
+        scale["roll_thrust"] = np.exp(rng.uniform(*np.log(options["roll_thrust"]), n))
+    gyroscopic = rng.uniform(-1, 1, n) * options.get("gyroscopic", 0.0)
+    deadband = rng.uniform(0, 1, n) * options.get("deadband", 0.0)
+    sim = R.Sim(n, plant, seed=seed, scale=scale)
     obs = sim.reset(np.tile([0, 0, BELLY], (n, 1)), np.zeros((n, 3)), np.tile([1.0, 0, 0, 0], (n, 1)), np.zeros((n, 3)))
     hover_n = sim.mass * R.G / 2
     # Each plant's motors against the firmware's thrust table: the drone's thrust scales are calibrated to its own motors (requested newtons are divided by them before the table lookup).
@@ -154,32 +194,50 @@ def fly(job):
     trims = (math.radians(flown["left_trim"]), math.radians(flown["right_trim"]))
     directions = (flight.MODEL["left_servo_direction"], flight.MODEL["right_servo_direction"])
     tip_limit = math.radians(flown.get("tip_limit", 45.0))
+    recovering = flown.get("recover_enable", 0) >= 1
+    params = RecoverParams.from_buffer_copy(RECOVER_DEFAULTS)
+    for key, value in options.get("params", {}).items():
+        setattr(params, key, value)
+    model = flight.MODEL
+    authority = Authority(model["arm"] / model["roll_inertia"], model["pivot_height"] / model["pitch_inertia"], model["arm"] / model["yaw_inertia"], sim.mass * R.G)
+    event = options["event"](np.random.default_rng(seed + 57), n) if "event" in options else None
     lanes = []
     for i in range(n):
         controller = flight.Controller()
         controller.configure(flown)
         controller.command[flight.YAW_I] = flown.get("yaw_i", 0.0)
         controller.command[HOVER_MASS] = sim.mass
-        for k, scale in zip(SCALES, (scales[i], scales[i])):
-            controller.command[k] = scale
+        for k, scale_k in zip(SCALES, (scales[i], scales[i])):
+            controller.command[k] = scale_k
         controller.reset()
         run = Run()
         library.flip_reset(ctypes.byref(run))
+        recovery = RecoverRun()
+        library.recover_reset(ctypes.byref(recovery))
         hover = Hover(flown)
         lanes.append({"controller": controller, "estimate": flight.Attitude(accel=obs["accel"][i] / R.G), "hover": hover, "guard": Guard(flown), "run": run, "sensors": Sensors(seed * 1000 + i),
                       "integral": ctypes.cast(ctypes.addressof(hover.state) + HoverState.integral.offset, FLOATS), "commanded": (0, 0), "dead": False, "tipped": False, "lifted": None,
-                      "started": None, "refusals": [], "asked": None, "touched": False, "lowest": np.inf, "start_height": None, "start_place": None, "back": None, "phase": 0, "target": None})
+                      "started": None, "refusals": [], "asked": None, "touched": False, "lowest": np.inf, "start_height": None, "start_place": None, "back": None, "phase": 0, "target": None,
+                      "recovery": recovery, "mode": HOLD, "relanding": None, "cut": 0, "event": None, "stages": [], "recovered_at": None, "event_lowest": np.inf, "event_touched": False})
     armed = round(1.0 / R.DT)
     out = Output()
+    recovered = RecoverOutput()
     for k in range(int(seconds / R.DT)):
         now = k * R.DT
         now_us = round((now + 1) * 1e6)
         throttle = np.zeros((n, 2))
         tilt = np.zeros((n, 2))
+        if gyroscopic.any():
+            # The props' net angular momentum along the body's up axis (counter-rotating, so only their difference), turned with the body: the body feels -ω × H, as a push the C backend scales by its in-flight factor (rigid_step.c flying).
+            root = np.sqrt(np.maximum(sim.state.motor, 0))
+            momentum = gyroscopic * (root[:, 0] - root[:, 1])
+            flying = np.where(sim.contact_now == 0, np.clip(sim.state.motor.sum(1) / (sim.mass * R.G), 0, 1), 0.0)
+            torque = np.column_stack([-sim.omega[:, 1] * momentum, sim.omega[:, 0] * momentum, np.zeros(n)])
+            sim.push[:] = np.where(flying[:, None] > 0.05, torque / sim.inertia / np.maximum(flying, 0.05)[:, None], 0.0)
         for i, lane in enumerate(lanes):
             if lane["dead"]:
                 continue
-            controller, estimate, hover, run = lane["controller"], lane["estimate"], lane["hover"], lane["run"]
+            controller, estimate, hover, run, recovery = lane["controller"], lane["estimate"], lane["hover"], lane["run"], lane["recovery"]
             height = sim.pos[i, 2] - BELLY
             if lane["lifted"] is None and k > armed and height > 0.05:
                 lane["lifted"] = now
@@ -192,26 +250,70 @@ def fly(job):
                               aligned=bool(s.aligned), located=bool(s.gps_us) and now_us - s.gps_us <= 500000, ekf=flown.get("hover_ekf", 0) > 0, landing=False, failsafe=lane["guard"].state.failsafe != 0,
                               pattern=False, airborne=controller.state[10], height=s.height, climb_rate=s.climb_rate, speed=math.hypot(s.gps_fix[0], s.gps_fix[1]), roll=pose[0], pitch=pose[1] - trim,
                               rate=(ctypes.c_float * 3)(*lane["gyro"]), min_height=flown["flip_height"], battery=BATTERY)
-                refusal = library.flip_refusal(ctypes.byref(check))
+                refusal = "Recovering" if library.recover_gyro_only(ctypes.byref(recovery)) else library.flip_refusal(ctypes.byref(check))
+                if isinstance(refusal, bytes):
+                    refusal = refusal.decode()
                 if refusal:
-                    lane["refusals"].append(refusal.decode())
+                    lane["refusals"].append(refusal)
                 else:
                     library.flip_begin(ctypes.byref(run), controller.command.buffer_info()[0], controller.state.buffer_info()[0], s.integral, s.force, estimate.state[0], estimate.state[1], s.climb_rate)
                     lane["started"], lane["start_height"], lane["start_place"], lane["target"] = now, height, sim.pos[i, :2].copy(), s.target
+            # The link-loss landing: from options["landing"] s after liftoff the hold lands (and again LINK_HOLD_S after a recovery, the link still lost).
+            if "landing" in options and lane["lifted"] is not None and lane["mode"] == HOLD and now - lane["lifted"] >= options["landing"] and (lane["relanding"] is None or now >= lane["relanding"]) and not library.recover_active(ctypes.byref(recovery)):
+                lane["mode"] = LAND
+            # The event: the drone is put into a drawn attitude, rates and vertical velocity (the attitude estimate with it, as the gyro would have carried it), and level-and-hold asked for if drawn.
+            due = event is not None and lane["event"] is None and lane["lifted"] is not None
+            if due and (lane["mode"] == LAND and height <= event["height"][i] if "landing" in options else now - lane["lifted"] >= event["time"][i]):
+                lane["event"] = now
+                lane["event_height"] = height
+                sim.quat[i] = event["quat"][i]
+                sim.omega[i] = event["omega"][i]
+                sim.vel[i, 2] = event["climb"][i]
+                q = event["quat"][i]
+                estimate.state[0] = math.atan2(2 * (q[0] * q[1] + q[2] * q[3]), 1 - 2 * (q[1] ** 2 + q[2] ** 2)) + rng.normal(0, 0.017)
+                estimate.state[1] = math.asin(max(-1.0, min(1.0, 2 * (q[0] * q[2] - q[3] * q[1])))) + rng.normal(0, 0.017)
+                if event["abort"][i]:
+                    library.flip_abort(ctypes.byref(run), lane["integral"])
+                    library.recover_abort(ctypes.byref(recovery))
             gyro = np.clip(obs["gyro"][i], -gyro_range, gyro_range)
             accel = np.clip(obs["accel"][i] / R.G, -accel_range, accel_range)
             lane["gyro"] = gyro
             spinning = sum(lane["commanded"]) > 0
-            estimate.update(accel, gyro, R.DT, spinning, banked=library.flip_gyro_only(ctypes.byref(run)))
+            estimate.update(accel, gyro, R.DT, spinning, banked=library.flip_gyro_only(ctypes.byref(run)) or library.recover_gyro_only(ctypes.byref(recovery)))
             enabled = k >= armed
             if enabled:
                 library.flip_tick(ctypes.byref(run), (ctypes.c_float * 3)(*gyro), (ctypes.c_float * 3)(*accel), R.DT, estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(out))
             else:
                 out = Output()
             roll, pitch = wrap(estimate.state[0]), wrap(estimate.state[1])
-            if enabled and not library.flip_tip_exempt(ctypes.byref(run)) and max(abs(roll), abs(pitch)) > tip_limit:
-                lane["dead"] = lane["tipped"] = True
-                continue
+            recovered = RecoverOutput()
+            if enabled:
+                # flight_rt.c's tip cut, or the recovery in its place (recover.h).
+                s = hover.state
+                landing = lane["mode"] > HOLD
+                gyro_c, accel_c = (ctypes.c_float * 3)(*gyro), (ctypes.c_float * 3)(*accel)
+                base = controller.command[BASE]
+                given = RecoverInput(enabled=recovering, tipped=not library.flip_tip_exempt(ctypes.byref(run)) and max(abs(roll), abs(pitch)) > tip_limit,
+                                     allowed=controller.state[10] >= RECOVER_AIRBORNE_S and not s.landed and not s.probing and not (s.engaged and s.lifted < 0) and not (landing and s.height < RECOVER_LAND_HEIGHT) and recovery.recoveries < RECOVER_MAX,
+                                     gyro=gyro_c, accel=accel_c, dt=R.DT, tip_limit=tip_limit, flip_active=library.flip_active(ctypes.byref(run)), flip_gyro_only=library.flip_gyro_only(ctypes.byref(run)),
+                                     flip_phase=library.flip_phase(ctypes.byref(run)), climb_rate=s.climb_rate, collective=2 * flight.thrust(max(base, 0.0)), authority=authority)
+                before = library.recover_active(ctypes.byref(recovery))
+                library.recover_tick(ctypes.byref(recovery), ctypes.byref(params), ctypes.byref(given), estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(recovered))
+                if recovered.cancel_flip:
+                    library.flip_cancel(ctypes.byref(run))
+                    out = Output()
+                if not before and library.recover_active(ctypes.byref(recovery)):
+                    lane["mode"] = HOLD
+                    lane["stages"].append((now, recovery.cause))
+                if before and not library.recover_active(ctypes.byref(recovery)) and not recovered.cut:
+                    lane["recovered_at"] = now
+                    if "landing" in options:
+                        lane["relanding"] = now + LINK_HOLD_S
+                if recovered.cut:
+                    lane["dead"] = lane["tipped"] = True
+                    lane["cut"] = recovered.cut
+                    continue
+                roll, pitch = wrap(estimate.state[0]), wrap(estimate.state[1])
             vertical = -accel[0] * math.sin(estimate.state[1]) + math.cos(estimate.state[1]) * (accel[1] * math.sin(estimate.state[0]) + accel[2] * math.cos(estimate.state[0]))
             gps, baro = lane["sensors"].step(now, sim.pos[i], sim.vel[i], lane["lifted"], BELLY)
             if not enabled:
@@ -226,31 +328,52 @@ def fly(job):
             up = left_force * math.cos(left_tilt) + right_force * math.cos(right_tilt)
             drag = (list(accel), math.atan2(left_force * math.sin(left_tilt) + right_force * math.sin(right_tilt), up) if up > 0 else 0.0)
             gains = Gains.from_buffer_copy(hover.gains)
-            mode = lane["guard"].hover(s, gains, HOLD, now_us, R.DT)
+            if lane["mode"] > HOLD:
+                # flight_rt.c's link-loss landing: no drift (LINK_LAND_DRAG) and at least LINK_LAND_RATE down.
+                gains.drag = max(gains.drag, 1.0)
+                gains.land_rate = max(gains.land_rate, 1.0)
+            mode = lane["guard"].hover(s, gains, lane["mode"], now_us, R.DT)
             if lane["guard"].state.failsafe:
                 library.flip_abort(ctypes.byref(run), lane["integral"])
-            if library.flip_active(ctypes.byref(run)):
+            if library.flip_active(ctypes.byref(run)) or library.recover_active(ctypes.byref(recovery)):
                 mode = HOLD
             result = hover.update(mode, None, now_us, R.DT, roll, pitch, heading_rate, vertical, flying, drag, None, gps, baro, gains=gains)
+            if s.landed and result.force <= 0 and not library.flip_active(ctypes.byref(run)) and not library.recover_active(ctypes.byref(recovery)):
+                # A finished landing disarms (flight_rt.c stop reason 8).
+                lane["dead"] = True
+                lane["cut"] = 8
+                continue
             base = min(1200.0, flight.throttle(result.force / 2 / math.cos(trim))) if result.force > 0 else 0.0
             if out.collective_set:
                 base = min(1200.0, flight.throttle(out.collective / 2 / math.cos(trim)))
-            controller.command[BASE], controller.command[ROLL], controller.command[PITCH], controller.command[YAW] = base, result.roll, result.pitch, flown.get("yaw_rate", 0.0)
+            targets = (result.roll, result.pitch)
+            if recovered.level:
+                targets = (0.0, 0.0)
+                base = min(1200.0, flight.throttle(recovered.motors.collective / 2 / math.cos(trim)))
+            controller.command[BASE], controller.command[ROLL], controller.command[PITCH], controller.command[YAW] = base, targets[0], targets[1], flown.get("yaw_rate", 0.0)
             left, right, left_angle, right_angle = controller.update((roll, pitch), gyro, R.DT)
-            if out.owned:
+            if out.owned or recovered.owned:
                 throttles, servos = (ctypes.c_float * 2)(), (ctypes.c_float * 2)()
-                library.flip_actuators(ctypes.byref(out), controller.command.buffer_info()[0], scales[i], scales[i], 1200.0, 60.0, throttles, servos)
+                library.flip_actuators(ctypes.byref(recovered.motors if recovered.owned else out), controller.command.buffer_info()[0], scales[i], scales[i], 1200.0, 60.0, throttles, servos)
                 left, right = round(throttles[0]), round(throttles[1])
                 left_angle, right_angle = math.radians(servos[0]), math.radians(servos[1])
             lane["commanded"] = (left, right)
-            throttle[i] = (left, right)
+            # An ESC that stops its motor under its deadband (options["deadband"]), so it restarts from standstill (motor_start).
+            throttle[i] = [t if t >= deadband[i] else 0 for t in (left, right)]
             tilt[i] = (directions[0] * (left_angle - trims[0]), directions[1] * (right_angle - trims[1]))
             lane["phase"] = max(lane["phase"], library.flip_phase(ctypes.byref(run)))
+            if options.get("trace") and lane["event"] is not None and now - lane["event"] < options["trace"]:
+                q = recovery.q
+                lane.setdefault("trace", []).append((round(now - lane["event"], 2), recovery.stage, round(float(sim.up()[i, 2]), 3), round(1 - 2 * (q[1] ** 2 + q[2] ** 2), 3), round(height, 2), round(recovery.vertical, 2),
+                                                     left, right, round(math.degrees(left_angle), 1), round(math.degrees(right_angle), 1), *np.round(np.degrees(gyro), 0)))
         obs = sim.step(throttle, tilt)
         for i, lane in enumerate(lanes):
+            height = sim.pos[i, 2] - BELLY
+            if lane["event"] is not None and now - lane["event"] <= LOST_WINDOW:
+                lane["event_lowest"] = min(lane["event_lowest"], height)
+                lane["event_touched"] |= bool(sim.contact_now[i] > 0)
             if lane["started"] is None:
                 continue
-            height = sim.pos[i, 2] - BELLY
             if now - lane["started"] <= LOST_WINDOW:
                 lane["lowest"] = min(lane["lowest"], height)
                 lane["touched"] |= bool(sim.contact_now[i] > 0)
@@ -267,6 +390,9 @@ def fly(job):
         if lane["started"] is not None:
             row |= {"clean": upright and not lane["touched"] and turned >= 2 * math.pi - DEFAULTS.handoff - 0.01, "touched": lane["touched"], "lost": lane["start_height"] - lane["lowest"], "lowest": lane["lowest"],
                     "back": lane["back"], "carried": lane.get("carried", 0.0), "start_height": lane["start_height"], "end_height": float(sim.pos[i, 2] - BELLY)}
+        if recovering or event is not None:
+            row |= {"cut": lane["cut"], "recoveries": [list(r) for r in lane["stages"]], "recovered_at": lane["recovered_at"], "event": lane["event"], "event_height": lane.get("event_height"),
+                    "event_lowest": lane["event_lowest"], "event_touched": lane["event_touched"], "end_height": float(sim.pos[i, 2] - BELLY), "upright": upright, "landed": lane["cut"] == 8, "trace": lane.get("trace")}
         rows.append(row)
     return rows
 

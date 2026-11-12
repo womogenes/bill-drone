@@ -68,7 +68,7 @@ static void turn(float *q, const float *w, float dt) {
 // Wanted angular accelerations into thrusts and tilts: roll by differential thrust (each motor kept at idle or more), pitch by common tilt, yaw by differential tilt, from the thrust the motors have by now.
 static void allocate(RecoverRun *run, const RecoverParams *p, const FlipAuthority *a, float roll, float pitch, float yaw, float collective, float dt, FlipOutput *out) {
     float diff = roll / a->roll, idle = p->idle * a->weight;
-    float total = fmaxf(collective, fabsf(diff) + idle);
+    float total = fmaxf(collective, fabsf(diff) + 2 * idle);
     out->left = (total + diff) / 2;
     out->right = (total - diff) / 2;
     run->thrust += (total - run->thrust) * (1 - expf(-dt / MOTOR_TAU));
