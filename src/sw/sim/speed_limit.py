@@ -51,11 +51,11 @@ def push_seconds(speed):
     return speed / ACCEL + CRUISE
 
 
-def fly(job):
-    airframe, flown, speed, tilt, seed, direction = job
+def flight(airframe, flown, speed, tilt, seed, direction, speed_draw=SPEED_DRAW):
+    """One run's plant drawn and flown: the sim's result, its log, the draws and how long the push lasts (s)."""
     rng = random.Random(seed + 77000)
     wind = rng.uniform(*WIND)
-    p, draws = outdoor_plant(airframe, wind, seed, True, False, flown["hover_climb"], baro=True, speed_draw=SPEED_DRAW, level_sd=1.3, pushes=True)
+    p, draws = outdoor_plant(airframe, wind, seed, True, False, flown["hover_climb"], baro=True, speed_draw=speed_draw, level_sd=1.3, pushes=True)
     draws |= {"wind": wind, "push_speed": rng.uniform(*PUSH_SPEED)}
     p["airframe"] = p["airframe"] | {"tilt_push_speed": draws["push_speed"]}
     p |= {"tilt_offset": BAND_TILT, "flight_accel_bias": (BAND_ACCEL, 0.0, 0.0)}
@@ -65,14 +65,24 @@ def fly(job):
     p |= {"nudge": [(SETTLE, forward * speed, left * speed, length)], "nudge_wrap": NUDGE_MAX, "nudge_period": NUDGE_PERIOD}
     log = []
     result = run(s, p, seconds=SETTLE + length + AFTER + 2, seed=seed, log=log, hover=True)
+    return result, log, draws, length
+
+
+def series(log, lifted):
+    """The log as arrays on s after liftoff: true horizontal position (m), roll and pitch (degrees, pitch positive nose-down), servo tilts (degrees, positive forward), pitch target (degrees), and the hold's own place (the drone less its hold point, m, hold frame)."""
+    return {"t": np.array([e[0] for e in log]) - lifted, "position": np.array([e[1] for e in log])[:, :2], "angles": np.degrees([e[2][:2] for e in log]),
+            "servo": np.degrees([e[4] for e in log]), "target": np.degrees([e[6] for e in log]), "place": np.array([e[-1][5] for e in log])}
+
+
+def fly(job):
+    airframe, flown, speed, tilt, seed, direction, speed_draw = job
+    result, log, draws, length = flight(airframe, flown, speed, tilt, seed, direction, speed_draw)
     out = {"speed": speed, "tilt": tilt, "seed": seed, "draws": draws}
     lifted = result.get("liftoff_s")
     if lifted is None:
         return out | {"fate": "no liftoff"}
-    t = np.array([e[0] for e in log]) - lifted
-    position = np.array([e[1] for e in log])[:, :2]
-    angles = np.degrees([e[2][:2] for e in log])
-    servo = np.degrees([e[4] for e in log])
+    d = series(log, lifted)
+    t, position, angles, servo, place = d["t"], d["position"], d["angles"], d["servo"], d["place"]
     velocity = np.gradient(position, t, axis=0)
     ground = np.hypot(*velocity.T)
     start, release = SETTLE, SETTLE + length
@@ -85,13 +95,13 @@ def fly(job):
     span = (t >= start) & (t <= release + AFTER)
     cruise = (t >= release - 1.0) & (t < release)
     r = np.searchsorted(t, release)
-    heading = velocity[cruise].mean(axis=0)
-    heading = heading / max(np.hypot(*heading), 1e-6)
-    along = (position - position[r]) @ heading
-    rest = along[(t > release + AFTER - 3) & (t <= release + AFTER)].mean()
+    # The overshoot past the hold point as the hold measures it: once the nudge's speed has faded (hover.c NUDGE_TAU 0.2 s), the place along the way the hold point had led it.
+    way = -place[cruise].mean(axis=0)
+    way = way / max(np.hypot(*way), 1e-6)
+    beyond = place[(t >= release + 0.5) & (t <= release + AFTER)] @ way
     after = np.flatnonzero((t > release) & (t <= release + AFTER) & (ground < STOPPED))
-    out |= {"fate": "held", "reached": float(ground[cruise].mean()), "peak": float(ground[span].max()), "overshoot": float(max(along[(t >= release) & (t <= release + AFTER)].max() - rest, 0.0)),
-            "rest": float(rest), "tilt_max": float(np.abs(angles[span]).max()), "servo_max": float(np.abs(servo[span]).max()),
+    out |= {"fate": "held", "reached": float(ground[cruise].mean()), "peak": float(ground[span].max()), "lag": float(-place[cruise].mean(axis=0) @ way), "overshoot": float(max(beyond.max(), 0.0)),
+            "tilt_max": float(np.abs(angles[span]).max()), "servo_max": float(np.abs(servo[span]).max()),
             "cruise_pitch": float(angles[cruise, 1].mean()), "cruise_servo": float(servo[cruise].mean()), "pitch_low": float(angles[span, 1].min()), "pitch_high": float(angles[span, 1].max())}
     if not len(after):
         return out | {"stop_time": math.nan, "stop_distance": math.nan, "ringing": math.nan, "swing": math.nan, "regained": math.nan}
@@ -115,7 +125,7 @@ def summary(runs):
     lo = lambda key: f"{np.nanmedian([r[key] for r in held]):.1f} ({np.nanpercentile([r[key] for r in held], 10):.1f})"
     unstopped = sum(math.isnan(r["stop_time"]) for r in held)
     return (line + f" | reached {q('reached')} m/s, peak {q('peak')}; stop {q('stop_time')} s, {q('stop_distance')} m" + (f" ({unstopped} never)" if unstopped else "")
-            + f"; overshoot {q('overshoot')} m; tilt max {q('tilt_max')}°, servo max {q('servo_max')}°, cruise pitch {lo('cruise_pitch')}° servo {q('cruise_servo')}°, pitch {lo('pitch_low')}..{q('pitch_high')}°"
+            + f"; lag behind the hold point {q('lag')} m, overshoot past it {q('overshoot')} m; tilt max {q('tilt_max')}°, servo max {q('servo_max')}°, cruise pitch {lo('cruise_pitch')}° servo {q('cruise_servo')}°, pitch {lo('pitch_low')}..{q('pitch_high')}°"
             + f"; after stop: pitch p2p {q('ringing')}°, swing rms {q('swing')}°, regained {q('regained')} m/s")
 
 
@@ -125,6 +135,7 @@ def main():
     parser.add_argument("--tilts", default="10,15,20", help="hover_tilt lean caps (degrees)")
     parser.add_argument("--runs", type=int, default=64, help="per case; the same drawn plants in every case")
     parser.add_argument("--direction", choices=sorted(DIRECTIONS), default="forward")
+    parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=SPEED_DRAW, help="LOW,HIGH: the forward speed moment's draw, times the airframe's (log-uniform)")
     parser.add_argument("--settings", default=SETTINGS, help="recording whose settings to fly")
     parser.add_argument("--set", default="", help="setting overrides, name=value,...")
     parser.add_argument("--airframe", type=Path, default=AIRFRAME)
@@ -136,7 +147,7 @@ def main():
     flown |= parse_settings(args.set)
     speeds = [float(v) for v in args.speeds.split(",")]
     tilts = [float(v) for v in args.tilts.split(",")]
-    jobs = [(airframe, flown, speed, tilt, seed, args.direction) for speed in speeds for tilt in tilts for seed in range(args.runs)]
+    jobs = [(airframe, flown, speed, tilt, seed, args.direction, args.speed_draw) for speed in speeds for tilt in tilts for seed in range(args.runs)]
     with Pool(args.workers) as pool:
         results = pool.map(fly, jobs)
     print(f"{args.airframe.name}, settings {args.settings}{' + ' + args.set if args.set else ''}, {args.direction}, {args.runs} runs per case, wind {WIND[0]:g}-{WIND[1]:g} m/s")

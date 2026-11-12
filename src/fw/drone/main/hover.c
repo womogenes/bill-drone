@@ -967,6 +967,14 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         if (dragging) {
             vx = state->nudge_rate[0] * cy - state->nudge_rate[1] * sy;
             vy = state->nudge_rate[0] * sy + state->nudge_rate[1] * cy;
+            // That speed changes by at most nudge_accel a second (hover.h), so a stick let go at speed moves the hold point on as far as the drone can stop in, instead of stopping it where the stick was let go and asking for kd times the speed at once; the fly-away failsafe's brake, which holds the nudge, slows along it too.
+            float dx = vx - state->reference[0], dy = vy - state->reference[1], change = hypotf(dx, dy), most = g->nudge_accel * dt;
+            if (g->nudge_accel > 0 && change > most) {
+                vx = state->reference[0] + dx * most / change;
+                vy = state->reference[1] + dy * most / change;
+            }
+            state->reference[0] = vx;
+            state->reference[1] = vy;
             state->place[0] -= vx * dt;
             state->place[1] -= vy * dt;
         }
