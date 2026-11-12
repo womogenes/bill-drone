@@ -44,8 +44,14 @@ def ladder(amplitudes, width, rest, doublet=False):
     return {"after": AFTER, "repeat": 1, "segments": segments(values, 1)}
 
 
+# The rubber bands on the servos (2026-11-11, models/NOTES.md): the assemblies' real tilt behind the command and the accelerometer reading forward in flight.
+BANDS = {"tilt_offset": -2.5, "flight_accel_bias": (0.025, 0.0, 0.0)}
+# What a recording flown on the tag needs to fly the GPS hold outdoors (models/NOTES.md 2026-11-06 and 2026-11-12).
+OUTDOOR = {"hover_gps_tau": 0.5, "hover_gps_place_tau": 2.0, "hover_tilt": 20.0}
+
+
 def fly(job):
-    pattern, settings, wind, seed, steps, tag, doublet = job
+    pattern, settings, wind, seed, steps, tag, doublet, bands = job
     if tag:
         p = dict(IDENTIFIED_ESC)
     else:
@@ -53,6 +59,8 @@ def fly(job):
         p, _ = outdoor_plant(airframe, wind, seed, True, False, settings["hover_climb"], baro=True, level_sd=1.3)
         p["gps"] = GPS | {"heading": 0.0}
     p["excite"] = pattern
+    if bands:
+        p |= BANDS
     log = []
     seconds = AFTER + 6 + sum(s["ticks"] for s in pattern["segments"]) / SAMPLE_HZ
     result = run(settings, p, seconds=seconds, seed=seed, log=log, hover=True)
@@ -102,6 +110,8 @@ def main():
     parser.add_argument("--wind", type=float, default=1.0)
     parser.add_argument("--seeds", type=int, default=8)
     parser.add_argument("--workers", type=int, default=min(4, os.cpu_count()))
+    parser.add_argument("--settings", default=SETTINGS, help="recording whose settings to fly (the test's on top); one flown on the tag gets the GPS hold's too (OUTDOOR)")
+    parser.add_argument("--bands", action="store_true", help="the 2026-11-11 rubber bands on the servos (BANDS)")
     parser.add_argument("--dry", action="store_true")
     args = parser.parse_args()
     amplitudes = [float(a) for a in args.amplitudes.split(",")]
@@ -117,11 +127,12 @@ def main():
         for sign in (1, -1):
             steps.append((a, sign, at, at + span, at + span + args.rest))
             at += span + args.rest
-    settings = recording_settings(recording(TAG_SETTINGS if args.tag else SETTINGS)) | test
+    flown = recording_settings(recording(TAG_SETTINGS if args.tag else args.settings))
+    settings = flown | (OUTDOOR if not args.tag and flown.get("hover_camera", 0) else {}) | test
     with Pool(args.workers) as pool:
-        results = pool.map(fly, [(pattern, settings, args.wind, seed, steps, args.tag, args.doublet) for seed in range(args.seeds)])
+        results = pool.map(fly, [(pattern, settings, args.wind, seed, steps, args.tag, args.doublet, args.bands) for seed in range(args.seeds)])
     where = f"on the tag, pattern_distance {settings['pattern_distance']:g} m" if args.tag else f"wind {args.wind} m/s"
-    print(f"roll ladder {amplitudes}, {args.width} s {'doublets' if args.doublet else 'steps'}, {args.rest} s rests, roll_target_rate {args.roll_rate}°/s, {where}, {args.seeds} runs")
+    print(f"roll ladder {amplitudes}, {args.width} s {'doublets' if args.doublet else 'steps'}, {args.rest} s rests, roll_target_rate {args.roll_rate}°/s, {where}, {args.seeds} runs, settings {args.settings}{' with the bands' if args.bands else ''}")
     print(f"  lost (past 45°, the tip cut) {sum(not r['stable'] for r in results)}, pattern stopped by its guard {sum(r['stop'] is not None for r in results)}: {[r['stop'] for r in results if r['stop']]}")
     for a in amplitudes:
         rows = [s for r in results for s in r["steps"] if s["amplitude"] == a]

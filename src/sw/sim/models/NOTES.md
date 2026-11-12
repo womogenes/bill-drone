@@ -488,3 +488,11 @@ Drone 1 with forward legs, the tilt pivots 2 cm higher and 10-inch props; hops 2
 **Outdoors on the GPS hold** the push is not learned (no camera) and take_gps already teaches drag_bias with feedback. outdoor.py --gps --baro on airframe_2026-11-09 and the 23:35 settings, 32 drawn plants per wind, bands (--tilt-offset -2.5 --flight-accel-bias 0.025) against none: no material difference (held 32/28/13 against 32/27/16 at 0/1/2 m/s as set; 32/32/32/31 either way at 0/1/2/3 m/s with hover_tilt 20, hover_thrust_direction 0.8, hover_kd 1.5). The indoor hover_tilt 10, hover_kd 2.5 and hover_thrust_direction 0 are what cost the runs in wind, as on 2026-11-06 and 2026-11-09.
 
 **Landings.** 22:59, 23:17, 23:33, 23:34 and 23:35 ended at -55 to -62 degrees of pitch, nose up by the firmware's convention (positive nose down), so backward; 22:57 and 23:01 stayed up. Each began within 0.1-0.3 s of the touchdown cut (the jolt, 1.5-2 g), pitching nose up at 70-240 degrees/s with the motors stopped, whatever the speed over the floor (-0.28 to +0.57 m/s toward the tag). 22:59 had no bands, so the bands are not the whole cause; with the forward legs the rear contact now sits closest to the CoM. Not investigated further.
+
+## Roll-step ladder with the bands (2026-11-12)
+
+tilt_ladder.py takes --settings (a tag recording's settings get the GPS hold's: hover_gps_tau 0.5, hover_gps_place_tau 2, hover_tilt 20) and --bands (tilt_offset -2.5 degrees, flight_accel_bias 0.025 g forward). On the 2026-11-11 23:35 settings with the test's on top, 0.4 s steps at roll_target_rate 360, 32 runs:
+- **1 m/s wind:** nothing lost, with or without the bands. The true roll reached 18/27/31/36 degrees at 20/30/35/40 (max 23/32/36/41). The estimate was off by 1.4 degrees median (4.7 max), with 0.01-0.06 m of height lost, 1.1-2.4 m/s sideways and up to 2.5 m from the hold point. One run's pattern stopped for tilt at the 40-degree step.
+- **2 m/s wind, with the bands:** 3 of 32 lost with the 40-degree steps, and 1 of 32 to 35 degrees.
+
+So fly the ladder in calm air to 35 degrees first. The bands do not change it.
