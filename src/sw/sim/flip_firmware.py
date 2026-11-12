@@ -30,11 +30,11 @@ LOST_WINDOW = 2.5
 
 
 class Params(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_float) for name in ("climb_thrust", "climb_time", "spin_rate", "k_spin", "spin_thrust", "handoff", "kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "flip_thrust", "right_angle", "servo_max", "kv", "arrest_time", "timeout")]
+    _fields_ = [(name, ctypes.c_float) for name in ("climb_thrust", "climb_time", "spin_rate", "k_spin", "spin_thrust", "handoff", "kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "flip_thrust", "right_angle", "servo_max", "roll_over", "kv", "arrest_time", "timeout")]
 
 
 class State(ctypes.Structure):
-    _fields_ = [("stage", ctypes.c_int), ("time", ctypes.c_float), ("turned", ctypes.c_float), ("thrust", ctypes.c_float), ("vertical", ctypes.c_float), ("arrested", ctypes.c_float), ("landing_roll", ctypes.c_float)]
+    _fields_ = [("stage", ctypes.c_int), ("q", ctypes.c_float * 4)] + [(name, ctypes.c_float) for name in ("time", "turned", "thrust", "vertical", "arrested")]
 
 
 class Authority(ctypes.Structure):
@@ -42,7 +42,7 @@ class Authority(ctypes.Structure):
 
 
 class Output(ctypes.Structure):
-    _fields_ = [("owned", ctypes.c_bool), ("collective_set", ctypes.c_bool), ("handed_back", ctypes.c_bool)] + [(name, ctypes.c_float) for name in ("left", "right", "left_tilt", "right_tilt", "collective")]
+    _fields_ = [("owned", ctypes.c_bool), ("collective_set", ctypes.c_bool), ("handed_back", ctypes.c_bool)] + [(name, ctypes.c_float) for name in ("left", "right", "left_tilt", "right_tilt", "collective", "roll", "pitch")]
 
 
 if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(SOURCE.stat().st_mtime, SOURCE.with_suffix(".h").stat().st_mtime):
@@ -50,14 +50,14 @@ if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(SOURCE.stat().st_mtime,
     subprocess.run(["cc", "-O2", "-fPIC", "-shared", "-iquote", str(SOURCE.parent), str(SOURCE), "-o", str(scratch), "-lm"], check=True)
     scratch.replace(LIBRARY)
 library = ctypes.CDLL(str(LIBRARY))
-library.flip_start.argtypes = [ctypes.POINTER(State), ctypes.c_float]
-library.flip_step.argtypes = [ctypes.POINTER(State), ctypes.POINTER(Params), ctypes.POINTER(Authority), ctypes.c_float * 3, ctypes.c_float, ctypes.c_float, ctypes.POINTER(Output)]
+library.flip_start.argtypes = [ctypes.POINTER(State), ctypes.c_float, ctypes.c_float, ctypes.c_float]
+library.flip_step.argtypes = [ctypes.POINTER(State), ctypes.POINTER(Params), ctypes.POINTER(Authority), ctypes.c_float * 3, ctypes.c_float * 3, ctypes.c_float, ctypes.POINTER(Output)]
 DEFAULTS = Params.in_dll(library, "flip_defaults")
 
 
 def fly(job, trace=None):
     """One batch of flips: per run, clean and the measures; trace, a list, gets every tick's time, positions, true roll (body z's tilt toward y) and estimated roll, and flip stages."""
-    settings, height, offset, seed, n, seconds = job
+    settings, height, offset, seed, n, seconds, gyro_range, accel_range, flipped = job
     from sw.sim import toss
     plant = toss.plant() | {"tilt_offset": offset, "accel_bias": (0.025 if offset else 0.0, 0.0, 0.0)}
     sim = R.Sim(n, plant, seed=seed, scale=C.randomization(n, seed))
@@ -89,19 +89,19 @@ def fly(job, trace=None):
         throttle = np.zeros((n, 2))
         tilt = np.zeros((n, 2))
         for i in range(n):
-            gyro = obs["gyro"][i]
-            flipping = flips[i].stage != 0 or now - handed[i] < FLIP_GRACE
+            # The IMU's full scale (the MPU6050's gyro at ±250, 500, 1000 or 2000 deg/s, its accelerometer at ±2-16 g): it reads no more than that.
+            gyro = np.clip(obs["gyro"][i], -gyro_range, gyro_range) if gyro_range else obs["gyro"][i]
             accel = obs["accel"][i] / R.G
+            accel = np.clip(accel, -accel_range, accel_range) if accel_range else accel
+            flipping = flips[i].stage != 0 or now - handed[i] < FLIP_GRACE
             roll, pitch = estimates[i].update(accel, gyro, R.DT, True, banked=flipping)
-            # The measured specific force along the estimated up (g), as flight_rt.c's vertical.
-            vertical = -accel[0] * math.sin(pitch) + math.cos(pitch) * (accel[1] * math.sin(roll) + accel[2] * math.cos(roll))
-            if k == round(FLIP_AT / R.DT):
-                library.flip_start(ctypes.byref(flips[i]), hover * 2)
+            if flipped and k == round(FLIP_AT / R.DT):
+                library.flip_start(ctypes.byref(flips[i]), hover * 2, roll, pitch)
                 saved[i] = (controllers[i].state[0], controllers[i].state[1], controllers[i].state[16])
-            library.flip_step(ctypes.byref(flips[i]), ctypes.byref(DEFAULTS), ctypes.byref(authority), (ctypes.c_float * 3)(*gyro), vertical, R.DT, ctypes.byref(out))
+            library.flip_step(ctypes.byref(flips[i]), ctypes.byref(DEFAULTS), ctypes.byref(authority), (ctypes.c_float * 3)(*gyro), (ctypes.c_float * 3)(*accel), R.DT, ctypes.byref(out))
             if out.handed_back:
-                # As flight_rt.c: the estimate's roll wrapped back into a half turn, and the integrators as they were before the flip.
-                estimates[i].state[0] = math.atan2(math.sin(estimates[i].state[0]), math.cos(estimates[i].state[0]))
+                # As flight_rt.c would: the estimate takes the flip's own attitude, and the integrators are as they were before the flip.
+                estimates[i].state[0], estimates[i].state[1] = out.roll, out.pitch
                 controllers[i].state[0], controllers[i].state[1], controllers[i].state[16] = saved[i]
                 handed[i] = now
             controllers[i].command[6 + flight.TUNING_LAYOUT.index("base_throttle")] = flight.throttle(out.collective / 2 * calibrations[i]) if out.collective_set else bases[i]
@@ -123,7 +123,7 @@ def fly(job, trace=None):
     up = sim.up()[:, 2]
     still = np.linalg.norm(sim.omega, axis=1) < 1.0
     turned = np.array([f.turned for f in flips])
-    clean = ~sim.touched & ~tipped & (up > math.cos(math.radians(10))) & still & (turned >= 2 * math.pi - DEFAULTS.handoff - 0.01)
+    clean = ~sim.touched & ~tipped & (up > math.cos(math.radians(10))) & still & ((turned >= 2 * math.pi - DEFAULTS.handoff - 0.01) | (not flipped))
     return [{"clean": bool(clean[i]), "touched": bool(sim.touched[i]), "tipped": bool(tipped[i]), "lost": float(height - lowest[i]), "up": float(up[i])} for i in range(n)]
 
 
@@ -135,15 +135,25 @@ def main():
     parser.add_argument("--settings", default="2026-11-11T23-35")
     parser.add_argument("--seconds", type=float, default=6.0)
     parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument("--gyro-range", type=float, default=0.0, help="the gyro's full scale (deg/s; 0 = unclipped; the firmware as of 2026-11-12 runs it at 250)")
+    parser.add_argument("--accel-range", type=float, default=0.0, help="the accelerometer's full scale (g; 0 = unclipped; the firmware runs it at 2)")
     args = parser.parse_args()
     settings = recording_settings(recording(args.settings))
     batch = 16
+    gyro_range = math.radians(args.gyro_range)
+    print(f"from {args.height} m, gyro {'±%g deg/s' % args.gyro_range if args.gyro_range else 'unclipped'}, accelerometer {'±%g g' % args.accel_range if args.accel_range else 'unclipped'}")
     for offset in args.bands:
-        jobs = [(settings, args.height, offset, 1000 + seed, batch, args.seconds) for seed in range(0, args.n, batch)]
-        with Pool(args.workers) as pool:
-            runs = [r for rows in pool.map(fly, jobs) for r in rows]
+        # The same plants with and without the flip: the firmware's attitude loop does not hold every drawn plant even without one.
+        results = {}
+        for flipped in (False, True):
+            jobs = [(settings, args.height, offset, 1000 + seed, batch, args.seconds, gyro_range, args.accel_range, flipped) for seed in range(0, args.n, batch)]
+            with Pool(args.workers) as pool:
+                results[flipped] = [r for rows in pool.map(fly, jobs) for r in rows]
+        runs = results[True]
+        held = [f for b, f in zip(results[False], runs) if b["clean"]]
         lost = np.array([r["lost"] for r in runs])
-        print(f"tilt offset {offset:+.1f} deg, from {args.height} m, {len(runs)} flips: clean {np.mean([r['clean'] for r in runs]) * 100:.1f}%, hit the ground {np.mean([r['touched'] for r in runs]) * 100:.1f}%, tip cut after the hand-back {np.mean([r['tipped'] for r in runs]) * 100:.1f}%, upright at the end {np.mean([r['up'] > math.cos(math.radians(10)) for r in runs]) * 100:.0f}%, height lost median {np.median(lost):.2f} m (90th {np.percentile(lost, 90):.2f})")
+        print(f"  tilt offset {offset:+.1f} deg, {len(runs)} flips: clean {np.mean([r['clean'] for r in runs]) * 100:.1f}%, hit the ground {np.mean([r['touched'] for r in runs]) * 100:.1f}%, tip cut after the hand-back {np.mean([r['tipped'] for r in runs]) * 100:.1f}%, height lost median {np.median(lost):.2f} m (90th {np.percentile(lost, 90):.2f}); "
+              f"without the flip {len(held)} of {len(runs)} plants hold, and of those the flip is clean in {np.mean([r['clean'] for r in held]) * 100:.1f}%")
 
 
 if __name__ == "__main__":
