@@ -25,7 +25,7 @@ static const int sensor_to_body[3] = {1, -1, 1};
 typedef struct __attribute__((packed)) {
     char magic[4];
     uint32_t time_ms, target_sequence;
-    // 1 IMU online, 2 calibrating, 4 calibrated, 8 armed, 16 recording, 32 recorder subscribed, 64 throttle latched, 128 force valid; bits 8-13 the guards as the flight record's guard field holds them (flight_rt.c Record).
+    // 1 IMU online, 2 calibrating, 4 calibrated, 8 armed, 16 recording, 32 recorder subscribed, 64 throttle latched, 128 force valid; bits 8-15 the guards and the flip's phase as the flight record's guard field holds them (flight_rt.c Record).
     uint16_t flags;
     // Native stop reason (controller/log_format.py STOP_REASONS).
     uint8_t reason;
@@ -91,6 +91,8 @@ void flight_runtime_consume_log(size_t count);
 bool flight_runtime_targets(const float *targets);
 // sequence: the STOP packet's laptop sequence.
 void flight_runtime_command_stop(uint32_t sequence);
+// The laptop's flip request (flip.h): NULL once the flip has started, or why it is refused.
+const char *flight_runtime_flip(void);
 // Copies the settings store's tunable values into the controller.
 void flight_runtime_apply_settings(void);
 const char *flight_runtime_calibrate(void);

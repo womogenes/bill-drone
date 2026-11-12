@@ -9,6 +9,14 @@
 // The arrest ends once the vertical speed has stayed under ARREST_DONE (m/s) for ARREST_HOLD (s).
 #define ARREST_DONE 0.2f
 #define ARREST_HOLD 0.3f
+#define DEGREE (3.14159265f / 180)
+// The flip request (flip_refusal) wants the hold settled this long after liftoff (s), within FLIP_LEVEL of level and turning under FLIP_STILL on every axis, its climb rate under FLIP_CLIMB_RATE and the GPS's ground speed under FLIP_SPEED (m/s), and the pack at FLIP_MIN_V or more: the climb asks for 2.1 times the weight, and a sagging pack gives less (3.7 V a cell under load on 4S).
+#define FLIP_SETTLE_S 5.0f
+#define FLIP_LEVEL (10 * DEGREE)
+#define FLIP_STILL (30 * DEGREE)
+#define FLIP_CLIMB_RATE 0.3f
+#define FLIP_SPEED 1.0f
+#define FLIP_MIN_V 14.8f
 
 const FlipParams flip_defaults = {
     .climb_thrust = 2.1362f, .climb_time = 0.1064f, .spin_rate = 15.9605f, .k_spin = 5.322f, .spin_thrust = 0.4672f, .handoff = 1.9173f,
@@ -20,10 +28,10 @@ static float clampf(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
 }
 
-void flip_start(Flip *flip, float hover_thrust, float roll, float pitch) {
+void flip_start(Flip *flip, float hover_thrust, float roll, float pitch, float vertical) {
     // flight_attitude's roll and pitch (about forward, then left; positive right side down and nose down) as a quaternion, the heading zero.
     float cr = cosf(roll / 2), sr = sinf(roll / 2), cp = cosf(pitch / 2), sp = sinf(pitch / 2);
-    *flip = (Flip){.stage = FLIP_CLIMB, .q = {cr * cp, sr * cp, cr * sp, -sr * sp}, .thrust = hover_thrust};
+    *flip = (Flip){.stage = FLIP_CLIMB, .q = {cr * cp, sr * cp, cr * sp, -sr * sp}, .thrust = hover_thrust, .vertical = vertical};
 }
 
 // The body rates turn the attitude: q += q (0, w) dt / 2, normalized.
@@ -114,4 +122,97 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
         }
     }
     if (flip->stage == FLIP_SPIN && flip->time > p->timeout) flip->stage = FLIP_RIGHT;
+}
+
+const char *flip_refusal(const FlipCheck *c) {
+    if (!c->enabled) return "Flip is off (setting flip_enable)";
+    if (!c->armed) return "Not armed";
+    if (c->done) return "One flip per arming: land and arm again";
+    if (!c->holding || c->landing) return "Flip only from the hover hold";
+    if (c->camera || !c->gps) return "Flip only from the GPS hold (hover_camera 0, hover_gps_tau on)";
+    if (c->ekf) return "Flip only with the hold on its own estimates (hover_ekf 0)";
+    if (!c->aligned || !c->located) return "GPS hold not settled: heading not pinned or no fresh fix";
+    if (c->failsafe) return "Fly-away failsafe active";
+    if (c->pattern) return "Test pattern playing";
+    if (c->airborne < FLIP_SETTLE_S) return "Not airborne long enough";
+    if (c->height < c->min_height) return "Below flip_height";
+    if (fabsf(c->climb_rate) > FLIP_CLIMB_RATE) return "Still climbing or sinking";
+    if (c->speed > FLIP_SPEED) return "Moving over the ground";
+    if (fabsf(c->roll) > FLIP_LEVEL || fabsf(c->pitch) > FLIP_LEVEL) return "Not level";
+    if (fabsf(c->rate[0]) > FLIP_STILL || fabsf(c->rate[1]) > FLIP_STILL || fabsf(c->rate[2]) > FLIP_STILL) return "Not still";
+    if (c->battery < FLIP_MIN_V) return "Battery under 14.8 V";
+    return NULL;
+}
+
+void flip_reset(FlipRun *run) {
+    *run = (FlipRun){.since = -1};
+}
+
+void flip_begin(FlipRun *run, const Command *command, const Controller *controller, float height_integral, float collective, float roll, float pitch, float climb_rate) {
+    const Model *m = &command->model;
+    run->authority = (FlipAuthority){m->arm / m->roll_inertia, m->pivot_height / m->pitch_inertia, m->arm / m->yaw_inertia, command->hover.mass * GRAVITY};
+    run->done = true;
+    run->since = -1;
+    run->saved = *controller;
+    run->height_integral = height_integral;
+    flip_start(&run->flip, collective, roll, pitch, climb_rate);
+}
+
+void flip_cancel(FlipRun *run) {
+    run->flip.stage = FLIP_IDLE;
+    run->since = -1;
+}
+
+bool flip_abort(FlipRun *run, float *height_integral) {
+    if (run->flip.stage != FLIP_CLIMB) return false;
+    run->flip.stage = FLIP_IDLE;
+    *height_integral = run->height_integral;
+    return true;
+}
+
+bool flip_active(const FlipRun *run) {
+    return run->flip.stage != FLIP_IDLE;
+}
+
+static bool grace(const FlipRun *run) {
+    return run->since >= 0 && run->since < FLIP_GRACE;
+}
+
+bool flip_gyro_only(const FlipRun *run) {
+    return flip_active(run) || grace(run);
+}
+
+bool flip_tip_exempt(const FlipRun *run) {
+    return run->flip.stage == FLIP_SPIN || run->flip.stage == FLIP_RIGHT || grace(run);
+}
+
+int flip_phase(const FlipRun *run) {
+    int stage = run->flip.stage;
+    return stage == FLIP_CLIMB ? 1 : stage == FLIP_SPIN || stage == FLIP_RIGHT ? 2 : stage == FLIP_ARREST ? 3 : 0;
+}
+
+void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, Attitude *attitude, Controller *controller, float *height_integral, FlipOutput *out) {
+    if (run->since >= 0) run->since += dt;
+    bool active = flip_active(run);
+    flip_step(&run->flip, &flip_defaults, &run->authority, gyro, accel, dt, out);
+    if (out->handed_back) {
+        attitude->roll = out->roll;
+        attitude->pitch = out->pitch;
+        controller->roll_i = run->saved.roll_i;
+        controller->pitch_i = run->saved.pitch_i;
+        controller->yaw_i = run->saved.yaw_i;
+        controller->velocity[0] = run->saved.velocity[0];
+        controller->velocity[1] = run->saved.velocity[1];
+        run->since = 0;
+    }
+    if (active && !flip_active(run)) *height_integral = run->height_integral;
+}
+
+void flip_actuators(const FlipOutput *out, const Command *c, float left_scale, float right_scale, float throttle_max, float servo_limit, float *throttle, float *servo) {
+    float thrust[2] = {fmaxf(out->left, 0) / left_scale, fmaxf(out->right, 0) / right_scale};
+    float tilt[2] = {c->left_trim + c->model.left_servo_direction * out->left_tilt, c->right_trim + c->model.right_servo_direction * out->right_tilt};
+    for (int side = 0; side < 2; side++) {
+        throttle[side] = clampf(roundf(flight_interpolate(thrust[side], &flight_thrust[0][0], flight_thrust_count, 1)), 1, throttle_max);
+        servo[side] = clampf(tilt[side] / DEGREE, -servo_limit, servo_limit);
+    }
 }

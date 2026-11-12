@@ -604,7 +604,7 @@ static const char *change_settings(const int *indices, const float *values, int 
     return NULL;
 }
 
-// Requests: A arm, O record while disarmed (1) or stop recording (0), U raw bytes to the camera's wire (recovery), J reset the camera (1: into download mode), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update), M the radio quiet test, N the GPS tunnel (gps_send, gps_take). Fills reply after the id and status bytes; returns an error or NULL.
+// Requests: A arm, O record while disarmed (1) or stop recording (0), U raw bytes to the camera's wire (recovery), J reset the camera (1: into download mode), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update), M the radio quiet test, N the GPS tunnel (gps_send, gps_take), f the roll flip (flight_runtime_flip). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -743,6 +743,8 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         arm_history_add(&arm_history, request, !failure);
         return failure;
     }
+    // The roll flip (flight_runtime_flip): a retry that finds its reply gone from the cache is refused by the one flip per arming.
+    if (op == 'f') return flight_runtime_flip();
     if (op == 'O') {
         // A recording while disarmed (1) or its end (0), as arming's needs the recorder and the previous one closed.
         int64_t now = esp_timer_get_time();

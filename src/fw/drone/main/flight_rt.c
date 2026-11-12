@@ -19,6 +19,7 @@
 #include "ekf.h"
 #include "gps.h"
 #include "guard.h"
+#include "flip.h"
 #include "hover.h"
 
 #define LOG_CAPACITY 200
@@ -75,7 +76,7 @@ typedef struct __attribute__((packed)) {
     int16_t velocity[2], height, climb, height_target, range_target, arc, yaw, trim[2], drag_velocity[2];
     // The barometer's newest reading (baro_input): pressure altitude in the standard atmosphere (mm), INT32_MIN without one in the last BARO_MAX_AGE_US.
     int32_t baro;
-    // The guards (guard.h): bits 0-1 the fly-away failsafe's phase (FAILSAFE_*), bit 2 set off by distance rather than speed, bits 3-5 why the test pattern stopped (PATTERN_*, 0 while it plays or never did).
+    // The guards (guard.h): bits 0-1 the fly-away failsafe's phase (FAILSAFE_*), bit 2 set off by distance rather than speed, bits 3-5 why the test pattern stopped (PATTERN_*, 0 while it plays or never did), bits 6-7 the flip's phase (flip.h flip_phase).
     uint16_t guard;
     // The Kalman filter's estimate (ekf.h), whether or not the hold flies it: roll and pitch as attitude above and yaw (centidegrees; from north once the heading is known, until then from where the nose pointed at the start), velocity north, west and up (mm/s), position north and west of where it last rested (cm) and height above it (mm), the standard deviations of its horizontal velocity (cm/s) and height (cm; 255 at most), and flags: bit 0 the heading is known, bit 1 resting still, bits 2 and 3 good enough for the hold to fly horizontally and vertically (ekf_estimate), bit 4 the hold flew on it this tick (hover.h gains ekf), bits 8-15 the GPS solutions it has refused in a row (255 at most).
     int16_t ekf_attitude[3], ekf_velocity[3], ekf_position[2], ekf_height;
@@ -126,6 +127,8 @@ static struct { int64_t us[GYRO_HISTORY]; float rate[GYRO_HISTORY][3]; int next;
 #define GPS_MAX_ACCURACY 8.0f
 #define GPS_MAX_AGE_US 300000
 #define GPS_LATENCY_US 60000
+// The flip asks for a fix the hold took in the last FLIP_FIX_US (hover.c GPS_STALE_US).
+#define FLIP_FIX_US 500000
 #define EARTH_RADIUS 6371000.0
 
 // The newest GPS solution as the Kalman filter and the hover take it (once each): north and east of the first fix taken since boot (m), up above sea level. False without a new, good fix.
@@ -195,6 +198,10 @@ static bool flow_input(const HoverGains *gains, HoverFlow *out) {
     return true;
 }
 static Command command;
+// The controller's tilt setpoint for bank_tilt: its roll, or its pitch beyond pitch_trim, whichever is larger (radians).
+static float bank_angle(const Controller *c) {
+    return fmaxf(fabsf(c->setpoint_roll), fabsf(c->setpoint_pitch - command.pitch_trim));
+}
 static Record records[LOG_CAPACITY];
 static uint32_t log_head, log_tail, log_samples, log_dropped, log_elapsed, log_session;
 static uint64_t log_started;
@@ -235,6 +242,8 @@ static Ekf ekf;
 static EkfOutput filtered;
 // The fly-away failsafe and the test pattern's limits (guard.h).
 static Guard guard;
+// The roll flip (flip.h), started only by flight_runtime_flip.
+static FlipRun flip;
 static Command flown;
 // The laptop's hold-point nudge for hover (m; toward the tag, left, up), from the targets.
 #define NUDGE_MAX 1.5f
@@ -250,7 +259,8 @@ static struct { float sum[2], bias[2]; int count; bool ready; } trim;
 // Channels: roll and pitch targets (degrees), yaw-rate target (degrees/s), collective (throttle), left and right servo tilt (degrees, positive forward), left and right motor (throttle), and the hover hold point's speed toward the tag and to the drone's left (m/s). The targets and collective add before the controller, so the log's targets hold them; the servos and motors add after it, and the fit adds them back from the pattern (the recording's events) and the segment logged in Record flags. The hold point's speed moves it as a held arrow does (on top of the laptop's nudge, within NUDGE_MAX), so a pattern can fly steady speeds for the speed moment's fit.
 #define EXCITE_CHANNELS 10
 #define EXCITE_SEGMENTS 224
-static const float excite_limit[EXCITE_CHANNELS] = {10, 10, 60, 150, 8, 8, 150, 150, 1, 1};
+// Each channel's largest value (sw/excite.py LIMITS holds the same). The roll and pitch targets go to 60 degrees (10 until 2026-11-12, which refused the roll-step ladder's 20-35 degree steps), as far as pattern_tilt may be set: the pattern's tilt guard (guard.c) and the tip cut are what bound the flown tilt.
+static const float excite_limit[EXCITE_CHANNELS] = {60, 60, 60, 150, 8, 8, 150, 150, 1, 1};
 typedef struct {
     uint16_t ticks;
     int16_t value[EXCITE_CHANNELS];
@@ -329,6 +339,7 @@ static void stop_locked(int reason) {
     state.latched = true;
     state.reason = reason;
     link_landing = false;
+    flip_cancel(&flip);
     state.controller = (Controller){0};
     for (int side = 0; side < 2; side++) {
         state.throttle[side] = 0;
@@ -458,7 +469,7 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->arc = scaled((hover.arc - (range > 0.1f ? held_nudge(1) / range : 0)) * DEG, 100);
     record->yaw = scaled(hover.yaw * DEG, 100);
     record->baro = isfinite(baro_altitude) ? (int32_t)lroundf(baro_altitude * 1000) : INT32_MIN;
-    record->guard = guard.failsafe | guard.far << 2 | guard.stopped << 3;
+    record->guard = guard.failsafe | guard.far << 2 | guard.stopped << 3 | flip_phase(&flip) << 6;
     record->ekf_attitude[0] = scaled((filtered.roll - state.pose_zero.roll) * DEG, 100);
     record->ekf_attitude[1] = scaled((filtered.pitch - state.pose_zero.pitch) * DEG, 100);
     record->ekf_attitude[2] = scaled(filtered.yaw * DEG, 100);
@@ -499,7 +510,11 @@ static void runtime_task(void *arg) {
             link_landing = false;
             hover_mode = requested_mode;
         }
-        if (state.enabled && (link_landing || (stale && state.controller.airborne > 0 && !hover.landed && hover.bias > 0.5f))) {
+        // A flip that has begun its spin finishes first (flip.h): it needs nothing from the laptop and hands back within a few seconds; one still climbing ends here.
+        if (state.enabled && stale) flip_abort(&flip, &hover.integral);
+        if (state.enabled && flip_active(&flip)) {
+            // The landing or the stop below, once it is done.
+        } else if (state.enabled && (link_landing || (stale && state.controller.airborne > 0 && !hover.landed && hover.bias > 0.5f))) {
             if (!link_landing) {
                 link_landing = true;
                 link_land_us = now;
@@ -552,18 +567,25 @@ static void runtime_task(void *arg) {
             idle_failure = false;
         }
 
-        // The tick's mean from the FIFO in place of the newest sample (the temperature stays the newest).
+        // The tick's mean from the FIFO in place of the newest sample (the temperature stays the newest). The log takes it rounded to counts; the estimates take it unrounded: at ±2000 deg/s a count is 0.061 deg/s, more than the resting gyro's noise (0.03-0.07 deg/s RMS), so a rounded mean would quantize the calibrated bias and leave the attitude estimate up to a degree or so off in flight (half a count over its 50 s powered time constant).
+        float fine[7];
+        for (int i = 0; i < 7; i++) fine[i] = sensor[i];
         if (samples) {
             for (int i = 0; i < 3; i++) {
                 sensor[i] = mean(sum[i], samples);
                 sensor[4 + i] = mean(sum[3 + i], samples);
+                fine[i] = (float)sum[i] / samples;
+                fine[4 + i] = (float)sum[3 + i] / samples;
             }
         }
         // Reordered to body axes, so the log's raw values need only the signs.
         raw[3] = sensor[3];
+        float body[7];
         for (int i = 0; i < 3; i++) {
             raw[i] = sensor[sensor_axis[i]];
             raw[4 + i] = sensor[4 + sensor_axis[i]];
+            body[i] = fine[sensor_axis[i]];
+            body[4 + i] = fine[4 + sensor_axis[i]];
         }
         float dt = previous ? (now - previous) / 1000000.0f : 1.0f / SAMPLE_HZ;
         if (voltage_mv) {
@@ -572,8 +594,8 @@ static void runtime_task(void *arg) {
         }
         if (state.enabled && previous && now - previous > MAX_SAMPLE_MS * 1000ULL) stop_locked(5);
         for (int i = 0; i < 3; i++) {
-            state.accel[i] = (raw[i] * config.accel_scale[i] - state.accel_offset[i]) * state.accel_gain[i];
-            state.gyro[i] = raw[4 + i] * config.gyro_scale[i];
+            state.accel[i] = (body[i] * config.accel_scale[i] - state.accel_offset[i]) * state.accel_gain[i];
+            state.gyro[i] = body[4 + i] * config.gyro_scale[i];
             if (state.calibration_left) {
                 state.calibration_sum[i] += state.gyro[i];
                 state.gravity_sum[i] += state.accel[i];
@@ -603,13 +625,15 @@ static void runtime_task(void *arg) {
             state.attitude.roll = atan2f(state.accel[1], state.accel[2]);
             state.attitude.pitch = atan2f(-state.accel[0], hypotf(state.accel[1], state.accel[2]));
         }
-        // Banked past bank_tilt (last tick's setpoint), the accelerometer reads the thrust, not gravity: the gyro alone carries the attitude.
-        const Controller *held = &state.controller;
-        bool banked = command.bank_tilt > 0 && spinning() && fmaxf(fabsf(held->setpoint_roll), fabsf(held->setpoint_pitch)) > command.bank_tilt;
+        // Banked past bank_tilt (last tick's setpoint, from pitch_trim), and through a flip and FLIP_GRACE after, the accelerometer reads the thrust, not gravity: the gyro alone carries the attitude.
+        bool banked = command.bank_tilt > 0 && spinning() && bank_angle(&state.controller) > command.bank_tilt;
         Motion motion = {state.accel[0], state.accel[1], state.accel[2],
                          state.gyro[0], state.gyro[1], state.gyro[2], dt,
-                         banked ? INFINITY : spinning() ? config.powered_tau : config.gravity_tau};
+                         banked || flip_gyro_only(&flip) ? INFINITY : spinning() ? config.powered_tau : config.gravity_tau};
         flight_attitude(&state.attitude, &motion);
+        // The flip, once asked for (flight_runtime_flip): it flies on the gyro, and at its hand-back the estimate above takes its attitude.
+        FlipOutput flipped = {0};
+        if (state.enabled) flip_tick(&flip, state.gyro, state.accel, dt, &state.attitude, &state.controller, &hover.integral, &flipped);
         state.online = true;
         state.temperature = raw[3] / 340.0f + 36.53f;
         state.sample_us = now;
@@ -630,7 +654,7 @@ static void runtime_task(void *arg) {
         ekf_estimate(&filtered, &estimate);
         hover_estimate(&hover, &estimate);
         Attitude pose = relative_attitude(&state);
-        if (state.enabled && (fabsf(pose.roll) > command.tip_limit || fabsf(pose.pitch) > command.tip_limit)) stop_locked(4);
+        if (state.enabled && !flip_tip_exempt(&flip) && (fabsf(pose.roll) > command.tip_limit || fabsf(pose.pitch) > command.tip_limit)) stop_locked(4);
         // Measured specific force along vertical, in g: the accelerometer onto the IMU attitude's up axis.
         float vertical = -state.accel[0] * sinf(state.attitude.pitch) +
                          cosf(state.attitude.pitch) * (state.accel[1] * sinf(state.attitude.roll) + state.accel[2] * cosf(state.attitude.roll));
@@ -643,7 +667,9 @@ static void runtime_task(void *arg) {
             Command scaled = command;
             // The pitch speed moment compensation needs a measured speed: the hover's while it flies on the tag (below); flight_math's own dead reckoning from g tan(pitch) reads a held trim pitch as speed.
             bool tracking = false;
-            if (hover_mode && hover.bias > 0.5f) {
+            if (hover_mode != HOVER_HOLD) flip_abort(&flip, &hover.integral);
+            bool hovering = hover_mode && hover.bias > 0.5f;
+            if (hovering) {
                 CameraPose camera;
                 HoverPose seen, *tag = NULL;
                 // Every frame whose tag corners the camera trusted, whether or not it settled the tilt: hover flies on the tag centre, which the tilt does not affect, and takes the wall's normal (the tag's z axis in the camera frame) only from an unambiguous tilt.
@@ -677,10 +703,13 @@ static void runtime_task(void *arg) {
                 bool have_gps = gains.gps_tau > 0 && have_fix;
                 // The fly-away failsafe may ignore the stick, brake harder or land (guard.c).
                 int mode = guard_hover(&guard, &command.guard, &hover, &gains, hover_mode, now, dt);
+                // The failsafe ends a flip that is still climbing; one past that holds until it is done, its estimators running on (its outputs are not flown meanwhile).
+                if (guard.failsafe != FAILSAFE_OFF) flip_abort(&flip, &hover.integral);
+                if (flip_active(&flip)) mode = HOVER_HOLD;
                 hover_update(&hover, &gains, mode, tag, now, dt, pose.roll, pose.pitch, heading_rate, vertical, flying, &drag,
                              have_flow ? &flow : NULL, have_gps ? &gps : NULL, have_baro ? &baro : NULL, &out);
                 // A finished landing disarms, ending the session like a stop, so the laptop can take off again (H or Enable) instead of being left armed with hover holding thrust at zero.
-                if (hover.landed && out.force <= 0) stop_locked(link_landing ? 8 : guard.failsafe == FAILSAFE_LAND ? 9 : 7);
+                if (hover.landed && out.force <= 0 && !flip_active(&flip)) stop_locked(link_landing ? 8 : guard.failsafe == FAILSAFE_LAND ? 9 : 7);
                 scaled.base = out.force > 0 ? fminf(THROTTLE_MAX, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
                 scaled.target_roll = out.roll;
                 scaled.target_pitch = out.pitch;
@@ -695,7 +724,7 @@ static void runtime_task(void *arg) {
                 }
             }
             float add[EXCITE_CHANNELS] = {0};
-            excite.active = excite.count && !guard.stopped && scaled.base > 0 && state.controller.airborne > excite.after && (!excite.repeat || excite.played < excite.repeat);
+            excite.active = excite.count && !guard.stopped && scaled.base > 0 && state.controller.airborne > excite.after && (!excite.repeat || excite.played < excite.repeat) && !flip_gyro_only(&flip);
             // The pattern stops for good (until the next arming) once it strays, loses the tag, tilts too far or the pilot steers (guard.c); the hold keeps flying, its hold point where the pattern left it.
             if (excite.active && guard_pattern(&guard, &command.guard, hover_mode && hover.engaged ? &hover : NULL, now, pose.roll, pose.pitch, command.target_roll, command.target_pitch, nudge, excite.hold)) excite.active = false;
             if (excite.active) {
@@ -716,13 +745,15 @@ static void runtime_task(void *arg) {
                 for (int i = 0; i < 2; i++) excite.hold[i] = limit(excite.hold[i] + add[8 + i] / SAMPLE_HZ, -NUDGE_MAX, NUDGE_MAX);
             }
             if (!tracking) scaled.pitch_speed = 0;
-            // Banked past bank_tilt (last tick's setpoint, as the attitude estimate above), the collective's thrust grows by 1 / cos(tilt) so the bank holds its height.
+            // Banked past bank_tilt (last tick's setpoint, as the attitude estimate above), the collective's thrust grows by 1 / cos(tilt) so the bank holds its height. Not under the hover, whose thrust is already divided by the cosine of the measured tilt (hover.c, at most twice): both made it up to four times.
             const Controller *bank = &state.controller;
-            if (command.bank_tilt > 0 && scaled.base > 0 && fmaxf(fabsf(bank->setpoint_roll), fabsf(bank->setpoint_pitch)) > command.bank_tilt) {
+            if (command.bank_tilt > 0 && scaled.base > 0 && !hovering && bank_angle(bank) > command.bank_tilt) {
                 float lift = cosf(bank->setpoint_roll) * cosf(bank->setpoint_pitch - command.pitch_trim);
                 float force = flight_interpolate(scaled.base, &flight_thrust[0][0], flight_thrust_count, 0) * fminf(1 / fmaxf(lift, 1 / BANK_THRUST_MAX), BANK_THRUST_MAX);
                 scaled.base = fminf(THROTTLE_MAX, flight_interpolate(force, &flight_thrust[0][0], flight_thrust_count, 1));
             }
+            // The flip's climb and arrest set the collective under the attitude controller.
+            if (flipped.collective_set) scaled.base = fminf(THROTTLE_MAX, flight_interpolate(flipped.collective / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1));
             flown = scaled;
             if (command.thrust_voltage > 0 && battery_v > 0) {
                 float ratio = limit(battery_v / command.thrust_voltage, 1 - VOLTAGE_RANGE, 1 + VOLTAGE_RANGE);
@@ -734,8 +765,14 @@ static void runtime_task(void *arg) {
             state.servo[1] = limit(state.controller.right_angle * DEG, -SERVO_LIMIT, SERVO_LIMIT);
             state.throttle[0] = lroundf(limit(state.controller.left, 0, THROTTLE_MAX));
             state.throttle[1] = lroundf(limit(state.controller.right, 0, THROTTLE_MAX));
+            // The spin and the righting fly the motors and servos themselves; the attitude controller above still runs, its outputs unused, and takes over at the hand-back.
+            if (flipped.owned) {
+                float throttle[2];
+                flip_actuators(&flipped, &command, scaled.left_thrust_scale, scaled.right_thrust_scale, THROTTLE_MAX, SERVO_LIMIT, throttle, state.servo);
+                for (int side = 0; side < 2; side++) state.throttle[side] = lroundf(throttle[side]);
+            }
             const Controller *c = &state.controller;
-            if (command.auto_trim > 0 && !excite.active && hover_mode <= HOVER_HOLD && scaled.base >= command.integrate_throttle && c->airborne > TRIM_SETTLE &&
+            if (command.auto_trim > 0 && !excite.active && !flip_gyro_only(&flip) && hover_mode <= HOVER_HOLD && scaled.base >= command.integrate_throttle && c->airborne > TRIM_SETTLE &&
                 fabsf(state.gyro[0]) < TRIM_RATE && fabsf(state.gyro[1]) < TRIM_RATE) {
                 // As flight_math.c: the roll integrator holds its bias, while the pitch bias adds on top of the pitch integrator (fully faded in by now).
                 trim.sum[0] += command.roll_p * (c->setpoint_roll - pose.roll) + c->roll_i - command.roll_damping * state.gyro[0];
@@ -905,6 +942,7 @@ const char *flight_runtime_arm(bool recorder, bool calibration_unsaved, uint32_t
         state.reason = 0;
         flight_reset(&state.controller, &command);
         rewind_pattern();
+        flip_reset(&flip);
         state.heartbeat_us = esp_timer_get_time();
         log_head = log_tail = log_samples = log_dropped = log_elapsed = 0;
         log_session = esp_random() | 1;
@@ -1073,10 +1111,30 @@ void flight_runtime_command_stop(uint32_t sequence) {
     portEXIT_CRITICAL(&lock);
 }
 
+// The laptop's flip request: starts the flip (flip.h) at once if flip_refusal finds nothing against it, checked under the lock against this tick's state.
+const char *flight_runtime_flip(void) {
+    portENTER_CRITICAL(&lock);
+    int64_t now = esp_timer_get_time();
+    Attitude pose = relative_attitude(&state);
+    FlipCheck check = {
+        .enabled = command.flip_enable >= 1, .armed = state.enabled, .done = flip.done,
+        .holding = hover_mode == HOVER_HOLD && hover.engaged, .camera = command.hover_camera != 0, .gps = command.hover.gps_tau > 0,
+        .aligned = hover.aligned, .located = hover.gps_us && now - hover.gps_us <= FLIP_FIX_US, .ekf = command.hover.ekf > 0,
+        .landing = link_landing, .failsafe = guard.failsafe != FAILSAFE_OFF, .pattern = excite.active,
+        .airborne = hover.lifted, .height = hover.height, .climb_rate = hover.climb_rate, .speed = hypotf(hover.gps_fix[0], hover.gps_fix[1]),
+        .roll = pose.roll, .pitch = pose.pitch - command.pitch_trim, .rate = {state.gyro[0], state.gyro[1], state.gyro[2]},
+        .min_height = command.flip_height, .battery = battery_v,
+    };
+    const char *error = flip_refusal(&check);
+    if (!error) flip_begin(&flip, &command, &state.controller, hover.integral, hover.force, state.attitude.roll, state.attitude.pitch, hover.climb_rate);
+    portEXIT_CRITICAL(&lock);
+    return error;
+}
+
 void flight_runtime_status(Status *status) {
     portENTER_CRITICAL(&lock);
     State copy = state;
-    int guarded = guard.failsafe | guard.far << 2 | guard.stopped << 3;
+    int guarded = guard.failsafe | guard.far << 2 | guard.stopped << 3 | flip_phase(&flip) << 6;
     float target[] = {command.target_roll * DEG, command.target_pitch * DEG, command.target_yaw * DEG, command.base};
     bool recording = log_active;
     uint32_t samples = log_samples, dropped = log_dropped;
