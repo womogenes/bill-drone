@@ -22,6 +22,7 @@ const FlipParams flip_defaults = {
     .climb_thrust = 2.1362f, .climb_time = 0.1064f, .spin_rate = 15.9605f, .k_spin = 5.322f, .spin_thrust = 0.4672f, .handoff = 1.9173f,
     .kp = 2.4309f, .brake = 15.4237f, .max_rate = 10.3931f, .k_roll = 7.4738f, .k_pitch = 2.1245f, .kd_yaw = 2.005f,
     .flip_thrust = 1.4874f, .right_angle = 0.656f, .servo_max = 0.8003f, .roll_over = 2.8798f, .kv = 7.9681f, .arrest_time = 2.0f, .timeout = 2.0f,
+    .floor = 0.0f, .ceiling = 3.0f, .handoff_rate = 1e9f, .slew = 1e9f, .throttle_cap = 1200.0f, .spin_lift = 0.0f,
 };
 
 static float clampf(float value, float low, float high) {
@@ -49,8 +50,10 @@ static void turn(float *q, const float *w, float dt) {
 
 // Wanted angular accelerations into thrusts and tilts (recover.py's allocation): roll by differential thrust, pitch by common tilt, yaw by differential tilt, from the thrust the motors have by now.
 static void allocate(Flip *flip, const FlipParams *p, const FlipAuthority *a, float roll, float pitch, float yaw, float collective, float dt, FlipOutput *out) {
-    float diff = roll / a->roll;
-    float total = fmaxf(collective, fabsf(diff));
+    // Each motor between floor and ceiling of the weight: the difference within what that allows, then the collective as asked where the difference leaves room.
+    float least = p->floor * a->weight, most = fmaxf(p->ceiling * a->weight, least);
+    float diff = clampf(roll / a->roll, least - most, most - least);
+    float total = clampf(fmaxf(collective, fabsf(diff) + 2 * least), fabsf(diff) + 2 * least, 2 * most - fabsf(diff));
     out->left = (total + diff) / 2;
     out->right = (total - diff) / 2;
     flip->thrust += (total - flip->thrust) * (1 - expf(-dt / FLIP_MOTOR_TAU));
@@ -96,7 +99,7 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
         // Keep the roll axis level: the nose's height (up's forward component, positive nose up) driven to zero through whichever of pitch and yaw tilts it now.
         float nose = up[0];
         float pitch_rate = p->kp * nose * up[2], yaw_rate = -p->kp * nose * up[1];
-        allocate(flip, p, a, p->k_spin * (p->spin_rate - gyro[0]), p->k_spin * (pitch_rate - gyro[1]), p->k_spin * 0.3f * (yaw_rate - gyro[2]), p->spin_thrust * a->weight, dt, out);
+        allocate(flip, p, a, p->k_spin * (p->spin_rate - gyro[0]), p->k_spin * (pitch_rate - gyro[1]), p->k_spin * 0.3f * (yaw_rate - gyro[2]), fmaxf(p->spin_thrust + p->spin_lift * cosf(flip->turned), 0) * a->weight, dt, out);
         if (flip->turned >= TWO_PI - p->handoff) flip->stage = FLIP_RIGHT;
     } else {
         // recover.py's righting: turn the thrust axis toward up about the axis between them, no faster than it can brake from; far over with the error mostly in pitch, roll the long way round.
@@ -109,7 +112,8 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
         }
         float rate = fminf(fminf(p->max_rate, sqrtf(2 * p->brake * angle)), p->kp * angle);
         allocate(flip, p, a, p->k_roll * (axis[0] * rate - gyro[0]), p->k_pitch * (axis[1] * rate - gyro[1]), -p->kd_yaw * gyro[2], p->flip_thrust * a->weight, dt, out);
-        if (up[2] > cosf(p->right_angle) || flip->time > p->timeout) {
+        bool slow = fabsf(gyro[0]) < p->handoff_rate && fabsf(gyro[1]) < p->handoff_rate && fabsf(gyro[2]) < p->handoff_rate;
+        if ((up[2] > cosf(p->right_angle) && slow) || flip->time > p->timeout) {
             // Back to the attitude controller, with the attitude as flight_attitude keeps it.
             flip->stage = FLIP_ARREST;
             flip->time = 0;
@@ -145,7 +149,7 @@ const char *flip_refusal(const FlipCheck *c) {
 }
 
 void flip_reset(FlipRun *run) {
-    *run = (FlipRun){.since = -1};
+    *run = (FlipRun){.since = -1, .params = &flip_defaults};
 }
 
 void flip_begin(FlipRun *run, const Command *command, const Controller *controller, float height_integral, float collective, float roll, float pitch, float climb_rate) {
@@ -194,7 +198,7 @@ int flip_phase(const FlipRun *run) {
 void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, Attitude *attitude, Controller *controller, float *height_integral, FlipOutput *out) {
     if (run->since >= 0) run->since += dt;
     bool active = flip_active(run);
-    flip_step(&run->flip, &flip_defaults, &run->authority, gyro, accel, dt, out);
+    flip_step(&run->flip, run->params, &run->authority, gyro, accel, dt, out);
     if (out->handed_back) {
         attitude->roll = out->roll;
         attitude->pitch = out->pitch;
@@ -206,6 +210,18 @@ void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, At
         run->since = 0;
     }
     if (active && !flip_active(run)) *height_integral = run->height_integral;
+}
+
+void flip_limit(FlipRun *run, float *throttle, float dt) {
+    const FlipParams *p = run->params;
+    bool limited = flip_active(run) || grace(run);
+    for (int side = 0; side < 2; side++) {
+        if (limited && throttle[side] > 0) {
+            float last = run->throttle[side], step = p->slew * dt;
+            throttle[side] = fminf(clampf(throttle[side], last - step, last + step), p->throttle_cap);
+        }
+        run->throttle[side] = throttle[side];
+    }
 }
 
 void flip_actuators(const FlipOutput *out, const Command *c, float left_scale, float right_scale, float throttle_max, float servo_limit, float *throttle, float *servo) {

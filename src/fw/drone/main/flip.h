@@ -14,6 +14,12 @@ typedef struct {
     float kv, arrest_time;
     // Hand the attitude back regardless after this long (s).
     float timeout;
+    // The motors while the flip owns them (2026-11-12, after the first flip): each makes at least floor and at most ceiling of the weight, so neither idles (an idle prop coasts, its ESC may stop it, and its spin-up later is a current spike and a desync risk) and neither sits at full throttle; the righting hands back only once every body rate is under handoff_rate (rad/s) as well as within right_angle of upright.
+    float floor, ceiling, handoff_rate;
+    // flip_limit: each throttle moves at most slew a second (throttle units: the full range in no less than 1200 / slew s), at most throttle_cap, from the flip's start until FLIP_GRACE after its hand-back.
+    float slew, throttle_cap;
+    // The spin's collective is spin_thrust plus spin_lift times the cosine of the turn so far, of the weight: more while the thrust points up, less while it points down.
+    float spin_lift;
 } FlipParams;
 
 extern const FlipParams flip_defaults;
@@ -70,6 +76,9 @@ typedef struct {
     float since;
     Controller saved;
     float height_integral;
+    // The maneuver's parameters (flip_reset: flip_defaults), and the throttles flip_limit last let out.
+    const FlipParams *params;
+    float throttle[2];
 } FlipRun;
 
 // A new arming: no flip yet.
@@ -89,5 +98,7 @@ bool flip_tip_exempt(const FlipRun *run);
 int flip_phase(const FlipRun *run);
 // One control tick, right after the attitude estimate: the flip's step, and at the hand-back the estimate takes its attitude and the controller its integrators and dead-reckoned velocity from before the flip; at its end the hover's height integral is given back too, so neither carries what the flip wound into them.
 void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, Attitude *attitude, Controller *controller, float *height_integral, FlipOutput *out);
+// Every control tick, on the throttles about to be sent (flight_rt.c, after the attitude controller and flip_actuators): from the flip's start until FLIP_GRACE after its hand-back each moves at most params->slew a second from the last tick's and stays under params->throttle_cap, so neither motor jumps between idle and full throttle (the ESCs' current and voltage spikes); a stopped motor (0) stays stopped. Otherwise it only follows them.
+void flip_limit(FlipRun *run, float *throttle, float dt);
 // While the flip owns the motors: its thrusts (N) as throttles through the thrust table and each motor's thrust scale (as flight_control's, battery compensation included), a running motor never stopped, and its tilts as servo angles (degrees, as flight_rt.c's state.servo, within servo_limit).
 void flip_actuators(const FlipOutput *out, const Command *command, float left_scale, float right_scale, float throttle_max, float servo_limit, float *throttle, float *servo);

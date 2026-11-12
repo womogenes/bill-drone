@@ -6,6 +6,7 @@ For the flip of 2026-11-12 02:27:04 UTC (drone 1's first, which failed): what th
 
 import argparse
 import math
+from pathlib import Path
 
 import numpy as np
 
@@ -153,6 +154,53 @@ def fit(log, airframe, geometry=None, names=tuple(FIT), end=10.88, start_values=
     return dict(zip(names, map(float, result.x))), dict(zip(names, map(float, spread))), correlation, float(np.sqrt((result.fun ** 2).mean()))
 
 
+def closed_loop(airframe, settings=FLIP, seed=1000):
+    """The firmware's flip (sw/sim/flip_firmware.py) flown once on the airframe, nominal, with the recording's settings and the bands: its trace (time from the flip's start, gyro deg/s, throttles, servo angles, phase, height)."""
+    from sw.flight_log import settings as recording_settings
+    from sw.sim import flip_firmware as FF
+    FF.TRACE = True
+    flown = recording_settings(recording(settings)) | FF.FLIGHT
+    row = FF.fly((flown, BAND_TILT, seed, 1, 40.0, math.radians(2000), 2.0, 20.0, True, airframe, "none"))[0]
+    return np.array(row["trace"]), row
+
+
+def plot(path, log, before, after, airframes):
+    """Real against the replay on the old and the fitted plant (left), and the firmware's flip flown closed loop on each (right), the flip's start at 0."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    ink, old, new = "#0b0b0b", "#eb6834", "#2a78d6"
+    start = log.time[np.argmax(log.phase > 0)]
+    loops = [closed_loop(a) for a in airframes]
+    figure, axes = plt.subplots(3, 2, figsize=(11, 7.5), sharex="col", sharey="row")
+    for row, name in enumerate(("roll rate", "pitch rate", "yaw rate")):
+        left, right = axes[row]
+        left.plot(log.time - start, log.gyro[:, row] / A.DEG, color=ink, lw=2, label="real (2026-11-12 02:27:04)")
+        left.plot(log.time - start, before["rates"][0, :, row] / A.DEG, color=old, lw=1.5, label=f"replayed on {airframes[0]}")
+        left.plot(log.time - start, after["rates"][0, :, row] / A.DEG, color=new, lw=1.5, label=f"replayed on {airframes[1]}")
+        right.plot(log.time - start, log.gyro[:, row] / A.DEG, color=ink, lw=2)
+        for (trace, result), color in zip(loops, (old, new)):
+            right.plot(trace[:, 0], trace[:, 1 + row], color=color, lw=1.5)
+        left.set_ylabel(f"{name} (deg/s)")
+        for axis in (left, right):
+            axis.grid(color="#e6e5e1", lw=0.6)
+            axis.spines[["top", "right"]].set_visible(False)
+            for edge, label, height in ((0.10, "spin", 0.98), (0.91, "righting", 0.98), (0.99, "arrest", 0.88)):
+                axis.axvline(edge, color="#c3c2b7", lw=0.8)
+                if row == 0:
+                    axis.text(edge + 0.01, height, label, transform=axis.get_xaxis_transform(), va="top", fontsize=8, color="#52514e")
+    axes[0, 0].set_title("Open loop: the plant driven by the logged throttles and servos", fontsize=10, loc="left")
+    axes[0, 1].set_title("Closed loop: the firmware's flip flown on each plant", fontsize=10, loc="left")
+    for axis in axes[-1]:
+        axis.set_xlabel("s from the flip's start")
+    axes[-1, 1].set_xlim(-0.05, 1.7)
+    figure.legend(*axes[0, 0].get_legend_handles_labels(), loc="lower center", ncol=3, frameon=False, fontsize=9)
+    figure.suptitle("Drone 1's first flip: the 11-09 hover model rolls it 3x too fast and flips clean; the fitted plant fails as the drone did", fontsize=11, x=0.01, ha="left")
+    figure.tight_layout(rect=(0, 0.04, 1, 0.97))
+    figure.savefig(path, dpi=110)
+    print(f"saved {path}; closed loop: " + ", ".join(f"{a} clean {r.get('clean')} lost {r.get('lost', float('nan')):.2f} m" for a, (t, r) in zip(airframes, loops)))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recording", default=FLIP)
@@ -160,6 +208,8 @@ def main():
     parser.add_argument("--end", type=float, default=END)
     parser.add_argument("--airframe", default="airframe_2026-11-09.json")
     parser.add_argument("--geometry", help="a geometry file in sw/sim/models instead of the airframe's own")
+    parser.add_argument("--plot", type=Path, help="save real against the replay on --airframe and on --fitted, open and closed loop, to this file")
+    parser.add_argument("--fitted", default="airframe_2026-11-12_flip.json")
     args = parser.parse_args()
     log = Log(args.recording, args.start, args.end)
     airframe = A.model(args.airframe)
@@ -170,6 +220,11 @@ def main():
     for k in range(0, len(log.time), 5):
         real, sim = log.gyro[k] / A.DEG, result["rates"][0, k] / A.DEG
         print(f"  {log.time[k]:.2f} {log.phase[k]:.0f}  real {real[0]:6.0f} {real[1]:6.0f} {real[2]:6.0f}  sim {sim[0]:6.0f} {sim[1]:6.0f} {sim[2]:6.0f}  height real {log.height[k] - log.height[0]:+.2f} sim {result['height'][0, k]:+.2f}")
+    if args.plot:
+        fitted = replay(log, [plant_for(log, A.model(args.fitted))])
+        rms = errors(log, fitted)[0]
+        print(f"on {args.fitted}: rate error RMS to 10.88 s roll {rms[0]:.0f}, pitch {rms[1]:.0f}, yaw {rms[2]:.0f} deg/s")
+        plot(args.plot, log, result, fitted, (args.airframe, args.fitted))
 
 
 if __name__ == "__main__":

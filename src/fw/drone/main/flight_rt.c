@@ -771,11 +771,11 @@ static void runtime_task(void *arg) {
             state.throttle[0] = lroundf(limit(state.controller.left, 0, THROTTLE_MAX));
             state.throttle[1] = lroundf(limit(state.controller.right, 0, THROTTLE_MAX));
             // The spin and the righting fly the motors and servos themselves; the attitude controller above still runs, its outputs unused, and takes over at the hand-back.
-            if (flipped.owned) {
-                float throttle[2];
-                flip_actuators(&flipped, &command, scaled.left_thrust_scale, scaled.right_thrust_scale, THROTTLE_MAX, SERVO_LIMIT, throttle, state.servo);
-                for (int side = 0; side < 2; side++) state.throttle[side] = lroundf(throttle[side]);
-            }
+            float throttle[2] = {state.throttle[0], state.throttle[1]};
+            if (flipped.owned) flip_actuators(&flipped, &command, scaled.left_thrust_scale, scaled.right_thrust_scale, THROTTLE_MAX, SERVO_LIMIT, throttle, state.servo);
+            // Through the flip and its grace each motor's throttle is slewed and capped (flip_limit); otherwise it is only followed.
+            flip_limit(&flip, throttle, dt);
+            for (int side = 0; side < 2; side++) state.throttle[side] = lroundf(throttle[side]);
             const Controller *c = &state.controller;
             if (command.auto_trim > 0 && !excite.active && !flip_gyro_only(&flip) && hover_mode <= HOVER_HOLD && scaled.base >= command.integrate_throttle && c->airborne > TRIM_SETTLE &&
                 fabsf(state.gyro[0]) < TRIM_RATE && fabsf(state.gyro[1]) < TRIM_RATE) {

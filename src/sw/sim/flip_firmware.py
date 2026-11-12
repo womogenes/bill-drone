@@ -39,6 +39,9 @@ FLIGHT = {"hover_camera": 0, "hover_center": 0, "hover_gps_tau": 0.5, "hover_gps
 LOST_WINDOW = 4.0
 # The belly's height below the center of mass (rigid.py HULL): the height above the ground is the position's less this.
 BELLY = 0.035
+# The motors' load through the flip (from its start until it is done, at most LOST_WINDOW): time at FULL or more of the throttle, and the current, modeled from each motor's thrust as momentum theory has power (I = CURRENT_FULL (T / THRUST_FULL)^1.5) and pinned at SunnySky's X2212 980KV table, about 31 A on a 10x4.7 at full throttle on 14.8 V (the firmware's table's 11.22 N at 1200 times the 1.28 trim). Not measured on this drone.
+FULL = 0.95 * 1200
+CURRENT_FULL, THRUST_FULL = 31.0, 11.22 * 1.28
 # Keep each flip's trace in its row (flip_replay.py --closed sets it).
 TRACE = False
 # A fresh pack under load (V), for flip_refusal's battery check.
@@ -46,7 +49,7 @@ BATTERY = 16.0
 
 
 class Params(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_float) for name in ("climb_thrust", "climb_time", "spin_rate", "k_spin", "spin_thrust", "handoff", "kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "flip_thrust", "right_angle", "servo_max", "roll_over", "kv", "arrest_time", "timeout")]
+    _fields_ = [(name, ctypes.c_float) for name in ("climb_thrust", "climb_time", "spin_rate", "k_spin", "spin_thrust", "handoff", "kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "flip_thrust", "right_angle", "servo_max", "roll_over", "kv", "arrest_time", "timeout", "floor", "ceiling", "handoff_rate", "slew", "throttle_cap", "spin_lift")]
 
 
 class Flip(ctypes.Structure):
@@ -67,7 +70,7 @@ class Check(ctypes.Structure):
 
 
 class Run(ctypes.Structure):
-    _fields_ = [("flip", Flip), ("authority", Authority), ("done", ctypes.c_bool), ("since", ctypes.c_float), ("saved", ctypes.c_float * 18), ("height_integral", ctypes.c_float)]
+    _fields_ = [("flip", Flip), ("authority", Authority), ("done", ctypes.c_bool), ("since", ctypes.c_float), ("saved", ctypes.c_float * 18), ("height_integral", ctypes.c_float), ("params", ctypes.POINTER(Params)), ("throttle", ctypes.c_float * 2)]
 
 
 if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime for path in SOURCES + HEADERS):
@@ -87,6 +90,7 @@ for name in ("flip_active", "flip_gyro_only", "flip_tip_exempt"):
     getattr(library, name).restype = ctypes.c_bool
 library.flip_phase.argtypes = [ctypes.POINTER(Run)]
 library.flip_tick.argtypes = [ctypes.POINTER(Run), ctypes.c_float * 3, ctypes.c_float * 3, ctypes.c_float, ctypes.c_void_p, ctypes.c_void_p, FLOATS, ctypes.POINTER(Output)]
+library.flip_limit.argtypes = [ctypes.POINTER(Run), ctypes.c_float * 2, ctypes.c_float]
 library.flip_actuators.argtypes = [ctypes.POINTER(Output), ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float * 2, ctypes.c_float * 2]
 DEFAULTS = Params.in_dll(library, "flip_defaults")
 # Command fields flight.Controller's configure leaves alone: the base throttle and attitude targets (radians), the thrust scales, and the hover gains' mass (flip_begin's weight).
@@ -180,7 +184,11 @@ def plant_of(airframe):
 
 def fly(job):
     """One batch of runs on the same drawn plants: per run, whether and when the flip started, why it was refused, and the measures."""
-    settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping, airframe, randomize = job
+    settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping, airframe, randomize = job[:11]
+    # The maneuver's parameters: flip.c's flip_defaults with the job's changes (job[11], a dict, for tuning).
+    params = Params.from_buffer_copy(DEFAULTS)
+    for key, value in (job[11] if len(job) > 11 else {}).items():
+        setattr(params, key, value)
     plant = plant_of(airframe) | {"tilt_offset": offset, "accel_bias": (0.025 if offset else 0.0, 0.0, 0.0)}
     gyro_scale = np.ones((n, 3))
     if randomize == "flip":
@@ -211,6 +219,7 @@ def fly(job):
         controller.reset()
         run = Run()
         library.flip_reset(ctypes.byref(run))
+        run.params = ctypes.pointer(params)
         hover = Hover(flown)
         lanes.append({"controller": controller, "estimate": flight.Attitude(accel=obs["accel"][i] / R.G), "hover": hover, "guard": Guard(flown), "run": run, "sensors": Sensors(seed * 1000 + i),
                       "integral": ctypes.cast(ctypes.addressof(hover.state) + HoverState.integral.offset, FLOATS), "commanded": (0, 0), "dead": False, "tipped": False, "lifted": None,
@@ -283,11 +292,14 @@ def fly(job):
                 base = min(1200.0, flight.throttle(out.collective / 2 / math.cos(trim)))
             controller.command[BASE], controller.command[ROLL], controller.command[PITCH], controller.command[YAW] = base, result.roll, result.pitch, flown.get("yaw_rate", 0.0)
             left, right, left_angle, right_angle = controller.update((roll, pitch), gyro, R.DT)
+            # As flight_rt.c: the attitude controller's throttles rounded, or the flip's own while it owns the motors, then flip_limit's slew and cap.
+            throttles = (ctypes.c_float * 2)(round(min(max(left, 0.0), 1200.0)), round(min(max(right, 0.0), 1200.0)))
             if out.owned:
-                throttles, servos = (ctypes.c_float * 2)(), (ctypes.c_float * 2)()
+                servos = (ctypes.c_float * 2)()
                 library.flip_actuators(ctypes.byref(out), controller.command.buffer_info()[0], scales[i], scales[i], 1200.0, 60.0, throttles, servos)
-                left, right = round(throttles[0]), round(throttles[1])
                 left_angle, right_angle = math.radians(servos[0]), math.radians(servos[1])
+            library.flip_limit(ctypes.byref(run), throttles, R.DT)
+            left, right = round(throttles[0]), round(throttles[1])
             lane["commanded"] = (left, right)
             throttle[i] = (left, right)
             tilt[i] = (directions[0] * (left_angle - trims[0]), directions[1] * (right_angle - trims[1]))
@@ -301,6 +313,12 @@ def fly(job):
                 continue
             height = sim.pos[i, 2] - BELLY
             if now - lane["started"] <= LOST_WINDOW:
+                if library.flip_active(ctypes.byref(lane["run"])):
+                    current = CURRENT_FULL * (np.maximum(sim.state.motor[i], 0.0) / THRUST_FULL) ** 1.5
+                    lane["full"] = lane.get("full", np.zeros(2)) + R.DT * (np.array(lane["commanded"]) >= FULL)
+                    lane["peak_current"] = max(lane.get("peak_current", 0.0), float(current.max()))
+                    lane["charge"] = lane.get("charge", np.zeros(2)) + current * R.DT
+                    lane["active"] = lane.get("active", 0.0) + R.DT
                 lane["lowest"] = min(lane["lowest"], height)
                 lane["touched"] |= bool(sim.contact_now[i] > 0)
                 lane["carried"] = float(np.linalg.norm(sim.pos[i, :2] - lane["start_place"]))
@@ -315,7 +333,8 @@ def fly(job):
         row = {"held": upright and sim.pos[i, 2] - BELLY > 0.5, "tipped": lane["tipped"], "started": lane["started"], "refusals": lane["refusals"], "phase": lane["phase"]}
         if lane["started"] is not None:
             row |= {"clean": upright and not lane["touched"] and turned >= 2 * math.pi - DEFAULTS.handoff - 0.01, "touched": lane["touched"], "lost": lane["start_height"] - lane["lowest"], "lowest": lane["lowest"],
-                    "back": lane["back"], "carried": lane.get("carried", 0.0), "start_height": lane["start_height"], "end_height": float(sim.pos[i, 2] - BELLY), "trace": lane.get("trace")}
+                    "back": lane["back"], "carried": lane.get("carried", 0.0), "start_height": lane["start_height"], "end_height": float(sim.pos[i, 2] - BELLY), "trace": lane.get("trace"),
+                    "full": float(lane.get("full", np.zeros(2)).max()), "peak_current": lane.get("peak_current", 0.0), "mean_current": float((lane.get("charge", np.zeros(2)) / max(lane.get("active", 0.0), R.DT)).max())}
         rows.append(row)
     return rows
 
@@ -367,6 +386,8 @@ def main():
               f"among the {len(held)} plants that hold without a flip: clean {np.mean([r['clean'] for r in held]) * 100 if held else float('nan'):.1f}%, touched {np.mean([r['touched'] for r in held]) * 100 if held else float('nan'):.1f}%")
         print(f"    height lost median {np.median(lost):.2f} m (90th {np.percentile(lost, 90):.2f}, max {lost.max():.2f}); lowest above the ground median {np.median(lowest):.2f} m (10th {np.percentile(lowest, 10):.2f}, min {lowest.min():.2f}); "
               f"back within 0.3 m of the start height {np.median(back):.1f} s median (90th {np.percentile(back, 90):.1f}); carried over the ground {np.median(carried):.2f} m median (90th {np.percentile(carried, 90):.2f})")
+        full, peak, mean = col(started, "full"), col(started, "peak_current"), col(started, "mean_current")
+        print(f"    motors through the flip (the busier one): at {FULL:.0f} throttle or more {np.median(full):.2f} s median (90th {np.percentile(full, 90):.2f}, max {full.max():.2f}); modeled current peak {np.median(peak):.0f} A median (max {peak.max():.0f}), mean {np.median(mean):.1f} A median (max {mean.max():.1f})")
 
 
 if __name__ == "__main__":
