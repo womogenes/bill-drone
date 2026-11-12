@@ -34,6 +34,8 @@
 #define HEARTBEAT_MS 500
 // A flight that loses the laptop lands itself, in any mode, instead of stopping the motors in the air (2026-10-29 07:28 dropped from 0.4 m): the landing needs nothing from the laptop. The controller's airborne time, not the hover's height estimate (outdoors, without the tag, only the IMU's), says it is flying. When the laptop returns it keeps landing until the laptop asks to fly: hover, or manual collective at liftoff (integrate_throttle); a reconnecting dashboard's zero collective does not end it. The watchdog still stops a flight not yet off the ground, and a link-loss landing that has not touched down within LINK_LAND_S (s; 60 m at LINK_LAND_RATE).
 #define LINK_LAND_S 60.0f
+// In the hover's hold a lost link is first waited out this long (s) with the hold flying on as it was, the laptop's tilt dropped: on 2026-11-12 the link dropped for under a second at a time at big roll angles and low on the ground (the drone's antenna is shadowed), and each landing it set off risked the backward tip-over at touchdown. Other modes land at once.
+#define LINK_HOLD_S 2.0f
 // Without the tag the landing holds its velocity on the rotor-drag model (hover.h drag, in 1/s), at least this much: with nothing damping the drift, a no-tag landing tipped over in 18 of 48 simulated runs, with the drag model at 1 in 2 (sw/sim/landing_test.py --no-camera, 2026-10-30).
 #define LINK_LAND_DRAG 1.0f
 // The link-loss landing descends at least this fast (m/s), whatever hover_land_rate (the pilot's L) is: down in seconds instead of a minute, so it drifts less sideways, and without the tag or a barometer the climb-rate estimate can be 0.3 m/s off (it read level while the drone rose 6 m in 16 s on 2026-11-08 01:56 UTC), which at 0.2 m/s could leave the drone climbing. 1 m/s at touchdown is about a 5 cm drop.
@@ -506,6 +508,7 @@ static void runtime_task(void *arg) {
         bool recording = log_active;
         // now was read before the lock, so a target accepted on the network core in between leaves heartbeat_us just after it; signed, that is a fresh heartbeat rather than an unsigned wrap to a huge age.
         bool stale = (int64_t)(now - state.heartbeat_us) > HEARTBEAT_MS * 1000LL;
+        bool lost = hover_mode == HOVER_HOLD ? (int64_t)(now - state.heartbeat_us) > (int64_t)(LINK_HOLD_S * 1e6f) : stale;
         if (link_landing && !stale && (requested_mode == HOVER_HOLD || (requested_mode == HOVER_OFF && command.base >= command.integrate_throttle))) {
             link_landing = false;
             hover_mode = requested_mode;
@@ -514,7 +517,7 @@ static void runtime_task(void *arg) {
         if (state.enabled && stale) flip_abort(&flip, &hover.integral);
         if (state.enabled && flip_active(&flip)) {
             // The landing or the stop below, once it is done.
-        } else if (state.enabled && (link_landing || (stale && state.controller.airborne > 0 && !hover.landed && hover.bias > 0.5f))) {
+        } else if (state.enabled && (link_landing || (lost && state.controller.airborne > 0 && !hover.landed && hover.bias > 0.5f))) {
             if (!link_landing) {
                 link_landing = true;
                 link_land_us = now;
@@ -690,8 +693,8 @@ static void runtime_task(void *arg) {
                 gains.nudge_left = held_nudge(1);
                 gains.nudge_up = held_nudge(2);
                 // Without the tag the laptop's tilt (the arrows, A and D) flies the drone directly (on the tag they move the hold point instead); a link-loss landing ignores what the lost laptop last sent.
-                gains.stick_pitch = command.hover_camera || link_landing ? 0 : command.target_pitch;
-                gains.stick_roll = command.hover_camera || link_landing ? 0 : command.target_roll;
+                gains.stick_pitch = command.hover_camera || link_landing || stale ? 0 : command.target_pitch;
+                gains.stick_roll = command.hover_camera || link_landing || stale ? 0 : command.target_roll;
                 if (link_landing && !hover.tracking) gains.drag = fmaxf(gains.drag, LINK_LAND_DRAG);
                 if (link_landing) gains.land_rate = fmaxf(gains.land_rate, LINK_LAND_RATE);
                 HoverOutput out;
