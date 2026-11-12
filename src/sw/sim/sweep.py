@@ -424,6 +424,9 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                     moves = nudge if isinstance(nudge[0], (list, tuple)) else [nudge]
                     # From liftoff, or from the start for a hover engaged in the air.
                     since = now - lifted if lifted is not None else (now if not liftoff else None)
+                    # plant["nudge_period"] (s): the laptop moves it in steps this far apart (the dashboard's gamepad every 50 ms) rather than every tick.
+                    if since is not None and plant.get("nudge_period"):
+                        since = math.floor(since / plant["nudge_period"]) * plant["nudge_period"]
                     outer.gains.nudge_forward = outer.gains.nudge_left = 0.0
                     for start, forward_speed, left_speed, length in moves:
                         moving = 0.0 if since is None else min(max(since - start, 0.0), length)
