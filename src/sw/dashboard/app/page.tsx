@@ -222,11 +222,15 @@ type Chain = {
 function offlineText(chain: Chain | null) {
   if (chain?.state === 'bridge_down') return 'Drone service not running';
   if (chain?.state === 'controller_missing') return 'Controller not plugged in';
-  if (chain?.state === 'drone_silent')
-    return chain.heard_s == null
-      ? 'Drone not answering'
-      : `Drone not answering for ${chain.heard_s < 60 ? `${chain.heard_s.toFixed(0)} s` : `${(chain.heard_s / 60).toFixed(0)} min`}`;
   return 'Offline';
+}
+
+// The silent drone's detail for the status's tooltip: how long since it last answered.
+function offlineDetail(chain: Chain | null) {
+  if (chain?.state !== 'drone_silent') return undefined;
+  return chain.heard_s == null
+    ? 'Drone not answering'
+    : `Drone not answering for ${chain.heard_s < 60 ? `${chain.heard_s.toFixed(0)} s` : `${(chain.heard_s / 60).toFixed(0)} min`}`;
 }
 
 function reuseUnchanged<T extends object>(
@@ -894,6 +898,7 @@ export default function Page() {
             icon={StatusIcon}
             iconClassName={shown === 'connecting' ? 'animate-spin' : ''}
             className={color}
+            title={shown === 'offline' ? offlineDetail(chain) : undefined}
           >
             {shown === 'offline' ? offlineText(chain) : label}
           </Status>

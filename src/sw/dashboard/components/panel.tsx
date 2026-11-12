@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from 'react';
 
-// One of a page's sections, with the padding and heading row they all share: the row is as tall as a button, so headings line up across columns whether or not theirs holds controls. header follows the heading in its row.
+// One of a page's sections, with the padding and heading row they all share: the row is as tall as a button, so headings line up across columns whether or not theirs holds controls. header follows the heading in its row, and wraps under it when the column is too narrow for both, so a column never scrolls sideways.
 export function Panel({
   title,
   header,
@@ -15,7 +15,7 @@ export function Panel({
   const id = useId();
   return (
     <section aria-labelledby={id} className={`px-4 py-3 ${className}`}>
-      <div className="flex h-8 items-center gap-2">
+      <div className="flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1">
         <h2 id={id} className="font-semibold whitespace-nowrap">
           {title}
         </h2>

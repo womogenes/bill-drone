@@ -282,7 +282,12 @@ const gainSections: {
     fields: [
       { key: 'tip_limit', label: 'Tip cut (°)', min: 20, max: 80 },
       { key: 'bank_tilt', label: 'Gyro-only past (°, 0 off)', min: 0, max: 80 },
-      { key: 'flip_enable', label: 'Flip allowed (0 off, 1 flip, 2 burst to 60 and back, 3 to 90)', min: 0, max: 3 },
+      {
+        key: 'flip_enable',
+        label: 'Flip allowed (0 off, 1 flip, 2 burst to 60 and back, 3 to 90)',
+        min: 0,
+        max: 3,
+      },
       { key: 'flip_height', label: 'Flip from at least (m)', min: 2.5, max: 5 },
       {
         key: 'recover_enable',
@@ -689,7 +694,7 @@ export const ControlPanel = memo(function ControlPanel({
     <Panel
       title="Flight control"
       header={
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <Dialog
             open={open}
             onOpenChange={(value) => {
