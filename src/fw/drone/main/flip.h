@@ -5,7 +5,7 @@
 #include "flight_math.h"
 
 // The roll flip (flip.c), as sw/sim/flip.py flies it: punch up level, spin about roll on differential thrust, right the thrust axis as recover.py does, then hand back to the attitude controller and stop the vertical speed.
-// The maneuver's parameters, from sw/sim/models/flip_params_2026-11-12_bands.json (tune_recover.py --flip --bands): thrusts as fractions of the weight, rates in rad/s, angles in radians.
+// The maneuver's parameters, from sw/sim/models/flip_firmware_params_2026-11-12.json (sw/sim/tune_flip.py on the plant fitted to the first real flip and its uncertainty; before it, flip_params_2026-11-12_bands.json): thrusts as fractions of the weight, rates in rad/s, angles in radians.
 typedef struct {
     float climb_thrust, climb_time, spin_rate, k_spin, spin_thrust, handoff;
     // Righting (recover.py): the rate toward up is at most max_rate, sqrt(2 brake angle) and kp angle; k_roll and k_pitch (1/s) turn rate errors into angular accelerations, kd_yaw damps yaw; the collective is flip_thrust of the weight; servo_max bounds the common tilt; past roll_over from up with the error mostly in pitch it rolls the long way round.
@@ -14,6 +14,12 @@ typedef struct {
     float kv, arrest_time;
     // Hand the attitude back regardless after this long (s).
     float timeout;
+    // The motors while the flip owns them (2026-11-12, after the first flip): each makes at least floor and at most ceiling of the weight, so neither idles (an idle prop coasts, its ESC may stop it, and its spin-up later is a current spike and a desync risk) and neither sits at full throttle; the righting hands back only once every body rate is under handoff_rate (rad/s) as well as within right_angle of upright.
+    float floor, ceiling, handoff_rate;
+    // flip_limit: each throttle moves at most slew a second (throttle units: the full range in no less than 1200 / slew s), at most throttle_cap, from the flip's start until FLIP_GRACE after its hand-back.
+    float slew, throttle_cap;
+    // The spin's collective is spin_thrust plus spin_lift times the cosine of the turn so far, of the weight: more while the thrust points up, less while it points down.
+    float spin_lift;
 } FlipParams;
 
 extern const FlipParams flip_defaults;
@@ -25,6 +31,8 @@ typedef struct {
     // q: the attitude (w, x, y, z; body to level, the heading at the start as zero), from the attitude estimate at the start and the gyro since; turned: the roll counted from the gyro since the spin began (radians); thrust: what the motors have by now (N); vertical: the vertical speed (m/s; the hold's climb rate at the start, then the specific force along its own up); arrested: how long it has stayed under ARREST_DONE (s).
     float q[4];
     float time, turned, thrust, vertical, arrested;
+    // How far it rolls (radians): 2 pi for the flip; 60 or 90 degrees for the staged tests (flip_enable 2 and 3, flip_turn): a short burst of the spin and the righting's brake at once, back the short way, so the drone peaks near 45-60 or 80-90 degrees with its thrust still mostly holding it up, and the motor split, the rotors' momentum, the floor and the brake are tested with margin. The spin aims at spin_rate times the square root of its share of a whole turn (the rate it can brake from in that angle) and ends with handoff's share of it left (handoff / 2 pi of the turn).
+    float turn;
 } Flip;
 
 // The airframe's authority as the firmware's model has it: angular acceleration (rad/s²) per newton of differential thrust (roll), per newton of collective per radian of common tilt (pitch), per newton per radian of differential tilt (yaw); and the weight (N).
@@ -59,6 +67,8 @@ typedef struct {
     float min_height, battery;
 } FlipCheck;
 
+// The roll a flip_enable setting asks for (radians): 1 the whole flip, 2 a 60-degree burst and back, 3 a 90-degree one; flip_begin takes it from the command.
+float flip_turn(float enable);
 // Why the flip is refused, or NULL.
 const char *flip_refusal(const FlipCheck *check);
 
@@ -70,6 +80,9 @@ typedef struct {
     float since;
     Controller saved;
     float height_integral;
+    // The maneuver's parameters (flip_reset: flip_defaults), and the throttles flip_limit last let out.
+    const FlipParams *params;
+    float throttle[2];
 } FlipRun;
 
 // A new arming: no flip yet.
@@ -89,5 +102,7 @@ bool flip_tip_exempt(const FlipRun *run);
 int flip_phase(const FlipRun *run);
 // One control tick, right after the attitude estimate: the flip's step, and at the hand-back the estimate takes its attitude and the controller its integrators and dead-reckoned velocity from before the flip; at its end the hover's height integral is given back too, so neither carries what the flip wound into them.
 void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, Attitude *attitude, Controller *controller, float *height_integral, FlipOutput *out);
+// Every control tick, on the throttles about to be sent (flight_rt.c, after the attitude controller and flip_actuators): from the flip's start until FLIP_GRACE after its hand-back each moves at most params->slew a second from the last tick's and stays under params->throttle_cap, so neither motor jumps between idle and full throttle (the ESCs' current and voltage spikes); a stopped motor (0) stays stopped. Otherwise it only follows them.
+void flip_limit(FlipRun *run, float *throttle, float dt);
 // While the flip owns the motors: its thrusts (N) as throttles through the thrust table and each motor's thrust scale (as flight_control's, battery compensation included), a running motor never stopped, and its tilts as servo angles (degrees, as flight_rt.c's state.servo, within servo_limit).
 void flip_actuators(const FlipOutput *out, const Command *command, float left_scale, float right_scale, float throttle_max, float servo_limit, float *throttle, float *servo);

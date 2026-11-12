@@ -14,6 +14,8 @@ GPS = {"hover_camera": 0, "hover_center": 0, "hover_gps_tau": 0.5, "hover_gps_pl
 LADDER = GPS | {"hover_tilt": 10, "hover_thrust_direction": 0.8, "hover_kd": 1.5, "pitch_damping": 6, "hover_climb": 1.5, "hover_ceiling": 3, "pattern_tilt": 42, "pattern_distance": 4,
                 "hover_gps_calibrate": 5, "roll_target_rate": 360}
 HIGH = LADDER | {"hover_climb": 3, "hover_ceiling": 3.5}
+# The staged tests after the first flip (src/fw/FLIP.md "After the first flip"): the hold 5 m up, the tip cut back at 45 (the flip is exempt while it runs), from 4.5 m.
+HIGH5 = LADDER | {"hover_climb": 5, "hover_ceiling": 5.5, "tip_limit": 45, "flip_height": 4.5}
 STEPS = {
     "indoor": ("the tag hold as flown on 2026-11-11", INDOOR),
     "gps": ("the GPS hold on the indoor gains: calm air only (held 32/28/13 of 32 in 0/1/2 m/s)", GPS),
@@ -25,7 +27,11 @@ STEPS = {
     # From here on the firmware of william/flip-ready (src/fw/FLIP.md): the tip cut and the flip are settings, and the hold may climb to 3 m.
     "high": ("the ladder's hold 3 m up (hover_climb 3, hover_ceiling 3.5), the flip's height; no pattern", HIGH),
     "ladder55": ("roll steps to 55 degrees past the 45-degree tip cut: tip_limit 65, pattern_tilt 58, 3 m up; play tilt_ladder.py --amplitudes 40,45,50,55 --dry", HIGH | {"tip_limit": 65, "pattern_tilt": 58}),
-    "flip": ("one roll flip from the 3 m hold (the dashboard's Flip button, once per arming), the tip cut back at 45", HIGH | {"tip_limit": 45, "flip_enable": 1, "flip_height": 2.5}),
+    # From here on the firmware of william/flip-fit (src/fw/FLIP.md "After the first flip"): the hold may climb to 5 m and flip_enable 2 and 3 are the staged partial rolls.
+    "high5": ("the ladder's hold 5 m up (hover_climb 5, hover_ceiling 5.5), no flip: check the height and the hold up there", HIGH5 | {"flip_enable": 0}),
+    "burst60": ("stage D1: one burst of the flip's spin braked at once, aimed at 60 degrees and back, from the 5 m hold (the dashboard's Flip button, once per arming)", HIGH5 | {"flip_enable": 2}),
+    "burst90": ("stage D2: the same aimed at 90 degrees, faster", HIGH5 | {"flip_enable": 3}),
+    "flip": ("stage E: one roll flip from the 5 m hold, the tip cut back at 45", HIGH5 | {"flip_enable": 1}),
     "noflip": ("the flip off again (flip_enable 0) and the tip cut at 45", {"flip_enable": 0, "tip_limit": 45}),
 }
 
