@@ -98,6 +98,8 @@ TUNE(pattern_distance, guard.pattern_distance, 1, 0, 10, 0.7)
 TUNE(pattern_tilt, guard.pattern_tilt, RAD, 0, 60, 30)
 // The tilt past which the motors stop in flight (flight_rt.c; degrees). 45 as the constant was; raised only to fly measured steps past it.
 TUNE(tip_limit, tip_limit, RAD, 20, 80, 45)
+// Banked flight (flight_rt.c; degrees, 0 = off): while the controller's roll or pitch setpoint is beyond this, the attitude estimate stops pulling toward the accelerometer, which in a banked hover reads the thrust's direction, not gravity (sw/sim/tilt_ladder.py: 1.5 degrees off after 0.4 s at 35-40), and runs on the gyro alone.
+TUNE(bank_tilt, bank_tilt, RAD, 0, 80, 0)
 STATE(servo_offset_left, -60, 60, -3)
 STATE(servo_offset_right, -60, 60, 0)
 // Gyro bias in rad/s and the stationary pose in degrees, valid only for the sensor frame they were taken in:

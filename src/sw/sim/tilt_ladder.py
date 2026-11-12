@@ -19,7 +19,7 @@ from multiprocessing import Pool
 import numpy as np
 
 from sw.excite import SAMPLE_HZ, segments
-from sw.flight_log import recording
+from sw.flight_log import parse_settings, recording
 from sw.flight_log import settings as recording_settings
 from sw.sim.outdoor import GPS, plant as outdoor_plant
 from sw.sim.pattern_guard import TAG_SETTINGS
@@ -113,10 +113,11 @@ def main():
     parser.add_argument("--settings", default=SETTINGS, help="recording whose settings to fly (the test's on top); one flown on the tag gets the GPS hold's too (OUTDOOR)")
     parser.add_argument("--bands", action="store_true", help="the 2026-11-11 rubber bands on the servos (BANDS)")
     parser.add_argument("--dry", action="store_true")
+    parser.add_argument("--set", default="", help="settings on top of the test's, name=value,... (e.g. tip_limit=60,bank_tilt=30)")
     args = parser.parse_args()
     amplitudes = [float(a) for a in args.amplitudes.split(",")]
     pattern = ladder(amplitudes, args.width, args.rest, args.doublet)
-    test = (TAG_TEST if args.tag else TEST) | {"roll_target_rate": args.roll_rate} | ({"pattern_distance": args.distance} if args.distance is not None else {})
+    test = (TAG_TEST if args.tag else TEST) | {"roll_target_rate": args.roll_rate} | ({"pattern_distance": args.distance} if args.distance is not None else {}) | parse_settings(args.set)
     if args.dry:
         print(json.dumps(pattern))
         print("flown here on " + ",".join(f"{name}={value:g}" for name, value in test.items()), file=sys.stderr)
@@ -133,7 +134,7 @@ def main():
         results = pool.map(fly, [(pattern, settings, args.wind, seed, steps, args.tag, args.doublet, args.bands) for seed in range(args.seeds)])
     where = f"on the tag, pattern_distance {settings['pattern_distance']:g} m" if args.tag else f"wind {args.wind} m/s"
     print(f"roll ladder {amplitudes}, {args.width} s {'doublets' if args.doublet else 'steps'}, {args.rest} s rests, roll_target_rate {args.roll_rate}°/s, {where}, {args.seeds} runs, settings {args.settings}{' with the bands' if args.bands else ''}")
-    print(f"  lost (past 45°, the tip cut) {sum(not r['stable'] for r in results)}, pattern stopped by its guard {sum(r['stop'] is not None for r in results)}: {[r['stop'] for r in results if r['stop']]}")
+    print(f"  lost (past the tip cut, {settings.get('tip_limit', 45.0):g}°) {sum(not r['stable'] for r in results)}, pattern stopped by its guard {sum(r['stop'] is not None for r in results)}: {[r['stop'] for r in results if r['stop']]}")
     for a in amplitudes:
         rows = [s for r in results for s in r["steps"] if s["amplitude"] == a]
         if not rows:

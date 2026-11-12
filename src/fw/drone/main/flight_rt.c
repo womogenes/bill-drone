@@ -601,9 +601,12 @@ static void runtime_task(void *arg) {
             state.attitude.roll = atan2f(state.accel[1], state.accel[2]);
             state.attitude.pitch = atan2f(-state.accel[0], hypotf(state.accel[1], state.accel[2]));
         }
+        // Banked past bank_tilt (last tick's setpoint), the accelerometer reads the thrust, not gravity: the gyro alone carries the attitude.
+        const Controller *held = &state.controller;
+        bool banked = command.bank_tilt > 0 && spinning() && fmaxf(fabsf(held->setpoint_roll), fabsf(held->setpoint_pitch)) > command.bank_tilt;
         Motion motion = {state.accel[0], state.accel[1], state.accel[2],
                          state.gyro[0], state.gyro[1], state.gyro[2], dt,
-                         spinning() ? config.powered_tau : config.gravity_tau};
+                         banked ? INFINITY : spinning() ? config.powered_tau : config.gravity_tau};
         flight_attitude(&state.attitude, &motion);
         state.online = true;
         state.temperature = raw[3] / 340.0f + 36.53f;

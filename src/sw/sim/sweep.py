@@ -302,7 +302,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         if imu_range:
             gyro_filter = [max(-math.radians(imu_range[0]), min(math.radians(imu_range[0]), g)) for g in gyro_filter]
             accel_filter = [max(-imu_range[1], min(imu_range[1], a)) for a in accel_filter]
-        attitude = estimator.update(accel_filter, gyro_filter, DT, powered=True)
+        # flight_rt.c bank_tilt: past it (the controller's last setpoint) the gyro alone carries the attitude.
+        bank_tilt = math.radians(settings.get("bank_tilt", 0.0))
+        banked = bank_tilt > 0 and spinning and max(abs(controller.state[11]), abs(controller.state[12])) > bank_tilt
+        attitude = estimator.update(accel_filter, gyro_filter, DT, powered=True, banked=banked)
         # The drone flies relative to its level reference: an error in it offsets the attitude both loops see.
         attitude = (attitude[0] - level_error[0], attitude[1] - level_error[1])
         # The body-to-world matrix until the physics substeps move the body.
