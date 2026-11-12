@@ -81,10 +81,10 @@ static size_t metadata(void) {
     if (!settings_json(settings, sizeof(settings))) abort();
     size_t at = snprintf(meta, META,
                          "{\"type\":\"metadata\",\"version\":1,\"sample_format\":\"<II7h2h2H2h3hHHHH3hH12hiH9h2BH\",\"record_size\":%d,"
-                         "\"target_hz\":%d,\"batch_ms\":%d,\"imu_dlpf\":%d,\"pwm_hz\":{\"servo\":%d,\"esc\":%d},"
+                         "\"target_hz\":%d,\"batch_ms\":%d,\"imu_dlpf\":%d,\"gyro_counts_per_deg_s\":%.9g,\"pwm_hz\":{\"servo\":%d,\"esc\":%d},"
                          "\"control_core\":1,\"network_core\":0,\"sensor_axis\":[%d,%d,%d],\"sensor_to_body\":[%d,%d,%d],"
                          "\"servo_offsets\":{\"left\":%.9g,\"right\":%.9g},\"settings\":%s,\"thrust_table\":[",
-                         RECORD_SIZE, SAMPLE_HZ, 1000 * LOG_BATCH / SAMPLE_HZ, IMU_DLPF, SERVO_HZ, ESC_HZ,
+                         RECORD_SIZE, SAMPLE_HZ, 1000 * LOG_BATCH / SAMPLE_HZ, IMU_DLPF, (double)GYRO_COUNTS_PER_DEG_S, SERVO_HZ, ESC_HZ,
                          sensor_axis[0], sensor_axis[1], sensor_axis[2], sensor_to_body[0], sensor_to_body[1], sensor_to_body[2],
                          settings_get(SETTING_servo_offset_left), settings_get(SETTING_servo_offset_right), settings);
     for (size_t i = 0; i < flight_thrust_count && at < META; i++) {

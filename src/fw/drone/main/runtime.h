@@ -11,6 +11,9 @@
 #define LOG_BATCH 4
 // MPU6050 DLPF_CFG: 3 is 42 Hz gyro bandwidth with 4.8 ms delay, 2 is 98 Hz with 2.8 ms. Each tick averages the FIFO's 1 kHz samples (flight_rt.c read_fifo), which removes the aliasing a single sample had, so 2: the mean's own 4.5 ms plus 2.8 ms is about 2 ms more delay than one sample through 3.
 #define IMU_DLPF 2
+// MPU6050 gyro full scale: FS_SEL 3 is ±2000 deg/s at 16.4 counts per deg/s (0 was ±250 at 131 until 2026-11-12). A roll flip spins at about 950 deg/s, which at ±250 the gyro clipped: in sw/sim/flip_firmware.py every flip then hit the ground. The recording's metadata carries the scale (gyro_counts_per_deg_s; sw/flight_log.py takes 131 without it).
+#define GYRO_FS_SEL 3
+#define GYRO_COUNTS_PER_DEG_S 16.4f
 // Servo (MG995, analog) and ESC refresh rates, independent of each other; the ESCs take 1000–2200 us pulses at 50 or 400 Hz alike.
 #define SERVO_HZ 100
 #define ESC_HZ 400

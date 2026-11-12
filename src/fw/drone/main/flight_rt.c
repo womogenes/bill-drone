@@ -347,7 +347,7 @@ static esp_err_t write_mpu(uint8_t reg, uint8_t value) {
 #define FIFO_MOST 16
 // A FIFO read cut short (an I2C timeout, a brownout) or an overflow that wraps mid-sample leaves the stream out of step with FIFO_SAMPLE, and every later read takes gyro bytes for the accelerometer's and back (2026-11-01 after a prop swap: accel ~0 g, gyro -125 deg/s, 1 g's counts). The newest FIFO sample must match the registers' sample to within FIFO_ACCEL_SLACK and FIFO_GYRO_SLACK counts (0.75 g, 100 deg/s: vibration between the two reads stays well under, any misaligned order is off by about 1 g); otherwise, and after a failed read or a partial sample, the FIFO is reset and the tick takes the registers' sample.
 #define FIFO_ACCEL_SLACK 12288
-#define FIFO_GYRO_SLACK 13100
+#define FIFO_GYRO_SLACK ((int)(100 * GYRO_COUNTS_PER_DEG_S))
 static int read_fifo(int32_t sum[6], const int16_t newest[7]) {
     uint8_t reg = 0x72, count[2];
     if (i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1, count, 2, pdMS_TO_TICKS(20)) != ESP_OK) return 0;
@@ -1215,7 +1215,7 @@ static bool configure_sensor(bool reset) {
     bool ok = write_mpu(0x6b, 1) == ESP_OK;
     vTaskDelay(pdMS_TO_TICKS(100));
     uint8_t registers[][2] = {
-        {0x19, 0}, {0x1a, IMU_DLPF}, {0x1b, 0}, {0x1c, 0}, {0x37, 0x20}, {0x38, 1}, {0x23, 0x78}, {0x6a, 0x44},
+        {0x19, 0}, {0x1a, IMU_DLPF}, {0x1b, GYRO_FS_SEL << 3}, {0x1c, 0}, {0x37, 0x20}, {0x38, 1}, {0x23, 0x78}, {0x6a, 0x44},
     };
     for (size_t i = 0; i < sizeof(registers) / sizeof(registers[0]); i++) {
         if (write_mpu(registers[i][0], registers[i][1]) != ESP_OK) ok = false;
@@ -1238,10 +1238,10 @@ static void reconfigure_sensor(void) {
 }
 
 void flight_runtime_start(void) {
-    // Accelerometer at ±2 g (16384 per g), gyro at ±250 °/s (131 per °/s), both mapped to body axes.
+    // Accelerometer at ±2 g (16384 per g), gyro at runtime.h's full scale (GYRO_COUNTS_PER_DEG_S), both mapped to body axes.
     for (int i = 0; i < 3; i++) {
         config.accel_scale[i] = sensor_to_body[i] / 16384.0f;
-        config.gyro_scale[i] = sensor_to_body[i] * 3.14159265358979323846 / (180 * 131);
+        config.gyro_scale[i] = sensor_to_body[i] * 3.14159265358979323846 / (180 * GYRO_COUNTS_PER_DEG_S);
     }
     // Equivalent to retaining 0.99 / 0.9998 of gyro integration every 10 ms.
     config.gravity_tau = -0.01 / log(0.99);

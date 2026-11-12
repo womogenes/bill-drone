@@ -126,6 +126,8 @@ def read_flight(path):
     meta = metadata(path)
     bias = [math.degrees(value) for value in meta["gyro_bias_rad_s"]]
     signs = meta["sensor_to_body"]
+    # The gyro's counts per deg/s: 131 (±250 deg/s) in recordings from before the metadata said.
+    counts = meta.get("gyro_counts_per_deg_s", 131)
     rows = []
     truncated = False
     with path.open("rb") as file:
@@ -144,7 +146,7 @@ def read_flight(path):
                 rows.append([
                     session, seq, stamp,
                     *(value * sign / 16384 for value, sign in zip((ax, ay, az), signs)),
-                    *(value * sign / 131 - zero for value, sign, zero in zip((gx, gy, gz), signs, bias)),
+                    *(value * sign / counts - zero for value, sign, zero in zip((gx, gy, gz), signs, bias)),
                     temperature / 340 + 36.53,
                     *(value / 100 for value in (roll, pitch)),
                     left, right,
