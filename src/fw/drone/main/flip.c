@@ -24,11 +24,11 @@
 #define FLIP_YAW_AUTHORITY 4.66f
 
 const FlipParams flip_defaults = {
-    .climb_thrust = 1.9829f, .climb_time = 0.35f, .spin_rate = 11.3753f, .k_spin = 12.0f, .spin_thrust = 0.4f, .handoff = 1.9829f,
-    .kp = 2.9482f, .brake = 9.0993f, .max_rate = 6.7122f, .k_roll = 7.2914f, .k_pitch = 20.0f, .kd_yaw = 2.0828f,
+    .climb_thrust = 1.9829f, .climb_time = 0.35f, .spin_rate = 11.3753f, .k_spin = 11.1647f, .spin_thrust = 1.0f, .handoff = 1.9829f,
+    .kp = 2.9482f, .brake = 9.0993f, .max_rate = 6.7122f, .k_roll = 6.7839f, .k_pitch = 16.2759f, .kd_yaw = 0.6021f,
     .flip_thrust = 1.7758f, .right_angle = 0.6f, .servo_max = 0.4927f, .roll_over = 2.8798f, .kv = 15.0f, .arrest_time = 2.0f, .timeout = 2.0f,
-    .floor = FLIP_FLOOR, .ceiling = 1.1647f, .handoff_rate = 3.0f, .slew = 10000.0f, .throttle_cap = 1100.0f, .spin_lift = 0.0147f,
-    .spin_pitch = 12.0f, .spin_yaw = 3.6f, .gyro_ff = 0.0f,
+    .floor = FLIP_FLOOR, .ceiling = 1.1647f, .handoff_rate = 3.0f, .slew = 10000.0f, .throttle_cap = 1100.0f, .spin_lift = 0.6f,
+    .spin_pitch = 9.7655f, .spin_yaw = 1.0407f, .gyro_ff = 10.0f,
 };
 
 static float clampf(float value, float low, float high) {
@@ -153,16 +153,18 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
     }
     out->owned = true;
     FlipRighting r = righting(p);
+    // A staged burst (a turn short of the whole flip) never turns its thrust far from up, so it asks for no more than the weight: the flip's spin and righting collectives took a 60-degree burst 7 m up.
+    float burst = flip->turn < TWO_PI ? a->weight : INFINITY;
     if (flip->stage == FLIP_SPIN) {
         flip->turned += gyro[0] * dt;
         // Keep the roll axis level: the nose's height (up's forward component, positive nose up) driven to zero through whichever of pitch and yaw tilts it now.
         float nose = up[0];
         float pitch_rate = p->kp * nose * up[2], yaw_rate = -p->kp * nose * up[1];
-        float roll = p->k_spin * (p->spin_rate * sqrtf(flip->turn / TWO_PI) - gyro[0]), collective = fmaxf(p->spin_thrust + p->spin_lift * cosf(flip->turned), 0) * a->weight;
+        float roll = p->k_spin * (p->spin_rate * sqrtf(flip->turn / TWO_PI) - gyro[0]), collective = fminf(fmaxf(p->spin_thrust + p->spin_lift * cosf(flip->turned), 0) * a->weight, burst);
         flip_allocate(&r, a, roll, gyroscopic(&r, a, roll, p->spin_pitch * (pitch_rate - gyro[1]), collective, gyro[0]), p->spin_yaw * (yaw_rate - gyro[2]), collective, &flip->thrust, dt, out);
         if (flip->turned >= flip->turn * (1 - p->handoff / TWO_PI)) flip->stage = FLIP_RIGHT;
     } else {
-        flip_righting(&r, a, up, gyro, p->flip_thrust * a->weight, &flip->thrust, dt, out);
+        flip_righting(&r, a, up, gyro, fminf(p->flip_thrust * a->weight, burst), &flip->thrust, dt, out);
         bool slow = fabsf(gyro[0]) < p->handoff_rate && fabsf(gyro[1]) < p->handoff_rate && fabsf(gyro[2]) < p->handoff_rate;
         if ((up[2] > cosf(p->right_angle) && slow) || flip->time > p->timeout) {
             // Back to the attitude controller, with the attitude as flight_attitude keeps it.

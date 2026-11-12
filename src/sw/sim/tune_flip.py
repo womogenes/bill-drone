@@ -28,8 +28,8 @@ SPACE = [
     ("climb_thrust", 1.2, 2.2, False), ("climb_time", 0.05, 0.35, True), ("spin_rate", 4.0, 26.0, True), ("k_spin", 2.0, 12.0, True), ("spin_thrust", 0.4, 2.0, False), ("spin_lift", 0.0, 0.8, False), ("handoff", 1.0, 3.0, False),
     ("kp", 1.0, 4.0, True), ("brake", 1.0, 20.0, True), ("max_rate", 3.0, 14.0, True), ("k_roll", 2.0, 8.0, True), ("k_pitch", 1.0, 20.0, True), ("kd_yaw", 0.1, 8.0, True),
     ("flip_thrust", 0.8, 2.2, False), ("right_angle", 0.2, 0.6, False), ("servo_max", 0.1, 0.9, False), ("kv", 2.0, 15.0, True), ("ceiling", 0.6, 1.4, False), ("handoff_rate", 1.0, 3.0, True),
-    # The levers against the rotors' momentum (2026-11-13): the spin's pitch and yaw rate gains apart from its roll gain, the gyroscopic pitch fed forward (0 to twice the physics' 0.018 / 0.0044), the motors' floor raised (a smaller speed difference between the rotors), and a later timeout.
-    ("spin_pitch", 2.0, 25.0, True), ("spin_yaw", 0.2, 12.0, True), ("gyro_ff", 0.0, 8.0, False), ("floor", 0.2, 0.6, False), ("timeout", 1.5, 3.0, False),
+    # The levers against the rotors' momentum (2026-11-13): the spin's pitch and yaw rate gains apart from its roll gain, the gyroscopic pitch fed forward (0 to 16: the physics gives rotor_momentum over the pitch inertia, 3.4 at 0.018 and 9.5 at 0.05), the motors' floor raised (a smaller speed difference between the rotors), and a later timeout.
+    ("spin_pitch", 2.0, 25.0, True), ("spin_yaw", 0.2, 12.0, True), ("gyro_ff", 0.0, 16.0, False), ("floor", 0.2, 0.6, False), ("timeout", 1.5, 3.0, False),
 ]
 FIXED = {"slew": SLEW, "throttle_cap": THROTTLE_CAP}
 CLIMB_ROOM, HANDBACK = 0.8, 1.3
@@ -140,6 +140,7 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--check", type=Path, help="fly this parameter file on --n fresh plants and print the summary instead of tuning")
     parser.add_argument("--seed", type=int, default=20000)
+    parser.add_argument("--sigma", type=float, default=0.2, help="CMA-ES's starting step, as a share of each parameter's range")
     parser.add_argument("--randomize", choices=("flip", "wide", "none"), default="flip", help="with --check: the plants (flip_firmware.py --randomize)")
     parser.add_argument("--airframe", default=AIRFRAME, help="with --check: the plant's airframe")
     parser.add_argument("--set", default="", help="with --check: settings on top, name=value,... (flip_enable=2 or 3 for the staged 60- and 90-degree bursts)")
@@ -163,7 +164,7 @@ def main():
         start = defaults | (json.loads(args.start.read_text()) if args.start else {})
         for name, low, high, _ in SPACE:
             start[name] = min(max(start[name], low), high)
-        strategy = cma.CMAEvolutionStrategy(encode(start), 0.2, {"bounds": [0, 1], "popsize": args.population, "seed": 1, "verbose": -9})
+        strategy = cma.CMAEvolutionStrategy(encode(start), args.sigma, {"bounds": [0, 1], "popsize": args.population, "seed": 1, "verbose": -9})
         best = (math.inf, None)
         for generation in range(args.generations):
             xs = strategy.ask()
