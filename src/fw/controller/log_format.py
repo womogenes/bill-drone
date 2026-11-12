@@ -26,17 +26,29 @@ STOP_REASONS = (
     "", "Stopped", "Controller heartbeat lost", "IMU read failed",
     "Tilt limit exceeded", "Control sample delayed", "IMU calibration", "Landed", "Landed after link loss", "Landed by the fly-away failsafe",
 )
-# The guards' states (drone/main/guard.h FAILSAFE_* and PATTERN_*), as the record's guard field and the status flags' bits 8-13 hold them.
+# The guards' states (drone/main/guard.h FAILSAFE_* and PATTERN_*) and the roll flip's phase (drone/main/flip.h flip_phase: climbing, spinning or righting, arresting), as the record's guard field and the status flags' bits 8-15 hold them.
 FAILSAFE_PHASES = (None, "brake", "hold", "land")
 PATTERN_STOPS = (None, "distance", "tag lost", "tilt", "stick", None, None, None)
+FLIP_PHASES = (None, "climb", "flip", "arrest")
 # The Kalman filter's flags from bit 0 (flight_rt.c Record ekf_flags): its heading is known, it is resting still, it is good enough for the hold to fly horizontally and vertically, and the hold flew on it this tick.
 EKF_FLAGS = ("aligned", "still", "horizontal", "vertical", "flown")
 
 
 def guard_state(bits):
-    """The guards from their bits: the failsafe's phase (None when off), whether distance set it off, and why the test pattern stopped (None when it did not)."""
-    return {"failsafe": FAILSAFE_PHASES[bits & 3], "failsafe_far": bool(bits & 4), "pattern_stop": PATTERN_STOPS[bits >> 3 & 7]}
+    """The guards from their bits: the failsafe's phase (None when off), whether distance set it off, why the test pattern stopped (None when it did not), and the flip's phase (None when none runs)."""
+    return {"failsafe": FAILSAFE_PHASES[bits & 3], "failsafe_far": bool(bits & 4), "pattern_stop": PATTERN_STOPS[bits >> 3 & 7], "flip": FLIP_PHASES[bits >> 6 & 3]}
 
 
 # The test pattern's channels in the drone's order (drone/main/flight_rt.c excite), and their units: roll and pitch targets and servo tilts in degrees (servos positive forward), the yaw-rate target in degrees/s, collective and motors in throttle, the hover hold point's speed toward the tag and to the drone's left in m/s.
 PATTERN_CHANNELS = ("roll", "pitch", "yaw", "base", "left_servo", "right_servo", "left_motor", "right_motor", "forward", "left")
+# Each channel's largest value either way, as the drone refuses past it (flight_rt.c excite_limit; test_bridge.py checks they agree). The roll and pitch targets went from 10 to 60 degrees on 2026-11-12 for the roll-step ladder.
+PATTERN_LIMITS = (60, 60, 60, 150, 8, 8, 150, 150, 1, 1)
+
+
+def pattern_refusal(pattern):
+    """Why the drone would refuse this pattern's values ("A value is past its channel's limit"), or None."""
+    for segment in pattern.get("segments", []):
+        for name, limit in zip(PATTERN_CHANNELS, PATTERN_LIMITS):
+            if abs(round(segment.get(name, 0) * 100) / 100) > limit:
+                return f"{name} {segment[name]} is past its limit {limit}"
+    return None

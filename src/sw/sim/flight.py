@@ -121,8 +121,9 @@ class Attitude:
     def __init__(self, accel=(0.0, 0.0, 1.0)):
         self.state = array("f", [math.atan2(accel[1], accel[2]), math.atan2(-accel[0], math.sqrt(accel[1] ** 2 + accel[2] ** 2))])
 
-    def update(self, accel, gyro, dt, powered):
-        motion = array("f", list(accel) + list(gyro) + [dt, POWERED_GRAVITY_TAU if powered else GRAVITY_TAU])
+    def update(self, accel, gyro, dt, powered, banked=False):
+        # banked: the gyro alone (flight_rt.c bank_tilt), an infinite time constant.
+        motion = array("f", list(accel) + list(gyro) + [dt, math.inf if banked else POWERED_GRAVITY_TAU if powered else GRAVITY_TAU])
         library.flight_attitude(self.state.buffer_info()[0], motion.buffer_info()[0])
         return self.state[0], self.state[1]
 

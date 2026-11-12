@@ -27,6 +27,7 @@ import {
 import { typing } from '@/lib/keys';
 import {
   FLIGHT_MODES,
+  HOVER,
   LAND,
   LAND_FAST,
   MANUAL,
@@ -35,6 +36,12 @@ import {
   type NumberSetting,
   type Reading,
 } from '@/lib/telemetry';
+
+const FLIP_PHASES = {
+  climb: 'climbing',
+  flip: 'spinning',
+  arrest: 'arresting',
+};
 
 const keyIcons: Record<string, LucideIcon> = {
   ArrowUp,
@@ -264,6 +271,15 @@ const gainSections: {
     ],
   },
   {
+    title: 'Tilt and flip',
+    fields: [
+      { key: 'tip_limit', label: 'Tip cut (°)', min: 20, max: 80 },
+      { key: 'bank_tilt', label: 'Gyro-only past (°, 0 off)', min: 0, max: 80 },
+      { key: 'flip_enable', label: 'Flip allowed (0 or 1)', min: 0, max: 1 },
+      { key: 'flip_height', label: 'Flip from at least (m)', min: 2.5, max: 5 },
+    ],
+  },
+  {
     title: 'Model',
     needs: 'arm',
     fields: [
@@ -305,6 +321,7 @@ export const ControlPanel = memo(function ControlPanel({
   onStop,
   escError,
   onEscStage,
+  onFlip,
 }: {
   settings: ControlSettings;
   // A 3D GPS fix and the GPS hold on: without the tag the right stick then flies a speed instead of a tilt.
@@ -325,6 +342,7 @@ export const ControlPanel = memo(function ControlPanel({
   viewing: boolean;
   escError: string | null;
   onEscStage: (stage: 0 | 1 | 2) => void;
+  onFlip: () => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
   const ready = available && recorderReady && imu === 'calibrated';
@@ -785,6 +803,21 @@ export const ControlPanel = memo(function ControlPanel({
           >
             {settings.enabled ? 'Disable' : arming ? 'Arming…' : 'Enable'}
           </Button>
+          {settings.flip_enable !== undefined && (
+            <Button
+              variant="outline"
+              disabled={
+                !connected ||
+                !settings.enabled ||
+                settings.flip_enable < 1 ||
+                mode !== HOVER ||
+                !!status?.flip
+              }
+              onClick={onFlip}
+            >
+              Flip
+            </Button>
+          )}
           <Button
             variant="outline"
             size="icon"
@@ -833,9 +866,11 @@ export const ControlPanel = memo(function ControlPanel({
       </div>
       <p
         role="status"
-        className={`h-6 truncate ${problem ? 'text-red-700' : 'text-green-700'}`}
+        className={`h-6 truncate ${status?.flip ? 'font-medium text-blue-700 dark:text-blue-400' : problem ? 'text-red-700' : 'text-green-700'}`}
       >
-        {problem || 'Good to fly.'}
+        {status?.flip
+          ? `Flip: ${FLIP_PHASES[status.flip]}`
+          : problem || 'Good to fly.'}
       </p>
     </Panel>
   );

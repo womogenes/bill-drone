@@ -56,6 +56,12 @@ typedef struct {
     float radio_rate, radio_power, radio_follow;
     // The fly-away failsafe and the test pattern's limits (guard.h). Runtime-only, last.
     GuardGains guard;
+    // The tilt past which flight_rt.c stops the motors (radians; settings.def tip_limit). Runtime-only, last.
+    float tip_limit;
+    // Banked flight past this setpoint (radians, 0 = off; settings.def bank_tilt). Runtime-only, last.
+    float bank_tilt;
+    // The roll flip (flip.h): whether the laptop may start one (1) and the least height it starts from (m). Runtime-only, last.
+    float flip_enable, flip_height;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.

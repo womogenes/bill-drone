@@ -1,13 +1,13 @@
 """
 A ladder of roll steps from a GPS hover, for the first measurements past the 35 degrees the airframe model was fitted within: uv run -m sw.sim.tilt_ladder [--amplitudes 15,20,25,30,35] [--width 0.5] [--rest 3] [--roll-rate 60] [--doublet] [--tag] [--distance m] [--seeds 8] [--dry]
 
-The pattern (sw/excite.py's format, its roll channel) steps the roll target to +A for --width s, back to 0 for --rest s, to -A, back to 0, for each amplitude in turn; on the drone the hold keeps flying under it, so the step's sideways push is braked between steps. Before flying it, it is flown here on the outdoor plant (sw/sim/outdoor.py: drone 1 as of 2026-11-09 with its uncertain terms drawn, GPS, barometer, a light wind) on the firmware's own hold and guards with the test's settings (TEST): each step's peak true roll, the attitude estimate's error there (the firmware's complementary filter pulls toward the accelerometer, which in a banked hover reads the thrust, not gravity), the height lost, the sideways speed and how far to the side of the hold point it gets before the next step, and whether the pattern's tilt guard or the 45-degree tip cut (flight_rt.c TIP_LIMIT; the sim fails a run there) ended it. --dry prints the pattern for sw/excite.py file instead, and the settings the sim flew it on.
+The pattern (sw/excite.py's format, its roll channel) steps the roll target to +A for --width s, back to 0 for --rest s, to -A, back to 0, for each amplitude in turn; on the drone the hold keeps flying under it, so the step's sideways push is braked between steps. Before flying it, it is flown here on the outdoor plant (sw/sim/outdoor.py: drone 1 as of 2026-11-09 with its uncertain terms drawn, GPS, barometer, a light wind) on the firmware's own hold and guards with the test's settings (TEST): each step's peak true roll, the attitude estimate's error there (the firmware's complementary filter pulls toward the accelerometer, which in a banked hover reads the thrust, not gravity), the height lost, the sideways speed and how far to the side of the hold point it gets before the next step, and whether the pattern's tilt guard or the tip cut (settings.def tip_limit, 45 degrees by default; the sim fails a run there) ended it. --dry prints the pattern for sw/excite.py file instead, and the settings the sim flew it on.
 
 --doublet follows each step at once with its opposite (+A, -A, rest, -A, +A, rest), which takes the step's sideways speed out again at the step's own tilt instead of the hold's: about half the room for the same roll, but the swing from one side to the other overshoots the target (on the tag a 20-degree doublet of 0.4 s each way peaks at 30 degrees, a 40-degree one passes the tip cut), so the peak it reports is the larger of the two halves.
 
 --tag flies it indoors on the tag instead: sweep.IDENTIFIED_ESC on the 2026-10-29 07:20 UTC camera hover's settings, as pattern_guard.py flies its patterns (0.5 m up, 1.9 m from the tag), with pattern_distance 0.5 unless --distance gives another. That is the drone as it was then; sweep.CURRENT on drone 1's hop settings loses the tag every few seconds in the sim. A room 2 m wide leaves the drone (0.6 m across its prop tips) 0.7 m to each side: --tag --doublet --amplitudes 20 --width 0.3 --roll-rate 360 reaches 24 degrees within 0.45 m of the hold point (0.3 m median), where single steps fit to about 10 degrees (models/NOTES.md 2026-11-10).
 
-Today's firmware caps the test below 45 degrees: TIP_LIMIT stops the motors there, nothing raises the collective for a bank (at 60 degrees holding height needs twice the thrust), and the filter's pull toward the accelerometer grows with the time spent banked. Steps past that need those three changed first (models/NOTES.md).
+Today's firmware caps the test below 45 degrees by default: tip_limit stops the motors there, nothing raises the collective for a bank (at 60 degrees holding height needs twice the thrust), and the filter's pull toward the accelerometer grows with the time spent banked. Steps past that need those three changed first (models/NOTES.md).
 """
 
 import argparse
@@ -19,7 +19,7 @@ from multiprocessing import Pool
 import numpy as np
 
 from sw.excite import SAMPLE_HZ, segments
-from sw.flight_log import recording
+from sw.flight_log import parse_settings, recording
 from sw.flight_log import settings as recording_settings
 from sw.sim.outdoor import GPS, plant as outdoor_plant
 from sw.sim.pattern_guard import TAG_SETTINGS
@@ -113,10 +113,11 @@ def main():
     parser.add_argument("--settings", default=SETTINGS, help="recording whose settings to fly (the test's on top); one flown on the tag gets the GPS hold's too (OUTDOOR)")
     parser.add_argument("--bands", action="store_true", help="the 2026-11-11 rubber bands on the servos (BANDS)")
     parser.add_argument("--dry", action="store_true")
+    parser.add_argument("--set", default="", help="settings on top of the test's, name=value,... (e.g. tip_limit=60,bank_tilt=30)")
     args = parser.parse_args()
     amplitudes = [float(a) for a in args.amplitudes.split(",")]
     pattern = ladder(amplitudes, args.width, args.rest, args.doublet)
-    test = (TAG_TEST if args.tag else TEST) | {"roll_target_rate": args.roll_rate} | ({"pattern_distance": args.distance} if args.distance is not None else {})
+    test = (TAG_TEST if args.tag else TEST) | {"roll_target_rate": args.roll_rate} | ({"pattern_distance": args.distance} if args.distance is not None else {}) | parse_settings(args.set)
     if args.dry:
         print(json.dumps(pattern))
         print("flown here on " + ",".join(f"{name}={value:g}" for name, value in test.items()), file=sys.stderr)
@@ -133,7 +134,7 @@ def main():
         results = pool.map(fly, [(pattern, settings, args.wind, seed, steps, args.tag, args.doublet, args.bands) for seed in range(args.seeds)])
     where = f"on the tag, pattern_distance {settings['pattern_distance']:g} m" if args.tag else f"wind {args.wind} m/s"
     print(f"roll ladder {amplitudes}, {args.width} s {'doublets' if args.doublet else 'steps'}, {args.rest} s rests, roll_target_rate {args.roll_rate}°/s, {where}, {args.seeds} runs, settings {args.settings}{' with the bands' if args.bands else ''}")
-    print(f"  lost (past 45°, the tip cut) {sum(not r['stable'] for r in results)}, pattern stopped by its guard {sum(r['stop'] is not None for r in results)}: {[r['stop'] for r in results if r['stop']]}")
+    print(f"  lost (past the tip cut, {settings.get('tip_limit', 45.0):g}°) {sum(not r['stable'] for r in results)}, pattern stopped by its guard {sum(r['stop'] is not None for r in results)}: {[r['stop'] for r in results if r['stop']]}")
     for a in amplitudes:
         rows = [s for r in results for s in r["steps"] if s["amplitude"] == a]
         if not rows:

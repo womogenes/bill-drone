@@ -348,6 +348,8 @@ export function analyzeFlight(
         if (!(key in metadata)) metadata[key] = value;
   const session = Number(metadata.session);
   const signs = (metadata.sensor_to_body as number[] | undefined) ?? [1, 1, 1];
+  // The gyro's counts per deg/s: 131 (±250 deg/s) in recordings from before the metadata said.
+  const gyroCounts = Number(metadata.gyro_counts_per_deg_s ?? 131);
   const bias = (
     (metadata.gyro_bias_rad_s as number[] | undefined) ?? [0, 0, 0]
   ).map((value) => (value * 180) / Math.PI);
@@ -389,7 +391,7 @@ export function analyzeFlight(
     const uint16 = (offset: number) => view.getUint16(at + offset, true);
     time[index] = view.getUint32(at, true) / 1e6;
     az[index] = (int16(12) * signs[2]) / 16384;
-    pitchRate[index] = (int16(18) * signs[1]) / 131 - bias[1];
+    pitchRate[index] = (int16(18) * signs[1]) / gyroCounts - bias[1];
     roll[index] = int16(22) / 100;
     pitch[index] = int16(24) / 100;
     throttle[index] = uint16(26) + uint16(28);

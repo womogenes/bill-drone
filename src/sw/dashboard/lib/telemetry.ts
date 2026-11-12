@@ -119,6 +119,10 @@ export type ControlSettings = {
   failsafe_time?: number;
   failsafe_land?: number;
   failsafe_tilt?: number;
+  tip_limit?: number;
+  bank_tilt?: number;
+  flip_enable?: number;
+  flip_height?: number;
 };
 
 // A setting that is a number: all but enabled.
@@ -272,6 +276,8 @@ export type Reading = {
     failsafe?: 'brake' | 'hold' | 'land' | null;
     failsafe_far?: boolean;
     pattern_stop?: 'distance' | 'tag lost' | 'tilt' | 'stick' | null;
+    // The roll flip's phase (fw/drone/main/flip.h), null when none runs.
+    flip?: 'climb' | 'flip' | 'arrest' | null;
   };
   recorder?: RecorderStatus;
   imu?: ImuReading | null;

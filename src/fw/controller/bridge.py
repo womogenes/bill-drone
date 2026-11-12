@@ -31,7 +31,7 @@ from aiohttp import WSMsgType, web
 import serial
 
 from find_port import candidates, listen
-from log_format import FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, PATTERN_CHANNELS, STOP_REASONS, guard_state
+from log_format import FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, PATTERN_CHANNELS, STOP_REASONS, guard_state, pattern_refusal
 from wire import LINK_CHANNEL, PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 # Messages of more fragments than this go out twice (send_message).
@@ -74,7 +74,9 @@ LINK_SOURCES = {b"LNK1": "drone", b"RLY1": "controller"}
 LINK_RATES = ("1 Mbps", "LR 500 kbps", "LR 250 kbps", "2 Mbps", "5.5 Mbps", "11 Mbps", "11g 6 Mbps")
 # A status gap at least this long (s) goes into the open recording as a dropout event with its length.
 DROPOUT_S = 0.3
-REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T", "esc": b"E"}
+REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T", "esc": b"E", "flip": b"f"}
+# The flip request is tried this long (s) instead of the 6 every other request gets: a flip that starts seconds after the click is not the one asked for (the drone checks its conditions on arrival either way).
+FLIP_TIMEOUT = 1.0
 # Schema entries per D reply (drone/main/settings.h SCHEMA_PAGE).
 SCHEMA_PAGE = 12
 
@@ -132,7 +134,7 @@ def decode_status(payload, settings):
         },
         "control_status": {
             "reason": STOP_REASONS[reason],
-            # The fly-away failsafe's phase and the test pattern's stop (drone/main/guard.h), from flags bits 8-13.
+            # The fly-away failsafe's phase, the test pattern's stop (drone/main/guard.h) and the flip's phase (drone/main/flip.h), from flags bits 8-15.
             **guard_state(flags >> 8),
             "throttle_latched": bool(flags & 64),
             "target_sequence": target_sequence,
@@ -226,6 +228,9 @@ def encode_pattern(pattern):
     unknown = {key for segment in segments for key in segment} - {"ticks", *PATTERN_CHANNELS}
     if unknown:
         raise ValueError(f"Unknown pattern channels {sorted(unknown)}")
+    refusal = pattern_refusal(pattern)
+    if refusal:
+        raise ValueError(refusal)
     used = [name for name in PATTERN_CHANNELS if any(segment.get(name) for segment in segments)]
     mask = sum(1 << PATTERN_CHANNELS.index(name) for name in used)
     after, repeat = float(pattern.get("after", 2.0)), int(pattern.get("repeat", 0))
@@ -971,7 +976,7 @@ class Service:
             elif kind == "esc":
                 # ESC calibration stage: 0 off, 1 the top of the range, 2 the bottom (drone/main/flight_rt.c).
                 body = bytes([int(message["stage"])])
-            data = await self.request(REQUESTS[kind], body)
+            data = await self.request(REQUESTS[kind], body, **({"timeout": FLIP_TIMEOUT} if kind == "flip" else {}))
             if kind == "tune":
                 self.settings = json.loads(data)
         except (RuntimeError, TimeoutError) as failure:
