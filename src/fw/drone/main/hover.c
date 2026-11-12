@@ -55,6 +55,9 @@
 #ifndef PROBE_SHARE
 #define PROBE_SHARE 0.5f
 #endif
+#ifndef PROBE_EXPLAINED
+#define PROBE_EXPLAINED 1
+#endif
 // A probe that finds air gives back the thrust it started from and waits PROBE_WAIT (s) before the next. The sink it caused (up to MAX_SINK, m/s) fades from the climb-rate command over SINK_TAU (s) instead of being caught at once, which with a climb-rate estimate that already reads low near the floor carried the simulated drone back up.
 #ifndef PROBE_WAIT
 #define PROBE_WAIT 1.0f
@@ -65,7 +68,7 @@
 #ifndef MAX_SINK
 #define MAX_SINK 0.1f
 #endif
-// A probe starts once the descent command has eased in and the descent has stalled (climb rate under half the descent rate for STALL_S), or the accelerometer shows the descent stopped by something (the speed gained over the last IMPULSE_TAU (s) jumps up by IMPULSE of the descent rate, and by at least IMPULSE_MIN (m/s): slower contacts are not told from the hold's own corrections), or the height estimate is below LOW_HEIGHT (m), or at the latest once the landing has run as long as the descent from its starting height should take, plus LAND_MARGIN of that and LAND_SLACK (s). All of them can be wrong in the air, which a probe only costs a short sink.
+// A probe starts once the descent command has eased in and the descent has stalled (climb rate under half the descent rate for STALL_S), or the accelerometer shows the descent stopped by something (the speed gained over the last IMPULSE_TAU (s) jumps up by IMPULSE of the descent rate, and by at least IMPULSE_MIN (m/s): slower contacts are not told from the hold's own corrections), or the height estimate is below LOW_HEIGHT (m), or at the latest once the landing has run as long as the descent from its starting height should take, plus LAND_MARGIN of that and LAND_SLACK (s). All of them can be wrong in the air, which a probe only costs a short sink. IMPULSE was 0.4 until 2026-11-12, when a soft outdoor contact (01:11 UTC) gained 0.18 m/s over IMPULSE_TAU against 0.2 at the 0.5 m/s rate and the first probe waited 1.5 s for the "due" start; the descents' own peaks that night were 0.01-0.08 m/s.
 #ifndef STALL_S
 #define STALL_S 0.2f
 #endif
@@ -73,7 +76,7 @@
 #define IMPULSE_TAU 0.1f
 #endif
 #ifndef IMPULSE
-#define IMPULSE 0.4f
+#define IMPULSE 0.3f
 #endif
 #ifndef IMPULSE_MIN
 #define IMPULSE_MIN 0.08f
@@ -116,6 +119,10 @@
 // Nor is a blind touchdown declared while the climb rate still reads a descent over BLIND_CLIMB (m/s, or half the land rate if more): ground effect then holds the specific force up as the probe winds thrust down. 2026-11-09 06:10 UTC: a probe started 0.25 m up on the barometer's height reading under the takeoff floor, declared touchdown 0.12 s before contact at 77 % of the hold's thrust with the climb rate at -0.89 m/s, and the drone dropped the last 10 cm (replayed: landing_test --replay ... --contact 81.89). The probe then goes on feeling until the accelerometer shows air (falling) or the descent stops. Without the barometer (the IMU's height, camera lost) landings go on as before: in landing_test's camera rig the IMU-only height drifted down below the floor while the drone rose, and only the "low" start ended those landings.
 #ifndef BLIND_CLIMB
 #define BLIND_CLIMB 0.2f
+#endif
+// But on the floor the barometer reads low with the rotors spinning (2026-11-12 01:09 and 01:11 UTC: 1.3-1.6 m below its reading just before contact, so the height estimate "descended" to -1.8 m and the climb rate read -0.3 to -0.7 m/s for 2 s on the floor), which held those touchdowns off until the probe had wound thrust to nothing. So a probe that has taken away BLIND_DEEP (m/s) of the air's vertical speed while the accelerometer saw under PROBE_SHARE of it and no fall is on the floor whatever the climb rate reads: that is about a third of the hold's thrust, which no ground effect makes up in the air (the 06:10 touchdown above came at 77 %, and the cushion at the rotors' height on the feet is about 5 %).
+#ifndef BLIND_DEEP
+#define BLIND_DEEP 0.6f
 #endif
 #ifndef LAND_SHOCK
 #define LAND_SHOCK 1.45f
@@ -898,8 +905,10 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->probing = true;
             state->ceiling = state->force;
             state->probe_start = state->probe_force = state->force * lean;
+            // A probe started by a jolt (stopped) judges air and floor against no more than the specific force its thrust explains in the air (probe_settled): against the jolt itself the jolt's fading back to 1 g reads as a fall, and it found air on the floor (2026-11-12 01:09 UTC: started 0.02 s after contact at 1.45 g, "air" 0.18 s later, the motors on the floor 2.3 s more). What it felt (the blind tilt cut) still goes against the specific force before it: in landing_test --outdoor the settled reference made the tilt cut live in the air on drones already losing control.
             state->probe_g = state->recent_g;
-            state->probe_velocity = state->probe_expected = 0;
+            state->probe_air_g = PROBE_EXPLAINED && stopped ? fminf(state->recent_g, state->hold_g * state->probe_start / state->hold_force) : state->recent_g;
+            state->probe_velocity = state->probe_settled = state->probe_expected = 0;
         }
         if (state->probing) {
             // In the air the specific force would follow the thrust (lagged by the motors) from where the probe began.
@@ -912,9 +921,10 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->probe_force += (state->force * lean - state->probe_force) * (1 - expf(-dt / PROBE_LAG));
             state->probe_expected += (state->probe_force - state->probe_start) / state->hold_force * GRAVITY * dt;
             state->probe_velocity += (vertical_g - state->probe_g) * GRAVITY * dt;
-            bool falling = state->recent_g < state->hold_g - PROBE_FALL || state->probe_velocity <= -PROBE_DEPTH;
+            state->probe_settled += (vertical_g - state->probe_air_g) * GRAVITY * dt;
+            bool falling = state->recent_g < state->hold_g - PROBE_FALL || state->probe_settled <= -PROBE_DEPTH;
             bool sinking = blind && state->climb_rate < -fmaxf(0.5f * rate, BLIND_CLIMB);
-            if (!falling && !sinking && state->probe_expected <= -PROBE_DEPTH && state->probe_velocity > PROBE_SHARE * state->probe_expected) {
+            if (!falling && (!sinking || state->probe_expected <= -BLIND_DEEP) && state->probe_expected <= -PROBE_DEPTH && state->probe_settled > PROBE_SHARE * state->probe_expected) {
                 state->landed = true;
             } else if (falling || (!sinking && state->probe_expected <= -PROBE_DEPTH)) {
                 // In the air.
