@@ -28,7 +28,7 @@
 #define LEAK_TAU 10.0f
 // Resting specific force smoothing (s).
 #define BIAS_TAU 0.5f
-// Fastest commanded climb or descent from the height error (m/s), most vertical acceleration asked for (m/s²), and the integral's limit (m/s²).
+// Fastest commanded descent from the height error (m/s; a climb goes to hover_climb_rate, which MAX_CLIMB capped at 0.5 m/s until 2026-11-12, so the 0.6 set that day made no difference), most vertical acceleration asked for (m/s²), and the integral's limit (m/s²).
 #define MAX_CLIMB 0.5f
 #define MAX_VERTICAL 3.0f
 #define MAX_INTEGRAL 3.0f
@@ -129,8 +129,18 @@
 #endif
 // The descent command ramps in over LAND_EASE (s), so pressing land does not step collective down.
 #define LAND_EASE 0.5f
-// Held L (HOVER_LAND_FAST) descends this many times hover_land_rate: 2 m/s at the 1 m/s set on 2026-11-08 (was 3x of 0.2). Faster is not safer: about 1 kg on two 10-inch rotors has an induced velocity near 6.4 m/s, and a straight descent beyond roughly a quarter of it (1.5-2 m/s) enters the vortex ring state, where lift and control drop out unpredictably.
+// Held L (HOVER_LAND_FAST) descends this many times hover_land_rate: 2 m/s at the 1 m/s set on 2026-11-08 (was 3x of 0.2). Faster is not safer: about 1 kg on two 10-inch rotors has an induced velocity near 6.4 m/s, and a straight descent beyond roughly a quarter of it (1.5-2 m/s) enters the vortex ring state, where lift and control drop out unpredictably. Where the height knows the floor (LAND_DESCENT below) it only sets how fast held L may come down above LAND_FINAL_HEIGHT.
 #define LAND_FAST_FACTOR 2
+// Above LAND_FINAL_HEIGHT (m, by the height estimate) a landing comes down faster, at up to LAND_DESCENT (m/s), braking at LAND_BRAKE (m/s²) so it reaches the set rate by LAND_FINAL_HEIGHT; the touchdown itself stays at hover_land_rate (the tip-overs of 2026-11-12 touched down at 0.85-1 m/s, the upright ones at 0.5). Only on a height that knows the floor, the camera's or the barometer's, and the barometer read up to 0.9 m above the floor at contact on 2026-11-09, so the final height leaves that and more. LAND_DESCENT 0 (or under the set rate) keeps one rate throughout, as before 2026-11-12, when a landing from 3 m at 0.5 m/s took 6 s to the cut (01:55 UTC).
+#ifndef LAND_DESCENT
+#define LAND_DESCENT 1.2f
+#endif
+#ifndef LAND_BRAKE
+#define LAND_BRAKE 0.8f
+#endif
+#ifndef LAND_FINAL_HEIGHT
+#define LAND_FINAL_HEIGHT 1.5f
+#endif
 // Above this nudge speed (m/s) the hold point counts as moving.
 #ifndef NUDGE_MOVING
 #define NUDGE_MOVING 0.02f
@@ -829,6 +839,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
 
     // Climb-rate command: hold moves the target height toward its goal at climb_rate; landing descends at a set rate, once the hold has braked (LAND_WAIT_S). Only the horizontal hold brakes, so without it (neither the tag nor the drag model) there is nothing to wait for.
     bool waiting = mode != HOVER_HOLD && state->land_time == 0 && state->land_wait < LAND_WAIT_S && (state->tracking || state->dragging) && !state->probing && state->height >= LAND_TILT_HEIGHT && hypotf(state->velocity[0], state->velocity[1]) > LAND_WAIT_SPEED;
+    // A landing's height knows the floor: the camera's, or the barometer's.
+    bool floored = seeing || (g->baro_tau > 0 && state->baro_used && state->baro_us && now_us - state->baro_us <= BARO_STALE_US);
     float command;
     if (mode == HOVER_HOLD) {
         // The goal is climb; centring goes to the tag's height instead, climbs toward the ceiling to bring the tag into view until it has been flown on (a glimpse from the ground does not count), and holds the height reached when it is lost.
@@ -844,9 +856,12 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         if (capped) state->target = fminf(state->target, g->ceiling);
         float rising = state->tracking || state->dragging ? state->nudge_rate[2] : 0;
         if (capped && state->target >= g->ceiling) rising = fminf(rising, 0);
-        command = clamp(g->kz * (state->target - state->height) + rising, -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
+        command = clamp(g->kz * (state->target - state->height) + rising, -MAX_CLIMB, g->climb_rate);
     } else {
         float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? LAND_FAST_FACTOR : 1);
+        // Held L too touches down at the set rate where the height knows the floor, and only comes down faster above it (2026-11-12 01:55 UTC: held L met the ground at 1 m/s, 5 degrees nose-down, and went over backward).
+        float fastest = fmaxf(LAND_DESCENT, -rate);
+        if (floored && LAND_DESCENT > 0) rate = -fminf(fastest, sqrtf(g->land_rate * g->land_rate + 2 * LAND_BRAKE * fmaxf(0, state->height - LAND_FINAL_HEIGHT)));
         if (waiting) {
             // Waiting, the height the hold was holding is held (kz), not only a zero climb rate.
             command = clamp(g->kz * (state->target - state->height), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
@@ -888,7 +903,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->land_wait += dt;
     } else {
         // The vertical speed the accelerometer gains this tick, against the hold's specific force.
-        float rate = g->land_rate * (mode == HOVER_LAND_FAST ? LAND_FAST_FACTOR : 1), gained = (vertical_g - state->hold_g) * GRAVITY * dt;
+        // The rate it touches down at (the descent command's final one).
+        float rate = g->land_rate * (mode == HOVER_LAND_FAST && !(floored && LAND_DESCENT > 0) ? LAND_FAST_FACTOR : 1), gained = (vertical_g - state->hold_g) * GRAVITY * dt;
         if (state->land_time == 0) state->land_height = state->height;
         state->land_time += dt;
         // Only once the descent command has eased in: before that the drone is not meant to be moving yet.
