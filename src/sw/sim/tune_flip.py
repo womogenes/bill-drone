@@ -26,10 +26,10 @@ FLOOR, SLEW, THROTTLE_CAP = 0.2, 10000.0, 1100.0
 # Searched: (name, low, high, log scale). The rate loops' gains (k_spin, k_roll, k_pitch, kd_yaw, kp, brake) stop where the motors' 0.066 s lag and the slew's 0.12 s for the full range would make them chatter: a search left free took them there and the throttles swung between 200 and 1100 every 0.1 s.
 SPACE = [
     ("climb_thrust", 1.2, 2.2, False), ("climb_time", 0.05, 0.35, True), ("spin_rate", 4.0, 26.0, True), ("k_spin", 2.0, 12.0, True), ("spin_thrust", 0.4, 2.0, False), ("spin_lift", 0.0, 0.8, False), ("handoff", 1.0, 3.0, False),
-    ("kp", 1.0, 4.0, True), ("brake", 1.0, 20.0, True), ("max_rate", 3.0, 14.0, True), ("k_roll", 2.0, 8.0, True), ("k_pitch", 1.0, 20.0, True), ("kd_yaw", 0.5, 8.0, True),
+    ("kp", 1.0, 4.0, True), ("brake", 1.0, 20.0, True), ("max_rate", 3.0, 14.0, True), ("k_roll", 2.0, 8.0, True), ("k_pitch", 1.0, 20.0, True), ("kd_yaw", 0.1, 8.0, True),
     ("flip_thrust", 0.8, 2.2, False), ("right_angle", 0.2, 0.6, False), ("servo_max", 0.1, 0.9, False), ("kv", 2.0, 15.0, True), ("ceiling", 0.6, 1.4, False), ("handoff_rate", 1.0, 3.0, True),
     # The levers against the rotors' momentum (2026-11-13): the spin's pitch and yaw rate gains apart from its roll gain, the gyroscopic pitch fed forward (0 to twice the physics' 0.018 / 0.0044), the motors' floor raised (a smaller speed difference between the rotors), and a later timeout.
-    ("spin_pitch", 2.0, 25.0, True), ("spin_yaw", 0.5, 12.0, True), ("gyro_ff", 0.0, 8.0, False), ("floor", 0.2, 0.6, False), ("timeout", 1.5, 3.0, False),
+    ("spin_pitch", 2.0, 25.0, True), ("spin_yaw", 0.2, 12.0, True), ("gyro_ff", 0.0, 8.0, False), ("floor", 0.2, 0.6, False), ("timeout", 1.5, 3.0, False),
 ]
 FIXED = {"slew": SLEW, "throttle_cap": THROTTLE_CAP}
 CLIMB_ROOM, HANDBACK = 0.8, 1.3
