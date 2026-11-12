@@ -25,7 +25,7 @@ GPS_LATENCY = 0.06
 GPS_MAX_SPEED_ACCURACY = 0.6
 GPS_MAX_ACCURACY = 8.0
 BARO_LATENCY = 0.075
-GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "view", "gps_tau", "gps_place_tau", "gps_height_tau", "gps_heading", "baro_tau", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll", "thrust_direction", "gps_calibrate", "ekf", "return_speed")
+GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "flow_depth", "flow_tau", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "view", "gps_tau", "gps_place_tau", "gps_height_tau", "gps_heading", "baro_tau", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll", "thrust_direction", "gps_calibrate", "ekf", "return_speed", "nudge_accel")
 # flight.py counts these to find the Command fields after them: a gain added here and not there shifts every one of them (the pitch damping's filter, the guards' gains) without an error.
 assert len(GAIN_KEYS) == flight.HOVER_GAINS, "sw/sim/flight.py HOVER_GAINS must be the number of hover.h HoverGains members"
 # Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_cam_roll, hover_drag_tilt) and the attitude controller's pitch_trim.
@@ -79,7 +79,7 @@ class State(ctypes.Structure):
         ("rest", ctypes.c_float * 2), ("lifted", ctypes.c_float), ("shocked", ctypes.c_bool),
         ("baro_ground", ctypes.c_float), ("baro_grounded", ctypes.c_bool), ("baro_us", ctypes.c_int64), ("baro_wait", ctypes.c_float), ("baro_used", ctypes.c_bool), ("settle", ctypes.c_float), ("land_wait", ctypes.c_float), ("flown_pitch", ctypes.c_float), ("direction", ctypes.c_float), ("descended", ctypes.c_bool),
         ("heading_sum", ctypes.c_float * 4), ("heading_count", ctypes.c_int), ("heading_start_us", ctypes.c_int64), ("heading_block_us", ctypes.c_int64), ("turn_square", ctypes.c_float * 2), ("heading_sigma", ctypes.c_float), ("aligned", ctypes.c_bool), ("calibrate_time", ctypes.c_float), ("anchor", ctypes.c_float * 2), ("heading_inertial", ctypes.c_float),
-        ("estimate", Estimate), ("estimated", ctypes.c_bool), ("flown", ctypes.c_bool), ("flown_tied", ctypes.c_bool), ("flown_position", ctypes.c_float * 2), ("flown_anchor", ctypes.c_float * 2), ("heading_steady", ctypes.c_float * 4), ("heading_steady_weight", ctypes.c_float), ("gps_fix", ctypes.c_float * 4), ("searching", ctypes.c_bool)]
+        ("estimate", Estimate), ("estimated", ctypes.c_bool), ("flown", ctypes.c_bool), ("flown_tied", ctypes.c_bool), ("flown_position", ctypes.c_float * 2), ("flown_anchor", ctypes.c_float * 2), ("heading_steady", ctypes.c_float * 4), ("heading_steady_weight", ctypes.c_float), ("gps_fix", ctypes.c_float * 4), ("searching", ctypes.c_bool), ("reference", ctypes.c_float * 2)]
 
 
 class Output(ctypes.Structure):

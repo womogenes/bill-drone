@@ -62,6 +62,8 @@ typedef struct {
     float ekf;
     // The fastest the hold flies back to its hold point without the tag (m/s; 0 = no limit): the place's pull is capped where the velocity damping meets it at this speed (the offset counts as at most return_speed × kd / kp), so a hold point meters away is flown back to and not lunged at. Uncapped the pull asks for kp / kd of speed per meter (1.3 m/s at kp 2, kd 1.5), more than the drone can stop from: in sw/sim/outdoor.py the hold points left 3-7 m behind by the drift before the heading was pinned were flown back to at 2.5-4.3 m/s and overshot until the fly-away failsafe landed the drone.
     float return_speed;
+    // The most the GPS hold's hold-point speed changes in a second (m/s²; 0 = as the laptop's nudge changes it): let go at speed, the hold point moves on as far as the drone can stop in at this deceleration, and the hold brakes along it instead of asking for kd times the speed at once. In sw/sim/speed_limit.py (2026-11-12, the raised airframe, wind 0-3 m/s) that step saturated the lean cap at hover_tilt 15-20 and the braking rang (pitch 50 degrees peak to peak after stopping from 3 m/s at hover_tilt 20, the hold point overshot 2.5 m median); at 1.5 every lean cap stops from 3 and 5 m/s within 0.3 m of the hold point (90th percentile 0.8-0.95 m) and without ringing.
+    float nudge_accel;
 } HoverGains;
 
 // One camera sighting: the tag centre in the camera frame (m; right, down, forward), the wall's normal into it in the camera frame when the camera settled the tag's tilt (zero otherwise), and its capture time.
@@ -190,6 +192,8 @@ typedef struct {
     // The newest fix as the GPS gave it, which needs no heading (m/s north, east; m north, east of the first fix), for the fly-away failsafe (guard.c); and whether the failsafe is braking, when the calibration pulses run unasked until the heading is pinned.
     float gps_fix[4];
     bool searching;
+    // The speed the GPS hold flies the hold point at (m/s; yaw-turned frame): the nudge's, changed at no more than nudge_accel (hover.c).
+    float reference[2];
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

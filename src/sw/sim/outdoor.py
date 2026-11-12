@@ -49,10 +49,10 @@ def loguniform(rng, low, high):
     return math.exp(rng.uniform(math.log(low), math.log(high)))
 
 
-def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwind=False, flow=None, baro=False, speed_draw=(0.5, 3.0), gps_noise=None, level_sd=0.0):
-    """The outdoor plant for one run: the airframe with its uncertain terms drawn, the wind and the GPS."""
+def plant(airframe, wind, seed, gps, nominal, height, disturbances=None, headwind=False, flow=None, baro=False, speed_draw=(0.5, 3.0), gps_noise=None, level_sd=0.0, pushes=False):
+    """The outdoor plant for one run: the airframe with its uncertain terms drawn, the wind and the GPS. Its steady pushes are left out unless pushes: on models up to airframe_2026-11-09 they were small per-flight trims, but airframe_2026-11-12_raised's pitch push (-4.74 rad/s²) takes back its geometry's forward CoM shift, and without it the hold sits 8 degrees nose-down on 11 degrees of backward servo tilt."""
     rng = random.Random(seed)
-    p = dict(airframe) | {f"{axis}_push": 0.0 for axis in ("roll", "pitch", "yaw")}
+    p = dict(airframe) | ({} if pushes else {f"{axis}_push": 0.0 for axis in ("roll", "pitch", "yaw")})
     geometry = A.geometry_of(p)
     cz = geometry["com"][2]
     full = A.complete(p)
