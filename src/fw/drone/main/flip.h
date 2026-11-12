@@ -20,6 +20,8 @@ typedef struct {
     float slew, throttle_cap;
     // The spin's collective is spin_thrust plus spin_lift times the cosine of the turn so far, of the weight: more while the thrust points up, less while it points down.
     float spin_lift;
+    // The spin's pitch and yaw rate gains (1/s; before 2026-11-13 k_spin and 0.3 k_spin), and the rotors' gyroscopic pitch fed forward in the spin and the righting (gyro_ff, rad/s² per rad/s of roll per √N of thrust difference: the rotors' momentum per √N over the pitch inertia, FlipRighting gyro_ff).
+    float spin_pitch, spin_yaw, gyro_ff;
 } FlipParams;
 
 extern const FlipParams flip_defaults;
@@ -49,8 +51,9 @@ typedef struct {
 } FlipOutput;
 
 // The righting the flip's last stage and the tumble recovery (recover.c) both fly, and the motors while either owns them: the rate toward up is at most max_rate, sqrt(2 brake angle) and kp angle; k_roll and k_pitch (1/s) turn rate errors into angular accelerations, kd_yaw damps yaw; past roll_over from up with the error mostly in pitch it rolls the long way round; servo_max bounds the common tilt (radians); each motor makes at least floor and at most ceiling of the weight.
+// gyro_ff: the pitch the rotors' spin momentum gives a rolling drone with one rotor faster than the other (-ω × H: ω_roll H (√T_right - √T_left) over the pitch inertia), fed forward from the thrusts asked for, rad/s² per rad/s per √N; 0 (recover.c) leaves it out.
 typedef struct {
-    float kp, brake, max_rate, k_roll, k_pitch, kd_yaw, roll_over, servo_max, floor, ceiling;
+    float kp, brake, max_rate, k_roll, k_pitch, kd_yaw, roll_over, servo_max, floor, ceiling, gyro_ff;
 } FlipRighting;
 
 // Wanted angular accelerations (rad/s²) into thrusts and tilts: roll by differential thrust, pitch by common tilt, yaw by differential tilt, the collective (N) as asked where the motors' floor and ceiling leave room. thrust: what the motors have by now (N), followed here with their lag.
