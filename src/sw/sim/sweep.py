@@ -6,6 +6,7 @@ import math
 import random
 from collections import deque
 
+from fw.controller.log_format import pattern_refusal
 from sw.sim.airframe import Airframe, model
 from sw.sim.disturbance import Disturbances
 from sw.sim.flight import MODEL, PITCH_SPEED, TUNING_LAYOUT, YAW_I, Attitude, Controller, throttle, thrust
@@ -277,6 +278,9 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         seen, ranges = [], []
     # The test pattern's roll, pitch and hold-point speeds per control tick, the step collective first reached integrate_throttle, and how far the pattern has moved the hold point (m; toward the tag, left).
     excite = plant.get("excite") if hover else None
+    # A pattern the drone would refuse (flight_rt.c excite_limit) is not flown here either.
+    if excite and pattern_refusal(excite):
+        raise ValueError(f"The drone refuses this pattern: {pattern_refusal(excite)}")
     pattern = [tuple(segment.get(key, 0.0) for key in ("roll", "pitch", "forward", "left")) for segment in excite["segments"] for _ in range(segment["ticks"])] if excite else []
     integrating, excited, excite_hold = None, 0.0, [0.0, 0.0]
     for step in range(int(seconds / DT)):

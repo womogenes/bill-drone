@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 import bridge
+import log_format
 from wire import LINK_CHANNEL, pack, serial_encode
 
 SESSION = 7
@@ -84,6 +85,11 @@ async def main():
         for task in (service.settings_task, service.firmware_task):
             if task is not None:
                 task.cancel()
+
+    # The pattern limits the bridge and the simulator check are the drone's own: until 2026-11-12 the drone capped roll at 10 degrees while the ladder was simmed at 35.
+    source = (Path(__file__).parents[1] / "drone/main/flight_rt.c").read_text()
+    firmware = source.split("excite_limit[EXCITE_CHANNELS] = {")[1].split("}")[0]
+    assert tuple(float(value) for value in firmware.split(",")) == log_format.PATTERN_LIMITS, firmware
     print("ok")
 
 
