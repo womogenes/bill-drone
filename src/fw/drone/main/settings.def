@@ -96,6 +96,8 @@ TUNE(failsafe_land, guard.land, 1, 1, 30, 3)
 TUNE(failsafe_tilt, guard.tilt, RAD, 0, 30, 20)
 TUNE(pattern_distance, guard.pattern_distance, 1, 0, 10, 0.7)
 TUNE(pattern_tilt, guard.pattern_tilt, RAD, 0, 60, 30)
+// The tilt past which the motors stop in flight (flight_rt.c; degrees). 45 as the constant was; raised only to fly measured steps past it.
+TUNE(tip_limit, tip_limit, RAD, 20, 80, 45)
 STATE(servo_offset_left, -60, 60, -3)
 STATE(servo_offset_right, -60, 60, 0)
 // Gyro bias in rad/s and the stationary pose in degrees, valid only for the sensor frame they were taken in:

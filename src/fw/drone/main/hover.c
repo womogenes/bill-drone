@@ -216,7 +216,7 @@
 #define BARO_STALE_US 300000
 // The filter's time constant is at least this many readings, so its discrete steps stay well inside stability.
 #define BARO_MIN_STEPS 10
-// Thrust direction (gains thrust_direction): the correction from the hold's tilt to the body pitch moves over THRUST_DIRECTION_TAU (s), and the body pitch asked for stays within THRUST_BODY_MAX (radians), short of flight_rt.c TIP_LIMIT's 45 degree cut. In sw/sim/outdoor.py (2026-11-09, 06:38 settings) 0.3-0.7 s fed a 0.3-0.4 Hz swing of the hold itself (pitch RMS 12-16 degrees in still air against 5.5 off), 1.5-2.5 s held as well without it.
+// Thrust direction (gains thrust_direction): the correction from the hold's tilt to the body pitch moves over THRUST_DIRECTION_TAU (s), and the body pitch asked for stays within THRUST_BODY_MAX (radians), short of flight_rt.c's tip cut (settings.def tip_limit, 45 degrees by default). In sw/sim/outdoor.py (2026-11-09, 06:38 settings) 0.3-0.7 s fed a 0.3-0.4 Hz swing of the hold itself (pitch RMS 12-16 degrees in still air against 5.5 off), 1.5-2.5 s held as well without it.
 #ifndef THRUST_DIRECTION_TAU
 #define THRUST_DIRECTION_TAU 1.5f
 #endif

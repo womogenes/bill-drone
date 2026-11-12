@@ -41,8 +41,7 @@
 #define MAX_SAMPLE_MS (2500 / SAMPLE_HZ)
 // The IMU is set up again from scratch (a fresh driver, a device reset, the configuration) after this many bad control ticks in a row with the motors stopped: on 2026-11-08 19:11 PST every read failed from power-up for 11 minutes until a reset, and "IMU offline" before the first outdoor flights also needed a restart. Never with the motors enabled: a failure there has already stopped them.
 #define SENSOR_RETRY_TICKS SAMPLE_HZ
-// Degrees.
-#define TIP_LIMIT 45
+// Degrees. The tip cut is the setting tip_limit (settings.def).
 #define SERVO_LIMIT 60
 #define THROTTLE_MAX 1200
 // The ESC pulse for a stopped motor (us), below the 1000 us that calibration teaches as zero: an ESC calibrated at exactly 1000 us can read that, with pulse jitter, as just above its minimum and spin.
@@ -626,7 +625,7 @@ static void runtime_task(void *arg) {
         ekf_estimate(&filtered, &estimate);
         hover_estimate(&hover, &estimate);
         Attitude pose = relative_attitude(&state);
-        if (state.enabled && (fabsf(pose.roll) > TIP_LIMIT / DEG || fabsf(pose.pitch) > TIP_LIMIT / DEG)) stop_locked(4);
+        if (state.enabled && (fabsf(pose.roll) > command.tip_limit || fabsf(pose.pitch) > command.tip_limit)) stop_locked(4);
         // Measured specific force along vertical, in g: the accelerometer onto the IMU attitude's up axis.
         float vertical = -state.accel[0] * sinf(state.attitude.pitch) +
                          cosf(state.attitude.pitch) * (state.accel[1] * sinf(state.attitude.roll) + state.accel[2] * cosf(state.attitude.roll));

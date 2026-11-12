@@ -56,6 +56,8 @@ typedef struct {
     float radio_rate, radio_power, radio_follow;
     // The fly-away failsafe and the test pattern's limits (guard.h). Runtime-only, last.
     GuardGains guard;
+    // The tilt past which flight_rt.c stops the motors (radians; settings.def tip_limit). Runtime-only, last.
+    float tip_limit;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.
