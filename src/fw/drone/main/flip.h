@@ -115,7 +115,7 @@ bool flip_gyro_only(const FlipRun *run);
 bool flip_tip_exempt(const FlipRun *run);
 // For the flight record and status (flight_rt.c, log_format.py FLIP_PHASES): 0 none, 1 climbing, 2 spinning or righting (the flip owns the motors), 3 arresting.
 int flip_phase(const FlipRun *run);
-// One control tick, right after the attitude estimate: the flip's step, and at the hand-back the estimate takes its attitude and the controller its integrators and dead-reckoned velocity from before the flip; at its end the hover's height integral is given back too, so neither carries what the flip wound into them.
+// One control tick, right after the attitude estimate: the flip's step; while the estimate is on the gyro alone (flip_gyro_only: the climb to FLIP_GRACE after the hand-back) it takes the roll and pitch of the flip's own quaternion every tick, at the hand-back the controller takes its integrators and dead-reckoned velocity from before the flip; at its end the hover's height integral is given back too, so neither carries what the flip wound into them.
 void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, Attitude *attitude, Controller *controller, float *height_integral, FlipOutput *out);
 // Every control tick, on the throttles about to be sent (flight_rt.c, after the attitude controller and flip_actuators): from the flip's start until FLIP_GRACE after its hand-back each moves at most params->slew a second from the last tick's and stays under params->throttle_cap, so neither motor jumps between idle and full throttle (the ESCs' current and voltage spikes); a stopped motor (0) stays stopped. Otherwise it only follows them.
 void flip_limit(FlipRun *run, float *throttle, float dt);

@@ -245,6 +245,9 @@ void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, At
         run->since = 0;
     }
     if (active && !flip_active(run)) *height_integral = run->height_integral;
+    // While the estimate is on the gyro alone it is the flip's own quaternion's, through the arrest and the grace too, where the attitude controller flies: Euler angles carried on the gyro jump at 90 degrees of pitch (02:27: roll 58 to 163), and from a quaternion they come back with pitch within ±90 degrees, unambiguous within 90 degrees of upright.
+    if (!active && grace(run)) flip_rotate(run->flip.q, gyro, dt);
+    if (flip_gyro_only(run)) flip_euler(run->flip.q, &attitude->roll, &attitude->pitch);
 }
 
 void flip_limit(FlipRun *run, float *throttle, float dt) {

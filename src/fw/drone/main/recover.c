@@ -86,7 +86,11 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
         int cause = saturated ? RECOVER_SATURATED : in->tipped ? RECOVER_TILT : after_flip && tilt > in->tip_limit ? RECOVER_FLIP : RECOVER_NONE;
         if (cause && in->enabled && in->allowed) begin(run, in, cause, out);
         else if (in->tipped) out->cut = RECOVER_TIP_REASON;
-        if (!recover_active(run)) return;
+        if (!recover_active(run)) {
+            // Through the grace after a recovery the estimate stays q's, as while it runs.
+            if (grace(run)) flip_euler(q, &attitude->roll, &attitude->pitch);
+            return;
+        }
     }
     run->time += dt;
     run->vertical += ((up[0] * in->accel[0] + up[1] * in->accel[1] + up[2] * in->accel[2]) - 1) * GRAVITY * dt;
@@ -103,7 +107,7 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
         controller->velocity[0] = run->saved.velocity[0];
         controller->velocity[1] = run->saved.velocity[1];
     }
-    // The attitude estimate flies q while this runs: Euler angles from it stay sane at any attitude.
+    // The attitude estimate flies q while this runs: Euler angles from it stay sane at any attitude, and the leveling hands the attitude controller roll and pitch within 90 degrees: it runs only within right_angle (58 degrees) or tip_limit (at most 80) of upright, and beyond both it is righting again.
     flip_euler(q, &attitude->roll, &attitude->pitch);
     if (run->stage == RECOVER_RIGHT) {
         run->righting += dt;

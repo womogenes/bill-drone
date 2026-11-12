@@ -63,7 +63,7 @@ void recover_abort(RecoverRun *run);
 bool recover_active(const RecoverRun *run);
 // The attitude estimate on the gyro alone: while it runs and RECOVER_GRACE after.
 bool recover_gyro_only(const RecoverRun *run);
-// One control tick, where the tip cut has always been tested (after the attitude estimate and the flip's tick): tracks q, starts a recovery on a trigger it is allowed, runs one, and says when the tip cut applies instead. While it runs the attitude estimate takes q's roll and pitch every tick; at the hand-back to leveling the controller gets back its integrators and dead-reckoned velocity, and at its end the hover gets back its height integral.
+// One control tick, where the tip cut has always been tested (after the attitude estimate and the flip's tick): tracks q, starts a recovery on a trigger it is allowed, runs one, and says when the tip cut applies instead. While it runs and through its grace the attitude estimate takes q's roll and pitch every tick; at the hand-back to leveling the controller gets back its integrators and dead-reckoned velocity, and at its end the hover gets back its height integral.
 void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *in, Attitude *attitude, Controller *controller, float *height_integral, RecoverOutput *out);
 // After a recovery ended, the estimate stays on the gyro this long (s): the accelerometer still reads the arrest's thrust.
 #define RECOVER_GRACE 1.0f
