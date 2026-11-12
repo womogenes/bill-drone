@@ -551,3 +551,22 @@ flip.py's own controller loses 0.00 m median on the same plant: the port climbs 
 - Wire it in: a trigger setting read on change, tip_limit bypassed during the flip and FLIP_GRACE after, the attitude estimate taking out.roll and out.pitch at the hand-back, the controller's integrators restored, and flip.c added to CMakeLists.txt.
 - Raise hover_climb and hover_ceiling, which settings.def caps at 1.5 and 3 m: from 1.5 m nearly every flip hits the ground.
 - Fly the ±2000 gyro on its own first, an ordinary hover, to check calibration and noise.
+
+## Flip wired in, from the GPS hold (2026-11-12, william/flip-ready)
+
+The flip is in the build behind flip_enable (default 0) and the laptop's request f, once per arming, with flip.c flip_refusal's checks. src/fw/FLIP.md has the wiring, the review's fixes and the flight checklist. sw/sim/flip_firmware.py now flies it as flight_rt.c wires it: the drone takes off in the GPS hold (hover.c, guard.c, the GPS and barometer), climbs to 3 m and asks for the flip through flip_refusal, all on the firmware's C. In calm air, 256 plants per offset, gyro ±2000 and accelerometer ±2 g:
+- **Clean:** 97.3/95.5/95.5% at 0/-2.5/-5 degrees of band tilt. Among the plants that hold without a flip: 99.5/98.1/96.7%.
+- **Failures:** none touched the ground or hit the tip cut.
+- **Height:** 0.70-0.71 m lost median (max 1.71), lowest point 0.83 m above the ground at worst.
+- **Recovery:** back at height in 2.5 s median.
+- **Old gyro range:** at ±250 deg/s every flip hit the ground.
+
+The airborne check first used hover.h lifted, which stops counting 2 s after liftoff, and refused every request; the sim found it.
+
+The flip's port to the firmware lost 1.1 m without the hold; with it, 0.7 m.
+
+Roll-step ladder on the new pattern limits, the bands, 1 m/s, 8 runs:
+- **20/30/35 at 1.5 m** (the settings cleared on 2026-11-12): none lost, 36 degrees true at most.
+- **40-55 at 3 m** (tip_limit 65, pattern_tilt 58): none lost, 55 degrees true at most, up to 3.5 m sideways.
+
+With the flip off, band_hold and outdoor.py --gps --baro print the same as william/cook. The gyro read in whole counts at 131 or 16.4 per deg/s holds the same in outdoor.py.
