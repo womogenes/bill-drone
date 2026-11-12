@@ -509,3 +509,25 @@ The drone's settings cap hover_climb at 1.5 m and hover_ceiling at 3 m (settings
 - **Height:** at most 0.31-0.36 m lost in a step.
 
 tilt_ladder.py's TEST now holds at 1.5 m, and sw/flight_steps.py stores each flight's settings through the bridge.
+
+## Flip in the firmware (2026-11-12): ported, not flyable yet
+
+fw/drone/main/flip.c is sw/sim/flip.py's maneuver as firmware C with flip_params_2026-11-12_bands.json as its defaults. It punches up for climb_time under the attitude controller, then spins on differential thrust at spin_rate, counting the turn from the gyro. With handoff left it brakes the roll toward level (recover.py's rate law, roll only, with pitch and yaw rates damped). Once within right_angle of up it hands the attitude back to flight_control, then arrests the vertical speed. It integrates that speed from the measured specific force along the estimated up, since the attitude estimate is kept on the gyro alone through the flip. It is not in CMakeLists.txt and not wired into flight_rt.c: nothing in the firmware can start it.
+
+sw/sim/flip_firmware.py flies it in rigid.py on drone 1 as of 2026-11-09 (toss.py plant, randomized). The loop is the firmware's own C: flight_attitude on the gyro alone through the flip and 1 s after, flight_control at the 2026-11-11 23:35 gains with its integrators restored at the hand-back, and the 45-degree tip cut from 1 s after the hand-back. The hover hold is not flown: the collective is the hover's apart from the flip's climb and arrest. 256 flips per row:
+
+| from | band tilt offset | clean | hit the ground | tip cut after hand-back | height lost, median (90th) |
+|---|---|---|---|---|---|
+| 3 m | 0 | 52% | 5% | 11% | 1.14 m (1.82) |
+| 3 m | -2.5° | 58% | 5% | 10% | 1.10 m (1.75) |
+| 3 m | -5° | 61% | 5% | 9% | 1.23 m (1.83) |
+| 1.5 m | 0 / -2.5° / -5° | 1% / 1% / 0% | 85% / 86% / 91% | 9-13% | 1.1-1.2 m |
+
+flip.py's own controller on the same plant is clean in 100% and loses 0.00 m median. The port falls short in three places:
+- Before the flip the firmware's controller wobbles in roll on this plant, and the climb's full throttle makes it worse.
+- The spin picks up pitch, up to 60 degrees in the failures, because only the pitch rate is damped and not the pitch angle.
+- The brake rights only the roll.
+
+recover.py rights the whole thrust axis from its quaternion. That is the next step: give flip.c the gyro-integrated attitude (or a quaternion of its own) and right the full axis. Then re-run flip_firmware.py, and wire it in (a trigger setting, tip_limit bypassed during the flip) only once it is clean.
+
+Height: hover_climb is capped at 1.5 m and hover_ceiling at 3 m in settings.def. From 1.5 m the port hits the ground 85-91% of the time, and even flip.py's controller loses up to about 0.4 m (90th percentile). A flip needs a 3 m hold at least, which means raising those caps.
