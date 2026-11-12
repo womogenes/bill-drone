@@ -12,10 +12,11 @@
 #define ARREST_SPEED 0.3f
 #define SETTLE_S 0.3f
 
+// The righting's gains from sw/sim/recover_firmware.py --tune --wide (CMA-ES, 60 generations of 20 on the tip, tilt and tumble events at 2 and 3 m, the plant's uncertain terms widened; sw/sim/models/recover_firmware_params.json). The flip's righting gains (flip.c), which they started from, used a fifth of this pitch gain and recovered 30% of the tip events. The tuned righting keeps the collective up even inverted (floor near 1): pitch authority comes from tilted thrust, and without it pitched-over drones could not turn in time. right_time and the leveling's were not tuned.
 const RecoverParams recover_defaults = {
-    .kp = 2.4309f, .brake = 15.4237f, .max_rate = 10.3931f, .k_roll = 7.4738f, .k_pitch = 2.1245f, .kd_yaw = 2.005f, .roll_over = 165 * DEGREE, .servo_max = 0.8003f,
-    .kv = 3.0f, .floor = 0.3f, .idle = 0.1f,
-    .right_angle = 30 * DEGREE, .right_rate = 1.5f, .right_time = 2.5f,
+    .kp = 4.8131f, .brake = 137.6662f, .max_rate = 24.8436f, .k_roll = 20.0008f, .k_pitch = 14.0902f, .kd_yaw = 0.6032f, .roll_over = 2.045f, .servo_max = 0.8919f,
+    .kv = 7.2089f, .floor = 0.9841f, .idle = 0.1443f,
+    .right_angle = 1.0079f, .right_rate = 2.0123f, .right_time = 2.5f,
     .level_angle = 10 * DEGREE, .level_rate = 0.5f, .level_time = 2.0f,
 };
 

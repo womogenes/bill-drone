@@ -27,6 +27,9 @@ STEPS = {
     "ladder55": ("roll steps to 55 degrees past the 45-degree tip cut: tip_limit 65, pattern_tilt 58, 3 m up; play tilt_ladder.py --amplitudes 40,45,50,55 --dry", HIGH | {"tip_limit": 65, "pattern_tilt": 58}),
     "flip": ("one roll flip from the 3 m hold (the dashboard's Flip button, once per arming), the tip cut back at 45", HIGH | {"tip_limit": 45, "flip_enable": 1, "flip_height": 2.5}),
     "noflip": ("the flip off again (flip_enable 0) and the tip cut at 45", {"flip_enable": 0, "tip_limit": 45}),
+    # The firmware of william/recovery (src/fw/FLIP.md, tumble recovery): recover_enable.
+    "recover": ("tumble recovery on, its trigger (tip_limit) at 30 on the 3 m GPS hold, the flip off; a 35-degree roll step from tilt_ladder.py --amplitudes 35 --dry trips it", HIGH | {"recover_enable": 1, "tip_limit": 30, "flip_enable": 0}),
+    "norecover": ("tumble recovery off again (recover_enable 0) and the tip cut at 45", {"recover_enable": 0, "tip_limit": 45}),
 }
 
 

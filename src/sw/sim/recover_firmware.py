@@ -1,15 +1,16 @@
 """
-The firmware's tumble recovery and level-and-hold (fw/drone/main/recover.c) as flight_rt.c flies them, in sw/sim/flip_firmware.py's harness: uv run -m sw.sim.recover_firmware [--scenario tumble tilt landing abort flip] [--n 64] [--heights 2 3] [--workers 2] [--wide] [--set name=value,...]
+The firmware's tumble recovery and level-and-hold (fw/drone/main/recover.c) as flight_rt.c flies them, in sw/sim/flip_firmware.py's harness: uv run -m sw.sim.recover_firmware [--scenario tip tilt tumble landing abort flip] [--n 64] [--heights 2 3] [--workers 2] [--wide] [--params name=value,...] [--set name=value,...] [--off] [--tune --generations 40 --population 16 --out gains.json]
 
-Each run takes off in the GPS hold as flip_firmware does (its FLIGHT settings, recover_enable 1 unless the scenario says otherwise) and climbs to the scenario's height, then:
-  tumble   20 s after liftoff the drone is put into a tumble like 2026-11-12 02:27:15 UTC's after the flip's hand-back: 90-180 degrees from upright about a random horizontal axis, pitching at 400-600 deg/s either way, rolling and yawing at a few hundred (normal, 200 and 150 deg/s), sinking at up to 2 m/s
-  tilt     60-150 degrees from upright, turning at rest rates (20 deg/s), the vertical speed near zero
-  landing  a link-loss landing (at least 1 m/s down) begins 15 s after liftoff, and at a drawn height of 0.5-2.5 m the drone is put 60-150 degrees over: recovery above 1 m (recover.h RECOVER_LAND_HEIGHT), the tip cut below; after a recovery the hold flies LINK_HOLD_S, then the landing starts again
+Each run takes off in the GPS hold as flip_firmware does (its FLIGHT settings, recover_enable 1 unless the scenario says otherwise) and climbs to the hold's height (--heights, hover_climb), then EVENT_AT (14 s) after liftoff:
+  tip      the drone is put 45-75 degrees from upright about a random horizontal axis, turning at about 100 deg/s, as past tip_limit in a hold
+  tilt     60-150 degrees over, turning at rest rates (20 deg/s), the vertical speed near zero
+  tumble   a tumble like 2026-11-12 02:27:15 UTC's after the flip's hand-back: 90-180 degrees over, pitching at 400-600 deg/s either way, rolling and yawing at a few hundred (normal, 200 and 150 deg/s), sinking at up to 2 m/s
+  landing  a link-loss landing (at least 1 m/s down) begins, and at a drawn height of 0.5-2.5 m the drone is put 60-150 degrees over: recovery above 1 m (recover.h RECOVER_LAND_HEIGHT), the tip cut below; after a recovery the hold flies LINK_HOLD_S, then the landing starts again
   abort    recover_enable 0: the drone is put 20-60 degrees over turning at up to 100 deg/s and level-and-hold is asked for at once
-  flip     the flip as flip_firmware flies it, with recovery on
-The attitude estimate is put into the drawn attitude with it (about a degree of error), as the gyro would have carried it there; the hover's height and climb rate are not, as they are not on the drone either.
+  flip     the flip as flip_firmware flies it (from 25 s), with recovery on
+The attitude estimate is put into the drawn attitude with it (about a degree of error), as the gyro would have carried it there; the hover's height and climb rate are not, as they are not on the drone either. The actuators keep the state they had. --off flies the same with recover_enable 0 (today's tip cut).
 
-Recovered: never cut, never touched the ground after the event, upright within 10 degrees and turning under 1 rad/s at the end and above 0.5 m (landing: or landed by the hold). It prints the share recovered, cut (and why), touched, the height lost from the event to the lowest point in 4 s, and the time from the event to the hand-back to the hold.
+Recovered: never cut, never touched the ground after the event, upright within 10 degrees and turning under 1 rad/s at the end (AFTER, 6 s, past the event) and above 0.5 m (landing: or landed by the hold). It prints the share recovered, cut (and why), touched, the height lost from the event to the lowest point in 4 s, and the time from the event to the hand-back to the hold. --tune searches the gains (SPACE) by CMA-ES on tip, tilt and tumble at both heights.
 
 The plant terms the 2026-11-12 flip showed to be uncertain, widened with --wide (or each on its own): the roll authority (recover.randomization's 0.8-5 times the fit, --roll-thrust 0.4 5 here: the flip's spin reached 540 deg/s on the drone against 950 in the sim, so the low end is plausible), the props' gyroscopic coupling, which rigid.py leaves out (--gyroscopic: up to this much angular momentum per root newton either way; a 10-inch prop with its motor bell is roughly 1e-4 kg m² at 600 rad/s near 4.5 N, about 0.03), an ESC deadband under which a motor stops and restarts from standstill (--deadband, throttle; airframe motor_start 0.16 s), and slower motors (--motor-tau factor).
 """
@@ -92,10 +93,12 @@ def jobs(scenario, height, settings, options, n, seed, off=False):
     return [(flown, 0.0, seed + s, batch, seconds, math.radians(2000), 2.0, 25.0, scenario == "flip", extra) for s in range(0, n, batch)]
 
 
-def summary(rows, scenario):
+def summary(rows, scenario, holds=None):
+    """The scenario's measures; holds: per run, whether the same plant holds without the event (the drawn plants' attitude loop does not hold every one, recover.randomization), to give the share recovered among those too."""
     n = len(rows)
     if scenario == "flip":
-        started = [r for r in rows if r["started"] is not None]
+        # With recover_enable 0 the rows carry no recovery: a run was cut only by the tip cut.
+        started = [{"cut": 4 if r["tipped"] else 0, "recoveries": []} | r for r in rows if r["started"] is not None]
         caught = [r for r in started if r["recoveries"]]
         return (f"flips started {len(started)} of {n}; clean {np.mean([r['clean'] for r in started]) * 100:.1f}%, touched {np.mean([r['touched'] for r in started]) * 100:.1f}%, cut {np.mean([r['cut'] not in (0, 8) for r in started]) * 100:.1f}% "
                 f"({', '.join(f'{c}: {sum(r['cut'] == c for r in started)}' for c in sorted({r['cut'] for r in started} - {0}))}); recovery started in {len(caught)} "
@@ -108,7 +111,9 @@ def summary(rows, scenario):
     for r in events:
         if r["cut"] not in (0, 8):
             cuts[r["cut"]] = cuts.get(r["cut"], 0) + 1
-    text = (f"events {len(events)} of {n}: recovered {np.mean(good) * 100:.1f}%, cut {sum(cuts.values())} {cuts}, touched the ground {np.mean([r['event_touched'] for r in events]) * 100:.1f}%; "
+    among = [recovered(r, scenario) for r, h in zip(rows, holds or []) if h and r["event"] is not None]
+    held = f" ({np.mean(among) * 100:.1f}% of the {len(among)} whose plant holds without the event)" if among else ""
+    text = (f"events {len(events)} of {n}: recovered {np.mean(good) * 100:.1f}%{held}, cut {sum(cuts.values())} {cuts}, touched the ground {np.mean([r['event_touched'] for r in events]) * 100:.1f}%; "
             f"height lost median {np.median(lost):.2f} m (90th {np.percentile(lost, 90):.2f}, max {lost.max():.2f}); "
             f"hand-back to the hold {np.median(times) if len(times) else float('nan'):.2f} s median (90th {np.percentile(times, 90) if len(times) else float('nan'):.2f})")
     if scenario == "landing":
@@ -198,7 +203,11 @@ def main():
         for scenario in args.scenario:
             for height in [3.0] if scenario == "flip" else args.heights:
                 rows = [r for part in pool.map(F.fly, jobs(scenario, height, settings, options, args.n, 2000 + args.seed, args.off)) for r in part]
-                print(f"{scenario:8s} hold {height:g} m: {summary(rows, scenario)}", flush=True)
+                holds = None
+                if scenario in EVENTS and scenario != "landing":
+                    calm = [job[:9] + ({key: value for key, value in job[9].items() if key != "event"},) for job in jobs(scenario, height, settings, options, args.n, 2000 + args.seed, args.off)]
+                    holds = [r["held"] for part in pool.map(F.fly, calm) for r in part]
+                print(f"{scenario:8s} hold {height:g} m: {summary(rows, scenario, holds)}", flush=True)
 
 
 if __name__ == "__main__":
