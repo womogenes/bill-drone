@@ -29,8 +29,8 @@ STEPS = {
     "ladder55": ("roll steps to 55 degrees past the 45-degree tip cut: tip_limit 65, pattern_tilt 58, 3 m up; play tilt_ladder.py --amplitudes 40,45,50,55 --dry", HIGH | {"tip_limit": 65, "pattern_tilt": 58}),
     # From here on the firmware of william/flip-fit (src/fw/FLIP.md "After the first flip"): the hold may climb to 5 m and flip_enable 2 and 3 are the staged partial rolls.
     "high5": ("the ladder's hold 5 m up (hover_climb 5, hover_ceiling 5.5), no flip: check the height and the hold up there", HIGH5 | {"flip_enable": 0}),
-    "roll90": ("stage D1: one fast roll to about 90 degrees and back from the 5 m hold (the dashboard's Flip button, once per arming)", HIGH5 | {"flip_enable": 2}),
-    "roll150": ("stage D2: one fast roll to about 150 degrees and back from the 5 m hold", HIGH5 | {"flip_enable": 3}),
+    "burst60": ("stage D1: one burst of the flip's spin braked at once, aimed at 60 degrees and back, from the 5 m hold (the dashboard's Flip button, once per arming)", HIGH5 | {"flip_enable": 2}),
+    "burst90": ("stage D2: the same aimed at 90 degrees, faster", HIGH5 | {"flip_enable": 3}),
     "flip": ("stage E: one roll flip from the 5 m hold, the tip cut back at 45", HIGH5 | {"flip_enable": 1}),
     "noflip": ("the flip off again (flip_enable 0) and the tip cut at 45", {"flip_enable": 0, "tip_limit": 45}),
 }

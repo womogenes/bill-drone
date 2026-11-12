@@ -5,7 +5,7 @@
 #include "flight_math.h"
 
 // The roll flip (flip.c), as sw/sim/flip.py flies it: punch up level, spin about roll on differential thrust, right the thrust axis as recover.py does, then hand back to the attitude controller and stop the vertical speed.
-// The maneuver's parameters, from sw/sim/models/flip_params_2026-11-12_bands.json (tune_recover.py --flip --bands): thrusts as fractions of the weight, rates in rad/s, angles in radians.
+// The maneuver's parameters, from sw/sim/models/flip_firmware_params_2026-11-12.json (sw/sim/tune_flip.py on the plant fitted to the first real flip and its uncertainty; before it, flip_params_2026-11-12_bands.json): thrusts as fractions of the weight, rates in rad/s, angles in radians.
 typedef struct {
     float climb_thrust, climb_time, spin_rate, k_spin, spin_thrust, handoff;
     // Righting (recover.py): the rate toward up is at most max_rate, sqrt(2 brake angle) and kp angle; k_roll and k_pitch (1/s) turn rate errors into angular accelerations, kd_yaw damps yaw; the collective is flip_thrust of the weight; servo_max bounds the common tilt; past roll_over from up with the error mostly in pitch it rolls the long way round.
@@ -31,7 +31,7 @@ typedef struct {
     // q: the attitude (w, x, y, z; body to level, the heading at the start as zero), from the attitude estimate at the start and the gyro since; turned: the roll counted from the gyro since the spin began (radians); thrust: what the motors have by now (N); vertical: the vertical speed (m/s; the hold's climb rate at the start, then the specific force along its own up); arrested: how long it has stayed under ARREST_DONE (s).
     float q[4];
     float time, turned, thrust, vertical, arrested;
-    // How far it rolls (radians): 2 pi for the flip; 90 or 150 degrees for the staged tests (flip_enable 2 and 3, flip_turn), which roll about that far and the righting brings back the short way (150 rather than 180: stopped near 180 the short way back is a coin toss). The spin aims at spin_rate times the square root of its share of a whole turn (the rate it can brake from in that angle) and ends with handoff's share of it left (handoff / 2 pi of the turn).
+    // How far it rolls (radians): 2 pi for the flip; 60 or 90 degrees for the staged tests (flip_enable 2 and 3, flip_turn): a short burst of the spin and the righting's brake at once, back the short way, so the drone peaks near 45-60 or 80-90 degrees with its thrust still mostly holding it up, and the motor split, the rotors' momentum, the floor and the brake are tested with margin. The spin aims at spin_rate times the square root of its share of a whole turn (the rate it can brake from in that angle) and ends with handoff's share of it left (handoff / 2 pi of the turn).
     float turn;
 } Flip;
 
@@ -67,7 +67,7 @@ typedef struct {
     float min_height, battery;
 } FlipCheck;
 
-// The roll a flip_enable setting asks for (radians): 1 the whole flip, 2 a roll to about 90 degrees and back, 3 to about 150 and back; flip_begin takes it from the command.
+// The roll a flip_enable setting asks for (radians): 1 the whole flip, 2 a 60-degree burst and back, 3 a 90-degree one; flip_begin takes it from the command.
 float flip_turn(float enable);
 // Why the flip is refused, or NULL.
 const char *flip_refusal(const FlipCheck *check);

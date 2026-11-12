@@ -318,6 +318,11 @@ def fly(job):
             height = sim.pos[i, 2] - BELLY
             if now - lane["started"] <= LOST_WINDOW:
                 lane["highest"] = max(lane.get("highest", height), height)
+                # Time past 90 degrees of tilt (the thrust no longer holding any weight), and the most tilt after the hand-back (the attitude controller's Euler angles go ambiguous near 90 degrees of pitch).
+                upright = float(R.rotation(sim.quat[i:i + 1])[0, 2, 2])
+                lane["past90"] = lane.get("past90", 0.0) + R.DT * (upright < 0)
+                if lane.get("handed") is not None:
+                    lane["after_tilt"] = max(lane.get("after_tilt", 0.0), math.degrees(math.acos(max(-1.0, min(1.0, upright)))))
                 if lane.get("handed") is None and library.flip_phase(ctypes.byref(lane["run"])) == 3:
                     lane["handed"] = now - lane["started"]
                 commanded = np.array(lane["commanded"], float)
@@ -348,7 +353,8 @@ def fly(job):
                     "back": lane["back"], "carried": lane.get("carried", 0.0), "start_height": lane["start_height"], "end_height": float(sim.pos[i, 2] - BELLY), "trace": lane.get("trace"),
                     "full": float(lane.get("full", np.zeros(2)).max()), "peak_current": lane.get("peak_current", 0.0), "mean_current": float((lane.get("charge", np.zeros(2)) / max(lane.get("active", 0.0), R.DT)).max()),
                     "climbed": lane.get("highest", lane["start_height"]) - lane["start_height"], "handed": lane.get("handed") if lane.get("handed") is not None else LOST_WINDOW,
-                    "rates": lane.get("rates", np.zeros(3)), "turned": math.degrees(turned), "travel": lane.get("travel", 0.0)}
+                    "rates": lane.get("rates", np.zeros(3)), "turned": math.degrees(turned), "travel": lane.get("travel", 0.0),
+                    "past90": lane.get("past90", 0.0), "after_tilt": lane.get("after_tilt", 0.0)}
         rows.append(row)
     return rows
 
