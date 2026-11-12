@@ -46,6 +46,21 @@ typedef struct {
     float left, right, left_tilt, right_tilt, collective, roll, pitch;
 } FlipOutput;
 
+// The righting the flip's last stage and the tumble recovery (recover.c) both fly, and the motors while either owns them: the rate toward up is at most max_rate, sqrt(2 brake angle) and kp angle; k_roll and k_pitch (1/s) turn rate errors into angular accelerations, kd_yaw damps yaw; past roll_over from up with the error mostly in pitch it rolls the long way round; servo_max bounds the common tilt (radians); each motor makes at least floor and at most ceiling of the weight.
+typedef struct {
+    float kp, brake, max_rate, k_roll, k_pitch, kd_yaw, roll_over, servo_max, floor, ceiling;
+} FlipRighting;
+
+// Wanted angular accelerations (rad/s²) into thrusts and tilts: roll by differential thrust, pitch by common tilt, yaw by differential tilt, the collective (N) as asked where the motors' floor and ceiling leave room. thrust: what the motors have by now (N), followed here with their lag.
+void flip_allocate(const FlipRighting *r, const FlipAuthority *a, float roll, float pitch, float yaw, float collective, float *thrust, float dt, FlipOutput *out);
+// Turn the thrust axis toward up about the axis between them, no faster than it can brake from, at this collective (N); far over with the error mostly in pitch, roll the long way round. up: the level frame's up in body axes (flip_up); gyro: body rates (rad/s).
+void flip_righting(const FlipRighting *r, const FlipAuthority *a, const float *up, const float *gyro, float collective, float *thrust, float dt, FlipOutput *out);
+// The attitude as the flip and the recovery carry it on the gyro: q (w, x, y, z; body to level) from flight_attitude's roll and pitch, the heading zero; turned by the body rates over dt; up in body axes; and back to roll and pitch as flight_attitude keeps them, pitch within ±90 degrees, so a drone within 90 degrees of upright has both under 90 and nothing ambiguous reaches the attitude controller.
+void flip_attitude(float *q, float roll, float pitch);
+void flip_rotate(float *q, const float *gyro, float dt);
+void flip_up(const float *q, float *up);
+void flip_euler(const float *q, float *roll, float *pitch);
+
 // roll and pitch: the attitude estimate when the flip starts (radians); vertical: the climb rate then (m/s).
 void flip_start(Flip *flip, float hover_thrust, float roll, float pitch, float vertical);
 // gyro: body rates (rad/s; roll positive right side down, pitch nose down, yaw left); accel: the measured specific force in body axes (g; forward, left, up).
@@ -104,5 +119,7 @@ int flip_phase(const FlipRun *run);
 void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, Attitude *attitude, Controller *controller, float *height_integral, FlipOutput *out);
 // Every control tick, on the throttles about to be sent (flight_rt.c, after the attitude controller and flip_actuators): from the flip's start until FLIP_GRACE after its hand-back each moves at most params->slew a second from the last tick's and stays under params->throttle_cap, so neither motor jumps between idle and full throttle (the ESCs' current and voltage spikes); a stopped motor (0) stays stopped. Otherwise it only follows them.
 void flip_limit(FlipRun *run, float *throttle, float dt);
+// flip_limit, limiting also while recovering holds (flight_rt.c: a recovery and its grace, recover_gyro_only).
+void flip_limit_with(FlipRun *run, bool recovering, float *throttle, float dt);
 // While the flip owns the motors: its thrusts (N) as throttles through the thrust table and each motor's thrust scale (as flight_control's, battery compensation included), a running motor never stopped, and its tilts as servo angles (degrees, as flight_rt.c's state.servo, within servo_limit).
 void flip_actuators(const FlipOutput *out, const Command *command, float left_scale, float right_scale, float throttle_max, float servo_limit, float *throttle, float *servo);
