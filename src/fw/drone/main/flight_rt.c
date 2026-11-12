@@ -259,7 +259,7 @@ static struct { float sum[2], bias[2]; int count; bool ready; } trim;
 // Channels: roll and pitch targets (degrees), yaw-rate target (degrees/s), collective (throttle), left and right servo tilt (degrees, positive forward), left and right motor (throttle), and the hover hold point's speed toward the tag and to the drone's left (m/s). The targets and collective add before the controller, so the log's targets hold them; the servos and motors add after it, and the fit adds them back from the pattern (the recording's events) and the segment logged in Record flags. The hold point's speed moves it as a held arrow does (on top of the laptop's nudge, within NUDGE_MAX), so a pattern can fly steady speeds for the speed moment's fit.
 #define EXCITE_CHANNELS 10
 #define EXCITE_SEGMENTS 224
-// Each channel's largest value (sw/excite.py LIMITS holds the same). The roll and pitch targets go to 60 degrees (10 until 2026-11-12, which refused the roll-step ladder's 20-35 degree steps), as far as pattern_tilt may be set: the pattern's tilt guard (guard.c) and the tip cut are what bound the flown tilt.
+// Each channel's largest value (fw/controller/log_format.py PATTERN_LIMITS holds the same; test_bridge.py checks). The roll and pitch targets go to 60 degrees (10 until 2026-11-12, which refused the roll-step ladder's 20-35 degree steps), as far as pattern_tilt may be set: the pattern's tilt guard (guard.c) and the tip cut are what bound the flown tilt.
 static const float excite_limit[EXCITE_CHANNELS] = {60, 60, 60, 150, 8, 8, 150, 150, 1, 1};
 typedef struct {
     uint16_t ticks;
