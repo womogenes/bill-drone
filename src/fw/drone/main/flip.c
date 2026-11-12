@@ -18,6 +18,10 @@
 #define FLIP_CLIMB_RATE 0.3f
 #define FLIP_SPEED 1.0f
 #define FLIP_MIN_V 14.8f
+// The flip's own authority (FlipAuthority), from the airframe with the pivots raised 20 mm (sw/sim/models/airframe_2026-11-12_raised.json at geometry_2026-11-12_raised.json), not from the settings' model, which the attitude controller keeps and which predates the raise (pivot_height 0.02 m, pitch_inertia 0.0023: 8.7 per N per radian of pitch, 16.1 of yaw): roll, the arm over the roll inertia (0.172 / 0.01275); pitch, the tilt's effective lever above the CoM (the pivot 39.1 mm above it less the slipstream's 2 mm, 37.2 mm) over the pitch inertia (0.00525); yaw, the 30% of the tilted thrust the slipstream leaves at the arm over the yaw inertia (0.302 x 0.172 / 0.01115). The flip's gains are tuned against these.
+#define FLIP_ROLL_AUTHORITY 13.5f
+#define FLIP_PITCH_AUTHORITY 7.08f
+#define FLIP_YAW_AUTHORITY 4.66f
 
 const FlipParams flip_defaults = {
     .climb_thrust = 1.9829f, .climb_time = 0.35f, .spin_rate = 11.3753f, .k_spin = 12.0f, .spin_thrust = 0.4f, .handoff = 1.9829f,
@@ -203,8 +207,7 @@ void flip_reset(FlipRun *run) {
 }
 
 void flip_begin(FlipRun *run, const Command *command, const Controller *controller, float height_integral, float collective, float roll, float pitch, float climb_rate) {
-    const Model *m = &command->model;
-    run->authority = (FlipAuthority){m->arm / m->roll_inertia, m->pivot_height / m->pitch_inertia, m->arm / m->yaw_inertia, command->hover.mass * GRAVITY};
+    run->authority = (FlipAuthority){FLIP_ROLL_AUTHORITY, FLIP_PITCH_AUTHORITY, FLIP_YAW_AUTHORITY, command->hover.mass * GRAVITY};
     run->done = true;
     run->since = -1;
     run->saved = *controller;
