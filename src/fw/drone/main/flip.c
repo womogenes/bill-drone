@@ -24,11 +24,11 @@
 #define FLIP_YAW_AUTHORITY 4.66f
 
 const FlipParams flip_defaults = {
-    .climb_thrust = 1.9829f, .climb_time = 0.35f, .spin_rate = 11.3753f, .k_spin = 11.1647f, .spin_thrust = 1.0f, .handoff = 1.9829f,
-    .kp = 2.9482f, .brake = 9.0993f, .max_rate = 6.7122f, .k_roll = 6.7839f, .k_pitch = 16.2759f, .kd_yaw = 0.6021f,
-    .flip_thrust = 1.7758f, .right_angle = 0.6f, .servo_max = 0.4927f, .roll_over = 2.8798f, .kv = 15.0f, .arrest_time = 2.0f, .timeout = 2.0f,
-    .floor = FLIP_FLOOR, .ceiling = 1.1647f, .handoff_rate = 3.0f, .slew = 10000.0f, .throttle_cap = 1100.0f, .spin_lift = 0.6f,
-    .spin_pitch = 9.7655f, .spin_yaw = 1.0407f, .gyro_ff = 10.0f,
+    .climb_thrust = 1.8954f, .climb_time = 0.35f, .spin_rate = 11.9178f, .k_spin = 11.9756f, .spin_thrust = 0.8693f, .handoff = 1.9648f,
+    .kp = 4.0f, .brake = 8.0696f, .max_rate = 8.5717f, .k_roll = 7.7428f, .k_pitch = 8.525f, .kd_yaw = 0.5321f,
+    .flip_thrust = 1.7828f, .right_angle = 0.5831f, .servo_max = 0.5092f, .roll_over = 2.8798f, .kv = 15.0f, .arrest_time = 2.0f, .timeout = 1.9751f,
+    .floor = 0.2645f, .ceiling = 1.2286f, .handoff_rate = 3.0f, .slew = 10000.0f, .throttle_cap = 1100.0f, .spin_lift = 0.6312f,
+    .spin_pitch = 8.217f, .spin_yaw = 2.3354f, .gyro_ff = 8.8625f,
 };
 
 static float clampf(float value, float low, float high) {

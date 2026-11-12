@@ -5,7 +5,7 @@
 #include "flight_math.h"
 
 // The roll flip (flip.c), as sw/sim/flip.py flies it: punch up level, spin about roll on differential thrust, right the thrust axis as recover.py does, then hand back to the attitude controller and stop the vertical speed.
-// The maneuver's parameters, from sw/sim/models/flip_firmware_params_2026-11-12.json (sw/sim/tune_flip.py on the plant fitted to the first real flip and its uncertainty; before it, flip_params_2026-11-12_bands.json): thrusts as fractions of the weight, rates in rad/s, angles in radians.
+// The maneuver's parameters, from sw/sim/models/flip_firmware_params_2026-11-13_robust.json (sw/sim/tune_flip.py --robust on the raised-pivot airframe, for the worst rotor_momentum band over 0-0.05; before it flip_firmware_params_2026-11-12.json and flip_params_2026-11-12_bands.json): thrusts as fractions of the weight, rates in rad/s, angles in radians.
 typedef struct {
     float climb_thrust, climb_time, spin_rate, k_spin, spin_thrust, handoff;
     // Righting (recover.py): the rate toward up is at most max_rate, sqrt(2 brake angle) and kp angle; k_roll and k_pitch (1/s) turn rate errors into angular accelerations, kd_yaw damps yaw; the collective is flip_thrust of the weight; servo_max bounds the common tilt; past roll_over from up with the error mostly in pitch it rolls the long way round.
