@@ -10,7 +10,7 @@
 // The fly-away failsafe: airborne in the hover hold without the tag, on the GPS, a drone moving faster than speed for time with no horizontal input from the laptop, or further than distance from where the hover engaged (its first fix) once untouched for time, both by the GPS itself, brakes at the hold's own velocity loop with the stick ignored and at least tilt (FAILSAFE_BRAKE), holds where it stopped once under FAILSAFE_SLOW (FAILSAFE_HOLD), and lands (FAILSAFE_LAND) if it is not that slow within land seconds, a landing is asked for while it brakes, or it flies off again from the hold. A brake without the hold's GPS heading cannot aim: the hold flies its calibration pulses to find it, and with none after FAILSAFE_SEARCH the failsafe lands. On 2026-11-09 05:55:44 and 06:39:08 UTC the GPS hold flew off at 4-6 m/s with nobody on the sticks.
 enum { FAILSAFE_OFF, FAILSAFE_BRAKE, FAILSAFE_HOLD, FAILSAFE_LAND };
 // Why a test pattern stopped before its end (0: it did not): it moved further than pattern_distance from where it started (moved by the pattern's own hold-point channels), lost the tag it started on, tilted past pattern_tilt, or the laptop's stick or arrows moved.
-enum { PATTERN_PLAYING, PATTERN_FAR, PATTERN_LOST, PATTERN_TILT, PATTERN_STICK };
+enum { PATTERN_PLAYING, PATTERN_FAR, PATTERN_LOST, PATTERN_TILT, PATTERN_STICK, PATTERN_LANDING };
 
 // Settings (settings.def failsafe_* and pattern_*), SI units and radians; a speed, distance or pattern limit of 0 turns that check off.
 typedef struct {

@@ -725,6 +725,8 @@ static void runtime_task(void *arg) {
             }
             float add[EXCITE_CHANNELS] = {0};
             excite.active = excite.count && !guard.stopped && scaled.base > 0 && state.controller.airborne > excite.after && (!excite.repeat || excite.played < excite.repeat) && !flip_gyro_only(&flip);
+            // A landing of any kind (the laptop's, the link-loss one, the failsafe's) ends the pattern for good: on 2026-11-12 01:59 UTC the link dropped after the 50-degree step and the -55-degree step played into the link-loss descent at 2.4 m, which came down from it at 1.5 m.
+            if (excite.active && !guard.stopped && (link_landing || hover_mode > HOVER_HOLD || guard.failsafe != FAILSAFE_OFF)) guard.stopped = PATTERN_LANDING;
             // The pattern stops for good (until the next arming) once it strays, loses the tag, tilts too far or the pilot steers (guard.c); the hold keeps flying, its hold point where the pattern left it.
             if (excite.active && guard_pattern(&guard, &command.guard, hover_mode && hover.engaged ? &hover : NULL, now, pose.roll, pose.pitch, command.target_roll, command.target_pitch, nudge, excite.hold)) excite.active = false;
             if (excite.active) {

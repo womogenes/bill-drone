@@ -28,7 +28,7 @@ STOP_REASONS = (
 )
 # The guards' states (drone/main/guard.h FAILSAFE_* and PATTERN_*) and the roll flip's phase (drone/main/flip.h flip_phase: climbing, spinning or righting, arresting), as the record's guard field and the status flags' bits 8-15 hold them.
 FAILSAFE_PHASES = (None, "brake", "hold", "land")
-PATTERN_STOPS = (None, "distance", "tag lost", "tilt", "stick", None, None, None)
+PATTERN_STOPS = (None, "distance", "tag lost", "tilt", "stick", "landing", None, None)
 FLIP_PHASES = (None, "climb", "flip", "arrest")
 # The Kalman filter's flags from bit 0 (flight_rt.c Record ekf_flags): its heading is known, it is resting still, it is good enough for the hold to fly horizontally and vertically, and the hold flew on it this tick.
 EKF_FLAGS = ("aligned", "still", "horizontal", "vertical", "flown")

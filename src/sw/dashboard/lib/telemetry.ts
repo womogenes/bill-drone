@@ -275,7 +275,7 @@ export type Reading = {
     // The drone's guards (fw/drone/main/guard.h): the fly-away failsafe's phase, whether distance (not speed) set it off, and why the test pattern stopped.
     failsafe?: 'brake' | 'hold' | 'land' | null;
     failsafe_far?: boolean;
-    pattern_stop?: 'distance' | 'tag lost' | 'tilt' | 'stick' | null;
+    pattern_stop?: 'distance' | 'tag lost' | 'tilt' | 'stick' | 'landing' | null;
     // The roll flip's phase (fw/drone/main/flip.h), null when none runs.
     flip?: 'climb' | 'flip' | 'arrest' | null;
   };
