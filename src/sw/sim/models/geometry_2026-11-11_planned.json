@@ -1,0 +1,19 @@
+{
+ "source": "geometry_2026-11-08b.json with the front landing frame (see geometry_2026-11-11_legs.json), the tilt pivots raised 20 mm (Onshape 'Motor and servo parts' on 2026-11-11: pivot 57.2 mm above the tube, rotors 114 mm; motors, tilt assemblies and servos, 0.29 kg, up 20 mm, the taller stands 16 g) and the GPS shelf over the camera (8.5 g, 59 mm up). Estimated from CAD volumes (Onshape has no masses assigned), not weighed.",
+ "mass": 1.1145,
+ "com": [
+  -0.0021,
+  -0.0007,
+  0.0181
+ ],
+ "arm": 0.172,
+ "pivot_z": 0.0572,
+ "rotor_z": 0.114,
+ "roll_inertia": 0.01275,
+ "pitch_inertia": 0.00525,
+ "yaw_inertia": 0.01115,
+ "assembly_mass": 0.089809,
+ "assembly_com": 0.032913,
+ "assembly_inertia": 0.00014311,
+ "com_x_shift": 0.00245
+}

@@ -1,0 +1,19 @@
+{
+ "source": "geometry_2026-11-08b.json with the front landing frame (hw/drone_chassis/legless/front_landing_flush: 38.5 cm^3 of PLA, taken as 40 g centered 66 mm ahead of the tube and 45 mm below it, feet 156 mm apart). Estimated from the design's volumes, not weighed: the CoM 2.6 mm further forward (com_x_shift) and 2.2 mm lower.",
+ "mass": 1.09,
+ "com": [
+  -0.0021,
+  -0.0007,
+  0.01229
+ ],
+ "arm": 0.172,
+ "pivot_z": 0.0372,
+ "rotor_z": 0.094,
+ "roll_inertia": 0.01229,
+ "pitch_inertia": 0.00474,
+ "yaw_inertia": 0.01115,
+ "assembly_mass": 0.089809,
+ "assembly_com": 0.032913,
+ "assembly_inertia": 0.00014311,
+ "com_x_shift": 0.0026
+}
