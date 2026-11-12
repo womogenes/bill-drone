@@ -570,6 +570,8 @@ export default function Page() {
 
   // One roll flip, if the drone finds the hold ready for it (fw/drone/main/flip.h); a refusal shows as the request's error.
   const flip = useCallback(() => request({ type: 'flip' }), [request]);
+  // Level-and-hold (fw/drone/main/recover.h): from any mode the drone ends a pattern or flip, levels and holds; STOP stays the motor cut.
+  const level = useCallback(() => request({ type: 'level' }), [request]);
 
   const escStage = useCallback(
     (stage: 0 | 1 | 2) => {
@@ -696,9 +698,16 @@ export default function Page() {
     reading?.control_status?.reason ||
     (guard?.pattern_stop ? `Test pattern stopped: ${guard.pattern_stop}` : '');
   const flipPhase = guard?.flip;
+  const recovery = guard?.recovery;
+  const recoveryCause = guard?.recovery_cause;
   const controlStatus = useMemo(
-    () => ({ reason, flip: flipPhase }),
-    [reason, flipPhase]
+    () => ({
+      reason,
+      flip: flipPhase,
+      recovery,
+      recovery_cause: recoveryCause,
+    }),
+    [reason, flipPhase, recovery, recoveryCause]
   );
 
   // A retry while the service names a broken hop keeps showing that hop: it is retried every second, and "Connecting" says nothing of what is missing.
@@ -931,6 +940,7 @@ export default function Page() {
               escError={escError}
               onEscStage={escStage}
               onFlip={flip}
+              onLevel={level}
             />
           )}
           <Suspense>

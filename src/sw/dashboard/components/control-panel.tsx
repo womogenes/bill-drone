@@ -43,6 +43,13 @@ const FLIP_PHASES = {
   arrest: 'arresting',
 };
 
+const RECOVERY_CAUSES = {
+  tilt: 'tipped',
+  flip: 'flip failed',
+  gyro: 'gyro saturated',
+  level: 'level',
+};
+
 const keyIcons: Record<string, LucideIcon> = {
   ArrowUp,
   ArrowDown,
@@ -277,6 +284,12 @@ const gainSections: {
       { key: 'bank_tilt', label: 'Gyro-only past (°, 0 off)', min: 0, max: 80 },
       { key: 'flip_enable', label: 'Flip allowed (0 or 1)', min: 0, max: 1 },
       { key: 'flip_height', label: 'Flip from at least (m)', min: 2.5, max: 5 },
+      {
+        key: 'recover_enable',
+        label: 'Recover, no tip cut (0 or 1)',
+        min: 0,
+        max: 1,
+      },
     ],
   },
   {
@@ -322,6 +335,7 @@ export const ControlPanel = memo(function ControlPanel({
   escError,
   onEscStage,
   onFlip,
+  onLevel,
 }: {
   settings: ControlSettings;
   // A 3D GPS fix and the GPS hold on: without the tag the right stick then flies a speed instead of a tilt.
@@ -343,6 +357,7 @@ export const ControlPanel = memo(function ControlPanel({
   escError: string | null;
   onEscStage: (stage: 0 | 1 | 2) => void;
   onFlip: () => void;
+  onLevel: () => void;
 }) {
   const available = connected && settings.pitch_p !== undefined;
   const ready = available && recorderReady && imu === 'calibrated';
@@ -820,6 +835,13 @@ export const ControlPanel = memo(function ControlPanel({
           )}
           <Button
             variant="outline"
+            disabled={!connected || !settings.enabled}
+            onClick={onLevel}
+          >
+            Level
+          </Button>
+          <Button
+            variant="outline"
             size="icon"
             aria-label="Stop motors"
             onClick={onStop}
@@ -866,11 +888,13 @@ export const ControlPanel = memo(function ControlPanel({
       </div>
       <p
         role="status"
-        className={`h-6 truncate ${status?.flip ? 'font-medium text-blue-700 dark:text-blue-400' : problem ? 'text-red-700' : 'text-green-700'}`}
+        className={`h-6 truncate ${status?.recovery || status?.flip ? 'font-medium text-blue-700 dark:text-blue-400' : problem ? 'text-red-700' : 'text-green-700'}`}
       >
-        {status?.flip
-          ? `Flip: ${FLIP_PHASES[status.flip]}`
-          : problem || 'Good to fly.'}
+        {status?.recovery
+          ? `Recovering (${status.recovery_cause ? RECOVERY_CAUSES[status.recovery_cause] : 'tipped'}): ${status.recovery}`
+          : status?.flip
+            ? `Flip: ${FLIP_PHASES[status.flip]}`
+            : problem || 'Good to fly.'}
       </p>
     </Panel>
   );

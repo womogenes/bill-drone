@@ -65,6 +65,12 @@ async def main():
         service.read()
         assert service.state() == "online" and service.reading["time"] == 0
 
+        # A recovery rides in the status reason's top bits (drone/main/runtime.h Status): leveling after the pilot's level-and-hold, with no stop reason.
+        version, reading = bridge.decode_status(status[:14] + bytes([2 << 6 | 3 << 4]) + status[15:], None)
+        assert reading["control_status"]["recovery"] == "leveling" and reading["control_status"]["recovery_cause"] == "level" and reading["control_status"]["reason"] == "", reading["control_status"]
+        version, reading = bridge.decode_status(status[:14] + bytes([10]) + status[15:], None)
+        assert reading["control_status"]["recovery"] is None and reading["control_status"]["reason"] == "Recovery failed", reading["control_status"]
+
         # A GPS report with no satellites is shorter than a status message, and one with many is longer: neither is the reading.
         reading = service.reading
         for satellites in (0, 20):
@@ -90,6 +96,12 @@ async def main():
     source = (Path(__file__).parents[1] / "drone/main/flight_rt.c").read_text()
     firmware = source.split("excite_limit[EXCITE_CHANNELS] = {")[1].split("}")[0]
     assert tuple(float(value) for value in firmware.split(",")) == log_format.PATTERN_LIMITS, firmware
+    # The recovery's names in the drone's order (drone/main/recover.h), and its failed righting as the stop reason the firmware gives it.
+    header = (Path(__file__).parents[1] / "drone/main/recover.h").read_text()
+    stages = header.split("enum { RECOVER_IDLE, ")[1].split("}")[0].split(", ")
+    causes = header.split("enum { RECOVER_NONE, ")[1].split("}")[0].split(", ")
+    assert len(stages) == len([s for s in log_format.RECOVERY_STAGES if s]) and len(causes) == len([c for c in log_format.RECOVERY_CAUSES if c]), (stages, causes)
+    assert log_format.STOP_REASONS[int(header.split("#define RECOVER_FAILED_REASON ")[1].split()[0])] == "Recovery failed"
     print("ok")
 
 
