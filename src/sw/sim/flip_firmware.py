@@ -56,7 +56,7 @@ RECOVER_LIMIT = True
 
 
 class Params(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_float) for name in ("climb_thrust", "climb_time", "spin_rate", "k_spin", "spin_thrust", "handoff", "kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "flip_thrust", "right_angle", "servo_max", "roll_over", "kv", "arrest_time", "timeout", "floor", "ceiling", "handoff_rate", "slew", "throttle_cap", "spin_lift")]
+    _fields_ = [(name, ctypes.c_float) for name in ("climb_thrust", "climb_time", "spin_rate", "k_spin", "spin_thrust", "handoff", "kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "flip_thrust", "right_angle", "servo_max", "roll_over", "kv", "arrest_time", "timeout", "floor", "ceiling", "handoff_rate", "slew", "throttle_cap", "spin_lift", "spin_pitch", "spin_yaw", "gyro_ff")]
 
 
 class Flip(ctypes.Structure):
@@ -222,7 +222,7 @@ def fly(job):
     """
     One batch of runs on the same drawn plants: per run, whether and when the flip started, why it was refused, and the measures.
 
-    job: settings, tilt offset, seed, runs, seconds, gyro and accelerometer range, flip_at, whether to ask for the flip, the airframe, the randomization, and optionally the flip's parameters (a dict on top of flip_defaults, for tuning) and options, what sw/sim/recover_firmware.py tests on top of the plant: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "recover" (recover.c RecoverParams on top of recover_defaults), "airframe" (factors on the drawn airframe's terms), "roll_thrust" (the roll authority's range, as recover.randomization's, in place of the randomization's), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up, for airframes without rotor_momentum), "deadband" (per run, the throttle under which an ESC stops its motor), "recover_limit" (whether the recovery's throttles are slewed and capped, in place of RECOVER_LIMIT) and "trace" (s of the recovery's trace after the event).
+    job: settings, tilt offset, seed, runs, seconds, gyro and accelerometer range, flip_at, whether to ask for the flip, the airframe, the randomization, and optionally the flip's parameters (a dict on top of flip_defaults, for tuning) and options, what sw/sim/recover_firmware.py tests on top of the plant: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "recover" (recover.c RecoverParams on top of recover_defaults), "airframe" (factors on the drawn airframe's terms), "roll_thrust" (the roll authority's range, as recover.randomization's, in place of the randomization's), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up, for airframes without rotor_momentum), "deadband" (per run, the throttle under which an ESC stops its motor), "set" (airframe terms set outright after the draws), "recover_limit" (whether the recovery's throttles are slewed and capped, in place of RECOVER_LIMIT) and "trace" (s of the recovery's trace after the event).
     """
     settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping, airframe, randomize = job[:11]
     # The maneuver's parameters: flip.c's flip_defaults with the job's changes (job[11], a dict, for tuning).
@@ -239,6 +239,8 @@ def fly(job):
         scale = C.randomization(n, seed) if randomize == "wide" else None
     for key, factor in options.get("airframe", {}).items():
         plant["airframe"] = plant["airframe"] | {key: plant["airframe"][key] * factor}
+    # "set": airframe terms set outright after the draws (sw/sim/tune_flip.py's robust runs place rotor_momentum in its bands).
+    plant["airframe"] = plant["airframe"] | options.get("set", {})
     rng = np.random.default_rng(seed + 31)
     if "roll_thrust" in options:
         scale = (scale or {}) | {"roll_thrust": np.exp(rng.uniform(*np.log(options["roll_thrust"]), n))}

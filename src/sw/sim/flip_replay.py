@@ -29,7 +29,9 @@ class Log:
         path = recording(name)
         df = read_flight(path)[0]
         time = (df["esp_time_us"] - df["esp_time_us"].iloc[0]).to_numpy() / 1e6
-        airborne = df[(df["flip"] == 0) & (df["hover_height_m"] > 1.0) & (time < start)]
+        # The thrust trim from the hover before the window (both motors over 300, no flip), or from the whole recording's when the window starts with it.
+        flying = (df["flip"].fillna(0) == 0) & (df["left_throttle"] > 300) & (df["right_throttle"] > 300)
+        airborne = df[flying & (time < start)] if (flying & (time < start)).sum() > 100 else df[flying]
         self.table_thrust = np.column_stack([airborne[f"{side}_throttle"].map(flight.thrust) for side in ("left", "right")])
         self.settings = settings(path)
         self.gyro_range = 32768 / metadata(path).get("gyro_counts_per_deg_s", 131.0) * A.DEG
@@ -43,7 +45,7 @@ class Log:
         self.height = rows["hover_height_m"].to_numpy()
         self.climb = rows["hover_climb_m_s"].to_numpy()
         self.baro = rows["baro_altitude_m"].to_numpy()
-        self.phase = rows["flip"].to_numpy()
+        self.phase = rows["flip"].fillna(0).to_numpy()
 
     def tilt(self):
         """The physical tilt commands (rad, positive forward) the servo angles stand for."""
@@ -97,7 +99,7 @@ def simulate(log, plant, scale, every=None):
             throttle[flipping, side] = [flight.throttle(fault[side] * flight.thrust(c)) if c > 0 else c for c in throttle[flipping, side]]
     if sim.backend == "c":
         sim.bind()
-    rates, forces, heights = [sim.omega.copy()], [sim.accel / R.G], [np.zeros(n)]
+    rates, forces, heights, ends = [sim.omega.copy()], [sim.accel / R.G], [np.zeros(n)], [sim.omega.copy()]
     stride = round(every / A.DT) if every else 0
     for k in range(1, len(log.time)):
         if stride and k % stride == 0:
@@ -107,7 +109,9 @@ def simulate(log, plant, scale, every=None):
         rates.append(np.clip(sim.turned, -log.gyro_range, log.gyro_range))
         forces.append(np.clip(sim.accel / R.G, -2.0, 2.0))
         heights.append(sim.pos[:, 2] - 10.0)
-    return {"rates": np.stack(rates, 1), "accel": np.stack(forces, 1), "height": np.stack(heights, 1)}
+        ends.append(sim.omega.copy())
+    # rates are each tick's mean (as the gyro reads), omega the body rates at its end.
+    return {"rates": np.stack(rates, 1), "accel": np.stack(forces, 1), "height": np.stack(heights, 1), "omega": np.stack(ends, 1)}
 
 
 def errors(log, result, end=10.88, start=0.0):

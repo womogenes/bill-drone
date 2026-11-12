@@ -116,8 +116,8 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
             out->cut = RECOVER_FAILED_REASON;
             return;
         }
-        // The flip's righting (flip.h flip_righting) at the recovery's gains, each motor at idle of the weight or more (the flip's floor) and no ceiling but flip_limit's throttle cap.
-        FlipRighting r = {p->kp, p->brake, p->max_rate, p->k_roll, p->k_pitch, p->kd_yaw, p->roll_over, p->servo_max, p->idle, INFINITY};
+        // The flip's righting (flip.h flip_righting) at the recovery's gains, each motor at idle of the weight or more (the flip's floor), no ceiling but flip_limit's throttle cap, and no gyroscopic feedforward (tuned for the flip only).
+        FlipRighting r = {p->kp, p->brake, p->max_rate, p->k_roll, p->k_pitch, p->kd_yaw, p->roll_over, p->servo_max, p->idle, INFINITY, 0};
         float collective = arrest(p, a, run->vertical, up[2]) * (p->floor + (1 - p->floor) * clampf(up[2], 0, 1));
         flip_righting(&r, a, up, w, collective, &run->thrust, dt, &out->motors);
         out->owned = true;
