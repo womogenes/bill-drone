@@ -18,6 +18,9 @@ DEFAULTS = {"climb_thrust": 2.0, "climb_time": 0.5, "spin_rate": 12.0, "k_spin":
 HOLD, CLIMB, SPIN, RECOVER = 0, 1, 2, 3
 START = 3.0
 FLIP_AT = 1.5
+# The 2026-11-11 rubber bands (sw/sim/band_hold.py): degrees of physical tilt behind the command, g the accelerometer reads forward.
+BAND_TILT = -2.5
+BAND_ACCEL = 0.025
 
 
 class Flip:
@@ -87,10 +90,19 @@ def main():
     parser.add_argument("--recovery", type=Path, default=C.PARAMS)
     parser.add_argument("--n", type=int, default=256)
     parser.add_argument("--nominal", action="store_true")
+    parser.add_argument("--current", action="store_true", help="drone 1 as of 2026-11-09 (sw/sim/toss.py plant) instead of rigid.load_plant's 2026-10-28 airframe")
+    parser.add_argument("--bands", action="store_true", help="with the 2026-11-11 rubber bands on the servos: the tilt 2.5 degrees behind its command and the accelerometer 0.025 g forward (models/NOTES.md)")
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     params = json.loads(args.params.read_text()) if args.params else {}
     recovery = json.loads(args.recovery.read_text()) if args.recovery.exists() else {}
-    print(summary(run(params, recovery, args.n, randomize=not args.nominal)))
+    plant = None
+    if args.current:
+        from sw.sim import toss
+        plant = toss.plant()
+    if args.bands:
+        plant = (plant or R.load_plant()) | {"tilt_offset": BAND_TILT, "accel_bias": (BAND_ACCEL, 0.0, 0.0)}
+    print(summary(run(params, recovery, args.n, seed=args.seed, randomize=not args.nominal, plant=plant)))
 
 
 if __name__ == "__main__":

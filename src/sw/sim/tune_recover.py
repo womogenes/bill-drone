@@ -65,6 +65,11 @@ def evaluate(job):
         if task.get("current"):
             from sw.sim import toss as T
             plant = T.plant()
+        if task.get("bands"):
+            # The 2026-11-11 rubber bands, their tilt offset drawn per flip over what the recordings allow (2.5 degrees if the gyro is off in flight, about 5 if the accelerometer is).
+            from sw.sim import rigid as R
+            low, high = task["bands"]
+            plant = (plant or R.load_plant()) | {"tilt_offset": np.random.default_rng(seed + 77).uniform(low, high, n), "accel_bias": (F.BAND_ACCEL, 0.0, 0.0)}
         return flip_cost(F.run(decode(x), task["recovery"], n=n, seed=seed, plant=plant))
     if task.get("toss"):
         from sw.sim import toss as T
@@ -85,6 +90,7 @@ def main():
     parser.add_argument("--start", type=Path)
     parser.add_argument("--flip", action="store_true")
     parser.add_argument("--current", action="store_true", help="with --flip: fly drone 1 as of 2026-11-09 (sw/sim/toss.py plant) instead of rigid.load_plant's 2026-10-28 airframe")
+    parser.add_argument("--bands", type=lambda text: tuple(float(v) for v in text.split(",")), help="with --flip: the rubber bands' tilt offset drawn per flip from LOW,HIGH degrees (e.g. -5,0), the accelerometer 0.025 g forward")
     parser.add_argument("--toss", action="store_true", help="tune for sw/sim/toss.py's throws, starting from --recovery's parameters")
     parser.add_argument("--recovery", type=Path, default=C.PARAMS)
     parser.add_argument("--out", type=Path, default=Path("recover_params.json"))
@@ -101,7 +107,7 @@ def main():
         start = C.DEFAULTS | recovery | (json.loads(args.start.read_text()) if args.start else {})
     else:
         start = C.DEFAULTS | (json.loads(args.start.read_text()) if args.start else {})
-    task = dict(TASK) | {"spread": args.spread, "current": args.current}
+    task = dict(TASK) | {"spread": args.spread, "current": args.current, "bands": args.bands}
     es = cma.CMAEvolutionStrategy(encode(start), 0.15, {"bounds": [0, 1], "popsize": args.popsize, "maxiter": args.generations, "seed": 1, "verbose": -9})
     began = time.time()
     best = (math.inf, None, 0.0)

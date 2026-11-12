@@ -161,6 +161,9 @@ class Sim:
         self.a = a
         self.geometry = g = plant.get("geometry") or A.geometry_of(a)
         self.mass = g["mass"]
+        # The servos' physical tilt behind their commands (plant["tilt_offset"], degrees, one value or one per env; the 2026-11-11 rubber bands about -2.5) and the accelerometer's steady error in flight (plant["accel_bias"], g, body forward, left, up; the bands about 0.025 forward), as sweep.py has them.
+        self.tilt_offset = np.radians(np.broadcast_to(np.asarray(plant.get("tilt_offset", 0.0), float), (n,)))[:, None]
+        self.accel_bias = np.asarray(plant.get("accel_bias", (0.0, 0.0, 0.0)), float) * G
         scale = scale or {}
         ones = np.ones(n)
         s = lambda key: np.asarray(scale.get(key, ones), float)
@@ -237,6 +240,7 @@ class Sim:
     def step(self, throttle, tilt_command):
         """Advance one control tick (DT) with these commands; returns the observation."""
         before = self.quat.copy()
+        tilt_command = np.asarray(tilt_command) + self.tilt_offset
         if self.backend == "c":
             self.step_c(throttle, tilt_command)
         else:
@@ -325,7 +329,7 @@ class Sim:
 
     def observe(self):
         """What the drone senses: gyro (rad/s, with bias and noise; the tick's whole rotation over DT, as the firmware's estimator integrating the gyro at 1 kHz sees it, rather than the rate at the tick's end, which over a fast spin-up would cost degrees a tick) and accelerometer (m/s², specific force in the body frame, with noise)."""
-        return {"gyro": self.turned + self.gyro_bias + self.rng.normal(0, 0.02, (self.n, 3)), "accel": self.accel + self.rng.normal(0, 0.3, (self.n, 3))}
+        return {"gyro": self.turned + self.gyro_bias + self.rng.normal(0, 0.02, (self.n, 3)), "accel": self.accel + self.accel_bias + self.rng.normal(0, 0.3, (self.n, 3))}
 
     def up(self):
         """The body's z axis in the world frame [env, 3]: (0, 0, 1) is upright."""
