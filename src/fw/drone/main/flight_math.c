@@ -35,6 +35,8 @@ float flight_interpolate(float value, const float *table, size_t count, int reve
     return table[2 * (count - 1) + 1 - reverse];
 }
 
+#define HALF_TURN 3.14159265f
+
 void flight_attitude(Attitude *state, const Motion *m) {
     float roll = state->roll;
     float pitch = state->pitch;
@@ -47,6 +49,11 @@ void flight_attitude(Attitude *state, const Motion *m) {
 
     roll += roll_rate * m->dt;
     pitch += pitch_rate * m->dt;
+    // Past 90 degrees of pitch the same attitude is the pitch's supplement with the roll half a turn round: kept within ±90 degrees of pitch, so an estimate carried through the vertical never hands the attitude controller the other form's error (2026-11-12 02:27: roll 136, pitch 159 is roll -44, pitch 21, which it flew as 140 degrees of error). Never reached below 90 degrees.
+    if (fabsf(pitch) > HALF_TURN / 2) {
+        pitch = copysignf(HALF_TURN, pitch) - pitch;
+        roll += roll > 0 ? -HALF_TURN : HALF_TURN;
+    }
     state->roll = roll + weight * (gravity_roll - roll);
     state->pitch = pitch + weight * (gravity_pitch - pitch);
 }

@@ -60,8 +60,9 @@ The sim was checked against the same day's roll-step ladders to 55 degrees and m
 - **spin_lift**: the spin's collective may follow the cosine of the turn (the final tuning left it near 0).
 - **Staged bursts**: flip_enable 2 and 3 fly a burst of the spin aimed at 60 or 90 degrees and brake it at once, back the short way (flip_turn); the spin aims at spin_rate times the square root of the turn's share of a full one. Same entry checks, once per arming. Whether they are less risky than the flip is in the sim results below.
 - **The parameters** (flip_defaults, models/flip_firmware_params_2026-11-12.json; radians and fractions of the weight) were retuned by sw/sim/tune_flip.py on the fitted plant and its uncertainty (below), with the rate loops' gains bounded where the motors' lag and the slew make them chatter.
-- **recover.c** (william/recovery) keeps its own quaternion and repeats about 40 lines of this righting (the thrust axis turned toward up about the axis between them, no faster than it can brake from, and the allocation into thrusts and tilts). Once both branches are in, the righting and allocate() should be one function both call, with the floor, ceiling and flip_limit's slew applying to both.
-- Unchanged: the API the tumble-recovery work calls (flip_abort, flip_active, flip_gyro_only, flip_tip_exempt), the climb, the gyro-integrated attitude, the arrest's logic, the entry checks.
+- **One righting for the flip and the recovery** (william/merge-sim): flip.c's flip_righting and flip_allocate, with the gains and motor limits in a FlipRighting, and the quaternion helpers (flip_attitude, flip_rotate, flip_up, flip_euler); recover.c calls them with its own gains, the flip's floor (FLIP_FLOOR, 0.2 of the weight) and no ceiling but the throttle cap, and flight_rt.c slews and caps the recovery's throttles as the flip's (flip_limit_with) while a recovery and its grace run. Details and the trade-off are under "Merged with the retuned flip" below.
+- **The attitude estimate through the flip** is the flip's own quaternion's roll and pitch every tick while the estimate is on the gyro alone (the climb to 1 s after the hand-back, the arrest included), no longer Euler angles carried on the gyro, which jumped at 90 degrees of pitch at 02:27.
+- Unchanged: the API the tumble-recovery work calls (flip_abort, flip_active, flip_gyro_only, flip_tip_exempt, flip_cancel, flip_actuators, flip_limit), the climb, the arrest's logic, the entry checks.
 - settings.def: hover_climb and hover_ceiling may go to 5 and 5.5 m; flip_enable takes 0-3.
 
 ### The retuned flip in the sim
@@ -158,7 +159,7 @@ Each stage has a prediction from the sim and pass/fail numbers; do not go on unt
   - the pack at 14.8 V or more.
 - **Sequence.** Climb at 2.1 times the weight for 0.11 s under the attitude controller. Spin on differential thrust. Right the thrust axis. Hand back to the attitude controller within 37 degrees of upright. Arrest the vertical speed, then return to the hold.
 - **During the flip:**
-  - The attitude estimate runs on the gyro alone, and for 1 s (FLIP_GRACE) after the hand-back.
+  - The attitude estimate runs on the gyro alone, and for 1 s (FLIP_GRACE) after the hand-back; since william/merge-sim it is the flip's quaternion's roll and pitch throughout.
   - The tip cut is off from the spin until 1 s after the hand-back.
   - The spin keeps a running motor at throttle 1 or more, never stopped.
   - The hover's estimators keep running in HOVER_HOLD, but their outputs are not flown.
@@ -360,8 +361,8 @@ Two safety features for aggressive maneuvers on drone 1, after the first real fl
   - the attitude passes `tip_limit` outside a flip (where the tip cut fired);
   - after a flip's hand-back (its arrest and the 1 s grace, when the tip cut is off for it) the thrust axis passes `tip_limit`;
   - the gyro reads 1900 deg/s or more on any axis (its full scale is 2000).
-- **Righting** owns the motors: it flies its own quaternion on the gyro alone (the Euler estimate breaks down near 90 degrees of pitch), turns the thrust axis toward up on differential thrust (roll) and the servos' common tilt (pitch), rolling the long way round when far over and mostly pitched, with each motor kept at 14% of the weight or more (a motor commanded to throttle 1 mid-spin on 2026-11-12 took 0.1 s or more to come back).
-- **Leveling**, once within 58 degrees of upright and turning under 115 deg/s: the attitude controller at level, its integrators as before the event, the collective stopping the vertical speed. Once within 10 degrees, still and under 0.3 m/s vertically for 0.3 s (or after 2 s) it hands to the hover's hold. The estimate stays on the gyro for 1 s more.
+- **Righting** owns the motors: it flies its own quaternion on the gyro alone (the Euler estimate breaks down near 90 degrees of pitch), turns the thrust axis toward up on differential thrust (roll) and the servos' common tilt (pitch), rolling the long way round when far over and mostly pitched, with each motor kept at 20% of the weight or more, the flip's floor (a motor commanded to throttle 1 mid-spin on 2026-11-12 took 0.1 s or more to come back), and the throttles slewed and capped as the flip's (the full range in no less than 0.12 s, at most 1100).
+- **Leveling**, once within 58 degrees of upright and turning under 115 deg/s: the attitude controller at level, on the righting's quaternion's roll and pitch (within 90 degrees, so unambiguous), its integrators as before the event, the collective stopping the vertical speed. Once within 10 degrees, still and under 0.3 m/s vertically for 0.3 s (or after 2 s) it hands to the hover's hold. The estimate stays on the gyro for 1 s more.
 - **Level** (dashboard button between Flip and the STOP square; request `h`): from any mode, with or without `recover_enable`, ends a test pattern or a flip and starts the same recovery (straight to leveling when already near upright), then the hold. It needs nothing more from the laptop once taken: a lost link afterwards is the hold's, waited out 2 s then landed. STOP stays the motor cut.
 - **After either**, the hover holds (GPS or tag hold, whatever is set) whatever mode the laptop streams until the pilot picks another mode (L lands, manual takes the stick back); a hold engaged from manual flight climbs to `hover_climb` as pressing H in the air does. The laptop's tilt is dropped only while the recovery and its grace run. The dashboard's mode label shows the mode it sends, not this hold.
 - **The tip cut still applies:**
@@ -375,7 +376,7 @@ Two safety features for aggressive maneuvers on drone 1, after the first real fl
 
 ## Verified, in the simulator
 
-sw/sim/recover_firmware.py flies recover.c, flip.c, flight_math.c, hover.c and guard.c in sw/sim/flip_firmware.py's harness, ticked as flight_rt.c ticks them, on drone 1's plant (2026-11-09) randomized as recover.randomization, from the 2026-11-11 23:35 settings with the GPS hold. At 14 s after liftoff each holding drone is put into a drawn attitude and rates (the estimate with it), 256 runs per row. Recovered means never cut, never touched the ground, and upright, still and above 0.5 m 6 s later; "of holding plants" leaves out the 20% of drawn plants whose attitude loop does not hold even without the event.
+As tuned on william/recovery, before the merge ("Merged with the retuned flip" below has the merged firmware, on the fitted plant too). sw/sim/recover_firmware.py flies recover.c, flip.c, flight_math.c, hover.c and guard.c in sw/sim/flip_firmware.py's harness, ticked as flight_rt.c ticks them, on drone 1's plant (2026-11-09) randomized as recover.randomization, from the 2026-11-11 23:35 settings with the GPS hold. At 14 s after liftoff each holding drone is put into a drawn attitude and rates (the estimate with it), 256 runs per row. Recovered means never cut, never touched the ground, and upright, still and above 0.5 m 6 s later; "of holding plants" leaves out the 20% of drawn plants whose attitude loop does not hold even without the event.
 
 **Wide plant** (`--wide`): the uncertain terms widened as the flip failure suggests: roll authority 0.4-5 times the fit, the props' gyroscopic coupling (missing from rigid.py) up to ±0.03 N·m·s/√N, an ESC deadband up to throttle 60 that stops a motor (0.16 s restart), motor lag 1.5 times.
 
@@ -397,23 +398,84 @@ sw/sim/recover_firmware.py flies recover.c, flip.c, flight_math.c, hover.c and g
 - **Nothing else changes with recover_enable 0.** With the setting off and no Level, recover_tick only tracks its quaternion and returns the tip cut exactly where flight_rt.c tested it. The flip's runs (flip_firmware, 32 plants with and without the flip) are bit-identical to william/cook. hover.c, guard.c, flight_math.c, ekf.c, flip.c and every other sim's code are unchanged (guard.h gains an enum value, flight_math.h's Command a last field), so the hover, tag hold, landing and outdoor sims are the same programs.
 - **Replayed on 2026-11-12T02-27-04** (sw/sim/recover_replay.py, open loop): the recovery would have started 0.15 s after the flip's hand-back, at 2 m by the hold, sinking 3.6 m/s, 48 degrees over by its quaternion and pitching nose-down at 584 deg/s, with the servos at their 51-degree limit tilting back and the collective at its limit of twice the weight. Whether that stops the pitch in time is not known: the simulator mispredicted this flip. The replay also shows what drove the tumble: at 11.19 s the Euler estimate went from roll 58 to 163 at 90 degrees of pitch, and from there wrote the attitude the other way round (roll 136, pitch 159 is roll -44, pitch 21), which the attitude controller flew as 140 degrees of error.
 
+## Merged with the retuned flip (william/merge-sim)
+
+william/flip-fit and william/recovery were merged into one firmware and one simulator harness. Nothing here has flown either.
+
+**What changed**
+- **One righting.** flip.c's flip_righting (the thrust axis turned toward up about the axis between them, no faster than it can brake from, the long way round when far over and mostly pitched) and flip_allocate (into thrusts and tilts, each motor between a floor and a ceiling of the weight) are what both the flip's last stage and recover.c fly, each with its own gains (FlipRighting). recover.c lost its copies, and both carry their attitude with the same quaternion helpers (flip_attitude, flip_rotate, flip_up, flip_euler). flip.h's and recover.h's existing functions are unchanged; flip_limit_with is new.
+- **The recovery's motors follow the flip's rules.** Each keeps at least the flip's floor, 0.2 of the weight (FLIP_FLOOR; it was 0.144: about a point fewer recoveries from tilts at rest in the sim, nothing elsewhere). flight_rt.c slews and caps the throttles while a recovery and its 1 s grace run, as through a flip (the full range in no less than 0.12 s, at most 1100); before, only a recovery inside the flip's window was limited, and one that took over a flip lost the limit the tick it cancelled it. The recovery has no ceiling of its own (the flip's 1.16 of the weight is one of its tuned gains); the cap bounds it.
+- **No ambiguous attitude reaches the attitude controller.** While the estimate is on the gyro alone for the flip (its climb to 1 s after the hand-back, the arrest included) it is the flip's quaternion's roll and pitch every tick, as it already was through a recovery, and now through the recovery's grace too. From a quaternion pitch comes back within ±90 degrees, so a drone within 90 degrees of upright has both angles under 90: the arrest hands back within 34 degrees, and the leveling runs only within right_angle (58 degrees) or tip_limit (at most 80) of upright, beyond both it is righting again. flight_attitude keeps pitch within ±90 degrees as a backstop. On the 02:27 recording's gyro from the hand-back (open loop), the recorded estimate went to roll 135, pitch 128 at 11.27 s; the new flight_attitude gives roll -47, pitch 51 and the flip's quaternion roll -49, pitch 54 (the same attitude; the Euler one still errs by up to about 30 degrees around the vertical itself, the quaternion does not).
+- **The simulator** (sw/sim/flip_firmware.py) is flip-fit's harness with the recovery's in it, ticked as the merged flight_rt.c: flip_tick, recover_tick (the tip cut or the recovery), the failsafe and landings, the hover, the controller, flip_actuators for the flip's or the righting's motors, flip_limit_with. The plant is flip-fit's: recover_firmware.py now flies the airframe fitted to the first flip with every untested term drawn (flip_firmware.uncertain) by default; `--airframe airframe_2026-11-09.json --randomize wide` is the plant the recovery was tuned on. The recovery's `--gyroscopic` push now adds to the airframe's constant pushes instead of replacing them, and is for airframes without rotor_momentum (the fitted one has it).
+
+**The flip, before and after** (tune_flip.py --check, the same plants as above, seed 90000, from 5 m; before is william/cook a99e6fe):
+
+| | clean | touched | tip cut | height lost median (90th, worst) | past 90° median (90th) | tilt after the hand-back median (90th) |
+|---|---|---|---|---|---|---|
+| retuned, 512 drawn, before | 92.5% | 7.1% | 3.2% | 0.00 m (3.74, 5.58) | 0.32 s (0.53) | 33° (49) |
+| retuned, 512 drawn, after | 92.5% | 7.1% | 3.0% | 0.00 m (3.74, 5.58) | 0.32 s (0.53) | 33° (49) |
+| retuned, 512 drawn, after, recover_enable 1 | 92.5% | 7.1% | 2.0% | 0.00 m (3.68, 5.58) | 0.32 s (0.53) | 31° (41) |
+| as flown on 2026-11-12, 512 drawn, before | 47.0% | 52.6% | 30.2% | 4.68 m (5.18, 5.61) | 0.38 s (2.78) | 70° (180) |
+| as flown, after | 47.6% | 52.0% | 28.0% | 4.67 m (5.18, 5.61) | 0.38 s (2.74) | 70° (180) |
+| 60° burst, 256 drawn, before / after | 100% / 100% | 0 / 0 | 0 / 0 | 0.00 m (0.01, 0.01) both | 0 | 33° (43) both |
+| 90° burst, 256 drawn, before / after | 100% / 100% | 0 / 0 | 0 / 0 | 0.00 m (0.46, 3.13) both | 0.20 s (0.32) both | 33° (41) both |
+| the fitted plant as saved, 64, before / after | 100% / 100% | 0 / 0 | 0 / 0 | 0.00 m (0.02, 0.21 / 0.20) | 0.26 s | 34° (38) both |
+
+The merged harness and the shared righting alone printed exactly what a99e6fe did; the small changes in the flip as flown come from the attitude estimate through its arrest (now the quaternion's). Recovery on does not save the retuned flip's failures from 5 m (the same 7.1% touch the ground), nor from 3 m on the same plants (recover_firmware flip: 89.1% clean and 10.5% touched either way; 77.7% holding at the end with it, 76.6% without).
+
+**The recovery on the fitted plant** (recover_firmware.py, 256 runs per row, the plant drawn over every untested term; every drawn plant holds without the event, so "of holding plants" is the same number; recovered means never cut, never on the ground, upright, still and above 0.5 m 6 s after the event):
+
+| event | hold | recovered | touched the ground | height lost median (90th) | hand-back to the hold median |
+|---|---|---|---|---|---|
+| tip: 45-75° over, ~100 deg/s | 2 m | 94.1% | 0.4% | 0.19 m (0.65) | 1.6 s |
+| | 3 m | 94.5% | 0 | 0.20 m (0.70) | 1.6 s |
+| tilt: 60-150° over, at rest | 2 m | 66.0% | 20.7% | 0.98 m (2.00) | 1.7 s |
+| | 3 m | 74.6% | 7.4% | 0.97 m (2.52) | 1.7 s |
+| tumble: 90-180° over, pitching 400-600 deg/s, sinking to 2 m/s | 2 m | 25.8% | 70.7% | 1.89 m (2.26) | 2.0 s |
+| | 3 m | 42.6% | 50.8% | 2.68 m (3.22) | 1.9 s |
+| Level with recover_enable 0: 20-60° over, up to 100 deg/s | 2 m | 96.5% | 0 | 0.14 m (0.54) | 1.5 s |
+| | 3 m | 96.5% | 0 | 0.15 m (0.55) | 1.5 s |
+| link-loss landing, 60-150° over at 0.5-2.5 m | 2 m | above 1 m 73.1% of 186; below it 60 of 70 cut as designed | 71.5% | 1.14 m | 1.8 s |
+| | 3 m | above 1 m 68.3% of 186; 60 of 70 cut | 53.9% | 0.93 m | 1.7 s |
+
+On the plant the recovery was tuned on (airframe_2026-11-09, recover.randomization), the same firmware recovers 70-71% of tips (84-85% of holding plants; on william/recovery 76-77%, 88-90%), 61-63% of tilts (73-77%; 65-67%, 76-78%), 23-36% of tumbles (29-44%; 25-39%, 29-46%) and 74% of Levels (88-89%; 79%, 91-92%). Most of the difference is not the merge: flip-fit's changes to the plant's code (rigid_step.c, airframe.py) alone moved the william/recovery harness and firmware to 71.5-72.3% of tips, 62.9-64.1% of tilts, 25.4-39.8% of tumbles and 74.6-75.0% of Levels, run for run what the merged harness gives before the motor changes below. The rest is the slew and cap. With `--wide` on that plant (roll authority 0.4-5 times, the gyroscopic push, a deadband, slower motors) the merged firmware recovers 71-72% of tips (william/recovery 77-78%), 55-60% of tilts (64-69%), 16-27% of tumbles (15-26%) and 81% of Levels (84-85%); the merged harness before the motor and attitude changes already gave 56-62% of tilts there, flip-fit's plant code and the gyroscopic push no longer replacing the airframe's constant pushes accounting for most of it.
+
+**The slew limit's trade-off** (the fitted plant, 256 runs per row, floor 0.2; unlimited is as william/recovery flew it outside a flip):
+
+| event | hold | unlimited: recovered / largest throttle step in a tick (max) / at ≥95% throttle median (90th) | slewed 0.12 s full range, cap 1100 (the firmware) | slewed 0.06 s full range |
+|---|---|---|---|---|
+| tip | 2 m | 93.8% / 258 / 0 (0.03 s) | 94.1% / 100 (178 after the grace) / 0 | 93.4% / 200 / 0 |
+| | 3 m | 94.5% | 94.5% | 93.8% |
+| tilt | 2 m | 71.1% / 1004 / 0.06 s (0.16) | 66.0% / 100 / 0 | 69.1% / 200 / 0 |
+| | 3 m | 77.3% | 74.6% | 75.8% |
+| tumble | 2 m | 25.4% / 1004 / 0.10 s (0.29) | 25.8% / 100 / 0 | 25.4% / 200 / 0 |
+| | 3 m | 42.6% | 42.6% | 41.8% |
+| Level | 2 m | 96.9% | 96.5% | 96.9% |
+| | 3 m | 97.3% | 96.5% | 96.9% |
+
+Unlimited, the tuned righting is close to bang-bang: in tilts and tumbles it steps a throttle by up to 1000 in one 10 ms tick and holds a motor at 95% or more for 0.06-0.10 s median, what the new ESCs should not see after the old left one burnt. Slewed as the flip's, no step exceeds 100 a tick and no motor reaches 95%, for 3-5 points fewer recoveries from 60-150° at rest and none fewer from tips, tumbles or Level, where the drone falls too far before authority matters. Halving the slew time (0.06 s, about the motors' lag) gives back half of the tilts' loss. On the plant the recovery was tuned on, whose roll authority spans 0.8-5 times the fit, the floor, slew and attitude changes together cost 1-4 points of tips, tilts and tumbles and triple the rightings that time out (Recovery failed, stop reason 10: 9 to 27-29 of 256 tips, 11 to 39 tilts), the drone then cut in the air rather than drifting down tilted. The gains were tuned unlimited; retuning them slewed (recover_firmware.py --tune, which now flies the firmware's limit) is the way to win the tilts back.
+
+**What these results rest on**: the fitted plant is one flight's fit (the first flip), and the sim matched every gentle flight while mispredicting that flip; its untested terms are drawn over their plausible ranges, but nothing past 35 degrees of tilt, at the rates of a tumble or near the ground in a righting has been flown or measured. The recovery's numbers at large tilts rest on the righting's roll and pitch authority there, the rotors' momentum (rotor_momentum, drawn 0.006-0.04), the gyro carrying the attitude through a tumble, and the ground contact. The slew's cost rests on the motors' modeled lag (0.04-0.1 s drawn); with slower real motors the slew matters less, with faster ones more. The ESC benefit is not modeled at all: the sim has no current spikes, desyncs or burnt joints, so the limit is chosen for what it removes (single-tick jumps between idle and full throttle, time at full throttle) at the cost the sim shows.
+
+**Unchanged with flip_enable 0 and recover_enable 0** (byte-identical output against a99e6fe): sweep.py's nominal hover, band_hold.py's tag holds (four cases, 16 seeds), landing_test.py's 200 landings, outdoor.py (16 runs per wind), takeoff_test.py, and flip_firmware.py --no-flip's GPS holds on both plants (64 each at three band offsets). The only change outside flip.c and recover.c these programs run is flight_attitude's backstop, which acts only past 90 degrees of pitch.
+
 ## What real data tests each assumption, and what does not
 
 - **The gyro carries the attitude through a tumble** (no accelerometer). Tested only up to 600 deg/s, in the replay: the quaternion and the Euler estimate (both on the gyro then) agree to a degree until the Euler one's singularity. Past the gyro's 2000 deg/s nothing can: the attitude is then unknown, and in the air the accelerometer cannot tell (it reads the thrust, not gravity, whatever the attitude). After a saturation trigger the recovery flies on an attitude that may be wrong by tens of degrees.
 - **Roll authority, pitch authority and their lags at large tilts and rates.** Fitted only within 35 degrees of level and at hover rates. The flip's spin reached 540 deg/s on the drone against the simulator's 950, so the roll authority at low thrust is likely at the low end of the wide range; the tuned gains hold up there (wide plant column) except in tumbles.
 - **The props' gyroscopic coupling.** Not in the identified model at all; its size (±0.03) is a physical estimate. During the real flip the pitch rate grew to -160 deg/s while rolling at 340 deg/s with the motors at 464 and 34 throttle, consistent with it, but not a measurement of it.
-- **ESC behavior near throttle 1 and restarts.** Not measured; the recovery keeps every motor at 14% of the weight to stay out of it.
+- **ESC behavior near throttle 1 and restarts.** Not measured; the recovery keeps every motor at 20% of the weight (the flip's floor) to stay out of it.
 - **The ground.** The simulator's contact is rough, and a recovery that meets the ground drives its motors into it until the 2.5 s timeout or the end of the righting. A drone tumbling from under about 2 m mostly hits the ground first either way.
 
 ## Enabling and testing it
 
-Flash `william/recovery` as in step 1 above. `recover_enable` stays 0 until set; the Level button works without it.
+Flash `william/merge-sim` (the recovery with the retuned flip) as in step 1 above. `recover_enable` stays 0 until set; the Level button works without it.
 
 ### A. On the ground, props off
 
 1. Props off, drone in hand or on a stand. `uv run -m sw.flight_steps recover --apply` (tip_limit 30, recover_enable 1).
 2. Arm, stay in manual, raise the collective past integrate_throttle (580) and hold it there more than 1 s (the recovery waits for 1 s airborne).
-3. Tilt the drone by hand past 30 degrees in roll: the status line shows `Recovering (tipped): righting`, the low side's motor speeds up and the high side's slows (never stopping). Tilt it nose-down past 30: both servos tilt back (nose-up), with both motors up. Hold it tilted: after 2.5 s the motors stop with "Recovery failed".
+3. Tilt the drone by hand past 30 degrees in roll: the status line shows `Recovering (tipped): righting`, the low side's motor speeds up and the high side's slows (never stopping, and ramping: the full throttle range takes at least 0.12 s, and no motor goes past 1100). Tilt it nose-down past 30: both servos tilt back (nose-up), with both motors up. Hold it tilted: after 2.5 s the motors stop with "Recovery failed".
 4. Arm again and repeat, bringing it back level within a second: `leveling`, then the drone's hold (the recording's hover mode, flags bits 1-2, goes to 1; the dashboard's mode label still shows what it sends). STOP.
 5. Arm, collective up past 580 for 1 s, press Level: `Recovering (level): leveling`, then the hold. STOP.
 6. In the recording: the `recovery` (1, 2) and `recovery_cause` (1, 4) columns, the throttles and servos against the gyro's sign, stop reason 10 on the held tilt.
@@ -426,6 +488,6 @@ Calm air, the 3 m GPS hold as cleared in steps 4-5 above, 10 m clear, STOP ready
 1. **Level in a plain hold.** Settings `high`, recover_enable 0. Hold 3 m, press Level once: leveling for a moment, then the hold, as before. Then press L to land: the hold gives way to the landing.
 2. **Level during a roll step.** Settings `ladder` at 3 m (`high`), a 30-degree step (`uv run -m sw.sim.tilt_ladder --amplitudes 30 --width 0.4 --roll-rate 360 --dry`). Press Level as the step starts: the pattern stops (pattern stop 6) and the drone levels and holds. In the sim, 20-60-degree Levels hand back to the hold in 1.6 s median and lose 0.16 m median.
 3. **Recovery from a 35-degree step.** `uv run -m sw.flight_steps recover --apply` (tip_limit 30, recover_enable 1) and a 35-degree step. It trips the recovery at 30 degrees: `Recovering (tipped)`, then the hold. Afterwards `norecover`.
-4. Only then consider larger tilts, and fly the flip with recover_enable 1 only after the flip itself has been refitted (william/flip-fit): on the plant the real flip suggests, recovery saved few failed flips in the sim.
+4. Only then consider larger tilts, and fly the flip with recover_enable 1 only after stages A-D of "Staged tests before another flip" have passed: on the fitted plant the recovery saved none of the retuned flip's failures in the sim (the same 7.1% on the ground from 5 m with it on or off).
 
 Abort a test with STOP if the righting does not turn the drone toward upright within half a second, or it falls below about 1 m.
