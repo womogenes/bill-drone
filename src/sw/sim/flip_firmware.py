@@ -53,7 +53,7 @@ class Params(ctypes.Structure):
 
 
 class Flip(ctypes.Structure):
-    _fields_ = [("stage", ctypes.c_int), ("q", ctypes.c_float * 4)] + [(name, ctypes.c_float) for name in ("time", "turned", "thrust", "vertical", "arrested")]
+    _fields_ = [("stage", ctypes.c_int), ("q", ctypes.c_float * 4)] + [(name, ctypes.c_float) for name in ("time", "turned", "thrust", "vertical", "arrested", "turn")]
 
 
 class Authority(ctypes.Structure):
@@ -89,6 +89,8 @@ for name in ("flip_active", "flip_gyro_only", "flip_tip_exempt"):
     getattr(library, name).argtypes = [ctypes.POINTER(Run)]
     getattr(library, name).restype = ctypes.c_bool
 library.flip_phase.argtypes = [ctypes.POINTER(Run)]
+library.flip_turn.argtypes = [ctypes.c_float]
+library.flip_turn.restype = ctypes.c_float
 library.flip_tick.argtypes = [ctypes.POINTER(Run), ctypes.c_float * 3, ctypes.c_float * 3, ctypes.c_float, ctypes.c_void_p, ctypes.c_void_p, FLOATS, ctypes.POINTER(Output)]
 library.flip_limit.argtypes = [ctypes.POINTER(Run), ctypes.c_float * 2, ctypes.c_float]
 library.flip_actuators.argtypes = [ctypes.POINTER(Output), ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float * 2, ctypes.c_float * 2]
@@ -252,6 +254,8 @@ def fly(job):
                     lane["refusals"].append(refusal.decode())
                 else:
                     library.flip_begin(ctypes.byref(run), controller.command.buffer_info()[0], controller.state.buffer_info()[0], s.integral, s.force, estimate.state[0], estimate.state[1], s.climb_rate)
+                    # flip_begin takes the turn from the command's flip_enable, which flight.Controller's command does not carry (runtime-only): set it as flip_begin would.
+                    run.flip.turn = library.flip_turn(flown["flip_enable"])
                     lane["started"], lane["start_height"], lane["start_place"], lane["target"] = now, height, sim.pos[i, :2].copy(), s.target
             gyro = np.clip(obs["gyro"][i] * gyro_scale[i], -gyro_range, gyro_range)
             accel = np.clip(obs["accel"][i] / R.G, -accel_range, accel_range)
@@ -313,12 +317,20 @@ def fly(job):
                 continue
             height = sim.pos[i, 2] - BELLY
             if now - lane["started"] <= LOST_WINDOW:
+                lane["highest"] = max(lane.get("highest", height), height)
+                if lane.get("handed") is None and library.flip_phase(ctypes.byref(lane["run"])) == 3:
+                    lane["handed"] = now - lane["started"]
+                commanded = np.array(lane["commanded"], float)
                 if library.flip_active(ctypes.byref(lane["run"])):
+                    lane["rates"] = np.maximum(lane.get("rates", np.zeros(3)), np.degrees(np.abs(sim.omega[i])))
                     current = CURRENT_FULL * (np.maximum(sim.state.motor[i], 0.0) / THRUST_FULL) ** 1.5
-                    lane["full"] = lane.get("full", np.zeros(2)) + R.DT * (np.array(lane["commanded"]) >= FULL)
+                    lane["full"] = lane.get("full", np.zeros(2)) + R.DT * (commanded >= FULL)
+                    # How far the throttles travel through the flip (units, both motors): each swing between low and high is a current spike for the ESC.
+                    lane["travel"] = lane.get("travel", 0.0) + float(np.abs(commanded - lane.get("last", commanded)).sum())
                     lane["peak_current"] = max(lane.get("peak_current", 0.0), float(current.max()))
                     lane["charge"] = lane.get("charge", np.zeros(2)) + current * R.DT
                     lane["active"] = lane.get("active", 0.0) + R.DT
+                lane["last"] = commanded
                 lane["lowest"] = min(lane["lowest"], height)
                 lane["touched"] |= bool(sim.contact_now[i] > 0)
                 lane["carried"] = float(np.linalg.norm(sim.pos[i, :2] - lane["start_place"]))
@@ -332,9 +344,11 @@ def fly(job):
         turned = lane["run"].flip.turned
         row = {"held": upright and sim.pos[i, 2] - BELLY > 0.5, "tipped": lane["tipped"], "started": lane["started"], "refusals": lane["refusals"], "phase": lane["phase"]}
         if lane["started"] is not None:
-            row |= {"clean": upright and not lane["touched"] and turned >= 2 * math.pi - DEFAULTS.handoff - 0.01, "touched": lane["touched"], "lost": lane["start_height"] - lane["lowest"], "lowest": lane["lowest"],
+            row |= {"clean": upright and not lane["touched"] and turned >= lane["run"].flip.turn * (1 - params.handoff / (2 * math.pi)) - 0.01, "touched": lane["touched"], "lost": lane["start_height"] - lane["lowest"], "lowest": lane["lowest"],
                     "back": lane["back"], "carried": lane.get("carried", 0.0), "start_height": lane["start_height"], "end_height": float(sim.pos[i, 2] - BELLY), "trace": lane.get("trace"),
-                    "full": float(lane.get("full", np.zeros(2)).max()), "peak_current": lane.get("peak_current", 0.0), "mean_current": float((lane.get("charge", np.zeros(2)) / max(lane.get("active", 0.0), R.DT)).max())}
+                    "full": float(lane.get("full", np.zeros(2)).max()), "peak_current": lane.get("peak_current", 0.0), "mean_current": float((lane.get("charge", np.zeros(2)) / max(lane.get("active", 0.0), R.DT)).max()),
+                    "climbed": lane.get("highest", lane["start_height"]) - lane["start_height"], "handed": lane.get("handed") if lane.get("handed") is not None else LOST_WINDOW,
+                    "rates": lane.get("rates", np.zeros(3)), "turned": math.degrees(turned), "travel": lane.get("travel", 0.0)}
         rows.append(row)
     return rows
 

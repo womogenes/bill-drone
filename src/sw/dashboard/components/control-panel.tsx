@@ -275,7 +275,7 @@ const gainSections: {
     fields: [
       { key: 'tip_limit', label: 'Tip cut (°)', min: 20, max: 80 },
       { key: 'bank_tilt', label: 'Gyro-only past (°, 0 off)', min: 0, max: 80 },
-      { key: 'flip_enable', label: 'Flip allowed (0 or 1)', min: 0, max: 1 },
+      { key: 'flip_enable', label: 'Flip allowed (0 off, 1 flip, 2 roll to 90 and back, 3 to 150)', min: 0, max: 3 },
       { key: 'flip_height', label: 'Flip from at least (m)', min: 2.5, max: 5 },
     ],
   },

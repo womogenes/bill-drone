@@ -32,7 +32,7 @@ static float clampf(float value, float low, float high) {
 void flip_start(Flip *flip, float hover_thrust, float roll, float pitch, float vertical) {
     // flight_attitude's roll and pitch (about forward, then left; positive right side down and nose down) as a quaternion, the heading zero.
     float cr = cosf(roll / 2), sr = sinf(roll / 2), cp = cosf(pitch / 2), sp = sinf(pitch / 2);
-    *flip = (Flip){.stage = FLIP_CLIMB, .q = {cr * cp, sr * cp, cr * sp, -sr * sp}, .thrust = hover_thrust, .vertical = vertical};
+    *flip = (Flip){.stage = FLIP_CLIMB, .q = {cr * cp, sr * cp, cr * sp, -sr * sp}, .thrust = hover_thrust, .vertical = vertical, .turn = TWO_PI};
 }
 
 // The body rates turn the attitude: q += q (0, w) dt / 2, normalized.
@@ -99,8 +99,8 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
         // Keep the roll axis level: the nose's height (up's forward component, positive nose up) driven to zero through whichever of pitch and yaw tilts it now.
         float nose = up[0];
         float pitch_rate = p->kp * nose * up[2], yaw_rate = -p->kp * nose * up[1];
-        allocate(flip, p, a, p->k_spin * (p->spin_rate - gyro[0]), p->k_spin * (pitch_rate - gyro[1]), p->k_spin * 0.3f * (yaw_rate - gyro[2]), fmaxf(p->spin_thrust + p->spin_lift * cosf(flip->turned), 0) * a->weight, dt, out);
-        if (flip->turned >= TWO_PI - p->handoff) flip->stage = FLIP_RIGHT;
+        allocate(flip, p, a, p->k_spin * (p->spin_rate * sqrtf(flip->turn / TWO_PI) - gyro[0]), p->k_spin * (pitch_rate - gyro[1]), p->k_spin * 0.3f * (yaw_rate - gyro[2]), fmaxf(p->spin_thrust + p->spin_lift * cosf(flip->turned), 0) * a->weight, dt, out);
+        if (flip->turned >= flip->turn * (1 - p->handoff / TWO_PI)) flip->stage = FLIP_RIGHT;
     } else {
         // recover.py's righting: turn the thrust axis toward up about the axis between them, no faster than it can brake from; far over with the error mostly in pitch, roll the long way round.
         float sine = hypotf(up[0], up[1]), angle = atan2f(sine, up[2]);
@@ -126,6 +126,10 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
         }
     }
     if (flip->stage == FLIP_SPIN && flip->time > p->timeout) flip->stage = FLIP_RIGHT;
+}
+
+float flip_turn(float enable) {
+    return enable >= 3 ? TWO_PI * 5 / 12 : enable >= 2 ? TWO_PI / 4 : TWO_PI;
 }
 
 const char *flip_refusal(const FlipCheck *c) {
@@ -160,6 +164,7 @@ void flip_begin(FlipRun *run, const Command *command, const Controller *controll
     run->saved = *controller;
     run->height_integral = height_integral;
     flip_start(&run->flip, collective, roll, pitch, climb_rate);
+    run->flip.turn = flip_turn(command->flip_enable);
 }
 
 void flip_cancel(FlipRun *run) {
