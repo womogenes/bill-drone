@@ -25,18 +25,28 @@ MAX_BATCH = 8  # Records per FLG1 batch at most (radio.c LOG_MAX: 4 since the 10
 STOP_REASONS = (
     "", "Stopped", "Controller heartbeat lost", "IMU read failed",
     "Tilt limit exceeded", "Control sample delayed", "IMU calibration", "Landed", "Landed after link loss", "Landed by the fly-away failsafe",
+    "Recovery failed",
 )
-# The guards' states (drone/main/guard.h FAILSAFE_* and PATTERN_*) and the roll flip's phase (drone/main/flip.h flip_phase: climbing, spinning or righting, arresting), as the record's guard field and the status flags' bits 8-15 hold them.
+# The guards' states (drone/main/guard.h FAILSAFE_* and PATTERN_*), the roll flip's phase (drone/main/flip.h flip_phase: climbing, spinning or righting, arresting) and a recovery's stage and cause (drone/main/recover.h RECOVER_*: righting or leveling; past tip_limit, a failing flip, the gyro at full scale, the pilot's level-and-hold), as the record's guard field holds them; the status carries the first eight bits in its flags' bits 8-15 and the recovery in its reason (decode_recovery).
 FAILSAFE_PHASES = (None, "brake", "hold", "land")
-PATTERN_STOPS = (None, "distance", "tag lost", "tilt", "stick", "landing", None, None)
+PATTERN_STOPS = (None, "distance", "tag lost", "tilt", "stick", "landing", "recovery", None)
 FLIP_PHASES = (None, "climb", "flip", "arrest")
+RECOVERY_STAGES = (None, "righting", "leveling", None)
+RECOVERY_CAUSES = (None, "tilt", "flip", "gyro", "level", None, None, None)
 # The Kalman filter's flags from bit 0 (flight_rt.c Record ekf_flags): its heading is known, it is resting still, it is good enough for the hold to fly horizontally and vertically, and the hold flew on it this tick.
 EKF_FLAGS = ("aligned", "still", "horizontal", "vertical", "flown")
 
 
 def guard_state(bits):
-    """The guards from their bits: the failsafe's phase (None when off), whether distance set it off, why the test pattern stopped (None when it did not), and the flip's phase (None when none runs)."""
-    return {"failsafe": FAILSAFE_PHASES[bits & 3], "failsafe_far": bool(bits & 4), "pattern_stop": PATTERN_STOPS[bits >> 3 & 7], "flip": FLIP_PHASES[bits >> 6 & 3]}
+    """The guards from their bits: the failsafe's phase (None when off), whether distance set it off, why the test pattern stopped (None when it did not), the flip's phase (None when none runs), and a recovery's stage and cause (None when none runs)."""
+    return {"failsafe": FAILSAFE_PHASES[bits & 3], "failsafe_far": bool(bits & 4), "pattern_stop": PATTERN_STOPS[bits >> 3 & 7], "flip": FLIP_PHASES[bits >> 6 & 3],
+            "recovery": RECOVERY_STAGES[bits >> 8 & 3], "recovery_cause": RECOVERY_CAUSES[bits >> 10 & 7]}
+
+
+def decode_reason(reason):
+    """The status's reason byte (drone/main/runtime.h Status) as the stop reason's index and the recovery's bits as the guard field holds them (bits 8-9 the stage, 10-12 the cause): the stage in bits 6-7, the cause less one in bits 4-5 while one runs."""
+    stage = reason >> 6
+    return reason & 15, (stage << 8 | ((reason >> 4 & 3) + 1) << 10) if stage else 0
 
 
 # The test pattern's channels in the drone's order (drone/main/flight_rt.c excite), and their units: roll and pitch targets and servo tilts in degrees (servos positive forward), the yaw-rate target in degrees/s, collective and motors in throttle, the hover hold point's speed toward the tag and to the drone's left in m/s.

@@ -33,6 +33,9 @@ STEPS = {
     "burst90": ("stage D2: the same aimed at 90 degrees, faster", HIGH5 | {"flip_enable": 3}),
     "flip": ("stage E: one roll flip from the 5 m hold, the tip cut back at 45", HIGH5 | {"flip_enable": 1}),
     "noflip": ("the flip off again (flip_enable 0) and the tip cut at 45", {"flip_enable": 0, "tip_limit": 45}),
+    # The firmware of william/recovery (src/fw/FLIP.md, tumble recovery): recover_enable.
+    "recover": ("tumble recovery on, its trigger (tip_limit) at 30 on the 3 m GPS hold, the flip off; a 35-degree roll step from tilt_ladder.py --amplitudes 35 --dry trips it", HIGH | {"recover_enable": 1, "tip_limit": 30, "flip_enable": 0}),
+    "norecover": ("tumble recovery off again (recover_enable 0) and the tip cut at 45", {"recover_enable": 0, "tip_limit": 45}),
 }
 
 

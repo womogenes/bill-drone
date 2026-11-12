@@ -1,4 +1,4 @@
-idf_component_register(SRCS main.c flight_rt.c radio.c settings.c flight_math.c hover.c ekf.c guard.c flip.c camera.c gps.c baro.c
+idf_component_register(SRCS main.c flight_rt.c radio.c settings.c flight_math.c hover.c ekf.c guard.c flip.c recover.c camera.c gps.c baro.c
                        INCLUDE_DIRS .
                        LDFRAGMENTS flight.lf
                        PRIV_REQUIRES esp_adc esp_driver_gpio driver esp_driver_ledc esp_driver_uart esp_driver_pcnt esp_timer esp_wifi app_update mbedtls nvs_flash)

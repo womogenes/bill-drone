@@ -1,0 +1,15 @@
+{
+ "kp": 4.8131,
+ "brake": 137.6662,
+ "max_rate": 24.8436,
+ "k_roll": 20.0008,
+ "k_pitch": 14.0902,
+ "kd_yaw": 0.6032,
+ "roll_over": 2.045,
+ "servo_max": 0.8919,
+ "kv": 7.2089,
+ "floor": 0.9841,
+ "idle": 0.1443,
+ "right_angle": 1.0079,
+ "right_rate": 2.0123
+}

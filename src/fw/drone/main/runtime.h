@@ -27,7 +27,7 @@ typedef struct __attribute__((packed)) {
     uint32_t time_ms, target_sequence;
     // 1 IMU online, 2 calibrating, 4 calibrated, 8 armed, 16 recording, 32 recorder subscribed, 64 throttle latched, 128 force valid; bits 8-15 the guards and the flip's phase as the flight record's guard field holds them (flight_rt.c Record).
     uint16_t flags;
-    // Native stop reason (controller/log_format.py STOP_REASONS).
+    // Native stop reason (controller/log_format.py STOP_REASONS) in bits 0-3; while a recovery runs (recover.h), its stage in bits 6-7 and its cause less one in bits 4-5.
     uint8_t reason;
     float accel[3], gyro[3], roll, pitch, temperature, servo[2];
     uint16_t throttle[2];
@@ -93,6 +93,8 @@ bool flight_runtime_targets(const float *targets);
 void flight_runtime_command_stop(uint32_t sequence);
 // The laptop's flip request (flip.h): NULL once the flip has started, or why it is refused.
 const char *flight_runtime_flip(void);
+// The laptop's level-and-hold (recover.h): NULL once taken, or why it is refused.
+const char *flight_runtime_level(void);
 // Copies the settings store's tunable values into the controller.
 void flight_runtime_apply_settings(void);
 const char *flight_runtime_calibrate(void);

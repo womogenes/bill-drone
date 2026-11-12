@@ -123,6 +123,7 @@ export type ControlSettings = {
   bank_tilt?: number;
   flip_enable?: number;
   flip_height?: number;
+  recover_enable?: number;
 };
 
 // A setting that is a number: all but enabled.
@@ -278,6 +279,9 @@ export type Reading = {
     pattern_stop?: 'distance' | 'tag lost' | 'tilt' | 'stick' | 'landing' | null;
     // The roll flip's phase (fw/drone/main/flip.h), null when none runs.
     flip?: 'climb' | 'flip' | 'arrest' | null;
+    // A recovery's stage and what started it (fw/drone/main/recover.h), null when none runs.
+    recovery?: 'righting' | 'leveling' | null;
+    recovery_cause?: 'tilt' | 'flip' | 'gyro' | 'level' | null;
   };
   recorder?: RecorderStatus;
   imu?: ImuReading | null;

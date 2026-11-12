@@ -31,7 +31,7 @@ from aiohttp import WSMsgType, web
 import serial
 
 from find_port import candidates, listen
-from log_format import FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, PATTERN_CHANNELS, STOP_REASONS, guard_state, pattern_refusal
+from log_format import FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, PATTERN_CHANNELS, STOP_REASONS, decode_reason, guard_state, pattern_refusal
 from wire import LINK_CHANNEL, PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 # Messages of more fragments than this go out twice (send_message).
@@ -74,7 +74,8 @@ LINK_SOURCES = {b"LNK1": "drone", b"RLY1": "controller"}
 LINK_RATES = ("1 Mbps", "LR 500 kbps", "LR 250 kbps", "2 Mbps", "5.5 Mbps", "11 Mbps", "11g 6 Mbps")
 # A status gap at least this long (s) goes into the open recording as a dropout event with its length.
 DROPOUT_S = 0.3
-REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T", "esc": b"E", "flip": b"f"}
+# level: the pilot's level-and-hold (drone/main/recover.h), from any mode; STOP stays the motor cut.
+REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T", "esc": b"E", "flip": b"f", "level": b"h"}
 # The flip request is tried this long (s) instead of the 6 every other request gets: a flip that starts seconds after the click is not the one asked for (the drone checks its conditions on arrival either way).
 FLIP_TIMEOUT = 1.0
 # Schema entries per D reply (drone/main/settings.h SCHEMA_PAGE).
@@ -86,6 +87,7 @@ def decode_status(payload, settings):
     The dashboard's reading (sw/dashboard/lib/telemetry.ts Reading) from a status message.
     """
     magic, time_ms, target_sequence, flags, reason, *values = struct.unpack_from(STATUS_FORMAT, payload)
+    reason, recovering = decode_reason(reason)
     camera = gps = baro = None
     if len(payload) >= STATUS_SIZE + CAMERA_SIZE:
         camera = dict(zip(CAMERA_KEYS, struct.unpack_from(CAMERA_FORMAT, payload, STATUS_SIZE)))
@@ -134,8 +136,8 @@ def decode_status(payload, settings):
         },
         "control_status": {
             "reason": STOP_REASONS[reason],
-            # The fly-away failsafe's phase, the test pattern's stop (drone/main/guard.h) and the flip's phase (drone/main/flip.h), from flags bits 8-15.
-            **guard_state(flags >> 8),
+            # The fly-away failsafe's phase, the test pattern's stop (drone/main/guard.h) and the flip's phase (drone/main/flip.h), from flags bits 8-15; a recovery's stage and cause (drone/main/recover.h) from the reason's top bits.
+            **guard_state(flags >> 8 | recovering),
             "throttle_latched": bool(flags & 64),
             "target_sequence": target_sequence,
         },

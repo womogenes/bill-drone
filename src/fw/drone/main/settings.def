@@ -104,6 +104,8 @@ TUNE(bank_tilt, bank_tilt, RAD, 0, 80, 0)
 // The roll flip (flip.c, fw/FLIP.md): 1 lets the laptop's flip request (radio.c f) start one per arming from a settled GPS hold at least flip_height (m above where the hold engaged) up; 2 and 3 the staged tests instead, a burst of the spin braked at once, aimed at 60 or 90 degrees and back (flip.c flip_turn); 0, the default, refuses every request.
 TUNE(flip_enable, flip_enable, 1, 0, 3, 0)
 TUNE(flip_height, flip_height, 1, 2.5, 5, 3)
+// Tumble recovery (recover.c, fw/FLIP.md): 1 rights and levels a drone past tip_limit in flight, or whose flip fails after its hand-back, or whose gyro reaches its full scale, and hands it to the hold, instead of the tip cut stopping the motors; 0, the default, cuts as before. On the ground, landing below 1 m and after RECOVER_MAX recoveries the tip cut stays.
+TUNE(recover_enable, recover_enable, 1, 0, 1, 0)
 STATE(servo_offset_left, -60, 60, -3)
 STATE(servo_offset_right, -60, 60, 0)
 // Gyro bias in rad/s and the stationary pose in degrees, valid only for the sensor frame they were taken in:
