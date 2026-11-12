@@ -27,8 +27,8 @@ from sw.sim.sweep import CURRENT_AIRFRAME, IDENTIFIED_ESC, run
 
 # The calm GPS and barometer hover of 2026-11-09 06:25 UTC, as flown.
 SETTINGS = "2026-11-09T06-25-48"
-# The test's settings: high enough to fall from a failed step, the pattern's tilt guard just under the tip cut, room for the steps' sideways travel, the takeoff wiggle that pins the GPS hold's heading (without it a still hover may never pin it, and the hold drifts on its drag model), and the thrust-direction hold (models/NOTES.md 2026-11-09: without it 1 of 16 ladder runs lost its attitude in the hold after its pattern stopped).
-TEST = {"hover_climb": 3.0, "hover_ceiling": 5.0, "pattern_tilt": 42.0, "pattern_distance": 4.0, "hover_camera": 0, "hover_center": 0, "hover_gps_calibrate": 5.0, "hover_thrust_direction": 0.8, "hover_kd": 1.5}
+# The test's settings: as high as the settings allow (hover_climb at most 1.5 m, hover_ceiling 3; the ladder was first simmed at 3 m, which the drone refuses, and at 1.5 m it does the same, models/NOTES.md 2026-11-12), the pattern's tilt guard just under the tip cut, room for the steps' sideways travel, the takeoff wiggle that pins the GPS hold's heading (without it a still hover may never pin it, and the hold drifts on its drag model), and the thrust-direction hold (models/NOTES.md 2026-11-09: without it 1 of 16 ladder runs lost its attitude in the hold after its pattern stopped).
+TEST = {"hover_climb": 1.5, "hover_ceiling": 3.0, "pattern_tilt": 42.0, "pattern_distance": 4.0, "hover_camera": 0, "hover_center": 0, "hover_gps_calibrate": 5.0, "hover_thrust_direction": 0.8, "hover_kd": 1.5}
 # On the tag (--tag) the camera hover's settings stay as flown but for the pattern's guards: the tilt guard as above, and the distance guard for a small room.
 TAG_TEST = {"pattern_tilt": 42.0, "pattern_distance": 0.5}
 # The pattern starts this long (s) after collective first reaches integrate_throttle: the climb to 3 m and a settled hold.

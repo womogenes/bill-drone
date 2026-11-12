@@ -1,0 +1,48 @@
+"""
+The 2026-11-12 outdoor session's settings, one step per flight, stored through the running bridge: uv run -m sw.flight_steps [step] [--apply]
+
+Without a step it lists them; with one it prints what that step stores against what the drone has now, and --apply stores it. Each outdoor step holds the ones before it, so any step can be applied from today's indoor settings. The sims behind each are in sw/sim/models/handoff_2026-11-12.md and NOTES.md. "indoor" puts the tag hold's values back.
+"""
+
+import argparse
+import json
+import urllib.request
+
+BRIDGE = "http://127.0.0.1:8765/settings"
+INDOOR = {"hover_camera": 1, "hover_center": 1, "hover_gps_tau": 0, "hover_tilt": 10, "hover_thrust_direction": 0, "hover_kd": 2.5}
+GPS = {"hover_camera": 0, "hover_center": 0, "hover_gps_tau": 0.5, "hover_gps_place_tau": 2}
+STEPS = {
+    "indoor": ("the tag hold as flown on 2026-11-11", INDOOR),
+    "gps": ("the GPS hold on the indoor gains: calm air only (held 32/28/13 of 32 in 0/1/2 m/s)", GPS),
+    "tilt": ("hover_tilt 20 (32/32/31/22 at 0/1/2/3 m/s)", GPS | {"hover_tilt": 20}),
+    "direction": ("hover_thrust_direction 0.8, not flown before (32/31/32/30)", GPS | {"hover_tilt": 20, "hover_thrust_direction": 0.8}),
+    "kd": ("hover_kd 1.5 (32/32/32/31)", GPS | {"hover_tilt": 20, "hover_thrust_direction": 0.8, "hover_kd": 1.5}),
+    "ladder": ("the roll-step ladder's test settings on the full GPS hold, 1.5 m up (the settings' most); play the pattern from sw/sim/tilt_ladder.py --dry with sw/excite.py",
+               GPS | {"hover_tilt": 20, "hover_thrust_direction": 0.8, "hover_kd": 1.5, "hover_climb": 1.5, "hover_ceiling": 3, "pattern_tilt": 42, "pattern_distance": 4,
+                      "hover_gps_calibrate": 5, "roll_target_rate": 360}),
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("step", nargs="?", choices=list(STEPS))
+    parser.add_argument("--apply", action="store_true", help="store the step's settings through the bridge")
+    args = parser.parse_args()
+    if not args.step:
+        for name, (what, _) in STEPS.items():
+            print(f"{name:10} {what}")
+        return
+    what, update = STEPS[args.step]
+    current = json.load(urllib.request.urlopen(BRIDGE, timeout=5))["settings"]
+    print(f"{args.step}: {what}")
+    for name, value in update.items():
+        print(f"  {name:24} {current.get(name)} -> {value}")
+    if args.apply:
+        request = urllib.request.Request(BRIDGE, json.dumps({"settings": update}).encode(), {"Content-Type": "application/json"})
+        stored = json.load(urllib.request.urlopen(request, timeout=5))["settings"]
+        wrong = {name: stored.get(name) for name, value in update.items() if stored.get(name) is None or abs(stored[name] - value) > 1e-3}
+        print("stored" if not wrong else f"NOT stored as asked: {wrong}")
+
+
+if __name__ == "__main__":
+    main()
