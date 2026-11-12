@@ -130,6 +130,8 @@ def fly(job):
     # The servos' real tilt behind their commands and the accelerometer's in-flight forward bias (2026-11-11's rubber bands; sw/sim/band_hold.py).
     if args.tilt_offset:
         p["tilt_offset"] = args.tilt_offset
+    if args.gyro:
+        p |= {"gyro_counts": args.gyro[0], "imu_range": (args.gyro[1], 2.0)}
     if args.flight_accel_bias:
         p["flight_accel_bias"] = (args.flight_accel_bias, 0.0, 0.0)
     s = dict(flown)
@@ -246,6 +248,7 @@ def main():
     parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=(0.5, 3.0), help="range the forward speed moment is drawn in, times the airframe's (log-uniform; default 0.5,3 from before any flight measured it; models fitted to the outdoor flights warrant narrower)")
     parser.add_argument("--tilt-offset", type=float, default=0.0, help="degrees the servos' physical tilt sits forward of their commands (sweep.py tilt_offset; the 2026-11-11 rubber bands about -2.5)")
     parser.add_argument("--flight-accel-bias", type=float, default=0.0, help="g the accelerometer reads forward while the motors run (sweep.py flight_accel_bias; the 2026-11-11 rubber bands about 0.025)")
+    parser.add_argument("--gyro", type=lambda text: tuple(float(v) for v in text.split(",")), help="COUNTS,RANGE: the gyro read in whole counts per deg/s and clipped at ±RANGE deg/s (131,250 the firmware until 2026-11-12, 16.4,2000 after; sweep.py gyro_counts, imu_range with the accelerometer at ±2 g)")
     args = parser.parse_args()
     airframe = json.loads(args.airframe.read_text())
     flown = recording_settings(recording(args.settings)) | {"hover_camera": 0, "hover_center": 0, "hover_climb": args.climb, "hover_ceiling": args.climb}
