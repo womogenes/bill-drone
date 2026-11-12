@@ -16,7 +16,7 @@ from sw.flight_log import parse_settings, recording, settings as recording_setti
 from sw.sim import flip_firmware as FF
 
 MODELS = Path(__file__).with_name("models")
-AIRFRAME = "airframe_2026-11-12_flip.json"
+AIRFRAME = "airframe_2026-11-12_raised.json"
 # The hold at 5 m (settings.def now allows hover_climb 5 and hover_ceiling 5.5) and the flip from 4.5.
 HIGH = {"hover_climb": 5.0, "hover_ceiling": 5.5, "flip_height": 4.5}
 # The tuning climbs there faster than the drone would (the climb is not what is tuned).
