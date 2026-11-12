@@ -23,7 +23,7 @@ const FlipParams flip_defaults = {
     .climb_thrust = 1.9829f, .climb_time = 0.35f, .spin_rate = 11.3753f, .k_spin = 12.0f, .spin_thrust = 0.4f, .handoff = 1.9829f,
     .kp = 2.9482f, .brake = 9.0993f, .max_rate = 6.7122f, .k_roll = 7.2914f, .k_pitch = 20.0f, .kd_yaw = 2.0828f,
     .flip_thrust = 1.7758f, .right_angle = 0.6f, .servo_max = 0.4927f, .roll_over = 2.8798f, .kv = 15.0f, .arrest_time = 2.0f, .timeout = 2.0f,
-    .floor = 0.2f, .ceiling = 1.1647f, .handoff_rate = 3.0f, .slew = 10000.0f, .throttle_cap = 1100.0f, .spin_lift = 0.0147f,
+    .floor = FLIP_FLOOR, .ceiling = 1.1647f, .handoff_rate = 3.0f, .slew = 10000.0f, .throttle_cap = 1100.0f, .spin_lift = 0.0147f,
 };
 
 static float clampf(float value, float low, float high) {

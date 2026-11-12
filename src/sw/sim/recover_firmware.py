@@ -36,9 +36,9 @@ EVENT_AT = 14.0
 AFTER = 6.0
 # Tuned with --tune on these, at both heights.
 TUNED = ("tip", "tilt", "tumble")
-# --tune's search: RecoverParams fields with their ranges (log scale where low > 0 and the third item is True; angles in radians).
+# --tune's search: RecoverParams fields with their ranges (log scale where low > 0 and the third item is True; angles in radians). Not idle, each motor's least thrust: it is the flip's floor (flip.h FLIP_FLOOR), as the slew and cap are the flip's.
 SPACE = [("kp", 1.0, 20.0, True), ("brake", 5.0, 150.0, True), ("max_rate", 4.0, 30.0, True), ("k_roll", 2.0, 60.0, True), ("k_pitch", 2.0, 80.0, True), ("kd_yaw", 0.5, 20.0, True),
-         ("roll_over", 90 * DEG, 175 * DEG, False), ("servo_max", 20 * DEG, 60 * DEG, False), ("kv", 0.5, 8.0, True), ("floor", 0.02, 1.0, True), ("idle", 0.03, 0.3, True),
+         ("roll_over", 90 * DEG, 175 * DEG, False), ("servo_max", 20 * DEG, 60 * DEG, False), ("kv", 0.5, 8.0, True), ("floor", 0.02, 1.0, True),
          ("right_angle", 10 * DEG, 60 * DEG, False), ("right_rate", 0.5, 6.0, True)]
 
 
@@ -82,7 +82,7 @@ def recovered(row, scenario):
     return (row["cut"] == 0 and not row["event_touched"] and row["upright"] and row["end_height"] > 0.5) or (scenario == "landing" and row["landed"])
 
 
-def jobs(scenario, height, settings, options, n, seed, off=False, airframe=AIRFRAME, randomize="flip"):
+def jobs(scenario, height, settings, options, n, seed, off=False, airframe=AIRFRAME, randomize="flip", flip_params=None):
     """flip_firmware.fly's jobs for one scenario at one hold height."""
     flown = settings | {"recover_enable": 0 if off or scenario == "abort" else 1, "hover_climb": height, "hover_ceiling": max(height + 0.5, 1.8)}
     extra = dict(options)
@@ -92,7 +92,7 @@ def jobs(scenario, height, settings, options, n, seed, off=False, airframe=AIRFR
         extra["landing"] = EVENT_AT
     seconds = 50.0 if scenario == "flip" else EVENT_AT + AFTER + (4.0 if scenario == "landing" else 0.0)
     batch = 16
-    return [(flown, 0.0, seed + s, batch, seconds, math.radians(2000), 2.0, 25.0, scenario == "flip", airframe, randomize, {}, extra) for s in range(0, n, batch)]
+    return [(flown, 0.0, seed + s, batch, seconds, math.radians(2000), 2.0, 25.0, scenario == "flip", airframe, randomize, flip_params or {}, extra) for s in range(0, n, batch)]
 
 
 def summary(rows, scenario, holds=None):
@@ -117,7 +117,9 @@ def summary(rows, scenario, holds=None):
     held = f" ({np.mean(among) * 100:.1f}% of the {len(among)} whose plant holds without the event)" if among else ""
     text = (f"events {len(events)} of {n}: recovered {np.mean(good) * 100:.1f}%{held}, cut {sum(cuts.values())} {cuts}, touched the ground {np.mean([r['event_touched'] for r in events]) * 100:.1f}%; "
             f"height lost median {np.median(lost):.2f} m (90th {np.percentile(lost, 90):.2f}, max {lost.max():.2f}); "
-            f"hand-back to the hold {np.median(times) if len(times) else float('nan'):.2f} s median (90th {np.percentile(times, 90) if len(times) else float('nan'):.2f})")
+            f"hand-back to the hold {np.median(times) if len(times) else float('nan'):.2f} s median (90th {np.percentile(times, 90) if len(times) else float('nan'):.2f}); "
+            f"motors in 4 s: throttle travel {np.median([r['event_travel'] for r in events]):.0f} median, largest step in a tick {np.median([r['event_step'] for r in events]):.0f} median (max {max(r['event_step'] for r in events):.0f}), "
+            f"at 95% throttle {np.median([r['event_full'] for r in events]):.2f} s median (90th {np.percentile([r['event_full'] for r in events], 90):.2f}), current peak {np.median([r['event_current'] for r in events]):.0f} A median")
     if scenario == "landing":
         high = [g for g, r in zip(good, events) if r["event_height"] >= 1.0]
         low = [r for r in events if r["event_height"] < 1.0]
@@ -148,7 +150,7 @@ def tune(args, settings, options, pool):
             extra = options | {"recover": decode(x)}
             for scenario in TUNED:
                 for height in args.heights:
-                    for job in jobs(scenario, height, settings, extra, args.n, seed, airframe=args.airframe, randomize=args.randomize):
+                    for job in jobs(scenario, height, settings, extra, args.n, seed, airframe=args.airframe, randomize=args.randomize, flip_params=parse_settings(args.flip_params)):
                         work.append(job)
                         index.append((c, scenario, height))
         results = pool.map(F.fly, work)
@@ -185,6 +187,8 @@ def main():
     parser.add_argument("--deadband", type=float, default=0.0)
     parser.add_argument("--motor-tau", type=float, default=1.0)
     parser.add_argument("--off", action="store_true", help="recover_enable 0 (today's tip cut) for comparison")
+    parser.add_argument("--limit", choices=("on", "off"), help="slew and cap the recovery's throttles as the flip's (flip_limit_with), or not (default: as flight_rt.c, flip_firmware.RECOVER_LIMIT)")
+    parser.add_argument("--flip-params", default="", help="flip.c FlipParams on top of flip_defaults, name=value,... (the slew and cap the recovery shares)")
     parser.add_argument("--tune", action="store_true", help="CMA-ES over the gains (SPACE) instead; --n runs per scenario and height per candidate")
     parser.add_argument("--generations", type=int, default=40)
     parser.add_argument("--population", type=int, default=16)
@@ -198,7 +202,9 @@ def main():
         options["roll_thrust"] = tuple(args.roll_thrust)
     if args.motor_tau != 1.0:
         options["airframe"] = {"motor_tau": args.motor_tau, "right_motor_tau": args.motor_tau}
-    print(f"plant: {args.airframe} randomized {args.randomize}; roll authority {options.get('roll_thrust', 'as randomized')} x, gyroscopic ±{args.gyroscopic:g} N·m·s/√N, ESC deadband up to {args.deadband:g}, motor lag x{args.motor_tau:g}; params {args.params or 'recover_defaults'}", flush=True)
+    if args.limit:
+        options["recover_limit"] = args.limit == "on"
+    print(f"plant: {args.airframe} randomized {args.randomize}; roll authority {options.get('roll_thrust', 'as randomized')} x, gyroscopic ±{args.gyroscopic:g} N·m·s/√N, ESC deadband up to {args.deadband:g}, motor lag x{args.motor_tau:g}; params {args.params or 'recover_defaults'}; the recovery's throttles {'slewed and capped' if options.get('recover_limit', F.RECOVER_LIMIT) else 'free'}{'; flip ' + args.flip_params if args.flip_params else ''}", flush=True)
     with Pool(args.workers) as pool:
         if args.tune:
             tune(args, settings, options, pool)
@@ -206,7 +212,7 @@ def main():
         options["recover"] = parse_settings(args.params)
         for scenario in args.scenario:
             for height in [3.0] if scenario == "flip" else args.heights:
-                planned = jobs(scenario, height, settings, options, args.n, 2000 + args.seed, args.off, args.airframe, args.randomize)
+                planned = jobs(scenario, height, settings, options, args.n, 2000 + args.seed, args.off, args.airframe, args.randomize, parse_settings(args.flip_params))
                 rows = [r for part in pool.map(F.fly, planned) for r in part]
                 holds = None
                 if scenario in EVENTS and scenario != "landing":

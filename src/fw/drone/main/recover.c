@@ -10,10 +10,10 @@
 #define ARREST_SPEED 0.3f
 #define SETTLE_S 0.3f
 
-// The righting's gains from sw/sim/recover_firmware.py --tune --wide (CMA-ES, 60 generations of 20 on the tip, tilt and tumble events at 2 and 3 m, the plant's uncertain terms widened; sw/sim/models/recover_firmware_params.json). The flip's righting gains (flip.c), which they started from, used a fifth of this pitch gain and recovered 30% of the tip events. The tuned righting keeps the collective up even inverted (floor near 1): pitch authority comes from tilted thrust, and without it pitched-over drones could not turn in time. right_time and the leveling's were not tuned.
+// The righting's gains from sw/sim/recover_firmware.py --tune --wide (CMA-ES, 60 generations of 20 on the tip, tilt and tumble events at 2 and 3 m, the plant's uncertain terms widened; sw/sim/models/recover_firmware_params.json). The flip's righting gains (flip.c), which they started from, used a fifth of this pitch gain and recovered 30% of the tip events. The tuned righting keeps the collective up even inverted (floor near 1): pitch authority comes from tilted thrust, and without it pitched-over drones could not turn in time. right_time and the leveling's were not tuned, and idle is the flip's floor (FLIP_FLOOR 0.2; the tuning's 0.144 made no difference in the sim).
 const RecoverParams recover_defaults = {
     .kp = 4.8131f, .brake = 137.6662f, .max_rate = 24.8436f, .k_roll = 20.0008f, .k_pitch = 14.0902f, .kd_yaw = 0.6032f, .roll_over = 2.045f, .servo_max = 0.8919f,
-    .kv = 7.2089f, .floor = 0.9841f, .idle = 0.1443f,
+    .kv = 7.2089f, .floor = 0.9841f, .idle = FLIP_FLOOR,
     .right_angle = 1.0079f, .right_rate = 2.0123f, .right_time = 2.5f,
     .level_angle = 10 * DEGREE, .level_rate = 0.5f, .level_time = 2.0f,
 };
@@ -116,7 +116,7 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
             out->cut = RECOVER_FAILED_REASON;
             return;
         }
-        // The flip's righting (flip.h flip_righting) at the recovery's gains, each motor at idle of the weight or more and no ceiling.
+        // The flip's righting (flip.h flip_righting) at the recovery's gains, each motor at idle of the weight or more (the flip's floor) and no ceiling but flip_limit's throttle cap.
         FlipRighting r = {p->kp, p->brake, p->max_rate, p->k_roll, p->k_pitch, p->kd_yaw, p->roll_over, p->servo_max, p->idle, INFINITY};
         float collective = arrest(p, a, run->vertical, up[2]) * (p->floor + (1 - p->floor) * clampf(up[2], 0, 1));
         flip_righting(&r, a, up, w, collective, &run->thrust, dt, &out->motors);

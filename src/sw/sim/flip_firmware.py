@@ -51,6 +51,8 @@ RECOVER_MAX = 3
 RECOVER_AIRBORNE_S = 1.0
 RECOVER_LAND_HEIGHT = 1.0
 LINK_HOLD_S = 2.0
+# flight_rt.c slews and caps the recovery's throttles as the flip's (flip_limit_with while recover_gyro_only); options["recover_limit"] False flies them unlimited, as before.
+RECOVER_LIMIT = True
 
 
 class Params(ctypes.Structure):
@@ -123,6 +125,7 @@ for name in ("recover_active", "recover_gyro_only"):
     getattr(library, name).restype = ctypes.c_bool
 library.recover_tick.argtypes = [ctypes.POINTER(RecoverRun), ctypes.POINTER(RecoverParams), ctypes.POINTER(RecoverInput), ctypes.c_void_p, ctypes.c_void_p, FLOATS, ctypes.POINTER(RecoverOutput)]
 library.flip_limit.argtypes = [ctypes.POINTER(Run), ctypes.c_float * 2, ctypes.c_float]
+library.flip_limit_with.argtypes = [ctypes.POINTER(Run), ctypes.c_bool, ctypes.c_float * 2, ctypes.c_float]
 library.flip_actuators.argtypes = [ctypes.POINTER(Output), ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float * 2, ctypes.c_float * 2]
 DEFAULTS = Params.in_dll(library, "flip_defaults")
 RECOVER_DEFAULTS = RecoverParams.in_dll(library, "recover_defaults")
@@ -219,7 +222,7 @@ def fly(job):
     """
     One batch of runs on the same drawn plants: per run, whether and when the flip started, why it was refused, and the measures.
 
-    job: settings, tilt offset, seed, runs, seconds, gyro and accelerometer range, flip_at, whether to ask for the flip, the airframe, the randomization, and optionally the flip's parameters (a dict on top of flip_defaults, for tuning) and options, what sw/sim/recover_firmware.py tests on top of the plant: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "recover" (recover.c RecoverParams on top of recover_defaults), "airframe" (factors on the drawn airframe's terms), "roll_thrust" (the roll authority's range, as recover.randomization's, in place of the randomization's), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up, for airframes without rotor_momentum), "deadband" (per run, the throttle under which an ESC stops its motor) and "trace" (s of the recovery's trace after the event).
+    job: settings, tilt offset, seed, runs, seconds, gyro and accelerometer range, flip_at, whether to ask for the flip, the airframe, the randomization, and optionally the flip's parameters (a dict on top of flip_defaults, for tuning) and options, what sw/sim/recover_firmware.py tests on top of the plant: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "recover" (recover.c RecoverParams on top of recover_defaults), "airframe" (factors on the drawn airframe's terms), "roll_thrust" (the roll authority's range, as recover.randomization's, in place of the randomization's), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up, for airframes without rotor_momentum), "deadband" (per run, the throttle under which an ESC stops its motor), "recover_limit" (whether the recovery's throttles are slewed and capped, in place of RECOVER_LIMIT) and "trace" (s of the recovery's trace after the event).
     """
     settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping, airframe, randomize = job[:11]
     # The maneuver's parameters: flip.c's flip_defaults with the job's changes (job[11], a dict, for tuning).
@@ -262,6 +265,7 @@ def fly(job):
     model = flight.MODEL
     authority = Authority(model["arm"] / model["roll_inertia"], model["pivot_height"] / model["pitch_inertia"], model["arm"] / model["yaw_inertia"], sim.mass * R.G)
     event = options["event"](np.random.default_rng(seed + 57), n) if "event" in options else None
+    limit_recovery = options.get("recover_limit", RECOVER_LIMIT)
     lanes = []
     for i in range(n):
         controller = flight.Controller()
@@ -422,7 +426,7 @@ def fly(job):
                 servos = (ctypes.c_float * 2)()
                 library.flip_actuators(ctypes.byref(recovered.motors if recovered.owned else out), controller.command.buffer_info()[0], scales[i], scales[i], 1200.0, 60.0, throttles, servos)
                 left_angle, right_angle = math.radians(servos[0]), math.radians(servos[1])
-            library.flip_limit(ctypes.byref(run), throttles, R.DT)
+            library.flip_limit_with(ctypes.byref(run), limit_recovery and library.recover_gyro_only(ctypes.byref(recovery)), throttles, R.DT)
             left, right = round(throttles[0]), round(throttles[1])
             lane["commanded"] = (left, right)
             # An ESC that stops its motor under its deadband (options["deadband"]), so it restarts from standstill (motor_start).
@@ -443,6 +447,15 @@ def fly(job):
             if lane["event"] is not None and now - lane["event"] <= LOST_WINDOW:
                 lane["event_lowest"] = min(lane["event_lowest"], height)
                 lane["event_touched"] |= bool(sim.contact_now[i] > 0)
+                # The motors through the recovery, as through the flip: the throttles' travel, their largest change in one tick (a stopped motor excluded), time at FULL or more, the modeled current's peak.
+                commanded = np.array(lane["commanded"], float)
+                last = lane.get("event_last", commanded)
+                running = (commanded > 0) & (last > 0)
+                lane["event_travel"] = lane.get("event_travel", 0.0) + float(np.abs(commanded - last).sum())
+                lane["event_step"] = max(lane.get("event_step", 0.0), float((np.abs(commanded - last) * running).max()))
+                lane["event_full"] = lane.get("event_full", 0.0) + R.DT * bool((commanded >= FULL).any())
+                lane["event_current"] = max(lane.get("event_current", 0.0), float((CURRENT_FULL * (np.maximum(sim.state.motor[i], 0.0) / THRUST_FULL) ** 1.5).max()))
+                lane["event_last"] = commanded
             if lane["started"] is None:
                 continue
             if now - lane["started"] <= LOST_WINDOW:
@@ -486,7 +499,8 @@ def fly(job):
                     "past90": lane.get("past90", 0.0), "after_tilt": lane.get("after_tilt", 0.0)}
         if recovering or event is not None:
             row |= {"cut": lane["cut"], "recoveries": [list(r) for r in lane["stages"]], "recovered_at": lane["recovered_at"], "event": lane["event"], "event_height": lane.get("event_height"),
-                    "event_lowest": lane["event_lowest"], "event_touched": lane["event_touched"], "end_height": float(sim.pos[i, 2] - BELLY), "upright": upright, "landed": lane["cut"] == 8, "event_trace": lane.get("event_trace")}
+                    "event_lowest": lane["event_lowest"], "event_touched": lane["event_touched"], "end_height": float(sim.pos[i, 2] - BELLY), "upright": upright, "landed": lane["cut"] == 8, "event_trace": lane.get("event_trace"),
+                    "event_travel": lane.get("event_travel", 0.0), "event_step": lane.get("event_step", 0.0), "event_full": lane.get("event_full", 0.0), "event_current": lane.get("event_current", 0.0)}
         rows.append(row)
     return rows
 
