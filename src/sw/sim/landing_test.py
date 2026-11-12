@@ -4,7 +4,7 @@ uv run -m sw.sim.landing_test [--runs 200] [--source path/to/hover.c] [--defines
 uv run -m sw.sim.landing_test --replay sw/recordings/<flight>.bin [--contact s] replays a recorded landing through hover.c with the recorded estimates, specific force and attitude forced in each tick. Before the contact time given (or throughout without one) the drone is taken to be in the air: thrust the new code flies below the recorded one shows in the specific force as that difference, lagged by the motors, over the weight. After it the floor holds the drone and the recorded specific force stands. It prints when probes start and what they find, and when touchdown comes.
 --source flies another copy of hover.c (its own hover.h beside it gives the state layout), so versions can be compared without touching the one other simulations use.
 --outdoor [RECORDING] flies drone 1 as it flew outdoors on 2026-11-09 instead (OUTDOOR's settings by default: no camera, the drag model, the GPS hold and the barometer): sw/sim/outdoor.py's plant on the current airframe (sweep.CURRENT_AIRFRAME, its uncertain terms drawn) with its GPS (the false descent at liftoff included) and the barometer (sweep.BARO, its near-floor offset drawn from -0.3 to +0.4 m), ground effect, 0-3 m/s of wind, a hold at 0.6-1.5 m and a landing at 0.2-0.75 m/s, hover_mass off by up to ±10 %, the same packs.
---tray (with --outdoor) lands it on the base it has had since 2026-11-07 instead of the sim's wide feet: the battery tray (sweep.TRAY_FEET, resting sweep.TRAY_REST degrees nose-down) on a softer floor (800 N/m and 8-25 N·s/m a contact point, friction 0.7-1.5, sloping up to 3 degrees each way), the gyro clipping at 2000 degrees/s (250 with the firmware before 2026-11-12) and the accelerometer at 2 g, and each run going on through a tip-over for 2 s after the motors stop. It then also reports the tip-overs (true tilt past 30 degrees within 1 s of contact), which way, the tilt it ends at and its speed over the ground at contact. --rates gives the landing rates to draw from (the 2026-11-09 flights had hover_land_rate 1), --floor another floor stiffness (N/m a contact point; the recorded touchdowns do not tell 800 from 20000) and --base FRONT REST a hypothetical base (its front edge FRONT mm ahead of the CoM and resting REST degrees nose-down; 27.5 and 4 as built). --no-guard leaves out the guards (guard.c is built against the tree's hover.h), for a --source whose HoverState differs.
+--tray (with --outdoor) lands it on the base it has had since 2026-11-07 instead of the sim's wide feet: the battery tray (sweep.TRAY_FEET, resting sweep.TRAY_REST degrees nose-down) on a softer floor (800 N/m and 8-25 N·s/m a contact point, friction 0.7-1.5, sloping up to 3 degrees each way), the gyro clipping at 2000 degrees/s (250 with the firmware before 2026-11-12) and the accelerometer at 2 g, and each run going on through a tip-over for 2 s after the motors stop. It then also reports the tip-overs (true tilt past 30 degrees within 1 s of contact), which way, the tilt it ends at and its speed over the ground at contact. --rates gives the landing rates to draw from (the 2026-11-09 flights had hover_land_rate 1), --floor another floor stiffness (N/m a contact point; the recorded touchdowns do not tell 800 from 20000) and --base FRONT REST a hypothetical base (its front edge FRONT mm ahead of the CoM and resting REST degrees nose-down; 27.5 and 4 as built). --fast lands with held L (HOVER_LAND_FAST) instead of L. --no-guard leaves out the guards (guard.c is built against the tree's hover.h), for a --source whose HoverState differs.
 """
 
 import argparse
@@ -233,6 +233,7 @@ def fly(case, source=None, defines=()):
         return step(self, throttles, commands, ratio ** ((power - 2) / power), *rest, **named)
 
     airframe.Airframe.step = stepped
+    plant["land_fast"] = case.get("land_fast", False)
     log = []
     try:
         result = sweep.run(settings, plant, seconds=seconds, seed=case["seed"], log=log, hover=True)
@@ -438,6 +439,7 @@ def main():
     parser.add_argument("--no-guard", action="store_true", help="leave the firmware's guards out: guard.c is built against the tree's hover.h, so a --source whose HoverState differs cannot run under it")
     parser.add_argument("--rates", type=float, nargs="*", help="landing rates to draw from (m/s) in place of the draw's")
     parser.add_argument("--base", type=float, nargs=2, metavar=("FRONT", "REST"), help="with --tray: a hypothetical base instead of the one built, its front edge FRONT mm ahead of the CoM (27.5 as built) and resting REST degrees nose-down (4 as built)")
+    parser.add_argument("--fast", action="store_true", help="land with held L (HOVER_LAND_FAST) instead of L")
     parser.add_argument("--floor", type=float, help="with --tray: the floor's stiffness a contact point (N/m) in place of 800, its damping scaled to keep the damping ratio")
     args = parser.parse_args()
     defines = args.defines.split()
@@ -458,6 +460,8 @@ def main():
                 case["tray"]["base"] = tuple(args.base)
         if args.no_guard:
             case["guard"] = False
+        if args.fast:
+            case["land_fast"] = True
         if args.rates:
             case["land_rate"] = random.Random(case["seed"] + 3).choice(args.rates)
     with ProcessPoolExecutor(args.workers) as pool:
