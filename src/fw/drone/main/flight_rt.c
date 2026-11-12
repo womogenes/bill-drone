@@ -43,6 +43,8 @@
 #define SENSOR_RETRY_TICKS SAMPLE_HZ
 // Degrees. The tip cut is the setting tip_limit (settings.def).
 #define SERVO_LIMIT 60
+// Banked past bank_tilt the collective's thrust is divided by the cosine of the setpoint's tilt, at most this many times: at 60 degrees holding height needs twice the thrust (the motors give about 2.2 times the weight).
+#define BANK_THRUST_MAX 2.0f
 #define THROTTLE_MAX 1200
 // The ESC pulse for a stopped motor (us), below the 1000 us that calibration teaches as zero: an ESC calibrated at exactly 1000 us can read that, with pulse jitter, as just above its minimum and spin.
 #define ESC_STOP_US 950
@@ -714,6 +716,13 @@ static void runtime_task(void *arg) {
                 for (int i = 0; i < 2; i++) excite.hold[i] = limit(excite.hold[i] + add[8 + i] / SAMPLE_HZ, -NUDGE_MAX, NUDGE_MAX);
             }
             if (!tracking) scaled.pitch_speed = 0;
+            // Banked past bank_tilt (last tick's setpoint, as the attitude estimate above), the collective's thrust grows by 1 / cos(tilt) so the bank holds its height.
+            const Controller *bank = &state.controller;
+            if (command.bank_tilt > 0 && scaled.base > 0 && fmaxf(fabsf(bank->setpoint_roll), fabsf(bank->setpoint_pitch)) > command.bank_tilt) {
+                float lift = cosf(bank->setpoint_roll) * cosf(bank->setpoint_pitch - command.pitch_trim);
+                float force = flight_interpolate(scaled.base, &flight_thrust[0][0], flight_thrust_count, 0) * fminf(1 / fmaxf(lift, 1 / BANK_THRUST_MAX), BANK_THRUST_MAX);
+                scaled.base = fminf(THROTTLE_MAX, flight_interpolate(force, &flight_thrust[0][0], flight_thrust_count, 1));
+            }
             flown = scaled;
             if (command.thrust_voltage > 0 && battery_v > 0) {
                 float ratio = limit(battery_v / command.thrust_voltage, 1 - VOLTAGE_RANGE, 1 + VOLTAGE_RANGE);

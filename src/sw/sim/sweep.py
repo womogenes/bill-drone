@@ -8,12 +8,14 @@ from collections import deque
 
 from sw.sim.airframe import Airframe, model
 from sw.sim.disturbance import Disturbances
-from sw.sim.flight import MODEL, PITCH_SPEED, YAW_I, Attitude, Controller, throttle, thrust
+from sw.sim.flight import MODEL, PITCH_SPEED, TUNING_LAYOUT, YAW_I, Attitude, Controller, throttle, thrust
 
 MASS = 0.940  # kg, the final assembly with the printed deck and IMU bracket (Bill's estimate, 2026-10-24)
 DT = 0.01
 # The hold-point nudge's limit each way (m; fw/drone/main/flight_rt.c NUDGE_MAX).
 NUDGE_MAX = 1.5
+# The most the collective's thrust grows in a bank (fw/drone/main/flight_rt.c BANK_THRUST_MAX).
+BANK_THRUST_MAX = 2.0
 # Physics substeps per control step: the foot contacts' friction is stiff, and at 10 a gripping contact chatters (the sampled gyro and accelerometer read tens of deg/s and 2-3 g at rest). Clear of the floor the rigid body and actuators need far fewer.
 SUB = 40
 AIR_SUB = 4
@@ -470,6 +472,13 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 controller.command[PITCH_SPEED] = settings.get("pitch_speed", 0.0) if out.tracking else 0.0
                 if out.tracking:
                     controller.state[13], controller.state[14] = out.velocity[0], out.velocity[1]
+        if bank_tilt > 0:
+            # flight_rt.c bank_tilt: banked past it, the collective's thrust over the cosine of the setpoint's tilt (at most BANK_THRUST_MAX times).
+            base = settings["base_throttle"]
+            if base > 0 and banked:
+                lift = math.cos(controller.state[11]) * math.cos(controller.state[12] - trim)
+                base = min(1200, throttle(thrust(base) * min(1 / max(lift, 1 / BANK_THRUST_MAX), BANK_THRUST_MAX)))
+            controller.command[6 + TUNING_LAYOUT.index("base_throttle")] = base
         left, right, left_angle, right_angle = controller.update(attitude, gyro_filter, DT)
         commanded = (left, right, left_angle, right_angle)
         motor_queue.append((left, right))
