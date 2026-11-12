@@ -20,7 +20,7 @@ typedef struct {
     double link_k, link_c, left_play, right_play, left_band, right_band, band_k, right_gain;
     double prop_torque, prop_momentum, inflow_damping, edgewise_damping, wash, pitch_wake, wake_tau;
     double roll_pendulum, pitch_pendulum, roll_from_yaw, yaw_from_roll;
-    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance;
+    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance, rotor_momentum, motor_tau_down, motor_idle, motor_floor, motor_coast, motor_ceiling, coast_below;
     double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, J;
     double level, mean_left, mean_right;
     double mass, throttle_max, servo_limit, ground_k, ground_c, friction, air_drag, tilt_share;
@@ -102,6 +102,8 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
     const double gain[2] = {1.0, p->right_gain};
     const double motor_delay[2] = {p->motor_delay, p->right_motor_delay}, servo_delay[2] = {p->servo_delay, p->right_servo_delay};
     const double motor_keep[2] = {exp(-DT / p->motor_tau), exp(-DT / p->right_motor_tau)};
+    // A falling thrust follows motor_tau_down where the model has it (airframe.py step).
+    const double motor_keep_down[2] = {p->motor_tau_down > 0 ? exp(-DT / p->motor_tau_down) : motor_keep[0], p->motor_tau_down > 0 ? exp(-DT / p->motor_tau_down) : motor_keep[1]};
     const double thrust_gain[2] = {1.0, p->right_thrust_gain};
     const double wn[2] = {p->servo_wn, p->right_servo_wn};
     const double w2[2] = {wn[0] * wn[0], wn[1] * wn[1]}, z2[2] = {2 * p->servo_zeta * wn[0], 2 * p->servo_zeta * wn[1]};
@@ -139,34 +141,49 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         // The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down (rigid.py).
         double flying = contact_now[e] == 0 ? clip((st_motor[0] + st_motor[1]) / (p->mass * G), 0, 1) : 0.0;
         // airframe.py step.
-        double table_thrust[2], departure[2], target[2], goal[2], tl[2], c[2], sn[2], running[2];
+        double table_thrust[2], departure[2], target[2], goal[2], tl[2], c[2], sn[2], running[2], asked[2];
         for (int s = 0; s < 2; s++) {
             double commanded = delayed(throttle_buffer, history, s, motor_delay[s]);
-            // A motor started from standstill makes no thrust for motor_start (airframe.py).
-            spin[2 * e + s] = commanded > 0 ? fmin(spin[2 * e + s] + DT, RUNNING) : 0.0;
+            asked[s] = commanded;
+            // A motor started from standstill makes no thrust for motor_start; at or below motor_idle the ESC stops it (airframe.py).
+            spin[2 * e + s] = commanded > p->motor_idle ? fmin(spin[2 * e + s] + DT, RUNNING) : 0.0;
             running[s] = spin[2 * e + s] > p->motor_start ? 1.0 : 0.0;
             table_thrust[s] = interp(commanded, table, count) * thrust_gain[s];
             departure[s] = table_thrust[s] - mean[s];
         }
         // airframe.py actual_thrust: the level times the mean, the common departure and differential_slope of the differential one.
         double common = (departure[0] + departure[1]) / 2, differential = (departure[0] - departure[1]) / 2 * differential_slope[e];
-        target[0] = p->level * (mean[0] + (common + differential)) * running[0];
-        target[1] = p->level * (mean[1] + (common - differential)) * running[1];
+        // A running motor makes at least motor_floor (airframe.py step).
+        target[0] = fmax(p->level * (mean[0] + (common + differential)), p->motor_floor) * running[0];
+        target[1] = fmax(p->level * (mean[1] + (common - differential)), p->motor_floor) * running[1];
+        // At most motor_ceiling where the model has it (airframe.py step).
+        if (p->motor_ceiling > 0) target[0] = fmin(target[0], p->motor_ceiling), target[1] = fmin(target[1], p->motor_ceiling);
+        double before[2] = {sqrt(fmax(st_motor[0], 0.0)), sqrt(fmax(st_motor[1], 0.0))};
         for (int s = 0; s < 2; s++) {
-            st_motor[s] = target[s] + (st_motor[s] - target[s]) * motor_keep[s];
+            double lagged = target[s] + (st_motor[s] - target[s]) * (target[s] < st_motor[s] ? motor_keep_down[s] : motor_keep[s]);
+            // Or a prop coasting down on its own drag (airframe.py step, motor_coast).
+            if (p->motor_coast > 0 && target[s] < st_motor[s] && asked[s] <= p->coast_below) {
+                double kappa = p->motor_coast * sqrt(5.0) / (sqrt(2.0) - 1), root_coasted = 1 / (1 / fmax(before[s], 1e-6) + DT / kappa);
+                lagged = fmax(target[s], root_coasted * root_coasted);
+            }
+            st_motor[s] = lagged;
             goal[s] = delayed(command_buffer, history, s, servo_delay[s]);
             tl[s] = st_tilt[s] * gain[s] * DEG;
             c[s] = cos(tl[s]), sn[s] = sin(tl[s]);
         }
         double left = st_motor[0], right = st_motor[1], total = left + right, a = p->arm, cy = p->cy;
         double root[2] = {sqrt(fmax(st_motor[0], 0.0)), sqrt(fmax(st_motor[1], 0.0))};
+        // The rotors' spin angular momentum along their tilted shafts (airframe.py step): -ω × H and -dH/dt.
+        double hx = p->rotor_momentum * (root[1] * sn[1] - root[0] * sn[0]), hz = p->rotor_momentum * (root[1] * c[1] - root[0] * c[0]);
+        double dhx = p->rotor_momentum * ((root[1] - before[1]) * sn[1] - (root[0] - before[0]) * sn[0]) / DT, dhz = p->rotor_momentum * ((root[1] - before[1]) * c[1] - (root[0] - before[0]) * c[0]) / DT;
         double roll_torque = (a - cy) * left * c[0] - (a + cy) * right * c[1]
             - p->prop_torque * (left * sn[0] - right * sn[1])
             + p->prop_momentum * (root[0] * st_tvel[0] - root[1] * st_tvel[1]) * DEG
             - p->inflow_damping * a * a * total * w[0]
             - flying * p->roll_pendulum * total * att0[0]
             + flying * p->hy * p->vy_drag * p->mass * vel0[1]
-            + p->roll_from_yaw * w[2];
+            + p->roll_from_yaw * w[2]
+            - w[1] * hz - dhx;
         double roll = roll_torque / p->Ixx + push[3 * e] * flying;
         double tilted = left * sn[0] + right * sn[1];
         wake[e] = tilted + (wake[e] - tilted) * wake_keep;
@@ -176,12 +193,14 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
             + p->cx * (left * c[0] + right * c[1])
             - p->edgewise_damping * p->hr * p->hr * total * w[1]
             - flying * p->pitch_pendulum * total * att0[1]
-            - flying * p->hx * p->vx_drag * p->mass * vel0[0];
+            - flying * p->hx * p->vx_drag * p->mass * vel0[0]
+            + w[0] * hz - w[2] * hx;
         double pitch_other = pitch_torque / p->Iyy + push[3 * e + 1] * flying;
         double yaw_torque = (1 - p->wash) * ((a + cy) * right * sn[1] - (a - cy) * left * sn[0])
             + p->prop_torque * (right * c[1] - left * c[0])
             - p->edgewise_damping * a * a * total * w[2]
-            + p->yaw_from_roll * w[0];
+            + p->yaw_from_roll * w[0]
+            + w[1] * hx - dhz;
         double yaw = yaw_torque / p->Izz + push[3 * e + 2] * flying;
         double pq = w[1], pitch = att0[1], pitch_sum = 0.0;
         for (int sub = 0; sub < SUB; sub++) {

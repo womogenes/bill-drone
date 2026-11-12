@@ -1,7 +1,7 @@
 """
-The firmware's roll flip (fw/drone/main/flip.c) as flight_rt.c flies it, from the GPS hold, in the full-attitude simulation: uv run -m sw.sim.flip_firmware [--n 256] [--bands 0 -2.5 -5] [--settings 2026-11-11T23-35] [--flip-at 25] [--workers 16] [--no-flip]
+The firmware's roll flip (fw/drone/main/flip.c) as flight_rt.c flies it, from the GPS hold, in the full-attitude simulation: uv run -m sw.sim.flip_firmware [--n 256] [--bands 0 -2.5 -5] [--settings 2026-11-11T23-35] [--flip-at 25] [--workers 16] [--no-flip] [--airframe airframe_2026-11-12_flip.json] [--randomize wide|flip|none] [--batch 16]
 
-Each run flies drone 1 as of 2026-11-09 (sw/sim/toss.py plant, randomized as recover.randomization) in sw/sim/rigid.py on the firmware's own C, ticked in flight_rt.c's order: the attitude estimate (flight_math.c flight_attitude), the flip (flip.c flip_tick), the tip cut (tip_limit, off where flip_tip_exempt says), the fly-away failsafe (guard.c), the hover hold (hover.c) on the GPS (10 Hz, as sweep.run's, sw/sim/outdoor.py GPS) and the barometer (sweep.BARO), the attitude controller (flight_control) and, while the flip owns the motors, flip_actuators. It rests, arms, takes off in the hold and climbs to hover_climb; from --flip-at s after liftoff it asks for the flip once a second as the dashboard's Flip button does, through flip_refusal with the checks flight_runtime_flip makes, until one starts. The IMU reads no more than --gyro-range and --accel-range (the firmware's ±2000 deg/s and ±2 g by default). Calm air: rigid.py has no wind.
+Each run flies drone 1 as of 2026-11-09 (sw/sim/toss.py plant, randomized as recover.randomization; --airframe another, --randomize flip draws every term the flip leans on that nothing real tests over its whole range: uncertain) in sw/sim/rigid.py on the firmware's own C, ticked in flight_rt.c's order: the attitude estimate (flight_math.c flight_attitude), the flip (flip.c flip_tick), the tip cut (tip_limit, off where flip_tip_exempt says), the fly-away failsafe (guard.c), the hover hold (hover.c) on the GPS (10 Hz, as sweep.run's, sw/sim/outdoor.py GPS) and the barometer (sweep.BARO), the attitude controller (flight_control) and, while the flip owns the motors, flip_actuators. It rests, arms, takes off in the hold and climbs to hover_climb; from --flip-at s after liftoff it asks for the flip once a second as the dashboard's Flip button does, through flip_refusal with the checks flight_runtime_flip makes, until one starts. The IMU reads no more than --gyro-range and --accel-range (the firmware's ±2000 deg/s and ±2 g by default). Calm air: rigid.py has no wind.
 
 Settings: the recording's (--settings), then FLIGHT (the GPS hold as the roll-step ladder was cleared with on 2026-11-12, the hold at 3 m, the flip on), then --set. The firmware's thrust scales and hover_mass are set to each drawn plant's, as the drone's are calibrated to its own motors and weight.
 
@@ -39,6 +39,8 @@ FLIGHT = {"hover_camera": 0, "hover_center": 0, "hover_gps_tau": 0.5, "hover_gps
 LOST_WINDOW = 4.0
 # The belly's height below the center of mass (rigid.py HULL): the height above the ground is the position's less this.
 BELLY = 0.035
+# Keep each flip's trace in its row (flip_replay.py --closed sets it).
+TRACE = False
 # A fresh pack under load (V), for flip_refusal's battery check.
 BATTERY = 16.0
 
@@ -137,12 +139,56 @@ class Sensors:
         return gps, baro
 
 
+def uncertain(seed, n):
+    """
+    One draw of every plant and sensor term the flip leans on that no real data pins down (models/NOTES.md "The first flip, replayed"), spanning what the flip's replay, the alternatives that fit it and physics allow rather than a spread about the fit: airframe overrides shared by a batch, per-run Sim scales, and per-run gyro scale factors.
+    """
+    rng = np.random.default_rng(seed + 31)
+    u = lambda lo, hi: float(math.exp(rng.uniform(math.log(lo), math.log(hi))))
+    overrides = {
+        # The rotors' spin momentum: 0.006-0.05 fits the flip under one structure or another; a 10x4.5 prop's I times its speed gives about 0.02.
+        "rotor_momentum": u(0.006, 0.04),
+        # A cut motor's thrust: coasting (0.15 s fitted, about 0.2 from the prop's drag and inertia) or braked by the ESC (as fast as it rises).
+        "motor_coast": u(0.05, 0.3),
+        # Roll damping at the flip's rates: 0.04-0.3 across the fits (0.046 in hover).
+        "inflow_damping": u(0.03, 0.3),
+        # Yaw from roll: the hover's lump (-0.023) to the flip's (+0.002) and past it.
+        "yaw_from_roll": float(rng.uniform(-0.025, 0.01)),
+        "prop_torque": float(rng.uniform(-0.015, 0.015)),
+        # The motors' rise: the hover fit's 0.066 s, unmeasured on the bench.
+        "motor_tau": u(0.04, 0.1),
+        # The table's top was never flown: full throttle on the ESCs' 30 A and a loaded pack may give 70-100% of it (11.2 N at 1200, times the trim).
+        "motor_ceiling": float(rng.uniform(0.7, 1.0) * 11.22 * 1.28),
+        # Whether the ESC stops a motor asked for throttle 1 (then it restarts from standstill, motor_start 0.16 s).
+        "motor_idle": float(rng.choice([0.0, 30.0])),
+    }
+    overrides["right_motor_tau"] = overrides["motor_tau"]
+    w = lambda lo, hi: np.exp(rng.uniform(math.log(lo), math.log(hi), n))
+    # The differential thrust's share far from hover (the flip fits 0.42-0.57 if it is a plant term, the ladders and the PRBS hovers 1), the tilt's pitch authority, the inertias (estimated, not measured, after the pivots were raised), drag.
+    scale = {"roll_thrust": w(0.45, 1.1), "pitch_tilt": w(0.7, 1.4), "inertia": w(0.8, 1.3), "drag": w(0.6, 1.6), "disturbance": w(0.5, 2.0)}
+    # The MPU6050's sensitivity tolerance (±3%) and cross-axis error, as a scale per axis.
+    gyro = rng.uniform(0.97, 1.03, (n, 3))
+    return overrides, scale, gyro
+
+
+def plant_of(airframe):
+    """A rigid.Sim plant from a saved airframe (sw/sim/toss.py's rotor drag and no disturbance terms)."""
+    from sw.sim import toss
+    params = R.A.model(airframe)
+    return {"airframe": params, "geometry": R.A.geometry_of(params), "disturbances": [], "rotor_drag": toss.ROTOR_DRAG}
+
+
 def fly(job):
     """One batch of runs on the same drawn plants: per run, whether and when the flip started, why it was refused, and the measures."""
-    settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping = job
-    from sw.sim import toss
-    plant = toss.plant() | {"tilt_offset": offset, "accel_bias": (0.025 if offset else 0.0, 0.0, 0.0)}
-    sim = R.Sim(n, plant, seed=seed, scale=C.randomization(n, seed))
+    settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping, airframe, randomize = job
+    plant = plant_of(airframe) | {"tilt_offset": offset, "accel_bias": (0.025 if offset else 0.0, 0.0, 0.0)}
+    gyro_scale = np.ones((n, 3))
+    if randomize == "flip":
+        overrides, scale, gyro_scale = uncertain(seed, n)
+        plant["airframe"] = plant["airframe"] | overrides
+    else:
+        scale = C.randomization(n, seed) if randomize == "wide" else None
+    sim = R.Sim(n, plant, seed=seed, scale=scale)
     obs = sim.reset(np.tile([0, 0, BELLY], (n, 1)), np.zeros((n, 3)), np.tile([1.0, 0, 0, 0], (n, 1)), np.zeros((n, 3)))
     hover_n = sim.mass * R.G / 2
     # Each plant's motors against the firmware's thrust table: the drone's thrust scales are calibrated to its own motors (requested newtons are divided by them before the table lookup).
@@ -198,7 +244,7 @@ def fly(job):
                 else:
                     library.flip_begin(ctypes.byref(run), controller.command.buffer_info()[0], controller.state.buffer_info()[0], s.integral, s.force, estimate.state[0], estimate.state[1], s.climb_rate)
                     lane["started"], lane["start_height"], lane["start_place"], lane["target"] = now, height, sim.pos[i, :2].copy(), s.target
-            gyro = np.clip(obs["gyro"][i], -gyro_range, gyro_range)
+            gyro = np.clip(obs["gyro"][i] * gyro_scale[i], -gyro_range, gyro_range)
             accel = np.clip(obs["accel"][i] / R.G, -accel_range, accel_range)
             lane["gyro"] = gyro
             spinning = sum(lane["commanded"]) > 0
@@ -246,6 +292,9 @@ def fly(job):
             throttle[i] = (left, right)
             tilt[i] = (directions[0] * (left_angle - trims[0]), directions[1] * (right_angle - trims[1]))
             lane["phase"] = max(lane["phase"], library.flip_phase(ctypes.byref(run)))
+            # The flip as the log has it (flip_replay.py and the plots compare it with the real one): from 0.2 s before it to 2 s after its start, the gyro (deg/s), throttles, servo angles (degrees), phase and height.
+            if TRACE and lane["started"] is not None and now - lane["started"] <= 2.0:
+                lane.setdefault("trace", []).append((now - lane["started"], *np.degrees(gyro), left, right, math.degrees(left_angle), math.degrees(right_angle), library.flip_phase(ctypes.byref(run)), height))
         obs = sim.step(throttle, tilt)
         for i, lane in enumerate(lanes):
             if lane["started"] is None:
@@ -266,7 +315,7 @@ def fly(job):
         row = {"held": upright and sim.pos[i, 2] - BELLY > 0.5, "tipped": lane["tipped"], "started": lane["started"], "refusals": lane["refusals"], "phase": lane["phase"]}
         if lane["started"] is not None:
             row |= {"clean": upright and not lane["touched"] and turned >= 2 * math.pi - DEFAULTS.handoff - 0.01, "touched": lane["touched"], "lost": lane["start_height"] - lane["lowest"], "lowest": lane["lowest"],
-                    "back": lane["back"], "carried": lane.get("carried", 0.0), "start_height": lane["start_height"], "end_height": float(sim.pos[i, 2] - BELLY)}
+                    "back": lane["back"], "carried": lane.get("carried", 0.0), "start_height": lane["start_height"], "end_height": float(sim.pos[i, 2] - BELLY), "trace": lane.get("trace")}
         rows.append(row)
     return rows
 
@@ -283,14 +332,17 @@ def main():
     parser.add_argument("--gyro-range", type=float, default=2000.0, help="the gyro's full scale (deg/s; the firmware's ±2000)")
     parser.add_argument("--accel-range", type=float, default=2.0, help="the accelerometer's full scale (g)")
     parser.add_argument("--no-flip", action="store_true", help="the same plants without the request only")
+    parser.add_argument("--airframe", default="airframe_2026-11-09.json", help="the plant's airframe in sw/sim/models (airframe_2026-11-12_flip.json: fitted to the first real flip)")
+    parser.add_argument("--randomize", choices=("wide", "flip", "none"), default="wide", help="wide: recover.randomization about the airframe (as before); flip: every term the flip leans on that nothing real tests, drawn over its whole plausible range (uncertain); none: the airframe as saved")
+    parser.add_argument("--batch", type=int, default=16, help="runs per job; with --randomize flip each job draws its own untested terms")
     args = parser.parse_args()
     settings = recording_settings(recording(args.settings)) | FLIGHT | parse_settings(args.set)
-    batch = 16
+    batch = args.batch
     print(f"settings {args.settings} with {','.join(f'{k}={v:g}' for k, v in (FLIGHT | parse_settings(args.set)).items())}; gyro ±{args.gyro_range:g} deg/s, accelerometer ±{args.accel_range:g} g; flip asked from {args.flip_at:g} s after liftoff")
     for offset in args.bands:
         results = {}
         for flipping in (False,) if args.no_flip else (False, True):
-            jobs = [(settings, offset, 1000 + seed, batch, args.seconds, math.radians(args.gyro_range), args.accel_range, args.flip_at, flipping) for seed in range(0, args.n, batch)]
+            jobs = [(settings, offset, 1000 + seed, batch, args.seconds, math.radians(args.gyro_range), args.accel_range, args.flip_at, flipping, args.airframe, args.randomize) for seed in range(0, args.n, batch)]
             with Pool(args.workers) as pool:
                 results[flipping] = [r for rows in pool.map(fly, jobs) for r in rows]
         base = results[False]

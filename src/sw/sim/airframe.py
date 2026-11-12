@@ -5,6 +5,7 @@ The geometry is an explicit input (models/geometry_<day>.json; meters from the t
 - motors: dead time, then a first-order lag on the thrust (the thrust table, times battery voltage over thrust_voltage to voltage_power; the right motor can differ in dead time, lag and gain). The "right" terms are the right motor's. A motor started from standstill makes no thrust for motor_start after its throttle turns positive (the ESC's start-up; the takeoffs show it, the airborne fit cannot). The level is pinned to the weight (each flight's trim: its airborne median table thrust times thrust level carries mass × g), and differential_slope is the share of a differential throttle step's table thrust the motors deliver (roll authority; the common part follows the table; from 2026-10-29b it is held at 1, which the ±1.5-3° PRBS flights measure, instead of fitted);
 - servos: dead time, then a second-order position loop (servo_wn, servo_zeta) whose horn speed is limited to servo_slew and which yields to the link's load by servo_compliance (rad per N·m: the horn's static deflection under load, the servo's finite stiffness; 0 is a horn that holds its position whatever the load, as every model before 2026-11-08); the horn drives the motor assembly through a link with play, as torques on the assembly's effective inertia (its CAD inertia about the tilt axis, its mass × CoM offset × pivot height, and servo_inertia, the servo's reflected rotor): link_k (N·m/rad), link_c (N·m·s/rad), a forward band preload (N·m) less band_k per radian of tilt. What the link does to the assembly it does the other way to the body;
 - props: prop_torque (m: reaction torque per newton along each tilted shaft, opposite spins, so it acts in yaw and, tilted, in roll), prop_momentum (N·m·s per √N, for the gyroscopic roll torque of the props as they tilt);
+- the flip's terms (2026-11-12, sw/sim/flip_replay.py; optional, off in older models): rotor_momentum (N·m·s per √N: the rotors' spin angular momentum along their shafts, -ω × H as the body turns and -dH/dt as they speed up or slow down), motor_coast and coast_below (a motor asked for coast_below or less coasts down on its prop's drag, halving from 5 N in motor_coast s), and, for robustness draws only, motor_tau_down (a separate lag for a falling thrust), motor_idle (the ESC stops the motor at or below this throttle), motor_floor (N: a running motor's least thrust) and motor_ceiling (N: the most a motor gives). The ESC-dependent ones (motor_coast, coast_below, motor_idle, motor_floor, motor_ceiling, with motor_tau and motor_start) are separate from the airframe's, so new ESCs need only those refitted;
 - rotors: inflow_damping (s/m: roll damping as thrust lost per newton per m/s of axial inflow at the arm), edgewise_damping (s/m: the H-force per newton per m/s, for pitch at the rotors' height above the CoM and yaw at the arm);
 - the slipstream: a share wash of the tilted thrust's horizontal force is canceled by its slipstream on the airframe, acting at wash_z above the tube, so yaw tilt authority is 1 - wash of the geometric, the pitch tilt torque is (pivot height - wash × (wash_z - CoM height)) × T sin(tilt), and a tilt pushes the drone forward tilt_push as hard as the same body pitch (1 - wash in models saved without it; the camera measures about 0.66); a share pitch_wake of that torque builds up with lag wake_tau (the tilt is less effective held than swung);
 - lumped terms, as torques so they scale with the geometry: roll_pendulum and pitch_pendulum (m: the attitude stiffness as an effective length times the thrust; free flight has no attitude spring, so this stands for something unmodelled), drag_z_x and drag_z_y (m above the tube: where the horizontal drag acts, so the speed moments follow the CoM height; from 2026-10-29b roll_pendulum is held at 0, and drag_z_y is set by the hovers' closed-loop statistics, where it damps the hover loop's sideways swing: the camera sees no sideways drag force, so its roll moment is better read as the downwind rotor losing thrust in the upwind one's wake), roll_from_yaw and yaw_from_roll (N·m per rad/s), and a constant push per flight;
@@ -32,11 +33,11 @@ GEOMETRY_FILE = "geometry_2026-10-28.json"
 # Every parameter with its search bounds and starting value.
 PARAMS = {
     "motor_delay": (0.0, 0.12, 0.07), "right_motor_delay": (0.0, 0.12, 0.07), "motor_tau": (0.002, 0.15, 0.005), "right_motor_tau": (0.002, 0.15, 0.005),
-    "right_thrust_gain": (0.5, 1.5, 1.0), "voltage_power": (0.0, 3.0, 0.5), "differential_slope": (0.05, 3.0, 1.0), "motor_start": (0.0, 0.5, 0.0),
+    "right_thrust_gain": (0.5, 1.5, 1.0), "voltage_power": (0.0, 3.0, 0.5), "differential_slope": (0.05, 3.0, 1.0), "motor_start": (0.0, 0.5, 0.0), "motor_tau_down": (0.0, 0.5, 0.0), "motor_idle": (0.0, 300.0, 0.0), "motor_floor": (0.0, 5.0, 0.0), "motor_coast": (0.0, 1.0, 0.0), "coast_below": (0.0, 1200.0, 1200.0), "motor_ceiling": (0.0, 20.0, 0.0),
     "servo_delay": (0.0, 0.1, 0.02), "right_servo_delay": (0.0, 0.1, 0.02), "servo_wn": (8.0, 150.0, 31.0), "right_servo_wn": (8.0, 150.0, 31.0), "servo_zeta": (0.1, 2.0, 0.85), "servo_slew": (100.0, 3000.0, 300.0),
     "link_k": (0.01, 50.0, 2.0), "link_c": (0.0, 0.5, 0.03), "servo_inertia": (0.0, 0.005, 0.0004), "servo_compliance": (0.0, 2.0, 0.0),
     "left_play": (0.0, 3.0, 0.6), "right_play": (0.0, 3.0, 0.6), "left_band": (-0.3, 0.3, 0.015), "right_band": (-0.3, 0.3, 0.015), "band_k": (-0.05, 0.05, 0.0), "right_gain": (0.6, 1.4, 1.0),
-    "prop_torque": (-0.05, 0.05, -0.015), "prop_momentum": (-0.05, 0.05, 0.003),
+    "prop_torque": (-0.05, 0.05, -0.015), "prop_momentum": (-0.05, 0.05, 0.003), "rotor_momentum": (0.0, 0.1, 0.0),
     "inflow_damping": (-2.0, 5.0, 0.2), "edgewise_damping": (-2.0, 5.0, 0.05),
     "wash": (-1.0, 1.5, 0.0), "wash_z": (-0.2, 0.3, 0.02), "pitch_wake": (-1.5, 1.5, 0.0), "wake_tau": (0.01, 2.0, 0.15), "pitch_ground": (-1, 3, 0.0), "ground_scale": (0.01, 2.0, 0.1),
     "roll_pendulum": (-0.2, 0.2, 0.0), "pitch_pendulum": (-0.2, 0.2, 0.0), "drag_z_x": (-0.5, 0.5, 0.017), "drag_z_y": (-0.5, 0.5, 0.06), "speed_moment2": (-0.05, 0.05, 0.0), "tilt_speed": (-0.3, 0.3, 0.0), "tilt_push_speed": (0.0, 0.2, 0.0),
@@ -46,7 +47,7 @@ PARAMS = {
 }
 KEYS = list(PARAMS)
 # Terms a parameter set may leave out (they then stay off).
-OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed")
+OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below")
 # The running time (s) of a motor that has long been spinning.
 RUNNING = 10.0
 
@@ -235,9 +236,24 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
     gain = np.array([1.0, p["right_gain"]])
     motor_delay, motor_tau, thrust_gain = motor_terms(p, n)
     commanded = delayed(throttles, k, motor_delay)
-    state.spin = np.where(commanded > 0, np.minimum(state.spin + DT, RUNNING), 0.0)
-    target = actual_thrust(p, table_thrust(p, commanded, voltage, table, thrust_gain), trim) * (state.spin > p.get("motor_start", 0.0))
-    state.motor = target + (state.motor - target) * np.exp(-DT / motor_tau)
+    # At or below motor_idle (throttle; 0 in models without it) the ESC stops the motor, and it starts again from standstill.
+    state.spin = np.where(commanded > p.get("motor_idle", 0.0), np.minimum(state.spin + DT, RUNNING), 0.0)
+    # A running motor makes at least motor_floor (N; 0 in models without it): the ESC's lowest speed, whatever the table says of the throttle.
+    target = np.maximum(actual_thrust(p, table_thrust(p, commanded, voltage, table, thrust_gain), trim), p.get("motor_floor", 0.0)) * (state.spin > p.get("motor_start", 0.0))
+    # At most motor_ceiling (N) where a model has it: the table's top (full throttle on the ESCs' current limit, a sagging pack) was never flown.
+    if p.get("motor_ceiling", 0.0):
+        target = np.minimum(target, p["motor_ceiling"])
+    before = np.sqrt(np.maximum(state.motor, 0.0))
+    # A falling thrust follows with motor_tau_down where a model has it (the ESC no longer drives the prop down as hard as up), else motor_tau.
+    tau = np.where(target < state.motor, p.get("motor_tau_down") or motor_tau, motor_tau)
+    lagged = target + (state.motor - target) * np.exp(-DT / tau)
+    # Or, where a model has motor_coast (s: how long a prop cut at 5 N takes to halve its thrust), a motor asked for coast_below or less (throttle; the ESC no longer drives or brakes it) coasts down as a prop slowed by its own drag (dΩ/dt ∝ -Ω², so d√T/dt ∝ -T: a long tail) until it meets the target.
+    coast = p.get("motor_coast", 0.0)
+    if coast:
+        kappa = coast * math.sqrt(5.0) / (math.sqrt(2.0) - 1)
+        coasted = 1 / (1 / np.maximum(before, 1e-6) + DT / kappa) ** 2
+        lagged = np.where((target < state.motor) & (commanded <= p.get("coast_below", PARAMS["coast_below"][2])), np.maximum(target, coasted), lagged)
+    state.motor = lagged
     goal = delayed(commands, k, (p["servo_delay"], p["right_servo_delay"]))
     left, right = state.motor[:, 0], state.motor[:, 1]
     tilt = state.tilt * gain * DEG
@@ -246,6 +262,12 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
     a, cy = c["arm"], c["cy"]
     total = left + right
     root = np.sqrt(np.maximum(state.motor, 0.0))
+    # The rotors' spin angular momentum (rotor_momentum, N·m·s per √N of thrust; left along -z, right along +z, as prop_momentum and prop_torque have the spins) along each tilted shaft: the body feels -ω × H as its rates turn it (in roll and pitch when the rotors spin unequally, as in a flip) and -dH/dt as the rotors speed up and slow down.
+    momentum = p.get("rotor_momentum", 0.0)
+    hx = momentum * (root[:, 1] * sr - root[:, 0] * sl)
+    hz = momentum * (root[:, 1] * cr - root[:, 0] * cl)
+    dhx = momentum * ((root[:, 1] - before[:, 1]) * sr - (root[:, 0] - before[:, 0]) * sl) / DT
+    dhz = momentum * ((root[:, 1] - before[:, 1]) * cr - (root[:, 0] - before[:, 0]) * cl) / DT
     # Roll: the thrusts at the arms (about the CoM's sideways offset), the props' tilted reaction torque, their gyroscopic torque as they tilt, inflow damping at the arm, the attitude term, the sideways drag at its height, cross-coupling.
     roll_torque = (
         (a - cy) * left * cl - (a + cy) * right * cr
@@ -255,6 +277,7 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
         - flying * p["roll_pendulum"] * total * att[:, 0]
         + flying * c["hy"] * p["vy_drag"] * c["mass"] * vel[:, 1]
         + p["roll_from_yaw"] * rate[:, 2]
+        - rate[:, 1] * hz - dhx
     )
     roll = roll_torque / c["Ixx"] + push[:, 0]
     tilted = left * sl + right * sr
@@ -270,6 +293,7 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
         - flying * p["pitch_pendulum"] * total * att[:, 1]
         - flying * c["hx"] * p["vx_drag"] * c["mass"] * vel[:, 0]
         - flying * p["speed_moment2"] * vel[:, 0] * np.abs(vel[:, 0])
+        + rate[:, 0] * hz - rate[:, 2] * hx
     )
     pitch_other = pitch_torque / c["Iyy"] + push[:, 1]
     # Yaw: the tilted thrusts at the arms (1 - wash of it), the props' reaction torque, edgewise damping at the arm, cross-coupling.
@@ -278,6 +302,7 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
         + p["prop_torque"] * (right * cr - left * cl)
         - p["edgewise_damping"] * a * a * total * rate[:, 2]
         + p["yaw_from_roll"] * rate[:, 0]
+        + rate[:, 1] * hx - dhz
     )
     yaw = yaw_torque / c["Izz"] + push[:, 2]
     h = DT / SUB
