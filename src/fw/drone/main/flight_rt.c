@@ -1121,7 +1121,7 @@ const char *flight_runtime_flip(void) {
         .holding = hover_mode == HOVER_HOLD && hover.engaged, .camera = command.hover_camera != 0, .gps = command.hover.gps_tau > 0,
         .aligned = hover.aligned, .located = hover.gps_us && now - hover.gps_us <= FLIP_FIX_US, .ekf = command.hover.ekf > 0,
         .landing = link_landing, .failsafe = guard.failsafe != FAILSAFE_OFF, .pattern = excite.active,
-        .airborne = hover.lifted, .height = hover.height, .climb_rate = hover.climb_rate, .speed = hypotf(hover.gps_fix[0], hover.gps_fix[1]),
+        .airborne = state.controller.airborne, .height = hover.height, .climb_rate = hover.climb_rate, .speed = hypotf(hover.gps_fix[0], hover.gps_fix[1]),
         .roll = pose.roll, .pitch = pose.pitch - command.pitch_trim, .rate = {state.gyro[0], state.gyro[1], state.gyro[2]},
         .min_height = command.flip_height, .battery = battery_v,
     };

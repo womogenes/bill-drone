@@ -53,7 +53,7 @@ typedef struct {
     bool enabled, armed, done;
     // The GPS hold: the hover holding (mode HOVER_HOLD, engaged), not on the camera, the GPS hold on (hover_gps_tau), its heading pinned and a fix in the last GPS_STALE_US; the hold on its own estimates (hover_ekf 0: the Kalman filter's attitude would take the spin's thrust for gravity); no link-loss landing, fly-away failsafe or test pattern.
     bool holding, camera, gps, aligned, located, ekf, landing, failsafe, pattern;
-    // Time since liftoff, the hold's height above where it engaged and its climb rate, the GPS's ground speed, the attitude and body rates.
+    // The attitude controller's airborne time (flight_math.h Controller airborne: since the collective first reached integrate_throttle; hover.h lifted stops counting after the takeoff), the hold's height above where it engaged and its climb rate, the GPS's ground speed, the attitude and body rates.
     float airborne, height, climb_rate, speed, roll, pitch, rate[3];
     // flip_height, and the smoothed battery voltage (0 before the first reading).
     float min_height, battery;
