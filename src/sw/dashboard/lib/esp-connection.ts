@@ -2,7 +2,7 @@ import type { HoverState, Side, Targets } from './telemetry';
 
 // Requests the drone service (src/fw/controller/bridge.py) forwards; stop repeats until the drone confirms it.
 export type DroneRequest =
-  | { type: 'stop' | 'arm' | 'calibrate' }
+  | { type: 'stop' | 'arm' | 'calibrate' | 'flip' }
   | { type: 'zero'; side: 'left' | 'right' }
   | { type: 'tune'; settings: Record<string, number> }
   | { type: 'esc'; stage: 0 | 1 | 2 };
