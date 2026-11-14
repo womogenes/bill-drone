@@ -3,7 +3,7 @@ A recording of the camera's FPV frames with the drone's IMU (sw/vio/record_camer
 
 uv run --with opencv-python-headless -m sw.vio.recorded --footage ~/sw/vio/footage/room_imu --log sw/recordings/<flight>.csv --out ~/sw/vio/data/room_imu [--offset S]
 
-offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to FPV's 480x320, which takes the array's full width and its middle 2/3 of the height; its distortion coefficients act on normalized coordinates, so they carry over.
+Frames are stamped through the log when it names the camera's frames (camera_sequence and camera_age_us, the camera sending each FPV frame's sequence and SYNC pulse to the drone): the frame numbers match the log's frames and a straight line maps the camera's clock onto the drone's (sw/vio/blackbox_dataset.py clock_line), to the frame's centre row as the drone dated it. Otherwise offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to FPV's 480x320, which takes the array's full width and its middle 2/3 of the height; its distortion coefficients act on normalized coordinates, so they carry over.
 """
 
 import argparse
@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from sw.vio import dataset, scene
+from sw.vio.blackbox_dataset import clock_line
 from sw.vio.openvins import configure
 
 GRAVITY = 9.80665
@@ -80,9 +81,18 @@ def main():
     start, end = log.esp_time_us.iloc[0] / 1e6, log.esp_time_us.iloc[-1] / 1e6
     footage = args.footage.expanduser()
     frames = list(csv.DictReader(open(footage / "frames.csv")))
-    offset = find_offset(footage, frames, log) if args.offset is None else args.offset
-    for frame in frames:
-        time = int(frame["capture_us"]) / 1e6 + offset + scene.READOUT_S / 2
+    capture = np.array([int(f["capture_us"]) for f in frames], np.int64)
+    capture += np.concatenate([[0], np.cumsum(np.diff(capture) < -(1 << 31))]) * (1 << 32)
+    if "frame" in frames[0] and "camera_age_us" in log and log.camera_age_us.notna().any():
+        numbers = np.array([int(f["frame"]) for f in frames], np.int64)
+        numbers += np.concatenate([[0], np.cumsum(np.diff(numbers) < -(1 << 15))]) << 16
+        slope, intercept, residual, wrong = clock_line(numbers, capture, log)
+        print(f"clock from the log: {len(residual)} frames matched ({wrong} refused), drift {(slope - 1) * 1e6:+.1f} ppm, residual RMS {np.sqrt(np.mean(residual ** 2)):.1f} us")
+        stamps = (slope * capture + intercept) / 1e6
+    else:
+        offset = find_offset(footage, frames, log) if args.offset is None else args.offset
+        stamps = capture / 1e6 + offset + scene.READOUT_S / 2
+    for frame, time in zip(frames, stamps):
         if start < time < end:
             gray = cv2.rotate(cv2.imread(str(footage / frame["file"]), cv2.IMREAD_GRAYSCALE), cv2.ROTATE_180)
             out.frame(time, cv2.imencode(".png", gray)[1].tobytes())

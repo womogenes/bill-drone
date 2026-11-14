@@ -7,7 +7,7 @@ Record the camera's FPV stream from the dashboard (sw/dashboard/app/api/camera/r
 
 uv run src/sw/vio/record_camera.py --out ~/sw/vio/footage/room [--seconds 60] [--imu]
 
-With --imu the drone records its flight log while disarmed for the same span (request O, fw/drone/main/radio.c): the laptop service saves it under sw/recordings like a flight, with the IMU at 100 Hz on the drone's clock; the two clocks are aligned afterwards from the motion. Each frame is <capture_us>.jpg, its capture start on the camera's clock (fw/esp32cam/src/fpv.h), and frames.csv lists capture_us, the laptop's receive time (Unix seconds) and the file. Asking for the stream turns the camera to FPV (tag tracking off) until 3 s after the recording ends.
+With --imu the drone records its flight log while disarmed for the same span (request O, fw/drone/main/radio.c): the laptop service saves it under sw/recordings like a flight, with the IMU at 100 Hz on the drone's clock; the two clocks are aligned afterwards from the motion. Each frame is <capture_us>.jpg, its capture start on the camera's clock (fw/esp32cam/src/fpv.h), and frames.csv lists capture_us, the frame number, the laptop's receive time (Unix seconds) and the file. Asking for the stream turns the camera to FPV (tag tracking off) until 3 s after the recording ends.
 """
 
 import argparse
@@ -43,7 +43,7 @@ def main():
     with open(out / "frames.csv", "w", newline="") as index:
         try:
             rows = csv.writer(index)
-            rows.writerow(["capture_us", "received_unix_s", "file"])
+            rows.writerow(["capture_us", "frame", "received_unix_s", "file"])
             while time.monotonic() < end:
                 # A stream that stalls (a radio gap of over 10 s on 2026-10-31) is opened again rather than ending the recording.
                 try:
@@ -53,7 +53,7 @@ def main():
                     stream, buffer = None, b""
                     continue
                 while True:
-                    header = re.search(rb"Content-Length: (\d+)\r\nX-Time: (\d+) \d+\r\n\r\n", buffer)
+                    header = re.search(rb"Content-Length: (\d+)\r\nX-Time: (\d+) \d+\r\nX-Frame: (\d+)\r\n\r\n", buffer)
                     if not header:
                         break
                     start, length = header.end(), int(header.group(1))
@@ -61,7 +61,7 @@ def main():
                         break
                     name = f"{int(header.group(2))}.jpg"
                     (out / name).write_bytes(buffer[start:start + length])
-                    rows.writerow([header.group(2).decode(), f"{time.time():.6f}", name])
+                    rows.writerow([header.group(2).decode(), header.group(3).decode(), f"{time.time():.6f}", name])
                     count += 1
                     buffer = buffer[start + length:]
         finally:

@@ -41,16 +41,16 @@ def log_frames(log):
     return first.camera_sequence.astype(np.int64).values, (first.esp_time_us - first.camera_age_us).values
 
 
-def clock_line(frames, times, log):
-    """Log time (us) as a function of camera time (us): the fit through every log frame matched to the black box by sequence, with its residuals."""
-    sequences = np.array([f["record"]["sequence"] for f in frames], np.int64)
+def clock_line(sequences, times, log):
+    """Log time (us) as a function of camera time (us): the fit through every frame the log names, matched to these frames (their sequences, at least the low 16 bits, and camera times) by sequence, with its residuals. Shared with sw/vio/recorded.py, whose FPV frames carry the same sequence."""
+    sequences = np.asarray(sequences, np.int64)
     by_low = {}
     for index, sequence in enumerate(sequences):
         by_low.setdefault(sequence & 0xFFFF, []).append(index)
     lows, logged = log_frames(log)
     pairs = [(by_low[low][0], t) for low, t in zip(lows, logged) if len(by_low.get(low, ())) == 1]
     if len(pairs) < 10:
-        raise ValueError(f"Only {len(pairs)} frames in the log match the black box: not the same span, or a log from before camera_sequence")
+        raise ValueError(f"Only {len(pairs)} frames in the log match: not the same span, or a log from before camera_sequence")
     index, logged_t = np.array(pairs).T
     slope, offset = np.polyfit(times[index.astype(int)], logged_t, 1)
     # A 16-bit sequence repeats every 25 minutes at 44 fps: longer files match each log frame to the candidate nearest the first line.
@@ -87,7 +87,7 @@ def main():
     frames = [e for e in entries(data) if "record" in e]
     log, _ = read_flight(args.log)
     times = camera_times(frames)
-    slope, offset, residual, wrong = clock_line(frames, times, log)
+    slope, offset, residual, wrong = clock_line([f["record"]["sequence"] for f in frames], times, log)
     print(f"clock: {len(residual)} frames matched ({wrong} refused), drift {(slope - 1) * 1e6:+.1f} ppm, residual RMS {np.sqrt(np.mean(residual ** 2)):.1f} us, max {np.abs(residual).max():.1f} us")
     out = dataset.Writer(args.out.expanduser())
     for row in log.itertuples():

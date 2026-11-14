@@ -160,7 +160,7 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
     const part = new Uint8Array(
       Buffer.concat([
         Buffer.from(
-          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(12)} ${message.readUInt32LE(16)}\r\n${tag ? `X-Tag: ${tag}\r\n` : ''}\r\n`
+          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(12)} ${message.readUInt32LE(16)}\r\nX-Frame: ${frame}\r\n${tag ? `X-Tag: ${tag}\r\n` : ''}\r\n`
         ),
         jpeg,
         Buffer.from('\r\n'),
