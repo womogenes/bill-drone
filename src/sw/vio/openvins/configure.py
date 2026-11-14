@@ -1,10 +1,10 @@
 """
 OpenVINS configuration for the drone (sw/vio/openvins/run_euroc.cpp), written from the same constants the simulated camera uses (sw/vio/scene.py) so the two cannot drift apart.
 
-uv run -m sw.vio.openvins.configure <folder> [--gyro-noise 0.03] [--accel-noise 0.15] [--init-imu-thresh 0.5]
+uv run -m sw.vio.openvins.configure <folder> [--gyro-noise 0.003] [--accel-noise 0.05] [--init-imu-thresh 0.5]
 Frames are equalized with CLAHE, not OpenVINS's global HISTOGRAM: equalizing the whole frame turned the sensor noise of flat areas (sky, plain walls) into texture, which FAST took as corners, and on sw/vio/synthetic.py (30 s, exact IMU) the estimate diverged 314 m; with CLAHE it ends 2.6 m off over a 20 m path (1.40 m RMS) with the rolling shutter, 0.82 m (0.69 m RMS) without (2026-11-14).
 
-The IMU noise densities are not the MPU6050's datasheet figures (about 1e-4 rad/s/sqrt(Hz)): the rotors shake the gyro about 10 deg/s RMS at 21 Hz and the accelerometer about 0.1 g, which at 100 Hz are densities of about 0.025 rad/s/sqrt(Hz) and 0.14 m/s^2/sqrt(Hz) taken as white.
+The IMU noise densities default to the drone's in flight, not the MPU6050's datasheet figures (about 1e-4 rad/s/sqrt(Hz)): above 5 Hz, in 28 airborne stretches of 2026-11-10 to 12 (sw/recordings, base throttle over 600), the median was 0.0025 rad/s/sqrt(Hz) for the gyro and 0.049 m/s^2/sqrt(Hz) for the accelerometer, taken as white. Before the ESCs and props changed (2026-10) the rotors shook the gyro about 10 deg/s RMS at 21 Hz, ten times this.
 """
 
 import argparse
@@ -122,7 +122,7 @@ cam0:
 """
 
 
-def write(folder, gyro_noise=0.03, accel_noise=0.15, init_imu_thresh=0.5, pixel_sigma=1.5, camera=None, dynamic=False, size=(scene.WIDTH, scene.HEIGHT)):
+def write(folder, gyro_noise=0.003, accel_noise=0.05, init_imu_thresh=0.5, pixel_sigma=1.5, camera=None, dynamic=False, size=(scene.WIDTH, scene.HEIGHT)):
     """camera: the real camera's fx, fy, cx, cy, k1, k2 and optionally p1 and p2 (sw/vio/recorded.py), else the simulated one's; dynamic: initialize from motion rather than from rest; size: the images' width and height."""
     camera = {"p1": 0.0, "p2": 0.0} | (camera or {"fx": scene.FOCAL, "fy": scene.FOCAL, "cx": scene.CENTRE[0], "cy": scene.CENTRE[1], "k1": 0.0, "k2": 0.0})
     folder = Path(folder)
@@ -143,8 +143,8 @@ def write(folder, gyro_noise=0.03, accel_noise=0.15, init_imu_thresh=0.5, pixel_
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     parser.add_argument("folder")
-    parser.add_argument("--gyro-noise", type=float, default=0.03)
-    parser.add_argument("--accel-noise", type=float, default=0.15)
+    parser.add_argument("--gyro-noise", type=float, default=0.003)
+    parser.add_argument("--accel-noise", type=float, default=0.05)
     parser.add_argument("--init-imu-thresh", type=float, default=0.5)
     args = parser.parse_args()
     print(write(args.folder, args.gyro_noise, args.accel_noise, args.init_imu_thresh))
