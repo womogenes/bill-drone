@@ -51,15 +51,20 @@ def push_seconds(speed):
     return speed / ACCEL + CRUISE
 
 
+def banded_plant(airframe, flown, seed, wind, **kwargs):
+    """outdoor.py's plant for one run at this wind (with the airframe's pushes, the GPS and barometer, a level-reference error of 1.3 degrees SD; kwargs to it) with the rubber bands, and the settings with hover_gps_heading off the GPS's truth by up to 30 degrees: the plant, its draws and the settings to fly."""
+    p, draws = outdoor_plant(airframe, wind, seed, True, False, flown["hover_climb"], baro=True, level_sd=1.3, pushes=True, **kwargs)
+    p |= {"tilt_offset": BAND_TILT, "flight_accel_bias": (BAND_ACCEL, 0.0, 0.0)}
+    return p, draws, flown | {"hover_gps_heading": p["gps"]["heading"] + random.Random(seed + 1).uniform(-30, 30)}
+
+
 def flight(airframe, flown, speed, tilt, seed, direction, speed_draw=SPEED_DRAW):
     """One run's plant drawn and flown: the sim's result, its log, the draws and how long the push lasts (s)."""
     rng = random.Random(seed + 77000)
     wind = rng.uniform(*WIND)
-    p, draws = outdoor_plant(airframe, wind, seed, True, False, flown["hover_climb"], baro=True, speed_draw=speed_draw, level_sd=1.3, pushes=True)
+    p, draws, s = banded_plant(airframe, flown | {"hover_tilt": tilt}, seed, wind, speed_draw=speed_draw)
     draws |= {"wind": wind, "push_speed": rng.uniform(*PUSH_SPEED)}
     p["airframe"] = p["airframe"] | {"tilt_push_speed": draws["push_speed"]}
-    p |= {"tilt_offset": BAND_TILT, "flight_accel_bias": (BAND_ACCEL, 0.0, 0.0)}
-    s = flown | {"hover_tilt": tilt, "hover_gps_heading": p["gps"]["heading"] + random.Random(seed + 1).uniform(-30, 30)}
     length = push_seconds(speed)
     forward, left = DIRECTIONS[direction]
     p |= {"nudge": [(SETTLE, forward * speed, left * speed, length)], "nudge_wrap": NUDGE_MAX, "nudge_period": NUDGE_PERIOD}
