@@ -28,7 +28,7 @@ const SHAKE_WINDOW_S = 1;
 const HANDS_ON_S = 1;
 const SPAN_SETTLE_S = 2;
 const SPAN_MIN_S = 3;
-// A fly-away: GPS ground speed past FLYAWAY_MS on FLYAWAY_FIXES fixes in a row without a tilt command in the TILT_COMMAND_S before (the hold's own speed commands stop at hover_nudge_speed, 1 m/s).
+// A fly-away: GPS ground speed past FLYAWAY_MS on FLYAWAY_FIXES fixes in a row without a tilt command in the TILT_COMMAND_S before. While the pilot flies the hold point (a forward or left nudge change in the command events) and while the hold brakes after it (hover_nudge_speed / hover_nudge_accel, at least TILT_COMMAND_S), the limit is FLYAWAY_MS past hover_nudge_speed, the fastest the nudge asks for.
 const FLYAWAY_MS = 2;
 const FLYAWAY_FIXES = 5;
 const TILT_COMMAND_S = 2;
@@ -536,6 +536,34 @@ export function analyzeFlight(
     .filter((command) => command.roll || command.pitch)
     .map((command) => command.time);
   const changed = commands.map((command) => command.time);
+  const nudged: number[] = [];
+  let lastNudge: number[] = [];
+  for (const command of commands) {
+    if (!command.nudge) continue;
+    if (
+      (command.nudge[0] ?? 0) !== (lastNudge[0] ?? 0) ||
+      (command.nudge[1] ?? 0) !== (lastNudge[1] ?? 0)
+    )
+      nudged.push(command.time);
+    lastNudge = command.nudge;
+  }
+  // The nudge's settings as flown: the start's and every change during the recording, the fastest speed and the longest brake.
+  const flownSettings = events
+    .filter((event) => event.settings)
+    .map((event) => event.settings as Record<string, number>);
+  const nudgeSpeed = Math.max(
+    settings.hover_nudge_speed ?? 0.5,
+    ...flownSettings.map((value) => value.hover_nudge_speed ?? 0)
+  );
+  const nudgeBrake = Math.max(
+    TILT_COMMAND_S,
+    nudgeSpeed /
+      Math.min(
+        ...flownSettings
+          .map((value) => value.hover_nudge_accel ?? 0)
+          .filter((value) => value > 0)
+      )
+  );
   const before = (times: number[], at: number, within: number) =>
     times.some((value) => value <= at && value > at - within);
   // A command held: the last one at or before a time (manual and level before the first).
@@ -624,21 +652,18 @@ export function analyzeFlight(
         (point) => point.time >= airborne[0] && point.time <= airborne[1]
       )
     : [];
+  const uncommanded = (point: FlightTrackPoint) =>
+    !before(tilted, point.time, TILT_COMMAND_S) &&
+    point.speed >
+      FLYAWAY_MS + (before(nudged, point.time, nudgeBrake) ? nudgeSpeed : 0);
   for (let index = 0; index < flown.length;) {
-    if (
-      flown[index].speed <= FLYAWAY_MS ||
-      before(tilted, flown[index].time, TILT_COMMAND_S)
-    ) {
+    if (!uncommanded(flown[index])) {
       index++;
       continue;
     }
     let end = index;
     let top = 0;
-    while (
-      end < flown.length &&
-      flown[end].speed > FLYAWAY_MS &&
-      !before(tilted, flown[end].time, TILT_COMMAND_S)
-    )
+    while (end < flown.length && uncommanded(flown[end]))
       top = Math.max(top, flown[end++].speed);
     if (end - index >= FLYAWAY_FIXES)
       warnings.push({
