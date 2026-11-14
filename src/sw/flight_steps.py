@@ -1,7 +1,7 @@
 """
 The 2026-11-12 outdoor session's settings, one step per flight, stored through the running bridge: uv run -m sw.flight_steps [step] [--apply]
 
-Without a step it lists them; with one it prints what that step stores against what the drone has now, and --apply stores it. The steps from "high" on need the firmware of william/flip-ready (src/fw/FLIP.md): older firmware refuses hover_climb past 1.5 and does not know tip_limit or flip_enable. Each outdoor step holds the ones before it, so any step can be applied from today's indoor settings. The sims behind each are in sw/sim/models/handoff_2026-11-12.md and NOTES.md. "indoor" puts the tag hold's values back.
+Without a step it lists them; with one it prints what that step stores against what the drone has now, and --apply stores it. The steps from "high" on need firmware from william/flip-ready on (src/fw/FLIP.md; "high5" william/flip-fit's 5 m, "recover" william/recovery's recover_enable, "speed" william/speed's hover_nudge_accel): older firmware refuses hover_climb past 1.5 and does not know tip_limit or flip_enable. Each outdoor step holds the ones before it, and from "high" on each also sets the tip cut, the flip and the recovery as the firmware defaults them unless it is their test, so any step can be applied from today's indoor settings or after any other. The sims behind each are in sw/sim/models/handoff_2026-11-12.md and NOTES.md. "indoor" puts the tag hold's values back.
 """
 
 import argparse
@@ -13,9 +13,13 @@ INDOOR = {"hover_camera": 1, "hover_center": 1, "hover_gps_tau": 0, "hover_tilt"
 GPS = {"hover_camera": 0, "hover_center": 0, "hover_gps_tau": 0.5, "hover_gps_place_tau": 2}
 LADDER = GPS | {"hover_tilt": 10, "hover_thrust_direction": 0.8, "hover_kd": 1.5, "pitch_damping": 6, "hover_climb": 1.5, "hover_ceiling": 3, "pattern_tilt": 42, "pattern_distance": 4,
                 "hover_gps_calibrate": 5, "roll_target_rate": 360}
-HIGH = LADDER | {"hover_climb": 3, "hover_ceiling": 3.5}
-# The staged tests after the first flip (src/fw/FLIP.md "After the first flip"): the hold 5 m up, the tip cut back at 45 (the flip is exempt while it runs), from 4.5 m.
-HIGH5 = LADDER | {"hover_climb": 5, "hover_ceiling": 5.5, "tip_limit": 45, "flip_height": 4.5}
+# The tip cut, the flip and the recovery as the firmware defaults them: a step that tests none of them sets them so.
+CALM = {"tip_limit": 45, "flip_enable": 0, "recover_enable": 0}
+HIGH = LADDER | {"hover_climb": 3, "hover_ceiling": 3.5} | CALM
+# The staged tests after the first flip (src/fw/FLIP.md "After the first flip"): the hold 5 m up, the tip cut back at 45 (the flip is exempt while it runs), from 4.5 m, the recovery off (FLIP.md: on for a flip only after stages A-D).
+HIGH5 = LADDER | {"hover_climb": 5, "hover_ceiling": 5.5, "flip_height": 4.5} | CALM
+# The first flight of the staged speed plan (sw/sim/models/NOTES.md "How fast the GPS hold can fly on the raised pivots"): the 3 m hold as flown on 2026-11-11 evening (hover_kp 1, hover_nudge_speed 1, no nudge ramp) with the fly-away failsafe opened to failsafe_speed 4 and failsafe_distance 40, where in the sim it fired in none of 64 pushes at 1-3 m/s (as set that evening, 2 and 5, it fired in every push of 1.5 m/s or more).
+SPEED = HIGH | {"hover_kp": 1, "hover_nudge_speed": 1, "hover_nudge_accel": 0, "failsafe_speed": 4, "failsafe_distance": 40}
 STEPS = {
     "indoor": ("the tag hold as flown on 2026-11-11", INDOOR),
     "gps": ("the GPS hold on the indoor gains: calm air only (held 32/28/13 of 32 in 0/1/2 m/s)", GPS),
@@ -27,6 +31,8 @@ STEPS = {
     # From here on the firmware of william/flip-ready (src/fw/FLIP.md): the tip cut and the flip are settings, and the hold may climb to 3 m.
     "high": ("the ladder's hold 3 m up (hover_climb 3, hover_ceiling 3.5), the flip's height; no pattern", HIGH),
     "ladder55": ("roll steps to 55 degrees past the 45-degree tip cut: tip_limit 65, pattern_tilt 58, 3 m up; play tilt_ladder.py --amplitudes 40,45,50,55 --dry", HIGH | {"tip_limit": 65, "pattern_tilt": 58}),
+    # From here on the firmware of william/speed: hover_nudge_accel, and hover_nudge_speed to 5 m/s.
+    "speed": ("the staged speed plan's first flight: the 3 m hold as flown on 2026-11-11 with the fly-away failsafe at failsafe_speed 4 and failsafe_distance 40; push with the arrows or the stick", SPEED),
     # From here on the firmware of william/flip-fit (src/fw/FLIP.md "After the first flip"): the hold may climb to 5 m and flip_enable 2 and 3 are the staged partial rolls.
     "high5": ("the ladder's hold 5 m up (hover_climb 5, hover_ceiling 5.5), no flip: check the height and the hold up there", HIGH5 | {"flip_enable": 0}),
     "burst60": ("stage D1: one burst of the flip's spin braked at once, aimed at 60 degrees and back, from the 5 m hold (the dashboard's Flip button, once per arming)", HIGH5 | {"flip_enable": 2}),
@@ -34,7 +40,7 @@ STEPS = {
     "flip": ("stage E: one roll flip from the 5 m hold, the tip cut back at 45", HIGH5 | {"flip_enable": 1}),
     "noflip": ("the flip off again (flip_enable 0) and the tip cut at 45", {"flip_enable": 0, "tip_limit": 45}),
     # The firmware of william/recovery (src/fw/FLIP.md, tumble recovery): recover_enable.
-    "recover": ("tumble recovery on, its trigger (tip_limit) at 30 on the 3 m GPS hold, the flip off; a 35-degree roll step from tilt_ladder.py --amplitudes 35 --dry trips it", HIGH | {"recover_enable": 1, "tip_limit": 30, "flip_enable": 0}),
+    "recover": ("tumble recovery on, its trigger (tip_limit) at 30 on the 3 m GPS hold, the flip off; a 35-degree roll step from tilt_ladder.py --amplitudes 35 --dry trips it", HIGH | {"recover_enable": 1, "tip_limit": 30}),
     "norecover": ("tumble recovery off again (recover_enable 0) and the tip cut at 45", {"recover_enable": 0, "tip_limit": 45}),
 }
 
