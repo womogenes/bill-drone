@@ -85,7 +85,7 @@ typedef struct __attribute__((packed)) {
     int16_t ekf_attitude[3], ekf_velocity[3], ekf_position[2], ekf_height;
     uint8_t ekf_sd[2];
     uint16_t ekf_flags;
-    // The camera's newest dated frame (camera_newest): its sequence's low 16 bits, and how long before this sample its centre row was read (10 us; 65535 none, or older than that), which ties the camera's black-box frames to the IMU (sw/vio/blackbox_dataset.py).
+    // The camera's newest dated frame (camera_newest): its sequence's low 16 bits, and how long before this sample it was dated (camera_newest: the centre row in tag mode, the frame's start in FPV) (10 us; 65535 none, or older than that), which ties the camera's black-box frames to the IMU (sw/vio/blackbox_dataset.py).
     uint16_t camera_sequence, camera_age;
 } Record;
 _Static_assert(sizeof(Record) == RECORD_SIZE, "Flight record layout");

@@ -27,7 +27,7 @@ EKF_COLUMNS = [
     "ekf_roll_deg", "ekf_pitch_deg", "ekf_yaw_deg", "ekf_north_m_s", "ekf_west_m_s", "ekf_up_m_s", "ekf_north_m", "ekf_west_m", "ekf_height_m",
     "ekf_velocity_sd_m_s", "ekf_height_sd_m", *("ekf_" + name for name in EKF_FLAGS), "ekf_rejected",
 ]
-# The camera's newest dated frame: its sequence's low 16 bits, and how long before esp_time_us its centre row was read (us; the drone truncates to 10 us, so the middle of that step).
+# The camera's newest dated frame: its sequence's low 16 bits, and how long before esp_time_us it was dated (its centre row in tag mode, its start in FPV) (us; the drone truncates to 10 us, so the middle of that step).
 CAMERA_COLUMNS = ["camera_sequence", "camera_age_us"]
 NAN = float("nan")
 

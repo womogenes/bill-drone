@@ -59,7 +59,7 @@ static void sync_edge(void *arg) {
     portEXIT_CRITICAL_ISR(&lock);
 }
 
-// The newest dated frame's centre-row readout (camera_newest), -1 before the first.
+// The newest dated frame's time (camera_newest: its centre row in tag mode, its start in FPV), -1 before the first.
 static int64_t newest_centre_us = -1;
 
 static void accept(const CameraPacket *packet, bool synced, uint32_t since_edge_us, int64_t now) {

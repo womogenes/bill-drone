@@ -50,7 +50,7 @@ typedef struct {
 // The newest flow if it is newer than *sequence (which it then updates) and at most max_age_us old.
 bool camera_flow(CameraFlow *flow, uint32_t *sequence, uint32_t max_age_us);
 void camera_stats(CameraStats *stats);
-// The newest dated frame's sequence and the readout of its centre row on this clock, for the flight log to tie the camera's black-box frames to the IMU; false before the first.
+// The newest dated frame's sequence and its time on this clock (capture time plus the packet's flow offset: the centre row's readout in tag mode, the frame's start for FPV frames, whose packets carry no flow), for the flight log to tie the camera's black-box frames to the IMU; false before the first.
 bool camera_newest(uint32_t *sequence, int64_t *centre_us);
 // The largest body of a camera update request: a sector write (index, hash prefix, 4 KB).
 #define CAMERA_UPDATE_BODY (2 + 8 + 4096)
