@@ -1,9 +1,9 @@
 """
 A recording of the camera's FPV frames with the drone's IMU (sw/vio/record_camera.py --imu) as a visual-inertial dataset (sw/vio/dataset.py) with its OpenVINS configuration (sw/vio/openvins/configure.py).
 
-uv run --with opencv-python-headless -m sw.vio.recorded --footage ~/sw/vio/footage/room_imu --log sw/recordings/<flight>.bin --out ~/sw/vio/data/room_imu [--offset S] [--calibration <dataset>] [--readout-ms 20]
+uv run --with opencv-python-headless -m sw.vio.recorded --footage ~/sw/vio/footage/room_imu --log sw/recordings/<flight>.bin --out ~/sw/vio/data/room_imu [--offset S] [--calibration <dataset>] [--readout-ms 35.6] [--rectify]
 
-Frames are stamped through the log when it names the camera's frames (camera_sequence and camera_age_us, the camera sending each FPV frame's sequence and SYNC pulse to the drone): the frame numbers match the log's frames and a straight line maps the camera's clock onto the drone's (sw/vio/blackbox_dataset.py clock_line), to the frame's start as the drone dated it, plus half the readout. Otherwise offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is another dataset's (--calibration, fitted from tags by sw/vio/tags.py --save), or else the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to the frames' size (camera); its distortion coefficients act on normalized coordinates, so they carry over.
+Frames are stamped through the log when it names the camera's frames (camera_sequence and camera_age_us, the camera sending each FPV frame's sequence and SYNC pulse to the drone): the frame numbers match the log's frames and a straight line maps the camera's clock onto the drone's (sw/vio/blackbox_dataset.py clock_line), to the frame's start as the drone dated it, plus half the readout (READOUT_MS). Otherwise offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is another dataset's (--calibration, fitted from tags by sw/vio/tags.py --save), or else the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to the frames' size (camera); its distortion coefficients act on normalized coordinates, so they carry over.
 """
 
 import argparse
@@ -24,6 +24,8 @@ from sw.vio.openvins import configure
 GRAVITY = 9.80665
 # Handheld, without rotors: the MPU6050's own noise (about 1e-4 rad/s/sqrt(Hz) and 4e-3 m/s^2/sqrt(Hz)) widened tenfold for the low-pass filter and handling.
 GYRO_NOISE, ACCEL_NOISE = 2e-3, 4e-2
+# FPV's rolling-shutter readout, first row to last (ms), by frame size: 640x480 from the sensor's registers during VGA FPV (Bill's agent, 2026-11-14: 774 rows at 46.05 us). Other sizes take the simulated camera's (scene.READOUT_S).
+READOUT_MS = {(640, 480): 35.6}
 
 
 def camera(width, height):
@@ -83,7 +85,8 @@ def main():
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--offset", type=float)
     parser.add_argument("--calibration", type=Path, help="a dataset whose camera calibration to use (sw/vio/tags.py --save)")
-    parser.add_argument("--readout-ms", type=float, help="the sensor's readout, first row to last: rectify the rolling shutter from the gyro (sw/vio/rolling.py)")
+    parser.add_argument("--readout-ms", type=float, help="the sensor's readout, first row to last (default READOUT_MS for the frames' size)")
+    parser.add_argument("--rectify", action="store_true", help="rectify the rolling shutter from the gyro (sw/vio/rolling.py)")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     out = dataset.Writer(args.out.expanduser())
@@ -94,6 +97,8 @@ def main():
     start, end = log.esp_time_us.iloc[0] / 1e6, log.esp_time_us.iloc[-1] / 1e6
     footage = args.footage.expanduser()
     frames = list(csv.DictReader(open(footage / "frames.csv")))
+    height, width = cv2.imread(str(footage / frames[0]["file"]), cv2.IMREAD_GRAYSCALE).shape
+    readout = (args.readout_ms if args.readout_ms is not None else READOUT_MS.get((width, height), scene.READOUT_S * 1e3)) / 1e3
     capture = np.array([int(f["capture_us"]) for f in frames], np.int64)
     capture += np.concatenate([[0], np.cumsum(np.diff(capture) < -(1 << 31))]) * (1 << 32)
     if "frame" in frames[0] and "camera_age_us" in log and log.camera_age_us.notna().any():
@@ -102,21 +107,20 @@ def main():
         slope, intercept, residual, wrong = clock_line(numbers, capture, log)
         print(f"clock from the log: {len(residual)} frames matched ({wrong} refused), drift {(slope - 1) * 1e6:+.1f} ppm, residual RMS {np.sqrt(np.mean(residual ** 2)):.1f} us")
         # FPV frames are dated at their start (fw/esp32cam/src/fpv.h), as capture_us is: the middle of the readout is half of it later.
-        stamps = (slope * capture + intercept) / 1e6 + scene.READOUT_S / 2
+        stamps = (slope * capture + intercept) / 1e6 + readout / 2
     else:
         offset = find_offset(footage, frames, log) if args.offset is None else args.offset
-        stamps = capture / 1e6 + offset + scene.READOUT_S / 2
-    height, width = cv2.imread(str(footage / frames[0]["file"]), cv2.IMREAD_GRAYSCALE).shape
+        stamps = capture / 1e6 + offset + readout / 2
     intrinsics = calibrated(args.calibration) if args.calibration else camera(width, height)
     matrix = np.array([[intrinsics["fx"], 0, intrinsics["cx"]], [0, intrinsics["fy"], intrinsics["cy"]], [0, 0, 1]])
     gyro = np.radians(log[["gx_deg_s", "gy_deg_s", "gz_deg_s"]].values)
     for frame, time in zip(frames, stamps):
         if start < time < end:
             gray = cv2.rotate(cv2.imread(str(footage / frame["file"]), cv2.IMREAD_GRAYSCALE), cv2.ROTATE_180)
-            if args.readout_ms:
+            if args.rectify:
                 # Turned upright, the sensor's first row is the image's bottom one.
                 omega = [np.interp(time * 1e6, log.esp_time_us.values, gyro[:, k]) for k in range(3)]
-                gray = rolling.rectify(gray, args.readout_ms / 1e3, omega, scene.CAMERA_TO_BODY, matrix, bottom_first=True)
+                gray = rolling.rectify(gray, readout, omega, scene.CAMERA_TO_BODY, matrix, bottom_first=True)
             out.frame(time, cv2.imencode(".png", gray)[1].tobytes())
     out.close()
     print(configure.write(args.out.expanduser(), GYRO_NOISE, ACCEL_NOISE, camera=intrinsics, dynamic=True, size=(width, height)), f"{len(out.frames)} frames, {len(out.imu)} IMU samples")
