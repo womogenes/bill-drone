@@ -23,8 +23,11 @@ extern char logRing[2048];
 extern size_t logHead;
 extern esp_err_t startError;
 extern volatile bool cameraStopRequested;
+namespace blackbox {
+const char *control(uint16_t every, uint8_t mode, char *text, size_t size);
+}
 
-// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. S reports the Wi-Fi network, address and camera state; N the camera's MAC and name; V asks for FPV over raw 802.11 (fpv.h) for another few seconds, optionally with the receiver's byte budget; P for tag mode's preview over it (web.h), tracking on; L reads the log 50 characters at a time; A starts the access point (ota.h) until the camera restarts; I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts; J restarts joined to the update network for one boot (ota.h), for a Wi-Fi update; R sets the drone's radio relay mode (relay.h), restarting into a changed one. The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
+// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. S reports the Wi-Fi network, address and camera state; N the camera's MAC and name; V asks for FPV over raw 802.11 (fpv.h) for another few seconds, optionally with the receiver's byte budget; P for tag mode's preview over it (web.h), tracking on; L reads the log 50 characters at a time; A starts the access point (ota.h) until the camera restarts; I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts; J restarts joined to the update network for one boot (ota.h), for a Wi-Fi update; R sets the drone's radio relay mode (relay.h), restarting into a changed one; D controls the black box on the microSD (sd.h). The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
 namespace update {
 // Requests answered, and ones that failed their checksum or length, for K S.
 uint32_t goodRequests = 0, badRequests = 0;
@@ -99,6 +102,12 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
         setExposureCap(body[0] | body[1] << 8);
         snprintf(text, size, "%d", maxExposureLines);
         return nullptr;
+    }
+    if (op == 'D') {
+        // The black box on the microSD (sd.h control): every Nth frame's whole image (u16, 0 none), then 0 stop, 1 record or 2 a new file; for visual-inertial datasets (sw/vio/camera_sd.py).
+        if (length < 3)
+            return "Expected full_every (u16) and mode";
+        return blackbox::control(body[0] | body[1] << 8, body[2], text, size);
     }
     if (op == 'H') {
         // Radio channel for FPV's raw frames (1-13), kept across restarts (ota.h saveRadio); the receiver (sw/fpv_monitor.py) searches for it.

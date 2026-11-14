@@ -44,7 +44,7 @@ def decode(record):
     return {
         "sequence": v[1], "capture_us": v[2], "age_us": v[3], "valid": v[5],
         "position": v[6:9], "rotation": v[9:18], "margin": v[18], "reprojection_px": v[19],
-        "flow": v[20:22], "flow_interval_us": v[22], "flow_residual_px": v[23], "flow_inliers": v[24],
+        "flow": v[20:22], "flow_interval_us": v[22], "flow_residual_px": v[23], "flow_inliers": v[24], "flow_offset_us": v[25],
         "tag_position": v[26:29], "alt_reprojection_px": v[41], "trusted": v[42],
         "corners": v[44:52], "frame_start_us": v[52], "process_us": v[53], "flow_wait_us": v[54],
         "found": v[55], "preview": v[56], "short_frames": v[57],

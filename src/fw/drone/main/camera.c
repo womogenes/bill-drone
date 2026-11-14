@@ -59,6 +59,9 @@ static void sync_edge(void *arg) {
     portEXIT_CRITICAL_ISR(&lock);
 }
 
+// The newest dated frame's centre-row readout (camera_newest), -1 before the first.
+static int64_t newest_centre_us = -1;
+
 static void accept(const CameraPacket *packet, bool synced, uint32_t since_edge_us, int64_t now) {
     static uint32_t last_sequence;
     static bool have_sequence;
@@ -78,6 +81,7 @@ static void accept(const CameraPacket *packet, bool synced, uint32_t since_edge_
         stats.frame_us = now;
         stats.sequence = packet->sequence;
         stats.capture_us = now - age;
+        newest_centre_us = now - age + packet->flow_offset_us;
         stats.valid = packet->valid;
         stats.trusted = packet->trusted;
         // poses counts frames whose tilt the camera decided as well.
@@ -242,6 +246,14 @@ void camera_stats(CameraStats *stats_out) {
     // The radio's status task starts before camera_start makes the counter.
     if (rx_counter) pcnt_unit_get_count(rx_counter, &rx_edges);
     stats_out->rx_edges = rx_edges;
+}
+
+bool camera_newest(uint32_t *sequence, int64_t *centre_us) {
+    portENTER_CRITICAL(&lock);
+    *sequence = stats.sequence;
+    *centre_us = newest_centre_us;
+    portEXIT_CRITICAL(&lock);
+    return *centre_us >= 0;
 }
 
 const char *camera_update(uint8_t op, const uint8_t *body, size_t length, uint32_t timeout_ms, char *text, size_t size) {

@@ -85,6 +85,8 @@ typedef struct __attribute__((packed)) {
     int16_t ekf_attitude[3], ekf_velocity[3], ekf_position[2], ekf_height;
     uint8_t ekf_sd[2];
     uint16_t ekf_flags;
+    // The camera's newest dated frame (camera_newest): its sequence's low 16 bits, and how long before this sample its centre row was read (10 us; 65535 none, or older than that), which ties the camera's black-box frames to the IMU (sw/vio/blackbox_dataset.py).
+    uint16_t camera_sequence, camera_age;
 } Record;
 _Static_assert(sizeof(Record) == RECORD_SIZE, "Flight record layout");
 
@@ -493,6 +495,11 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->ekf_sd[1] = fminf(filtered.height_sd * 100, 255);
     record->ekf_flags = filtered.aligned | filtered.still << 1 | hover.estimate.horizontal << 2 | hover.estimate.vertical << 3 | hover.flown << 4 |
                         (filtered.rejected > 255 ? 255 : filtered.rejected) << 8;
+    uint32_t camera_sequence;
+    int64_t centre_us;
+    int64_t camera_age = camera_newest(&camera_sequence, &centre_us) ? ((int64_t)now - centre_us) / 10 : UINT16_MAX;
+    record->camera_sequence = camera_sequence & 0xffff;
+    record->camera_age = camera_age < 0 ? 0 : camera_age > UINT16_MAX ? UINT16_MAX : camera_age;
 }
 
 static void reconfigure_sensor(void);

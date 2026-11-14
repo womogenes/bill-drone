@@ -9,6 +9,7 @@ Finds every tag16h5 tag in the frames; calibrates the camera from their corners,
 import argparse
 import collections
 import csv
+import re
 from pathlib import Path
 
 import cv2
@@ -114,6 +115,7 @@ def main():
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--size", type=float, default=0.150, help="the tags' black square (m)")
     parser.add_argument("--estimate", type=Path)
+    parser.add_argument("--save", action="store_true", help="write the calibration fitted from the tags into the dataset's kalibr_imucam_chain.yaml")
     args = parser.parse_args()
     folder = args.dataset.expanduser()
     camera = yaml.safe_load((folder / "kalibr_imucam_chain.yaml").read_text().replace("%YAML:1.0", ""))["cam0"]
@@ -134,6 +136,13 @@ def main():
         error = float("nan")
         print("too few tags to calibrate: the dataset's calibration stays")
     print(f"calibration: reprojection {error:.2f} px, fx {matrix[0, 0]:.1f} fy {matrix[1, 1]:.1f} cx {matrix[0, 2]:.1f} cy {matrix[1, 2]:.1f} k1 {distortion.ravel()[0]:.3f} k2 {distortion.ravel()[1]:.3f}")
+    if args.save and np.isfinite(error):
+        path = folder / "kalibr_imucam_chain.yaml"
+        text = path.read_text()
+        text = re.sub(r"intrinsics: \[.*\]", f"intrinsics: [{matrix[0, 0]:.3f}, {matrix[1, 1]:.3f}, {matrix[0, 2]:.3f}, {matrix[1, 2]:.3f}]", text)
+        text = re.sub(r"distortion_coeffs: \[.*\]", "distortion_coeffs: [" + ", ".join(f"{v:.6f}" for v in distortion.ravel()[:4]) + "]", text)
+        path.write_text(text)
+        print(f"saved to {path}")
     seen = collections.defaultdict(dict)
     for time, tag, corners in found:
         transform = pose(corners, args.size, matrix, distortion)
