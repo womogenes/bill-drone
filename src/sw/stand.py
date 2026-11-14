@@ -393,6 +393,79 @@ def step_lag(frequencies, times, power, changes, lags):
     return float(lags[int(np.argmax(scores))]), max(scores) / (np.sqrt(len(changes)) + 1e-9)
 
 
+# An HX711 with its bridge disconnected reads near zero with little noise (2026-11-14: about 1,590 ± 10); a healthy one here rests near 256,000.
+NO_SIGNAL_COUNTS = 20000
+SATURATED = 8388000
+CELLS_4S = 4
+
+
+def run_checks(directory, meta, cells, pulses, supply, thrust):
+    """What went wrong in a run, as (ok, label, detail): the link, the stand's resets, the load cell, the supply and the audio. The dashboard's stand page shows these."""
+    start = meta["started_monotonic"]
+    commands = meta["commands"]
+    found = []
+    arrivals, stand_us, restarts = [], [], 0
+    for line in (directory / "lines.txt").read_text().splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[1] in "FEHV":
+            try:
+                arrived, us = float(parts[0]), int(parts[2] if parts[1] != "F" else parts[3])
+            except ValueError:
+                continue
+            if stand_us and us < stand_us[-1] - 1_000_000:
+                restarts += 1
+            arrivals.append(arrived)
+            stand_us.append(us)
+    running = [when for when, throttle in commands if throttle > 0]
+    if arrivals and running:
+        inside = np.array([when for when in arrivals if running[0] <= when <= commands[-1][0] + 1.0])
+        gaps = np.diff(inside) if len(inside) > 1 else np.zeros(1)
+        worst = int(np.argmax(gaps))
+        found.append((gaps[worst] < 0.3, "Link", f"longest silence {gaps[worst] * 1000:.0f} ms" + (f" at {inside[worst] - start:.1f} s (the motor stops after 300 ms without a command)" if gaps[worst] >= 0.3 else "")))
+    if restarts:
+        found.append((False, "Stand", f"restarted {restarts} times during the run: power or brownout"))
+    # A stop pulse while the schedule still asked for thrust: the stand's watchdog cut the motor.
+    commanded = lambda when: next((throttle for at, throttle in reversed(commands) if at <= when), 0)
+    cut = [when - start for when, pulse in pulses if pulse <= 950 and when < commands[-1][0] and commanded(when) > 0]
+    if cut:
+        found.append((False, "Motor", f"stopped by the stand's watchdog at {', '.join(f'{when:.1f}' for when in cut[:5])} s: commands didn't arrive"))
+    rows = cells[0]
+    if not len(rows):
+        found.append((False, "Load cell", "no readings: check the HX711's DT, SCK and power"))
+    else:
+        raw = rows[:, 1]
+        seconds = rows[-1, 0] - rows[0, 0]
+        rate = len(raw) / seconds if seconds > 0 else 0
+        peak = float(np.max(thrust[0][1])) if 0 in thrust else 0.0
+        if abs(np.mean(raw)) < NO_SIGNAL_COUNTS and np.std(raw) < 200:
+            found.append((False, "Load cell", f"no signal (reads {np.mean(raw):,.0f} ± {np.std(raw):.0f}): check the cell's four wires to the HX711"))
+        elif np.any(np.abs(raw) >= SATURATED):
+            found.append((False, "Load cell", "saturated: overloaded or a wire off"))
+        elif running and peak < 20:
+            found.append((False, "Load cell", f"no thrust seen (peak {peak:.0f} g): props off, or the cell isn't loaded"))
+        elif rate < 8:
+            found.append((False, "Load cell", f"slow: {rate:.1f} readings/s"))
+        else:
+            found.append((True, "Load cell", f"{rate:.1f} readings/s, peak {peak:,.0f} g" + ("" if meta.get("scale") else " in counts: run sw.stand scale")))
+    if not len(supply):
+        found.append((False, "Supply", "not recorded (stand firmware before 2026-11-14)"))
+    else:
+        volts = supply[:, 1]
+        rest = volts[supply[:, 0] < (running[0] if running else supply[-1, 0])]
+        rest_v = float(np.median(rest)) if len(rest) else float(np.median(volts))
+        low = float(np.percentile(volts, 1))
+        if rest_v < 5:
+            found.append((False, "Supply", f"reads {rest_v:.1f} V: no pack on the GPIO35 divider"))
+        elif rest_v > 16.8 + 0.4:
+            found.append((False, "Supply", f"{rest_v:.2f} V is above a full 4S: check the divider"))
+        else:
+            ok = rest_v / CELLS_4S >= 3.6 and low / CELLS_4S >= 3.3
+            found.append((ok, "Supply", f"{rest_v:.2f} V at rest ({rest_v / CELLS_4S:.2f} V a cell), {low:.2f} V lowest under load ({low / CELLS_4S:.2f} V a cell)"))
+    if not meta.get("audio") or not (directory / "audio.wav").exists():
+        found.append((False, "Audio", "not recorded"))
+    return found
+
+
 def analyze(args):
     import matplotlib
     matplotlib.use("Agg")
@@ -411,6 +484,10 @@ def analyze(args):
         grams = (rows[:, 1] - tare) * per_count.get(cell, 1.0)
         # Lift reads positive whichever way the scale's mass loaded the cell.
         thrust[cell] = (t, grams if np.mean(grams[t >= TARE_S]) >= 0 else -grams)
+    checks = run_checks(directory, meta, cells, pulses, supply, thrust)
+    for ok, label, detail in checks:
+        print(f"check {'ok' if ok else 'FAIL'} {label}: {detail}")
+    cell_ok = any(ok for ok, label, _ in checks if label == "Load cell")
     # A supply panel when the run recorded the voltage (stands wired on GPIO35 since 2026-11-14).
     panels = 5 if len(supply) else 4
     fig, axes = plt.subplots(panels, 1, figsize=(11, 3 * panels), sharex=True, gridspec_kw={"height_ratios": [1] * (panels - 1) + [2]})
@@ -464,7 +541,7 @@ def analyze(args):
     axes[2].set_ylabel(f"rpm (audio, {args.blades} blades)")
     axes[3].set_xlabel("seconds from the start of the run")
     # Each throttle change's response: when the first cell's thrust got 63% of the way to its new level.
-    if thrust and len(pulses):
+    if thrust and cell_ok and len(pulses):
         t, grams = next(iter(thrust.values()))
         changes = pulses[1:]
         print("step                        63% time (ms)")

@@ -1,4 +1,4 @@
-// Thrust stand: one ESC on GPIO25 and up to two HX711 load cells (A: DT GPIO32, SCK GPIO33; B: DT GPIO39, SCK GPIO17), driven from the laptop by sw/stand.py over USB at 921600 baud or over Wi-Fi: it joins the network in the repository's .env (WIFI_SSID, WIFI_PASSWORD, built in by main/CMakeLists.txt) and takes one TCP client at a time on port 3333 with the same lines both ways, announcing "STAND <ip> 3333" by UDP broadcast to port 3334 every second so the laptop finds it. A newer client replaces the old one. New firmware also comes over Wi-Fi (sw/stand.py flash): its length as 4 bytes little-endian, then the image, on TCP port 3335; the stand answers "OK" and restarts into it, or "ERR <reason>", and refuses while the motor is commanded. The ESC pulse is the drone's (fw/drone/main/flight_rt.c esc_us): 400 Hz, 1000 us plus the throttle (1-1200), and 950 us for throttle 0 (stopped, below the calibrated bottom so the ESC arms and stays off), so a throttle here is a throttle there.
+// Thrust stand: one ESC on GPIO25 and up to two HX711 load cells (A: DT GPIO32, SCK GPIO33; B: DT GPIO39, SCK GPIO17), driven from the laptop by sw/stand.py over USB at 921600 baud or over Wi-Fi: it joins the network in the repository's .env (WIFI_SSID, WIFI_PASSWORD, built in by main/CMakeLists.txt) and takes up to CLIENTS TCP clients on port 3333 (a run and the dashboard's stand page together), each getting every line and each able to command, announcing "STAND <ip> 3333" by UDP broadcast to port 3334 every second so the laptop finds it. A client beyond CLIENTS replaces the oldest. New firmware also comes over Wi-Fi (sw/stand.py flash): its length as 4 bytes little-endian, then the image, on TCP port 3335; the stand answers "OK" and restarts into it, or "ERR <reason>", and refuses while the motor is commanded. The ESC pulse is the drone's (fw/drone/main/flight_rt.c esc_us): 400 Hz, 1000 us plus the throttle (1-1200), and 950 us for throttle 0 (stopped, below the calibrated bottom so the ESC arms and stays off), so a throttle here is a throttle there.
 // Laptop to stand, one command per line: "T <throttle>" sets the throttle, "P <us>" sets a raw pulse for the ESC's range calibration (1000-2200 us), "Z <hz>" sets the ESC's PWM rate (50-400; some ESCs read only 50 Hz servo-style signals, so calibrating or testing those needs it), "C <mask>" chooses the cells read (bit 0 A, bit 1 B; A alone at start, since an unwired B on GPIO39, which has no pull-up, floats). T and P are held for WATCHDOG_US; without a fresh one the pulse falls back to 950 us (motor stopped).
 // Stand to laptop, one line each: "R <reason>" once at boot, why the board last reset (esp_reset_reason: 1 power-on, 3 software, 4 panic, 9 brownout, ...), "F <cell> <us> <raw>" a load cell's reading and when its conversion finished (this board's clock, us), "E <us> <pulse>" the ESC pulse from that moment on, "H <us>" a heartbeat every 100 ms, "V <us> <mV>" the supply voltage every 10 ms (GPIO35 through the drone's 100k/10k divider, battery side of the ESC, with 100 nF at the pin; it floats when unwired), "W <ip>" on USB when it joins the network.
 // The HX711 converts at 10 Hz unless its RATE pin is high (80 Hz); step timing wants 80 Hz.
@@ -41,6 +41,7 @@
 #define TCP_PORT 3333
 #define BEACON_PORT 3334
 #define UPDATE_PORT 3335
+#define CLIENTS 4
 
 static const int dout_pins[CELLS] = {32, 39}, sck_pins[CELLS] = {33, 17};
 static portMUX_TYPE transfer = portMUX_INITIALIZER_UNLOCKED;
@@ -50,16 +51,18 @@ static volatile int cells = 1;
 static SemaphoreHandle_t esc;
 static int esc_hz = ESC_HZ, pulse_now = -1;
 static SemaphoreHandle_t client_lock;
-static int client = -1;
+static int clients[CLIENTS] = {-1, -1, -1, -1};
+static int oldest;
 static char address[16];
 static adc_oneshot_unit_handle_t adc;
 static adc_cali_handle_t calibration;
 
-// To USB and to the Wi-Fi client if there is one. A line the client's socket can't take at once is dropped rather than stalling the sampling.
+// To USB and to every Wi-Fi client. A line a client's socket can't take at once is dropped rather than stalling the sampling.
 static void write_line(const char *line) {
     uart_write_bytes(UART_NUM_0, line, strlen(line));
     xSemaphoreTake(client_lock, portMAX_DELAY);
-    if (client >= 0) send(client, line, strlen(line), MSG_DONTWAIT);
+    for (int i = 0; i < CLIENTS; i++)
+        if (clients[i] >= 0) send(clients[i], line, strlen(line), MSG_DONTWAIT);
     xSemaphoreGive(client_lock);
 }
 
@@ -283,40 +286,55 @@ static void update_task(void *arg) {
     }
 }
 
-// One client at a time; a new connection replaces the old (a laptop reconnecting after a dropout).
+// One task per client, reading its commands until it closes.
+static void client_task(void *arg) {
+    int sock = (int)(intptr_t)arg;
+    char line[64], chunk[128];
+    size_t length = 0;
+    int got;
+    while ((got = recv(sock, chunk, sizeof(chunk), 0)) > 0) {
+        for (int i = 0; i < got; i++) {
+            if (chunk[i] != '\n' && length < sizeof(line) - 1) {
+                line[length++] = chunk[i];
+                continue;
+            }
+            line[length] = 0;
+            length = 0;
+            handle_line(line);
+        }
+    }
+    xSemaphoreTake(client_lock, portMAX_DELAY);
+    for (int i = 0; i < CLIENTS; i++)
+        if (clients[i] == sock) clients[i] = -1;
+    xSemaphoreGive(client_lock);
+    close(sock);
+    vTaskDelete(NULL);
+}
+
+// Accepts clients into a free slot, or the oldest one's when all are taken (its task then sees the socket shut and ends).
 static void server_task(void *arg) {
     int listener = socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1;
     setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     struct sockaddr_in at = {.sin_family = AF_INET, .sin_port = htons(TCP_PORT), .sin_addr.s_addr = htonl(INADDR_ANY)};
     bind(listener, (struct sockaddr *)&at, sizeof(at));
-    listen(listener, 1);
+    listen(listener, 2);
     while (true) {
         int sock = accept(listener, NULL, NULL);
         if (sock < 0) continue;
         setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
         xSemaphoreTake(client_lock, portMAX_DELAY);
-        if (client >= 0) shutdown(client, SHUT_RDWR);
-        client = sock;
-        xSemaphoreGive(client_lock);
-        char line[64], chunk[128];
-        size_t length = 0;
-        int got;
-        while ((got = recv(sock, chunk, sizeof(chunk), 0)) > 0) {
-            for (int i = 0; i < got; i++) {
-                if (chunk[i] != '\n' && length < sizeof(line) - 1) {
-                    line[length++] = chunk[i];
-                    continue;
-                }
-                line[length] = 0;
-                length = 0;
-                handle_line(line);
-            }
+        int slot = -1;
+        for (int i = 0; i < CLIENTS && slot < 0; i++)
+            if (clients[i] < 0) slot = i;
+        if (slot < 0) {
+            slot = oldest;
+            oldest = (oldest + 1) % CLIENTS;
+            shutdown(clients[slot], SHUT_RDWR);
         }
-        xSemaphoreTake(client_lock, portMAX_DELAY);
-        if (client == sock) client = -1;
+        clients[slot] = sock;
         xSemaphoreGive(client_lock);
-        close(sock);
+        xTaskCreatePinnedToCore(client_task, "client", 4096, (void *)(intptr_t)sock, 5, NULL, 0);
     }
 }
 
