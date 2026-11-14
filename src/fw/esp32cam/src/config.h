@@ -62,6 +62,11 @@ constexpr float fpvRadioBytesPerSecond = 90000, fpvFramePeriodS = 0.0312f;
 constexpr float fpvRadioShardsPerSecond = 190;
 // The largest frame over the radio when the receiver's budget allows it (the S3 receiver, fw/fpv_rx make s3: its own USB has no 1 Mbaud limit), for finer JPEGs than fpvTargetBytes: under the driver's JPEG buffer for 480x320 (width x height / 5, about 30 KB), which a larger frame would overrun.
 constexpr size_t fpvRadioMaxBytes = 24000;
+// With a receiver whose budget is at least fpvLargeBudget (the S3 receiver's) FPV starts at 640x480 instead: twice the pixels, a frame every 36 ms (VGA's at 20 MHz XCLK, measured 2026-10-30) instead of 31.2, and frames up to fpvLargeMaxBytes under VGA's JPEG buffer (about 61 KB). The budget at FPV's start decides; a receiver changed mid-stream keeps the size until the next start.
+constexpr float fpvLargeBudget = 300000;
+constexpr framesize_t fpvLargeFrameSize = FRAMESIZE_VGA;
+constexpr float fpvLargeFramePeriodS = 0.036f;
+constexpr size_t fpvLargeMaxBytes = 40000;
 constexpr int fpvQualityRange[2] = {10, 63};
 constexpr uint32_t fpvLingerMs = 3000;
 // While tracking, detector allocations below this size go to internal RAM.

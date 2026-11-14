@@ -31,8 +31,11 @@ type Hub = {
   viewers: Set<ReadableStreamDefaultController<Uint8Array>>;
   closed: AbortController;
   idle?: ReturnType<typeof setTimeout>;
-  // FPV frames delivered, for the status.
+  // FPV frames delivered, for the status, and where the others went: frames begun (a shard heard), those a newer frame overtook short of shards, and those with enough shards that did not decode.
   received?: number;
+  started?: number;
+  short?: number;
+  undecoded?: number;
 };
 const hubs: Map<string, Hub> = ((
   globalThis as { cameraHubs?: Map<string, Hub> }
@@ -134,7 +137,7 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
   let current = -1;
   let shards = new Map<number, Buffer>();
   let done = false;
-  hub.received = 0;
+  hub.received = hub.started = hub.short = hub.undecoded = 0;
   const chunk = (message: Buffer) => {
     if (message.length < 20 || message.toString('latin1', 0, 4) !== 'FPV2')
       return;
@@ -145,6 +148,8 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
     if (frame !== current) {
       // A late chunk of a frame a few back; a frame far behind is a restarted camera counting from 0 again, whose frames were all dropped as late until the count caught up (2026-10-30).
       if (current >= 0 && ((current - frame) & 0xffff) < 64) return;
+      if (current >= 0 && !done) hub.short!++;
+      hub.started!++;
       current = frame;
       shards = new Map();
       done = false;
@@ -154,13 +159,16 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
     if (shards.size < data) return;
     done = true;
     const frameBytes = decode(shards, data, length);
-    if (!frameBytes) return;
+    if (!frameBytes) {
+      hub.undecoded!++;
+      return;
+    }
     hub.received!++;
     const { jpeg, tag } = splitTag(frameBytes);
     const part = new Uint8Array(
       Buffer.concat([
         Buffer.from(
-          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(12)} ${message.readUInt32LE(16)}\r\n${tag ? `X-Tag: ${tag}\r\n` : ''}\r\n`
+          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(12)} ${message.readUInt32LE(16)} ${message.readUInt16LE(4)}\r\n${tag ? `X-Tag: ${tag}\r\n` : ''}\r\n`
         ),
         jpeg,
         Buffer.from('\r\n'),
@@ -344,6 +352,15 @@ type Receiver = {
   heard: number;
   serial: number;
   fast: boolean;
+  // The S3 receiver's FPVT report (fw/fpv_rx), since its boot: frames heard, declined for buffer room, short of shards (the air), shards its buffer refused, its longest USB write in the last second (us) and bytes written.
+  stats?: {
+    heard: number;
+    declined: number;
+    short: number;
+    refused: number;
+    usbLongestUs: number;
+    usbBytes: number;
+  };
   copies: number;
   chunks: number;
   signal?: number;
@@ -443,6 +460,24 @@ function receiver() {
         opened.fast = true;
       }
       for (;;) {
+        const report = buffer.indexOf('FPVT');
+        if (report >= 0 && buffer.length >= report + 28) {
+          const value = (index: number) =>
+            buffer.readUInt32LE(report + 4 + 4 * index);
+          opened.stats = {
+            heard: value(0),
+            declined: value(1),
+            short: value(2),
+            refused: value(3),
+            usbLongestUs: value(4),
+            usbBytes: value(5),
+          };
+          buffer = Buffer.concat([
+            buffer.subarray(0, report),
+            buffer.subarray(report + 28),
+          ]);
+          continue;
+        }
         const at = buffer.indexOf('FPV2', 3);
         if (at < 0) {
           buffer = buffer.subarray(Math.max(0, buffer.length - 3));
@@ -469,7 +504,7 @@ function receiver() {
 }
 
 // The camera's byte budget for the receiver, KB/s little-endian in its K V request: the ESP32 receiver's USB link carries about 98 KB/s; the monitor-mode adapter takes in about 210 shards/s whatever is sent (2026-10-31: 12 KB frames, 15 shards each at 32 fps, reached the dashboard at 16 fps, where 190 KB/s, about 5 KB frames, gave 28 fps), so frames stay near 5 KB (the camera aims at 85%). The S3 receiver gets FAST_BUDGET and, after it, a shard budget (shards/s, little-endian; camera firmware from 2026-11-14, which takes the monitor's 190 when none comes), so the camera's frames grow toward its fpvRadioMaxBytes.
-const FAST_BUDGET = { kilobytes: 400, shards: 1500 };
+const FAST_BUDGET = { kilobytes: 800, shards: 2000 };
 function radioBudget() {
   const fast = receiver().fast && Date.now() - receiver().serial < 5000;
   const kilobytes = fast
@@ -525,14 +560,17 @@ export async function GET(request: Request) {
         }
       );
     // The camera's state through the drone, and the FPV frames delivered when FPV runs.
-    const received = [...hubs.values()].find(
-      (hub) => hub.received !== undefined
-    )?.received;
+    const fpvHub = [...hubs.values()].find((hub) => hub.received !== undefined);
+    const received = fpvHub?.received;
     const state = (await cameraRequest('S')).split(' ')[4];
     return Response.json(
       {
         camera: state,
         received,
+        started: fpvHub?.started,
+        short: fpvHub?.short,
+        undecoded: fpvHub?.undecoded,
+        receiver: store.fpvReceiver?.stats,
         copies: store.fpvReceiver?.copies,
         chunks: store.fpvReceiver?.chunks,
         signal: store.fpvReceiver?.signal,

@@ -35,6 +35,8 @@ static uint8_t camera[6];
 static volatile bool chosen;
 static volatile int64_t heard_us;
 static uint16_t admitted;
+// Where frames go missing, sent to the laptop every second as FPVT and six u32 (since boot): frames heard (their first shard), frames declined for want of buffer room for all their data shards, frames admitted but short of shards when the next began (the air), shards the buffer refused, and the longest a USB write took in the last second (us; long means the laptop is not reading) and the bytes written.
+static volatile uint32_t frames_heard, frames_declined, frames_short, shards_refused, usb_longest_us, usb_bytes;
 
 static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     const wifi_promiscuous_pkt_t *packet = buffer;
@@ -48,14 +50,18 @@ static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     const uint16_t number = chunk[4] | chunk[5] << 8;
     static uint16_t seen_frame;
     static uint64_t seen;
-    static int passed;
+    static int passed, data_wanted;
     static bool started;
     if (!started || number != seen_frame) {
+        if (started && admitted == seen_frame && passed < data_wanted) ++frames_short;
         started = true;
         seen_frame = number;
         seen = 0;
         passed = 0;
+        data_wanted = chunk[8];
+        ++frames_heard;
         admitted = xRingbufferGetCurFreeSize(chunks) >= chunk[8] * (3 + 20 + CHUNK) ? number : number - 1;
+        if (admitted != number) ++frames_declined;
     }
     const uint64_t bit = 1ull << (chunk[6] & 63);
     if (number != admitted || (seen & bit) || passed >= chunk[8]) return;
@@ -67,7 +73,7 @@ static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     out[1] = length >> 8;
     out[2] = (uint8_t)packet->rx_ctrl.rssi;
     memcpy(out + 3, chunk, length);
-    xRingbufferSend(chunks, out, 3 + length, 0);
+    if (xRingbufferSend(chunks, out, 3 + length, 0) != pdTRUE) ++shards_refused;
 }
 
 static void write_out(const void *data, size_t size) {
@@ -90,7 +96,11 @@ static void forward(void *unused) {
     for (;;) {
         size_t size;
         uint8_t *item = xRingbufferReceiveUpTo(chunks, &size, portMAX_DELAY, 4096);
+        const int64_t began = esp_timer_get_time();
         write_out(item, size);
+        const uint32_t took = esp_timer_get_time() - began;
+        if (took > usb_longest_us) usb_longest_us = took;
+        usb_bytes += size;
         vRingbufferReturnItem(chunks, item);
     }
 }
@@ -101,9 +111,15 @@ static void blink(void *unused) {
     gpio_reset_pin(LED);
     gpio_set_direction(LED, GPIO_MODE_OUTPUT);
 #endif
-    for (bool lit = false;; vTaskDelay(pdMS_TO_TICKS(500))) {
+    for (bool lit = false, report = false;; vTaskDelay(pdMS_TO_TICKS(500))) {
         const bool hearing = esp_timer_get_time() - heard_us < LOST_US;
         if (!hearing) xRingbufferSend(chunks, BEACON, 4, 0);
+        if ((report = !report)) {
+            uint32_t stats[7] = {0, frames_heard, frames_declined, frames_short, shards_refused, usb_longest_us, usb_bytes};
+            memcpy(stats, "FPVT", 4);
+            usb_longest_us = 0;
+            xRingbufferSend(chunks, stats, sizeof(stats), 0);
+        }
         lit = hearing || !lit;
 #ifdef LED
         gpio_set_level(LED, lit);
