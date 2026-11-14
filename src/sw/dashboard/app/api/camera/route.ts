@@ -380,6 +380,8 @@ type Receiver = {
   copies: number;
   chunks: number;
   signal?: number;
+  // The receiver's RSSI (dBm) of each shard it passed, with when it came, for the last second's mean and minimum in the status.
+  rssi: [number, number][];
 };
 const store = globalThis as { fpvReceiver?: Receiver };
 
@@ -417,6 +419,7 @@ function receiver() {
     skipped: 0,
     copies: 0,
     chunks: 0,
+    rssi: [],
   };
   // The monitor passes every shard it hears; the first of each goes on. The capture time tells a restarted camera's frame numbers from the same numbers before it.
   const recent = new Set<string>();
@@ -481,8 +484,11 @@ function receiver() {
         opened.fast = true;
       }
       for (;;) {
+        // A report ahead of the next shard is taken out whole once all of it has come.
+        const at = buffer.indexOf('FPV2', 3);
         const report = buffer.indexOf('FPVT');
-        if (report >= 0 && buffer.length >= report + 28) {
+        if (report >= 0 && (at < 0 || report < at - 3)) {
+          if (buffer.length < report + 28) break;
           const value = (index: number) =>
             buffer.readUInt32LE(report + 4 + 4 * index);
           opened.stats = {
@@ -493,16 +499,14 @@ function receiver() {
             usbLongestUs: value(4),
             usbBytes: value(5),
           };
-          buffer = Buffer.concat([
-            buffer.subarray(0, report),
-            buffer.subarray(report + 28),
-          ]);
+          opened.skipped += report;
+          buffer = buffer.subarray(report + 28);
           continue;
         }
-        const at = buffer.indexOf('FPV2', 3);
+        // No shard's start yet: the last 6 bytes stay, which may be the next shard's length and RSSI and the first three of its FPV2. Keeping only 3 tore the shard whenever a read ended inside its marker, about 2% of the S3 receiver's shards, a quarter of the VGA frames (2026-11-14).
         if (at < 0) {
-          opened.skipped += Math.max(0, buffer.length - 3);
-          buffer = buffer.subarray(Math.max(0, buffer.length - 3));
+          opened.skipped += Math.max(0, buffer.length - 6);
+          buffer = buffer.subarray(Math.max(0, buffer.length - 6));
           break;
         }
         opened.skipped += at - 3;
@@ -514,6 +518,8 @@ function receiver() {
         }
         if (buffer.length < at + length) break;
         opened.serial = heard = Date.now();
+        opened.rssi.push([heard, buffer.readInt8(at - 1)]);
+        if (opened.rssi.length > 4096) opened.rssi.splice(0, 2048);
         deliver(buffer.subarray(at, at + length));
         buffer = buffer.subarray(at + length);
       }
@@ -586,6 +592,10 @@ export async function GET(request: Request) {
     // The camera's state through the drone, and the FPV frames delivered when FPV runs.
     const fpvHub = [...hubs.values()].find((hub) => hub.received !== undefined);
     const received = fpvHub?.received;
+    const now = Date.now();
+    const rssi = (store.fpvReceiver?.rssi ?? [])
+      .filter(([time]) => now - time < 1000)
+      .map(([, value]) => value);
     const state = (await cameraRequest('S')).split(' ')[4];
     return Response.json(
       {
@@ -599,6 +609,14 @@ export async function GET(request: Request) {
         copies: store.fpvReceiver?.copies,
         chunks: store.fpvReceiver?.chunks,
         signal: store.fpvReceiver?.signal,
+        // The receiver's last second: shards passed and their RSSI (dBm).
+        rssi: rssi.length
+          ? {
+              shards: rssi.length,
+              mean: Math.round(rssi.reduce((a, b) => a + b, 0) / rssi.length),
+              min: Math.min(...rssi),
+            }
+          : undefined,
       },
       { headers: { 'Cache-Control': 'no-store' } }
     );
