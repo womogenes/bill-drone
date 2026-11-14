@@ -3,7 +3,7 @@ The thrust stand (fw/stand): runs a throttle profile on one motor while recordin
 
   run PROFILE [--port P] [--max 1100] [--cells 1|2] [--no-audio]   fly a profile on the stand and save it under sw/recordings/stand/<UTC time>/
   scale --mass GRAMS [--cell 0|1]                                    with that mass on the cell, pulling the way the prop does, store its lift per count (~/.config/bill-drone/stand.json; signed: lift is (count - tare) times it)
-  esc-cal [--top 2000] [--hz 400]                                    teach a new ESC its pulse range, 1000 us to --top (props off); --hz 50 for ESCs that only read servo-rate signals
+  esc-cal [--top 2000] [--hz 50]                                     teach a new ESC its pulse range, 1000 us to --top (props off, motor connected: it beeps through the motor); at 50 Hz as the stand's Nuofany 40A (a Hobbywing Skywalker-40A clone) wants it
   spin [--throttle 50] [--seconds 2] [--hz 400]                      spin the motor gently to check the signal reaches the ESC (props off)
   flash [--port wifi] [--image fw/stand/build/stand.bin]               send new stand firmware over Wi-Fi (build it with make -C fw/stand build); the stand restarts into it
   analyze RUN_DIR [--blades 2]                                       thrust, rpm from the audio, and each step's timing, as a plot and CSV beside the run
@@ -324,8 +324,9 @@ def esc_cal(args):
                     print(f"\n!! the stand reset ({reasons.get(int(parts[1]), parts[1].decode())}); if that was as the battery went on, the ESC missed the top. Fix the reset and run esc-cal again.")
                 elif parts[:1] == [b"E"] and len(parts) >= 3:
                     print(f"   stand sending {int(parts[2])} us" + (f" at {int(parts[3])} Hz" if len(parts) > 3 else ""))
-    for pulse, prompt in ((args.top, f"Sending the top ({args.top} us). Connect the battery, wait for the ESC's top-confirm beeps, then press Enter."),
-                          (1000, "Sending the bottom (1000 us). Wait for the confirm beeps, then press Enter.")):
+    # Hobbywing Skywalker's sequence (the Nuofany 40A's likely firmware): powered at the top, "beep-beep" after about 2 s stores it; staying about 5 s more enters its programming menu instead, so drop to the bottom promptly. At the bottom it beeps the cell count, then one long beep stores it. If it spins or stays silent instead, it isn't calibrating: press Enter at once to drop to the bottom.
+    for pulse, prompt in ((args.top, f"Sending the top ({args.top} us at {args.hz} Hz). Connect the battery. At the beep-beep (about 2 s), press Enter at once."),
+                          (1000, "Sending the bottom (1000 us). Wait for the cell-count beeps and one long beep, then press Enter.")):
         stop.clear()
         thread = threading.Thread(target=hold, args=(pulse,), daemon=True)
         thread.start()
@@ -616,7 +617,7 @@ def main():
     weighing.add_argument("--cell", type=int, choices=(0, 1), default=0)
     calibrating = commands.add_parser("esc-cal")
     calibrating.add_argument("--top", type=int, default=2000, help="the top pulse (us); many generic ESCs take only up to 2000")
-    calibrating.add_argument("--hz", type=int, default=400, help="PWM rate, 50-400")
+    calibrating.add_argument("--hz", type=int, default=50, help="PWM rate, 50-400")
     spinning = commands.add_parser("spin")
     spinning.add_argument("--throttle", type=int, default=50)
     spinning.add_argument("--seconds", type=float, default=2.0)
