@@ -49,11 +49,13 @@ def segments(profile, cap):
 
 
 def open_port(name):
-    # DTR and RTS released before opening: asserted, the board's auto-reset holds it in reset.
+    # DTR and RTS released before opening: asserted, the board's auto-reset holds it in reset. What the port buffered while closed is dropped.
     port = serial.Serial()
     port.port, port.baudrate, port.timeout = name, BAUD, 0.05
     port.dtr = port.rts = False
     port.open()
+    time.sleep(0.5)
+    port.reset_input_buffer()
     return port
 
 
@@ -136,7 +138,9 @@ def parse(directory):
         try:
             if kind == "F":
                 cell, stand_us, raw = int(parts[2]), int(parts[3]), int(parts[4])
-                cells[cell].append((stand_us, raw))
+                # The same reading can arrive more than once just after the port opens (seen on 2026-11-13): one per conversion time.
+                if not cells[cell] or cells[cell][-1][0] != stand_us:
+                    cells[cell].append((stand_us, raw))
             elif kind == "E":
                 stand_us, pulse = int(parts[2]), int(parts[3])
                 pulses.append((stand_us, pulse))
@@ -157,14 +161,15 @@ def scale(args):
     port = open_port(args.port)
     port.write(f"C {1 << args.cell}\n".encode())
     def mean_counts(seconds):
-        values, end = [], time.monotonic() + seconds
+        values, seen, end = [], set(), time.monotonic() + seconds
         buffer = b""
         while time.monotonic() < end:
             buffer += port.read(4096)
             *lines, buffer = buffer.split(b"\n")
             for line in lines:
                 parts = line.split()
-                if len(parts) == 4 and parts[0] == b"F" and int(parts[1]) == args.cell:
+                if len(parts) == 4 and parts[0] == b"F" and int(parts[1]) == args.cell and parts[2] not in seen:
+                    seen.add(parts[2])
                     values.append(int(parts[3]))
         if not values:
             raise SystemExit("no readings: check the HX711 wiring and the cell number")
@@ -187,10 +192,21 @@ def esc_cal(args):
         return
     port = open_port(args.port)
     stop = threading.Event()
+    reasons = {1: "power-on", 3: "software", 4: "panic", 5: "interrupt watchdog", 6: "task watchdog", 9: "brownout"}
     def hold(pulse):
+        buffer = b""
         while not stop.is_set():
             port.write(f"P {pulse}\n".encode())
             time.sleep(COMMAND_S)
+            buffer += port.read(4096)
+            *lines, buffer = buffer.split(b"\n")
+            for line in lines:
+                parts = line.split()
+                # A reset drops the pulse for the half second the board takes to boot: an ESC powered up in that gap never sees the top and arms as usual instead.
+                if parts[:1] == [b"R"] and len(parts) == 2:
+                    print(f"\n!! the stand reset ({reasons.get(int(parts[1]), parts[1].decode())}); if that was as the battery went on, the ESC missed the top. Fix the reset and run esc-cal again.")
+                elif parts[:1] == [b"E"] and len(parts) == 3:
+                    print(f"   stand sending {int(parts[2])} us")
     for pulse, prompt in ((2200, "Sending the top (2200 us). Connect the battery, wait for the ESC's top-confirm beeps, then press Enter."),
                           (1000, "Sending the bottom (1000 us). Wait for the confirm beeps, then press Enter.")):
         stop.clear()
