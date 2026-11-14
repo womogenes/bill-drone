@@ -144,8 +144,8 @@ def open_port(name):
     return port
 
 
-def read_lines(port, out, stop):
-    """Every line from the stand with the laptop's arrival time (monotonic s) until stop is set."""
+def read_lines(port, out, stop, seen=None):
+    """Every line from the stand with the laptop's arrival time (monotonic s) until stop is set; seen, if given, collects cell 0's counts and the supply volts as (arrival, value) for the run's printout."""
     buffer = b""
     while not stop.is_set():
         chunk = port.read(4096)
@@ -155,7 +155,23 @@ def read_lines(port, out, stop):
         buffer += chunk
         *lines, buffer = buffer.split(b"\n")
         for line in lines:
-            out.write(f"{now:.6f} {line.decode(errors='replace').strip()}\n")
+            text = line.decode(errors="replace").strip()
+            out.write(f"{now:.6f} {text}\n")
+            parts = text.split()
+            if seen is None:
+                continue
+            try:
+                if len(parts) == 4 and parts[0] == "F" and parts[1] == "0":
+                    seen["cell"].append((now, int(parts[3])))
+                elif len(parts) == 3 and parts[0] == "V":
+                    seen["volts"].append((now, int(parts[2]) / 1000))
+            except ValueError:
+                pass
+
+
+def mean_since(rows, since):
+    values = [value for when, value in rows if when >= since]
+    return sum(values) / len(values) if values else None
 
 
 def run(args):
@@ -176,18 +192,30 @@ def run(args):
         audio = subprocess.Popen(["pw-record", "--rate", str(AUDIO_RATE), "--channels", "1", "--format", "s16", str(directory / "audio.wav")])
     stop = threading.Event()
     with open(directory / "lines.txt", "w") as out:
-        reader = threading.Thread(target=read_lines, args=(port, out, stop), daemon=True)
+        seen = {"cell": [], "volts": []}
+        reader = threading.Thread(target=read_lines, args=(port, out, stop, seen), daemon=True)
         reader.start()
         commands = []
         started = time.monotonic()
+        # Each step's held thrust and supply as it ends, from its last half second: thrust from the tare's counts (lift raises them on this stand, 2026-11-14), roughly; analyze does it properly.
+        per_count = abs(load_config().get("grams_per_count", {}).get("0", 0))
+        tare = None
         try:
             schedule = [(TARE_S, 0)] + plan
-            for seconds, throttle in schedule:
-                end = time.monotonic() + seconds
-                commands.append((time.monotonic(), throttle))
+            for step, (seconds, throttle) in enumerate(schedule):
+                begun = time.monotonic()
+                print(f"{begun - started:5.1f} s  {step + 1:2d}/{len(schedule)}  throttle {throttle:4d}" + ("  (tare)" if step == 0 else ""), end="", flush=True)
+                end = begun + seconds
+                commands.append((begun, throttle))
                 while time.monotonic() < end:
                     port.write(f"T {throttle}\n".encode())
                     time.sleep(COMMAND_S)
+                counts = mean_since(seen["cell"], end - 0.5)
+                volts = mean_since(seen["volts"], end - 0.5)
+                if step == 0:
+                    tare = mean_since(seen["cell"], end - 2.0)
+                thrust = "" if counts is None or tare is None else f"{(counts - tare) * per_count:7.0f} g" if per_count else f"{counts - tare:9.0f} counts"
+                print(f"  {thrust}" + (f"  {volts:6.2f} V" if volts is not None else "") + ("" if seen["cell"] and seen["cell"][-1][0] > end - 0.5 else "  no cell readings"))
         except KeyboardInterrupt:
             print("stopped")
         finally:
