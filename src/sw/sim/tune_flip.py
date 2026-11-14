@@ -1,7 +1,7 @@
 """
 Tune the firmware's flip (fw/drone/main/flip.c) as flown from the GPS hold (sw/sim/flip_firmware.py) by CMA-ES, on plants that span what the first real flip left uncertain: uv run -m sw.sim.tune_flip [--generations 40] [--n 64] [--workers 40] [--out models/flip_params_<day>.json]; --check params.json [--n 512] flies a parameter set and prints flip_firmware's summary.
 
-Every candidate flies the same n drawn plants (a quarter of them the staged 60- and 90-degree bursts, flip_enable 2 and 3) (flip_firmware.uncertain: every term the flip leans on that nothing real tests, over its whole plausible range, on models/airframe_2026-11-12_flip.json, the plant fitted to the first flip) from a 5 m hold with the bands' tilt offset drawn from 0 to -5 degrees. Its cost is the mean over runs of: 20 for touching the ground, 3 for not ending upright and still, twice the height lost over 1 m, the throttles' travel over TRAVEL, the time either motor spends at FULL throttle or more, twice the climb above the start past CLIMB_ROOM, and twice the hand-back past HANDBACK s after the start: a flip that climbs metres first or turns slowly for seconds flies a different maneuver in regimes nothing has measured. The motors' limits are not searched: each keeps at least FLOOR of the weight while the flip owns them and throttles slew the full range in no less than 0.12 s with a cap of THROTTLE_CAP (flip.c flip_limit), so no draw can win by idling a motor or by full throttle.
+Every candidate flies the same n drawn plants (a quarter of them the staged 60- and 90-degree bursts, flip_enable 2 and 3) (flip_firmware.uncertain: every term the flip leans on that nothing real tests, over its whole plausible range, on models/airframe_2026-11-12_raised.json, the plant refitted on the raised pivots; the 2026-11-12 retune ran on airframe_2026-11-12_flip.json, fitted to the first flip; --robust weighs the worst rotor_momentum band) from a 5 m hold with the bands' tilt offset drawn from 0 to -5 degrees. Its cost is the mean over runs of: 20 for touching the ground, 3 for not ending upright and still, twice the height lost over 1 m, the throttles' travel over TRAVEL, the time either motor spends at FULL throttle or more, twice the climb above the start past CLIMB_ROOM, and twice the hand-back past HANDBACK s after the start: a flip that climbs metres first or turns slowly for seconds flies a different maneuver in regimes nothing has measured. The motors' limits are not searched: each keeps at least FLOOR of the weight while the flip owns them and throttles slew the full range in no less than 0.12 s with a cap of THROTTLE_CAP (flip.c flip_limit), so no draw can win by idling a motor or by full throttle.
 """
 
 import argparse
@@ -16,7 +16,7 @@ from sw.flight_log import parse_settings, recording, settings as recording_setti
 from sw.sim import flip_firmware as FF
 
 MODELS = Path(__file__).with_name("models")
-AIRFRAME = "airframe_2026-11-12_raised.json"
+AIRFRAME = FF.AIRFRAME
 # The hold at 5 m (settings.def now allows hover_climb 5 and hover_ceiling 5.5) and the flip from 4.5.
 HIGH = {"hover_climb": 5.0, "hover_ceiling": 5.5, "flip_height": 4.5}
 # The tuning climbs there faster than the drone would (the climb is not what is tuned).

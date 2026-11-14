@@ -1,5 +1,5 @@
 """
-The firmware's tumble recovery and level-and-hold (fw/drone/main/recover.c) as flight_rt.c flies them, in sw/sim/flip_firmware.py's harness: uv run -m sw.sim.recover_firmware [--scenario tip tilt tumble landing abort flip] [--n 64] [--heights 2 3] [--workers 2] [--airframe airframe_2026-11-12_flip.json] [--randomize flip|wide|none] [--wide] [--params name=value,...] [--set name=value,...] [--off] [--tune --generations 40 --population 16 --out gains.json]
+The firmware's tumble recovery and level-and-hold (fw/drone/main/recover.c) as flight_rt.c flies them, in sw/sim/flip_firmware.py's harness: uv run -m sw.sim.recover_firmware [--scenario tip tilt tumble landing abort flip] [--n 64] [--heights 2 3] [--workers 2] [--airframe airframe_2026-11-12_raised.json] [--randomize flip|wide|none] [--wide] [--params name=value,...] [--set name=value,...] [--off] [--tune --generations 40 --population 16 --out gains.json]
 
 Each run takes off in the GPS hold as flip_firmware does (its FLIGHT settings, recover_enable 1 unless the scenario says otherwise) and climbs to the hold's height (--heights, hover_climb), then EVENT_AT (14 s) after liftoff:
   tip      the drone is put 45-75 degrees from upright about a random horizontal axis, turning at about 100 deg/s, as past tip_limit in a hold
@@ -12,7 +12,7 @@ The attitude estimate is put into the drawn attitude with it (about a degree of 
 
 Recovered: never cut, never touched the ground after the event, upright within 10 degrees and turning under 1 rad/s at the end (AFTER, 6 s, past the event) and above 0.5 m (landing: or landed by the hold). It prints the share recovered, cut (and why), touched, the height lost from the event to the lowest point in 4 s, and the time from the event to the hand-back to the hold. --tune searches the gains (SPACE) by CMA-ES on tip, tilt and tumble at both heights.
 
-The plant: flip_firmware's, by default the airframe fitted to the first flip (models/airframe_2026-11-12_flip.json, with the rotors' spin momentum and coasting cut motors) with every term the flip leans on that nothing real tests drawn over its whole range (flip_firmware.uncertain, --randomize flip: rotor_momentum 0.006-0.04, the motors' lag 0.04-0.1 s, the ESC stopping a motor at throttle 1 or not, the differential thrust's share 0.45-1.1, ...); --airframe airframe_2026-11-09.json --randomize wide is the plant the recovery was first tuned on. On top of either, the terms the 2026-11-12 flip showed to be uncertain, widened with --wide (or each on its own): the roll authority (recover.randomization's 0.8-5 times the fit, --roll-thrust 0.4 5 here: the flip's spin reached 540 deg/s on the drone against 950 in the sim, so the low end is plausible), the props' gyroscopic coupling, which airframes without rotor_momentum leave out (--gyroscopic: up to this much angular momentum per root newton either way; a 10-inch prop with its motor bell is roughly 1e-4 kg m² at 600 rad/s near 4.5 N, about 0.03), an ESC deadband under which a motor stops and restarts from standstill (--deadband, throttle; airframe motor_start 0.16 s), and slower motors (--motor-tau factor).
+The plant: flip_firmware's, by default the airframe refitted on the raised pivots (models/airframe_2026-11-12_raised.json; FLIP.md's recovery tables before 2026-11-13 are on airframe_2026-11-12_flip.json, fitted to the first flip before the raise, with the rotors' spin momentum and coasting cut motors) with every term the flip leans on that nothing real tests drawn over its whole range (flip_firmware.uncertain, --randomize flip: rotor_momentum 0.006-0.04, the motors' lag 0.04-0.1 s, the ESC stopping a motor at throttle 1 or not, the differential thrust's share 0.45-1.1, ...); --airframe airframe_2026-11-09.json --randomize wide is the plant the recovery was first tuned on. On top of either, the terms the 2026-11-12 flip showed to be uncertain, widened with --wide (or each on its own): the roll authority (recover.randomization's 0.8-5 times the fit, --roll-thrust 0.4 5 here: the flip's spin reached 540 deg/s on the drone against 950 in the sim, so the low end is plausible), the props' gyroscopic coupling, which airframes without rotor_momentum leave out (--gyroscopic: up to this much angular momentum per root newton either way; a 10-inch prop with its motor bell is roughly 1e-4 kg m² at 600 rad/s near 4.5 N, about 0.03), an ESC deadband under which a motor stops and restarts from standstill (--deadband, throttle; airframe motor_start 0.16 s), and slower motors (--motor-tau factor).
 """
 
 import argparse
@@ -28,8 +28,8 @@ from sw.sim import flip_firmware as F
 from sw.sim import rigid as R
 
 SCENARIOS = ("tip", "tilt", "tumble", "landing", "abort", "flip")
-# The plant: the airframe fitted to the first flip (flip_firmware.py --airframe).
-AIRFRAME = "airframe_2026-11-12_flip.json"
+# The plant: flip_firmware.py's, the airframe on the raised pivots.
+AIRFRAME = F.AIRFRAME
 DEG = math.pi / 180
 # The event comes this long after liftoff (s), once the hold has climbed to its height, and each run goes on AFTER s past it; the link-loss landing starts at EVENT_AT.
 EVENT_AT = 14.0
