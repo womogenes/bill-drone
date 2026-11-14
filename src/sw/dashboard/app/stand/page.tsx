@@ -182,8 +182,8 @@ function Live() {
       )?.time ?? now)
     : now;
   const tare = restingCount(raw, pulsePoints, now);
-  const perCount = Math.abs(status?.scale['0'] ?? 0);
-  // The prop's lift raises the count on this stand (2026-11-14), the calibration mass lowered it: lift is the rise, scaled.
+  const perCount = status?.scale['0'] ?? 0;
+  // grams_per_count is signed lift per count (sw/stand.py scale).
   const thrust = raw.map((point) => ({
     time: point.time,
     value: tare === null ? 0 : (point.value - tare) * (perCount || 1),

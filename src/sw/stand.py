@@ -2,7 +2,7 @@
 The thrust stand (fw/stand): runs a throttle profile on one motor while recording its load cells and the laptop's microphone, then lines them up: uv run -m sw.stand <command>
 
   run PROFILE [--port P] [--max 1100] [--cells 1|2] [--no-audio]   fly a profile on the stand and save it under sw/recordings/stand/<UTC time>/
-  scale --mass GRAMS [--cell 0|1]                                    with that mass on the cell, store its grams per count (~/.config/bill-drone/stand.json)
+  scale --mass GRAMS [--cell 0|1]                                    with that mass on the cell, pulling the way the prop does, store its lift per count (~/.config/bill-drone/stand.json; signed: lift is (count - tare) times it)
   esc-cal [--top 2000] [--hz 400]                                    teach a new ESC its pulse range, 1000 us to --top (props off); --hz 50 for ESCs that only read servo-rate signals
   spin [--throttle 50] [--seconds 2] [--hz 400]                      spin the motor gently to check the signal reaches the ESC (props off)
   flash [--port wifi] [--image fw/stand/build/stand.bin]               send new stand firmware over Wi-Fi (build it with make -C fw/stand build); the stand restarts into it
@@ -197,8 +197,8 @@ def run(args):
         reader.start()
         commands = []
         started = time.monotonic()
-        # Each step's held thrust and supply as it ends, from its last half second: thrust from the tare's counts (lift raises them on this stand, 2026-11-14), roughly; analyze does it properly.
-        per_count = abs(load_config().get("grams_per_count", {}).get("0", 0))
+        # Each step's held thrust and supply as it ends, from its last half second: thrust from the tare's counts, roughly; analyze does it properly.
+        per_count = load_config().get("grams_per_count", {}).get("0", 0)
         tare = None
         try:
             schedule = [(TARE_S, 0)] + plan
