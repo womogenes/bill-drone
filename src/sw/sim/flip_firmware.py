@@ -51,7 +51,7 @@ RECOVER_MAX = 3
 RECOVER_AIRBORNE_S = 1.0
 RECOVER_LAND_HEIGHT = 1.0
 LINK_HOLD_S = 2.0
-# flight_rt.c slews and caps the recovery's throttles as the flip's (flip_limit_with while recover_gyro_only); options["recover_limit"] False flies them unlimited, as before.
+# flight_rt.c slews and caps the recovery's throttles as the flip's (flip_limit while recover_gyro_only); options["recover_limit"] False flies them unlimited, as before.
 RECOVER_LIMIT = True
 
 
@@ -124,8 +124,7 @@ for name in ("recover_active", "recover_gyro_only"):
     getattr(library, name).argtypes = [ctypes.POINTER(RecoverRun)]
     getattr(library, name).restype = ctypes.c_bool
 library.recover_tick.argtypes = [ctypes.POINTER(RecoverRun), ctypes.POINTER(RecoverParams), ctypes.POINTER(RecoverInput), ctypes.c_void_p, ctypes.c_void_p, FLOATS, ctypes.POINTER(RecoverOutput)]
-library.flip_limit.argtypes = [ctypes.POINTER(Run), ctypes.c_float * 2, ctypes.c_float]
-library.flip_limit_with.argtypes = [ctypes.POINTER(Run), ctypes.c_bool, ctypes.c_float * 2, ctypes.c_float]
+library.flip_limit.argtypes = [ctypes.POINTER(Run), ctypes.c_bool, ctypes.c_float * 2, ctypes.c_float]
 library.flip_actuators.argtypes = [ctypes.POINTER(Output), ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float * 2, ctypes.c_float * 2]
 DEFAULTS = Params.in_dll(library, "flip_defaults")
 RECOVER_DEFAULTS = RecoverParams.in_dll(library, "recover_defaults")
@@ -428,7 +427,7 @@ def fly(job):
                 servos = (ctypes.c_float * 2)()
                 library.flip_actuators(ctypes.byref(recovered.motors if recovered.owned else out), controller.command.buffer_info()[0], scales[i], scales[i], 1200.0, 60.0, throttles, servos)
                 left_angle, right_angle = math.radians(servos[0]), math.radians(servos[1])
-            library.flip_limit_with(ctypes.byref(run), limit_recovery and library.recover_gyro_only(ctypes.byref(recovery)), throttles, R.DT)
+            library.flip_limit(ctypes.byref(run), limit_recovery and library.recover_gyro_only(ctypes.byref(recovery)), throttles, R.DT)
             left, right = round(throttles[0]), round(throttles[1])
             lane["commanded"] = (left, right)
             # An ESC that stops its motor under its deadband (options["deadband"]), so it restarts from standstill (motor_start).

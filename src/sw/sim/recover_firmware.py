@@ -187,7 +187,7 @@ def main():
     parser.add_argument("--deadband", type=float, default=0.0)
     parser.add_argument("--motor-tau", type=float, default=1.0)
     parser.add_argument("--off", action="store_true", help="recover_enable 0 (today's tip cut) for comparison")
-    parser.add_argument("--limit", choices=("on", "off"), help="slew and cap the recovery's throttles as the flip's (flip_limit_with), or not (default: as flight_rt.c, flip_firmware.RECOVER_LIMIT)")
+    parser.add_argument("--limit", choices=("on", "off"), help="slew and cap the recovery's throttles as the flip's (flip_limit), or not (default: as flight_rt.c, flip_firmware.RECOVER_LIMIT)")
     parser.add_argument("--flip-params", default="", help="flip.c FlipParams on top of flip_defaults, name=value,... (the slew and cap the recovery shares)")
     parser.add_argument("--tune", action="store_true", help="CMA-ES over the gains (SPACE) instead; --n runs per scenario and height per candidate")
     parser.add_argument("--generations", type=int, default=40)

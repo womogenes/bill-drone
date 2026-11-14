@@ -816,8 +816,8 @@ static void runtime_task(void *arg) {
             // The spin and the righting fly the motors and servos themselves; the attitude controller above still runs, its outputs unused, and takes over at the hand-back.
             float throttle[2] = {state.throttle[0], state.throttle[1]};
             if (flipped.owned || recovered.owned) flip_actuators(recovered.owned ? &recovered.motors : &flipped, &command, scaled.left_thrust_scale, scaled.right_thrust_scale, THROTTLE_MAX, SERVO_LIMIT, throttle, state.servo);
-            // Through the flip, a recovery and their graces each motor's throttle is slewed and capped (flip_limit_with); otherwise it is only followed.
-            flip_limit_with(&flip, recover_gyro_only(&recovery), throttle, dt);
+            // Through the flip, a recovery and their graces each motor's throttle is slewed and capped (flip_limit); otherwise it is only followed.
+            flip_limit(&flip, recover_gyro_only(&recovery), throttle, dt);
             for (int side = 0; side < 2; side++) state.throttle[side] = lroundf(throttle[side]);
             const Controller *c = &state.controller;
             if (command.auto_trim > 0 && !excite.active && !flip_gyro_only(&flip) && !recover_gyro_only(&recovery) && hover_mode <= HOVER_HOLD && scaled.base >= command.integrate_throttle && c->airborne > TRIM_SETTLE &&
