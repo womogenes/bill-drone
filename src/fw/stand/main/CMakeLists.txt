@@ -1,1 +1,22 @@
-idf_component_register(SRCS "stand.c" PRIV_REQUIRES esp_driver_uart esp_driver_gpio esp_driver_ledc esp_timer)
+idf_component_register(SRCS "stand.c" PRIV_REQUIRES esp_driver_uart esp_driver_gpio esp_driver_ledc esp_timer esp_wifi esp_netif esp_event nvs_flash lwip)
+
+# The Wi-Fi network from the repository's .env (WIFI_SSID, WIFI_PASSWORD), written into a header in the build directory so it stays out of git.
+set(env_file "${CMAKE_CURRENT_LIST_DIR}/../../../../.env")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${env_file}")
+set(WIFI_SSID "")
+set(WIFI_PASSWORD "")
+if(EXISTS "${env_file}")
+    file(STRINGS "${env_file}" env_lines)
+    foreach(env_line IN LISTS env_lines)
+        if(env_line MATCHES "^(WIFI_SSID|WIFI_PASSWORD)=(.*)$")
+            # Kept before the REGEX REPLACE below, which overwrites CMAKE_MATCH_n.
+            set(name "${CMAKE_MATCH_1}")
+            string(REGEX REPLACE "^[\"'](.*)[\"']$" "\\1" value "${CMAKE_MATCH_2}")
+            string(REPLACE "\\" "\\\\" value "${value}")
+            string(REPLACE "\"" "\\\"" value "${value}")
+            set(${name} "${value}")
+        endif()
+    endforeach()
+endif()
+file(WRITE "${CMAKE_BINARY_DIR}/wifi_credentials.h" "#define WIFI_SSID \"${WIFI_SSID}\"\n#define WIFI_PASSWORD \"${WIFI_PASSWORD}\"\n")
+target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_BINARY_DIR}")

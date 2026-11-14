@@ -9,11 +9,14 @@ The thrust stand (fw/stand): runs a throttle profile on one motor while recordin
 
 Profiles (throttles are the drone's, 0-1200; FLIP.md stage A): steps (A1: hover 600 to 1000, to the flip's floor near 290 and to 1, each and back, 1.5 s apiece), full (A2: 1100 for 1 s from hover), table (0 to the cap in steps of 100, 2 s each, for the thrust table).
 
+--port is wifi (the default: the stand found by its broadcast on the local network), a host or host:port, or a serial device such as /dev/ttyUSB1.
+
 The stand stamps each load-cell reading with its own clock; the laptop stamps every line as it arrives and maps the stand's clock onto its own by the earliest arrivals (the least delayed). The audio starts on the laptop's clock with pw-record's own buffering unknown, so analyze shifts the audio by the lag that best matches rpm² to thrust (thrust goes as rpm²), within half a second.
 """
 
 import argparse
 import json
+import socket
 import subprocess
 import sys
 import threading
@@ -49,7 +52,86 @@ def segments(profile, cap):
     return ramp + [(seconds, min(throttle, cap)) for seconds, throttle in body] + [(1.0, 300)]
 
 
+TCP_PORT = 3333
+BEACON_PORT = 3334
+
+
+class WifiPort:
+    """The stand over Wi-Fi (fw/stand's TCP server), with the serial port's write, read, reset_input_buffer and close. A dropped connection is reopened on the next call; the stand stops the motor by itself while commands are missing."""
+
+    def __init__(self, host, tcp_port):
+        self.address = (host, tcp_port)
+        self.sock = None
+        self.connect()
+
+    def connect(self):
+        if self.sock:
+            self.sock.close()
+        self.sock = socket.create_connection(self.address, timeout=3)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.sock.settimeout(0.05)
+
+    def reconnect(self, error):
+        print(f"\n!! stand connection lost ({error}); reconnecting")
+        while True:
+            try:
+                self.connect()
+                return
+            except OSError:
+                time.sleep(0.5)
+
+    def write(self, data):
+        try:
+            self.sock.sendall(data)
+        except OSError as error:
+            self.reconnect(error)
+
+    def read(self, size):
+        try:
+            data = self.sock.recv(size)
+        except (socket.timeout, BlockingIOError):
+            return b""
+        except OSError as error:
+            self.reconnect(error)
+            return b""
+        if not data:
+            self.reconnect("closed by the stand")
+        return data
+
+    def reset_input_buffer(self):
+        while self.read(65536):
+            pass
+
+    def close(self):
+        self.sock.close()
+
+
+def find_stand(seconds=5.0):
+    """The stand's address from its UDP broadcast."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("", BEACON_PORT))
+    listener.settimeout(seconds)
+    try:
+        while True:
+            parts = listener.recv(100).split()
+            if len(parts) == 3 and parts[0] == b"STAND":
+                return parts[1].decode(), int(parts[2])
+    except socket.timeout:
+        raise SystemExit(f"no stand broadcast in {seconds:.0f} s: is it powered and on the network? (or pass --port HOST or --port /dev/ttyUSB1)")
+    finally:
+        listener.close()
+
+
 def open_port(name):
+    if not name.startswith("/dev/"):
+        host, _, tcp_port = name.partition(":")
+        address = find_stand() if name == "wifi" else (host, int(tcp_port or TCP_PORT))
+        port = WifiPort(*address)
+        print(f"stand at {address[0]} over Wi-Fi")
+        time.sleep(0.3)
+        port.reset_input_buffer()
+        return port
     # DTR and RTS released before opening: asserted, the board's auto-reset holds it in reset. What the port buffered while closed is dropped.
     port = serial.Serial()
     port.port, port.baudrate, port.timeout = name, BAUD, 0.05
@@ -403,7 +485,7 @@ def main():
     looking.add_argument("run")
     looking.add_argument("--blades", type=int, default=2)
     for sub in (flying, weighing, calibrating, spinning):
-        sub.add_argument("--port", default="/dev/ttyUSB0")
+        sub.add_argument("--port", default="wifi")
     args = parser.parse_args()
     {"run": run, "scale": scale, "esc-cal": esc_cal, "spin": spin, "analyze": analyze}[args.command](args)
 
