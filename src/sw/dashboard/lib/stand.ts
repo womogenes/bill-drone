@@ -71,7 +71,8 @@ function findStand(seconds: number) {
 
 function receive(line: string, now: number) {
   const parts = line.trim().split(' ');
-  const us = Number(parts[1]);
+  // "F <cell> <us> <raw>"; the others carry the stand's time first.
+  const us = Number(parts[0] === 'F' ? parts[2] : parts[1]);
   if (!['F', 'V', 'E', 'H'].includes(parts[0]) || !Number.isFinite(us)) return;
   if (us < stand.lastUs - 1_000_000) {
     stand.restarts += 1;
@@ -92,7 +93,7 @@ function receive(line: string, now: number) {
       seq,
       kind: 'cell',
       time,
-      cell: Number(parts[2]),
+      cell: Number(parts[1]),
       raw: Number(parts[3]),
     });
   else if (parts[0] === 'V')
