@@ -22,6 +22,7 @@
 #include "runtime.h"
 #include "arming.h"
 #include "camera.h"
+#include "settings.h"
 #include "../../pairs.h"
 #include "../../link.h"
 
@@ -111,17 +112,35 @@ static uint8_t usual_rate;
 static const esp_now_rate_config_t fast_rate = {.phymode = WIFI_PHY_MODE_11B, .rate = WIFI_PHY_RATE_11M_L};
 static bool fast;
 static int64_t fast_until;
+// Relay mode (radio_via_camera, fw/relay_link.h): this board's Wi-Fi stays off and its packets go out through the camera's radio, whose station takes this board's MAC, so the controller needs no change. Each relayed send's outcome comes back from the camera into the link counts as on_sent's would, and each packet heard with its RSSI. Following and adoption are off (radio_ready stays false): the camera stays on channel 6 and hears only the paired controller, so hopping this board's idle radio would do nothing and another relay's claim never arrives; the fallback below brings both back. relay_since is when relay mode began, relay_progress_us when a send last finished or the window last opened; a camera that stops answering frees the window after RELAY_STALL_US, its unanswered sends counted as failed.
+static volatile bool relay;
+static int64_t relay_since, relay_progress_us;
+#define RELAY_STALL_US 100000
+// Disarmed, relay mode with nothing heard from the controller for this long gives up and brings up this board's own radio until the next restart, so a broken relay cannot lock the laptop out.
+#define RELAY_FALLBACK_US 30000000
 // Compressed sector writes (request Y): raw deflate, expanded by the ROM's inflater into a sector.
 static tinfl_decompressor inflater;
 static uint8_t inflated[SECTOR];
 
 static void set_rate(bool on) {
+    // Relay frames carry the rate to the camera.
+    if (relay) {
+        fast = on;
+        return;
+    }
     esp_now_rate_config_t rate = on ? fast_rate : link_rates[usual_rate];
     if (esp_now_set_peer_rate_config(peer, &rate) == ESP_OK) fast = on;
 }
 
 // The radio settings (settings.def radio_rate, radio_power, radio_follow), whenever the settings change; from the update task only.
 static void apply_radio_settings(void) {
+    // In relay mode only the rate applies, carried by each relay frame; the camera keeps its own transmit power.
+    if (relay && radio_version != settings_version()) {
+        radio_version = settings_version();
+        int rate = settings_get(SETTING_radio_rate);
+        if (rate >= 0 && rate < (int)LINK_RATES) usual_rate = rate;
+        return;
+    }
     if (!radio_ready || radio_version == settings_version()) return;
     radio_version = settings_version();
     int rate = settings_get(SETTING_radio_rate);
@@ -148,6 +167,7 @@ static void follow(int64_t now) {
 
 // Takes the relay that claims this drone as its controller (ADOPT_AFTER_US above); from the update task only. The NVS write stalls flash access, so it runs as maintenance, like the settings'.
 static void adopt(int64_t now) {
+    if (!radio_ready) return;
     uint8_t relay[ESP_NOW_ETH_ALEN];
     portENTER_CRITICAL(&lock);
     bool claimed = claimed_us && now - claimed_us < 1000000;
@@ -217,13 +237,32 @@ static bool transmit(uint8_t channel, uint32_t number, const uint8_t *data, size
     packet[16] = index;
     packet[17] = count;
     memcpy(packet + HEADER, data, length);
-    if (esp_timer_get_time() < quiet_until) return false;
+    int64_t now = esp_timer_get_time();
+    if (now < quiet_until) return false;
+    bool via_camera = relay;
+    int stalled = 0;
     portENTER_CRITICAL(&lock);
+    // A camera that restarted or stopped relaying leaves its sends unanswered: the window opens again rather than holding the link shut.
+    if (via_camera && inflight && now - relay_progress_us > RELAY_STALL_US) {
+        stalled = inflight;
+        inflight = 0;
+    }
+    if (via_camera && !inflight) relay_progress_us = now;
     bool open = inflight < WINDOW;
     if (open) inflight++;
     portEXIT_CRITICAL(&lock);
+    for (int i = 0; i < stalled; i++) link_sent(&link, now, false);
     if (!open) {
         link_refused(&link);
+        return false;
+    }
+    if (via_camera) {
+        link_sending(&link, now);
+        if (camera_relay_send(packet, HEADER + length, fast ? 5 : usual_rate)) return true;
+        link_unsent(&link);
+        portENTER_CRITICAL(&lock);
+        inflight--;
+        portEXIT_CRITICAL(&lock);
         return false;
     }
     // The send callback may run before esp_now_send returns, so the slot is taken first.
@@ -243,6 +282,17 @@ static void on_sent(const esp_now_send_info_t *info, esp_now_send_status_t statu
     portENTER_CRITICAL(&lock);
     inflight--;
     portEXIT_CRITICAL(&lock);
+}
+
+// The camera's answer to one relayed send. An answer that arrives after its send was given up (RELAY_STALL_US) is not counted again.
+static void relay_sent(bool delivered) {
+    int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL(&lock);
+    bool awaited = inflight > 0;
+    if (awaited) inflight--;
+    relay_progress_us = now;
+    portEXIT_CRITICAL(&lock);
+    if (awaited) link_sent(&link, now, delivered);
 }
 
 static void collect(uint32_t number, uint8_t index, uint8_t count, const uint8_t *data, size_t length) {
@@ -277,7 +327,16 @@ static volatile int64_t heard_us = INT64_MIN / 2;
 
 bool radio_connected(void) { return esp_timer_get_time() - heard_us < 2000000; }
 
-// Runs in the Wi-Fi task: parse, check freshness and order, and queue; never sends.
+static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, int size);
+
+// A packet the camera heard (relay mode), from its receive task: addressed to this drone, with the camera's RSSI and noise floor for the link counts.
+static void relay_received(const uint8_t *src, int8_t rssi, int8_t noise_floor, const uint8_t *packet, size_t length) {
+    wifi_pkt_rx_ctrl_t control = {.rssi = rssi, .noise_floor = noise_floor};
+    esp_now_recv_info_t info = {.src_addr = (uint8_t *)src, .des_addr = own, .rx_ctrl = &control};
+    on_received(&info, packet, (int)length);
+}
+
+// Runs in the Wi-Fi task (in relay mode the camera's receive task): parse, check freshness and order, and queue; never sends.
 static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, int size) {
     if (memcmp(info->src_addr, peer, ESP_NOW_ETH_ALEN)) {
         // Another relay's beacon addressed to this drone: its claim, for adopt().
@@ -530,7 +589,7 @@ static void tick(void *arg) {
             report.channel = channel_now;
             report.rate = fast ? 5 : usual_rate;
             report.power = power_now;
-            report.flags = following | hopping << 1;
+            report.flags = following | hopping << 1 | relay << 2;
             report_pending = true;
         }
         if (report_pending && transmit(LINK_CHANNEL, next_sequence(), (const uint8_t *)&report, sizeof(report), 0, 1)) report_pending = false;
@@ -760,8 +819,8 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         describe(running_sha, sizeof(running_sha), running);
         describe(target_sha, sizeof(target_sha), target);
         // reset is esp_reset_reason_t: 1 power-on, 3 software, 4 panic, 5-7 watchdogs, 9 brownout.
-        *size = snprintf(text, REPLY - 5, "{\"drone\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"running\":\"%s\",\"target\":%s%s%s,\"size\":%lu,\"running_sha\":%s,\"target_sha\":%s,\"reset\":%d}",
-                         own[0], own[1], own[2], own[3], own[4], own[5], running->label, target ? "\"" : "", target ? target->label : "null", target ? "\"" : "",
+        *size = snprintf(text, REPLY - 5, "{\"drone\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"radio\":\"%s\",\"running\":\"%s\",\"target\":%s%s%s,\"size\":%lu,\"running_sha\":%s,\"target_sha\":%s,\"reset\":%d}",
+                         own[0], own[1], own[2], own[3], own[4], own[5], relay ? "camera" : "own", running->label, target ? "\"" : "", target ? target->label : "null", target ? "\"" : "",
                          target ? (unsigned long)target->size : 0UL, running_sha, target_sha, esp_reset_reason());
         return NULL;
     }
@@ -887,6 +946,9 @@ static void update_loop(void *arg) {
     }
 }
 
+static void own_radio_start(void);
+static void mode_task(void *arg);
+
 void radio_start(void) {
     pair_find(true, own, peer);
     // An adopted controller (adopt) stands in for the table's.
@@ -896,8 +958,6 @@ void radio_start(void) {
         nvs_get_blob(stored, "controller", peer, &size);
         nvs_close(stored);
     }
-    esp_now_peer_info_t peer_info = {.ifidx = WIFI_IF_STA};
-    memcpy(peer_info.peer_addr, peer, sizeof(peer));
     session = esp_random() | 1;
     link_init(&link, esp_timer_get_time());
     // A slot written over USB with blank OTA data has no state.
@@ -905,6 +965,27 @@ void radio_start(void) {
     unconfirmed = esp_ota_get_state_partition(esp_ota_get_running_partition(), &image) == ESP_OK &&
                   image == ESP_OTA_IMG_PENDING_VERIFY;
     if (xTaskCreatePinnedToCore(update_loop, "update", 4096, NULL, 2, &update_task, 0) != pdPASS) abort();
+    relay = settings_get(SETTING_radio_via_camera) >= 0.5f;
+    if (relay) {
+        // This board's Wi-Fi is never started, so its MAC is on the air only from the camera.
+        relay_since = esp_timer_get_time();
+        camera_relay_start(relay_received, relay_sent);
+    } else {
+        own_radio_start();
+    }
+    // Low priority on core 0; it starts asking once camera_start (after this) has set up the wire.
+    if (xTaskCreatePinnedToCore(mode_task, "radio mode", 3072, NULL, 1, NULL, 0) != pdPASS) abort();
+    const esp_timer_create_args_t timer_args = {.callback = tick, .name = "radio"};
+    esp_timer_handle_t timer;
+    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(timer, 10000));
+    printf("Radio on channel %d %s, transmit power %d (0.25 dBm), controller %02x:%02x:%02x:%02x:%02x:%02x; reset reason %d\n", WIFI_CHANNEL, relay ? "through the camera" : "on this board", power_boot, peer[0], peer[1], peer[2], peer[3], peer[4], peer[5], esp_reset_reason());
+}
+
+// This board's own radio: Wi-Fi in station mode on WIFI_CHANNEL and ESP-NOW to the controller, at boot or as relay mode's fallback.
+static void own_radio_start(void) {
+    esp_now_peer_info_t peer_info = {.ifidx = WIFI_IF_STA};
+    memcpy(peer_info.peer_addr, peer, sizeof(peer));
     wifi_init_config_t wifi = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(esp_wifi_init(&wifi));
@@ -918,16 +999,38 @@ void radio_start(void) {
     ESP_ERROR_CHECK(esp_now_register_recv_cb(on_received));
     ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
     ESP_ERROR_CHECK(esp_now_add_peer(&peer_info));
-    esp_now_rate_config_t rate = link_rates[usual_rate];
+    esp_now_rate_config_t rate = fast ? fast_rate : link_rates[usual_rate];
     ESP_ERROR_CHECK(esp_now_set_peer_rate_config(peer, &rate));
     ESP_ERROR_CHECK(esp_wifi_get_max_tx_power(&power_boot));
     power_now = power_boot;
+    // The radio settings apply again to this radio.
+    radio_version = 0;
     radio_ready = true;
-    const esp_timer_create_args_t timer_args = {.callback = tick, .name = "radio"};
-    esp_timer_handle_t timer;
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(timer, 10000));
-    printf("Radio on channel %d, transmit power %d (0.25 dBm), controller %02x:%02x:%02x:%02x:%02x:%02x; reset reason %d\n", WIFI_CHANNEL, power_boot, peer[0], peer[1], peer[2], peer[3], peer[4], peer[5], esp_reset_reason());
+}
+
+// Keeps the camera's radio in this board's mode: relay mode with this drone's MAC and its controller's, or its own camera Wi-Fi (FPV, updates, its own MAC) otherwise. The camera keeps the mode in its flash and restarts into a changed one (fw/esp32cam/src/relay.h), so this repeats every second until the camera answers, then every 10 s in case it restarted with another. Its own task, since the camera may take a few seconds or never answer.
+static void mode_task(void *arg) {
+    bool confirmed = false;
+    while (true) {
+        int64_t now = esp_timer_get_time();
+        if (relay && flight_runtime_idle() && now - (heard_us > relay_since ? heard_us : relay_since) > RELAY_FALLBACK_US) {
+            // The camera is told first to give up this board's MAC (it restarts with its own), then this board's radio comes up.
+            relay = false;
+            printf("Nothing heard through the camera for %d s: falling back to this board's radio until the next restart\n", RELAY_FALLBACK_US / 1000000);
+            uint8_t off = 0;
+            char text[64];
+            camera_update('R', &off, 1, 500, text, sizeof(text));
+            own_radio_start();
+        }
+        uint8_t body[13] = {relay};
+        memcpy(body + 1, own, 6);
+        memcpy(body + 7, peer, 6);
+        char text[64];
+        const char *failure = camera_update('R', body, relay ? sizeof(body) : 1, 500, text, sizeof(text));
+        // Any answer but a changed mode confirms; an older camera's refusal too, as it has no relay to leave and in relay mode the fallback handles it. Only silence is asked again soon.
+        confirmed = failure ? strcmp(failure, "The camera did not answer") && strcmp(failure, "The camera link is not started") : !strstr(text, "restart");
+        vTaskDelay(pdMS_TO_TICKS(confirmed ? 10000 : 1000));
+    }
 }
 
 bool radio_log_meta(const char *data, size_t length) {

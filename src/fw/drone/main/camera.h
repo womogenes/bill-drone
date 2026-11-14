@@ -56,6 +56,10 @@ void camera_stats(CameraStats *stats);
 const char *camera_update(uint8_t op, const uint8_t *body, size_t length, uint32_t timeout_ms, char *text, size_t size);
 // Recovery: sends length bytes to the camera at baud, collects what comes back for wait_ms into out (at most size) and restores the link's own baud; for reaching the camera's ROM bootloader (115200) when its application is not running. Returns the bytes collected.
 size_t camera_raw(uint32_t baud, const uint8_t *data, size_t length, uint32_t wait_ms, uint8_t *out, size_t size);
+// The radio relay (radio_via_camera, fw/relay_link.h): call before camera_start. received gets each packet the camera heard with its sender's MAC, RSSI and noise floor (dBm), sent each send's outcome, both from the camera's receive task; the link then gets a transmit buffer.
+void camera_relay_start(void (*received)(const uint8_t *src, int8_t rssi, int8_t noise_floor, const uint8_t *packet, size_t length), void (*sent)(bool delivered));
+// Queues one packet for the camera to send to the controller at rate (fw/link.h link_rates index). False, without waiting, when the wire's buffer has no room.
+bool camera_relay_send(const uint8_t *packet, size_t length, uint8_t rate);
 // Resets the camera through its EN line (drone GPIO 26), into its ROM's download mode with IO0 (GPIO 4) held low when download is set.
 void camera_reset(bool download);
 // Holds the camera in reset through its EN line (off) or releases it to boot (on): its chip, radio and the sensor's clock stop while held, for telling its interference apart (the drone's J 4 and J 5 requests).

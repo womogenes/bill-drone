@@ -38,11 +38,13 @@ accel:
 level:
 	uv run tools/level.py
 
-# Host tests of the camera link: the drone's packet parser, and the camera's black-box format against blackbox.py.
+# Host tests of the camera link: the drone's packet parser, the radio relay's frames, and the camera's black-box format against blackbox.py.
 camera-test:
 	mkdir -p drone/build/host
 	cc -std=c11 -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -Idrone/main drone/test/camera_link_test.c -o drone/build/host/camera_link_test
 	drone/build/host/camera_link_test
+	cc -std=c11 -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -Idrone/main drone/test/relay_link_test.c -o drone/build/host/relay_link_test
+	drone/build/host/relay_link_test
 	uv run esp32cam/test/blackbox_test.py
 
 # Host test of the GPS's UBX parser and configuration request against pyubx2's frames.
