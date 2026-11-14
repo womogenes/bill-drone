@@ -25,7 +25,7 @@ typedef struct {
 } FlipParams;
 
 extern const FlipParams flip_defaults;
-// Each motor's least thrust while the flip or a recovery (recover.c) owns the motors, of the weight: flip_defaults' floor and recover_defaults' idle.
+// The least thrust each motor keeps while the flip or a recovery (recover.c) owns the motors, of the weight: recover_defaults' idle, and the floor below which sw/sim/tune_flip.py does not search flip_defaults' own (0.2645 since the robust retune).
 #define FLIP_FLOOR 0.2f
 
 enum { FLIP_IDLE, FLIP_CLIMB, FLIP_SPIN, FLIP_RIGHT, FLIP_ARREST };
