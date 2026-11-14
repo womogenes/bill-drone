@@ -1,4 +1,9 @@
-import { execFile, execFileSync } from 'node:child_process';
+import {
+  execFile,
+  execFileSync,
+  spawn,
+  type ChildProcess,
+} from 'node:child_process';
 import dgram from 'node:dgram';
 import {
   closeSync,
@@ -9,7 +14,6 @@ import {
   realpathSync,
   writeSync,
 } from 'node:fs';
-import tty from 'node:tty';
 import { resolve } from 'node:path';
 import { decode } from '@/lib/fec';
 import { indexOf } from '@/lib/multipart';
@@ -344,6 +348,16 @@ a[6][termios.VMIN], a[6][termios.VTIME] = 1, 0
 termios.tcflush(fd, termios.TCIOFLUSH)
 termios.tcsetattr(fd, termios.TCSANOW, a)
 termios.tcflow(fd, termios.TCOON)`;
+// The receiver's port read in blocks as they come, to stdout (TERMIOS has set it raw).
+const READER = `import os, sys
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOCTTY)
+out = sys.stdout.buffer
+while True:
+    data = os.read(fd, 65536)
+    if not data:
+        break
+    out.write(data)
+    out.flush()`;
 // heard: when the monitor last said anything, serial: when the ESP32 receiver did; fast: the open port's receiver is an S3 (its beacon is FPVS, fw/fpv_rx make s3), whose own USB carries far more than the ESP32's 1 Mbaud; copies: every chunk copy heard, chunks: the first of each, signal: the monitor's last (dBm), for the status.
 // choose: takes only this camera's shards from now on (its MAC, as K N reports it).
 type Receiver = {
@@ -352,6 +366,8 @@ type Receiver = {
   heard: number;
   serial: number;
   fast: boolean;
+  // Bytes from the receiver's port the parser passed over to find a shard: beacons and reports, and any stream that lost bytes on the way.
+  skipped: number;
   // The S3 receiver's FPVT report (fw/fpv_rx), since its boot: frames heard, declined for buffer room, short of shards (the air), shards its buffer refused, its longest USB write in the last second (us) and bytes written.
   stats?: {
     heard: number;
@@ -398,6 +414,7 @@ function receiver() {
     heard: 0,
     serial: 0,
     fast: false,
+    skipped: 0,
     copies: 0,
     chunks: 0,
   };
@@ -423,11 +440,13 @@ function receiver() {
   monitor.on('error', () => {});
   monitor.bind(5602, '127.0.0.1');
   // The port is opened again, with its settings, after an error or 5 s without a whole shard: another program opening the port (a flash, a serial monitor) can reset the receiver or leave the port at another baud, and an error ended the old stream for good.
-  let port: tty.ReadStream | undefined;
+  let port: NodeJS.ReadableStream | undefined;
+  let reader: ChildProcess | undefined;
   let portPath: string | undefined;
   let heard = 0;
   const open = () => {
-    port?.destroy();
+    reader?.kill();
+    reader = undefined;
     port = undefined;
     portPath = undefined;
     opened.fast = false;
@@ -435,9 +454,11 @@ function receiver() {
       try {
         // Not stty: it applies settings only once the output has drained, and a port left at its defaults echoes the receiver's bytes back while a 0x13 among them (XOFF) holds the output, so it waited forever and froze the server (2026-10-31). This flushes and applies at once, and the timeout bounds it anyway.
         execFileSync('python3', ['-c', TERMIOS, path], { timeout: 3000 });
-        port = new tty.ReadStream(
-          openSync(path, constants.O_RDONLY | constants.O_NOCTTY)
-        );
+        // Read by its own process, whose blocking reads keep up with the S3 receiver's 400 KB/s whatever this server is doing: read here, on the event loop, 8% of the bytes were lost while it was busy (2026-11-14), and torn shards cost a quarter of the VGA frames. Should this server fall behind, the pipe fills and the reader waits, holding the bytes back instead.
+        reader = spawn('python3', ['-c', READER, path], {
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        port = reader.stdout!;
         portPath = path;
         tried.set(path, Date.now());
         break;
@@ -480,11 +501,14 @@ function receiver() {
         }
         const at = buffer.indexOf('FPV2', 3);
         if (at < 0) {
+          opened.skipped += Math.max(0, buffer.length - 3);
           buffer = buffer.subarray(Math.max(0, buffer.length - 3));
           break;
         }
+        opened.skipped += at - 3;
         const length = buffer.readUInt16LE(at - 3);
         if (length < 20 || length > 1500) {
+          opened.skipped += 4;
           buffer = buffer.subarray(at + 1);
           continue;
         }
@@ -494,7 +518,7 @@ function receiver() {
         buffer = buffer.subarray(at + length);
       }
     });
-    port.on('error', () => port?.destroy());
+    port.on('error', () => reader?.kill());
   };
   open();
   setInterval(() => {
@@ -571,6 +595,7 @@ export async function GET(request: Request) {
         short: fpvHub?.short,
         undecoded: fpvHub?.undecoded,
         receiver: store.fpvReceiver?.stats,
+        skipped: store.fpvReceiver?.skipped,
         copies: store.fpvReceiver?.copies,
         chunks: store.fpvReceiver?.chunks,
         signal: store.fpvReceiver?.signal,
