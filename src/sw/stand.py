@@ -569,6 +569,8 @@ def run_checks(directory, meta, cells, pulses, supply, thrust):
             found.append((False, "Load cell", f"no signal (reads {np.mean(raw):,.0f} ± {np.std(raw):.0f}): check the cell's four wires to the HX711"))
         elif np.any(np.abs(raw) >= SATURATED):
             found.append((False, "Load cell", "saturated: overloaded or a wire off"))
+        elif running and np.min(thrust[0][1]) < -50 and -np.min(thrust[0][1]) > peak:
+            found.append((False, "Load cell", f"thrust reversed (down to {np.min(thrust[0][1]):,.0f} g): the motor spins backwards (swap two motor wires) or the prop is on upside down"))
         elif running and peak < 20:
             found.append((False, "Load cell", f"no thrust seen (peak {peak:.0f} g): props off, or the cell isn't loaded"))
         elif rate < 8:
@@ -609,9 +611,8 @@ def analyze(args):
             continue
         t = rows[:, 0] - start
         tare = rows[t < TARE_S - 0.5, 1].mean()
-        grams = (rows[:, 1] - tare) * per_count.get(cell, 1.0)
-        # Lift reads positive whichever way the scale's mass loaded the cell.
-        thrust[cell] = (t, grams if np.mean(grams[t >= TARE_S]) >= 0 else -grams)
+        # The scale is signed lift per count, so thrust pushing the wrong way (the motor spinning backwards) reads negative.
+        thrust[cell] = (t, (rows[:, 1] - tare) * per_count.get(cell, 1.0))
     checks = run_checks(directory, meta, cells, pulses, supply, thrust)
     for ok, label, detail in checks:
         print(f"check {'ok' if ok else 'FAIL'} {label}: {detail}")
