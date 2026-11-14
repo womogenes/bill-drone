@@ -1,4 +1,4 @@
-idf_component_register(SRCS "stand.c" PRIV_REQUIRES esp_driver_uart esp_driver_gpio esp_driver_ledc esp_timer esp_wifi esp_netif esp_event nvs_flash lwip)
+idf_component_register(SRCS "stand.c" PRIV_REQUIRES esp_adc esp_driver_uart esp_driver_gpio esp_driver_ledc esp_timer esp_wifi esp_netif esp_event nvs_flash lwip app_update)
 
 # The Wi-Fi network from the repository's .env (WIFI_SSID, WIFI_PASSWORD), written into a header in the build directory so it stays out of git.
 set(env_file "${CMAKE_CURRENT_LIST_DIR}/../../../../.env")

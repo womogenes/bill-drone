@@ -5,6 +5,7 @@ The thrust stand (fw/stand): runs a throttle profile on one motor while recordin
   scale --mass GRAMS [--cell 0|1]                                    with that mass on the cell, store its grams per count (~/.config/bill-drone/stand.json)
   esc-cal [--top 2000] [--hz 400]                                    teach a new ESC its pulse range, 1000 us to --top (props off); --hz 50 for ESCs that only read servo-rate signals
   spin [--throttle 50] [--seconds 2] [--hz 400]                      spin the motor gently to check the signal reaches the ESC (props off)
+  flash [--port wifi] [--image fw/stand/build/stand.bin]               send new stand firmware over Wi-Fi (build it with make -C fw/stand build); the stand restarts into it
   analyze RUN_DIR [--blades 2]                                       thrust, rpm from the audio, and each step's timing, as a plot and CSV beside the run
 
 Profiles (throttles are the drone's, 0-1200; FLIP.md stage A): steps (A1: hover 600 to 1000, to the flip's floor near 290 and to 1, each and back, 1.5 s apiece), full (A2: 1100 for 1 s from hover), table (0 to the cap in steps of 100, 2 s each, for the thrust table).
@@ -54,6 +55,7 @@ def segments(profile, cap):
 
 TCP_PORT = 3333
 BEACON_PORT = 3334
+UPDATE_PORT = 3335
 
 
 class WifiPort:
@@ -211,8 +213,8 @@ def load_config():
 
 
 def parse(directory):
-    """The stand's lines as arrays: per cell (laptop time s, raw), the ESC pulses (laptop time s, us), on the laptop's clock."""
-    cells, pulses, offsets = {0: [], 1: []}, [], []
+    """The stand's lines as arrays: per cell (laptop time s, raw), the ESC pulses (laptop time s, us) and the supply (laptop time s, V), on the laptop's clock."""
+    cells, pulses, supply, offsets = {0: [], 1: []}, [], [], []
     for line in (directory / "lines.txt").read_text().splitlines():
         parts = line.split()
         if len(parts) < 3:
@@ -227,6 +229,9 @@ def parse(directory):
             elif kind == "E":
                 stand_us, pulse = int(parts[2]), int(parts[3])
                 pulses.append((stand_us, pulse))
+            elif kind == "V":
+                stand_us = int(parts[2])
+                supply.append((stand_us, int(parts[3]) / 1000))
             elif kind == "H":
                 stand_us = int(parts[2])
             else:
@@ -237,7 +242,7 @@ def parse(directory):
     # The least-delayed lines set the clock offset; the stand's crystal drifts by tens of ppm, under a millisecond a minute.
     offset = np.percentile(offsets, 1)
     to_laptop = lambda rows: np.array([(us / 1e6 + offset, value) for us, value in rows]) if rows else np.zeros((0, 2))
-    return {cell: to_laptop(rows) for cell, rows in cells.items()}, to_laptop(pulses)
+    return {cell: to_laptop(rows) for cell, rows in cells.items()}, to_laptop(pulses), to_laptop(supply)
 
 
 def scale(args):
@@ -324,6 +329,20 @@ def spin(args):
     print("done: did the motor turn?")
 
 
+def flash(args):
+    image = Path(args.image).read_bytes()
+    host = find_stand()[0] if args.port == "wifi" else args.port.partition(":")[0]
+    print(f"sending {len(image)} bytes to the stand at {host}")
+    with socket.create_connection((host, UPDATE_PORT), timeout=30) as connection:
+        connection.sendall(len(image).to_bytes(4, "little") + image)
+        answer = connection.makefile().readline().strip()
+    if answer != "OK":
+        raise SystemExit(f"update refused: {answer or 'no answer'}")
+    print("written; the stand is restarting into it")
+    # Back on the network a few seconds after its restart.
+    print(f"stand back at {find_stand(15.0)[0]}")
+
+
 def rpm_track(path, blades):
     """The rotation rate (rpm) over time (s from the audio's start) from the blade-pass tone: the strongest peak of the harmonic sum in 30-400 Hz (900-12000 rpm at two blades), refined between bins; NaN where no tone stands out (motor stopped)."""
     from scipy.signal import stft
@@ -380,7 +399,7 @@ def analyze(args):
     import matplotlib.pyplot as plt
     directory = Path(args.run)
     meta = json.loads((directory / "meta.json").read_text())
-    cells, pulses = parse(directory)
+    cells, pulses, supply = parse(directory)
     start = meta["started_monotonic"]
     per_count = {int(cell): value for cell, value in meta.get("scale", {}).items()}
     thrust = {}
@@ -392,7 +411,13 @@ def analyze(args):
         grams = (rows[:, 1] - tare) * per_count.get(cell, 1.0)
         # Lift reads positive whichever way the scale's mass loaded the cell.
         thrust[cell] = (t, grams if np.mean(grams[t >= TARE_S]) >= 0 else -grams)
-    fig, axes = plt.subplots(4, 1, figsize=(11, 12), sharex=True, gridspec_kw={"height_ratios": [1, 1, 1, 2]})
+    # A supply panel when the run recorded the voltage (stands wired on GPIO35 since 2026-11-14).
+    panels = 5 if len(supply) else 4
+    fig, axes = plt.subplots(panels, 1, figsize=(11, 3 * panels), sharex=True, gridspec_kw={"height_ratios": [1] * (panels - 1) + [2]})
+    if len(supply):
+        axes[2].plot(supply[:, 0] - start, supply[:, 1], lw=1, color="#555")
+        axes[2].set_ylabel("supply (V)")
+        axes = [axes[0], axes[1], axes[3], axes[4], axes[2]]
     if len(pulses):
         axes[0].step(pulses[:, 0] - start, pulses[:, 1] - 1000, where="post", color="#555")
     axes[0].set_ylabel("throttle (0-1200)")
@@ -458,6 +483,13 @@ def analyze(args):
                 print(f"  to throttle {int(pulse) - 1000:4d} at {when:6.2f} s  {(span_t[crossed[0]] - when) * 1000:6.0f}")
     for axis in axes:
         axis.grid(alpha=0.3)
+    if len(supply) and len(pulses):
+        print("supply at the end of each step (V)")
+        for i, (when, pulse) in enumerate(pulses[1:]):
+            until = pulses[i + 2][0] if i + 2 < len(pulses) else supply[-1, 0]
+            held = supply[(supply[:, 0] > until - 0.5) & (supply[:, 0] < until), 1]
+            if len(held):
+                print(f"  throttle {int(pulse) - 1000:4d}  {held.mean():6.2f}")
     fig.suptitle(f"Stand run {directory.name} UTC, profile {meta['profile']}")
     fig.tight_layout()
     fig.savefig(directory / "stand.png", dpi=110)
@@ -484,13 +516,15 @@ def main():
     spinning.add_argument("--throttle", type=int, default=50)
     spinning.add_argument("--seconds", type=float, default=2.0)
     spinning.add_argument("--hz", type=int, default=400)
+    updating = commands.add_parser("flash")
+    updating.add_argument("--image", default=str(Path(__file__).resolve().parent.parent / "fw" / "stand" / "build" / "stand.bin"))
     looking = commands.add_parser("analyze")
     looking.add_argument("run")
     looking.add_argument("--blades", type=int, default=2)
-    for sub in (flying, weighing, calibrating, spinning):
+    for sub in (flying, weighing, calibrating, spinning, updating):
         sub.add_argument("--port", default="wifi")
     args = parser.parse_args()
-    {"run": run, "scale": scale, "esc-cal": esc_cal, "spin": spin, "analyze": analyze}[args.command](args)
+    {"run": run, "scale": scale, "esc-cal": esc_cal, "spin": spin, "flash": flash, "analyze": analyze}[args.command](args)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
-// Thrust stand: one ESC on GPIO25 and up to two HX711 load cells (A: DT GPIO32, SCK GPIO33; B: DT GPIO39, SCK GPIO17), driven from the laptop by sw/stand.py over USB at 921600 baud or over Wi-Fi: it joins the network in the repository's .env (WIFI_SSID, WIFI_PASSWORD, built in by main/CMakeLists.txt) and takes one TCP client at a time on port 3333 with the same lines both ways, announcing "STAND <ip> 3333" by UDP broadcast to port 3334 every second so the laptop finds it. A newer client replaces the old one. The ESC pulse is the drone's (fw/drone/main/flight_rt.c esc_us): 400 Hz, 1000 us plus the throttle (1-1200), and 950 us for throttle 0 (stopped, below the calibrated bottom so the ESC arms and stays off), so a throttle here is a throttle there.
+// Thrust stand: one ESC on GPIO25 and up to two HX711 load cells (A: DT GPIO32, SCK GPIO33; B: DT GPIO39, SCK GPIO17), driven from the laptop by sw/stand.py over USB at 921600 baud or over Wi-Fi: it joins the network in the repository's .env (WIFI_SSID, WIFI_PASSWORD, built in by main/CMakeLists.txt) and takes one TCP client at a time on port 3333 with the same lines both ways, announcing "STAND <ip> 3333" by UDP broadcast to port 3334 every second so the laptop finds it. A newer client replaces the old one. New firmware also comes over Wi-Fi (sw/stand.py flash): its length as 4 bytes little-endian, then the image, on TCP port 3335; the stand answers "OK" and restarts into it, or "ERR <reason>", and refuses while the motor is commanded. The ESC pulse is the drone's (fw/drone/main/flight_rt.c esc_us): 400 Hz, 1000 us plus the throttle (1-1200), and 950 us for throttle 0 (stopped, below the calibrated bottom so the ESC arms and stays off), so a throttle here is a throttle there.
 // Laptop to stand, one command per line: "T <throttle>" sets the throttle, "P <us>" sets a raw pulse for the ESC's range calibration (1000-2200 us), "Z <hz>" sets the ESC's PWM rate (50-400; some ESCs read only 50 Hz servo-style signals, so calibrating or testing those needs it), "C <mask>" chooses the cells read (bit 0 A, bit 1 B; A alone at start, since an unwired B on GPIO39, which has no pull-up, floats). T and P are held for WATCHDOG_US; without a fresh one the pulse falls back to 950 us (motor stopped).
-// Stand to laptop, one line each: "R <reason>" once at boot, why the board last reset (esp_reset_reason: 1 power-on, 3 software, 4 panic, 9 brownout, ...), "F <cell> <us> <raw>" a load cell's reading and when its conversion finished (this board's clock, us), "E <us> <pulse>" the ESC pulse from that moment on, "H <us>" a heartbeat every 100 ms, "W <ip>" on USB when it joins the network.
+// Stand to laptop, one line each: "R <reason>" once at boot, why the board last reset (esp_reset_reason: 1 power-on, 3 software, 4 panic, 9 brownout, ...), "F <cell> <us> <raw>" a load cell's reading and when its conversion finished (this board's clock, us), "E <us> <pulse>" the ESC pulse from that moment on, "H <us>" a heartbeat every 100 ms, "V <us> <mV>" the supply voltage every 10 ms (GPIO35 through the drone's 100k/10k divider, battery side of the ESC, with 100 nF at the pin; it floats when unwired), "W <ip>" on USB when it joins the network.
 // The HX711 converts at 10 Hz unless its RATE pin is high (80 Hz); step timing wants 80 Hz.
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,8 +8,12 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/uart.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include "esp_adc/adc_oneshot.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_ota_ops.h"
 #include "esp_wifi.h"
 #include "lwip/sockets.h"
 #include "nvs_flash.h"
@@ -31,8 +35,12 @@
 #define WATCHDOG_US 300000
 #define CELLS 2
 #define LED GPIO_NUM_2
+// Supply voltage on GPIO35 (ADC1 channel 7) through a 100k/10k divider, as on the drone (fw/drone/main/main.c).
+#define SUPPLY ADC_CHANNEL_7
+#define DIVIDER ((100000 + 10000) / 10000)
 #define TCP_PORT 3333
 #define BEACON_PORT 3334
+#define UPDATE_PORT 3335
 
 static const int dout_pins[CELLS] = {32, 39}, sck_pins[CELLS] = {33, 17};
 static portMUX_TYPE transfer = portMUX_INITIALIZER_UNLOCKED;
@@ -44,6 +52,8 @@ static int esc_hz = ESC_HZ, pulse_now = -1;
 static SemaphoreHandle_t client_lock;
 static int client = -1;
 static char address[16];
+static adc_oneshot_unit_handle_t adc;
+static adc_cali_handle_t calibration;
 
 // To USB and to the Wi-Fi client if there is one. A line the client's socket can't take at once is dropped rather than stalling the sampling.
 static void write_line(const char *line) {
@@ -102,10 +112,25 @@ static void mark_command(void) {
     portEXIT_CRITICAL(&command);
 }
 
-// Every millisecond: each chosen cell's finished conversion, the watchdog, the heartbeat.
+// The supply in millivolts, averaged over four conversions.
+static int supply_mv(void) {
+    int sum = 0;
+    for (int i = 0; i < 4; i++) {
+        int raw, millivolts;
+        adc_oneshot_read(adc, SUPPLY, &raw);
+        adc_cali_raw_to_voltage(calibration, raw, &millivolts);
+        sum += millivolts;
+    }
+    return sum / 4 * DIVIDER;
+}
+
+// Every tick (10 ms): each chosen cell's finished conversion, the supply voltage, the watchdog, the heartbeat.
 static void sample_task(void *arg) {
     int64_t heartbeat_us = 0;
     while (true) {
+        char volts[40];
+        snprintf(volts, sizeof(volts), "V %lld %d\n", (long long)esp_timer_get_time(), supply_mv());
+        write_line(volts);
         for (int cell = 0; cell < CELLS; cell++) {
             int32_t raw;
             int64_t now = esp_timer_get_time();
@@ -200,6 +225,64 @@ static void beacon_task(void *arg) {
     }
 }
 
+static void reply(int sock, const char *text) {
+    send(sock, text, strlen(text), 0);
+}
+
+// One update at a time: the image into the partition not running, then a restart into it. A failed update leaves the running firmware as it was.
+static void update_task(void *arg) {
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    int yes = 1;
+    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    struct sockaddr_in at = {.sin_family = AF_INET, .sin_port = htons(UPDATE_PORT), .sin_addr.s_addr = htonl(INADDR_ANY)};
+    bind(listener, (struct sockaddr *)&at, sizeof(at));
+    listen(listener, 1);
+    static char chunk[4096];
+    while (true) {
+        int sock = accept(listener, NULL, NULL);
+        if (sock < 0) continue;
+        struct timeval timeout = {.tv_sec = 10};
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        portENTER_CRITICAL(&command);
+        bool running = esp_timer_get_time() - commanded_us <= 1000000;
+        portEXIT_CRITICAL(&command);
+        uint8_t header[4];
+        size_t have = 0;
+        int got;
+        while (have < 4 && (got = recv(sock, header + have, 4 - have, 0)) > 0) have += got;
+        uint32_t size = header[0] | header[1] << 8 | header[2] << 16 | (uint32_t)header[3] << 24;
+        const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
+        esp_ota_handle_t ota;
+        if (running) {
+            reply(sock, "ERR motor commanded in the last second\n");
+        } else if (have < 4 || !target || size == 0 || size > target->size) {
+            reply(sock, "ERR bad length or no update partition\n");
+        } else if (esp_ota_begin(target, size, &ota) != ESP_OK) {
+            reply(sock, "ERR begin\n");
+        } else {
+            uint32_t written = 0;
+            esp_err_t status = ESP_OK;
+            while (written < size && status == ESP_OK && (got = recv(sock, chunk, size - written < sizeof(chunk) ? size - written : sizeof(chunk), 0)) > 0) {
+                status = esp_ota_write(ota, chunk, got);
+                written += got;
+            }
+            if (written < size || status != ESP_OK) {
+                esp_ota_abort(ota);
+                reply(sock, "ERR short or failed write\n");
+            } else if (esp_ota_end(ota) != ESP_OK || esp_ota_set_boot_partition(target) != ESP_OK) {
+                reply(sock, "ERR image rejected\n");
+            } else {
+                reply(sock, "OK\n");
+                shutdown(sock, SHUT_RDWR);
+                close(sock);
+                vTaskDelay(pdMS_TO_TICKS(200));
+                esp_restart();
+            }
+        }
+        close(sock);
+    }
+}
+
 // One client at a time; a new connection replaces the old (a laptop reconnecting after a dropout).
 static void server_task(void *arg) {
     int listener = socket(AF_INET, SOCK_STREAM, 0);
@@ -262,11 +345,18 @@ void app_main(void) {
         gpio_config_t dout = {.pin_bit_mask = 1ULL << dout_pins[cell], .mode = GPIO_MODE_INPUT, .pull_up_en = dout_pins[cell] < 34};
         ESP_ERROR_CHECK(gpio_config(&dout));
     }
+    adc_oneshot_unit_init_cfg_t unit = {.unit_id = ADC_UNIT_1};
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&unit, &adc));
+    adc_oneshot_chan_cfg_t sensing = {.atten = ADC_ATTEN_DB_6, .bitwidth = ADC_BITWIDTH_12};
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc, SUPPLY, &sensing));
+    adc_cali_line_fitting_config_t fitting = {.unit_id = ADC_UNIT_1, .atten = ADC_ATTEN_DB_6, .bitwidth = ADC_BITWIDTH_12};
+    ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&fitting, &calibration));
     commanded_us = -WATCHDOG_US;
     xTaskCreatePinnedToCore(sample_task, "sample", 4096, NULL, 10, NULL, 1);
 
     start_wifi();
     xTaskCreatePinnedToCore(server_task, "server", 4096, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(update_task, "update", 4096, NULL, 3, NULL, 0);
     xTaskCreatePinnedToCore(beacon_task, "beacon", 3072, NULL, 2, NULL, 0);
 
     char line[64];
