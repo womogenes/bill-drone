@@ -2,6 +2,25 @@
 
 The roll flip from the GPS hold, behind a setting and a one-shot request, on drone 1. It builds clean (`nice -n 19 taskset -c 0-3 make -C src/fw build`) and has only been flown in the simulator. Nothing here has flown.
 
+## Review and cleanup before the next outdoor session (2026-11-13, william/cleanup)
+
+Everything merged since 63d8b99 (the flip, the ±2000 deg/s gyro, tip_limit and bank_tilt, the recovery and Level, takeoff vectoring, the touchdown cut and faster descents, the link-loss hold, patterns ending on landings, hover_nudge_accel) reviewed as one firmware. Builds clean with no warnings; nothing here has flown.
+
+**Fixed**
+- **A short link dropout in the GPS hold cut the motors in the air.** e526c3a waits a flying hold's lost link out for LINK_HOLD_S (2 s) before the link-loss landing, but the watchdog's stop branch below it still fired on any link stale for 0.5 s with the motors spinning: with the link gone 0.5-2 s in the hold the landing did not start (not yet lost) and the stop did. The stop now goes by the same test, so a flying hold neither lands nor stops until the link has been gone 2 s; everything else stops or lands at 0.5 s as before. The sims do not model the heartbeat; this was found by reading the branches.
+- **After a recovery the hold is waited out too.** A link still lost when a recovery ended landed the drone at once (it had long been gone); it now holds LINK_HOLD_S first, as sw/sim/flip_firmware.py and the recovery's tables below always flew it.
+- **Leveling and righting no longer alternate within a tick.** With tip_limit under the righting's right_angle (45 against 58 degrees, the defaults) a slow drone between the two went leveling → righting → leveling every tick, its integrators restored and its settling restarted each time. Leveling now goes back to righting only beyond both. On the fitted plant (recover_firmware, 256 runs a row, airframe_2026-11-12_flip) before → after: tip 94.1 → 94.5% (2 m), 94.5 → 94.5% (3 m); tilt 66.0 → 65.6%, 74.6 → 74.2%; tumble 25.8 → 25.4%, 42.6 → 42.2%; link-loss landing recovered 55.9 → 54.3%, 51.2 → 51.6% (touched the ground unchanged, 71.5 and 53.9%); Level 96.5 → 96.9%, 96.5 → 97.3%; the flip from 3 m unchanged (97.7% clean). Within a few runs of 256 either way.
+- sw/flight_steps.py: from `high` on every step sets tip_limit 45, flip_enable 0 and recover_enable 0 unless it tests them (a burst or the flip after the `recover` step had kept recover_enable 1); a new `speed` step for the staged speed plan's first flight (the 3 m hold as flown on 2026-11-11 with failsafe_speed 4, failsafe_distance 40).
+- The dashboard: the mode label shows the armed drone's own hover mode (the hold a recovery or Level latches reads Hover), the gains dialog has hover_nudge_speed, hover_nudge_accel, pattern_distance and pattern_tilt, and the flight report no longer calls a pushed GPS hold a fly-away (the limit rises by hover_nudge_speed for the brake after a nudge).
+
+**Cleaned up**: flip_limit and flip_limit_with are one flip_limit(run, recovering, ...); flight_rt.c maps a collective to throttle in one place; speed_limit.py and nudge_replay.py build their plant in one function; the flip and recovery tools (flip_firmware, recover_firmware, tune_flip, flip_replay) default to models/airframe_2026-11-12_raised.json; stale comments (FLIP_FLOOR, flip_enable's range, the pattern's landing stop).
+
+**Unchanged** with flip_enable 0, recover_enable 0 and hover_nudge_accel 0 (on drone-v0, byte for byte against a721541): sweep.py's nominal hover, band_hold.py (four cases, 16 seeds), landing_test.py (200), outdoor.py (16 a wind at 0/2/4/6 m/s, and --gps --baro 2 at 0 and 2), takeoff_test.py, flip_firmware.py --no-flip on airframe_2026-11-09 (wide) and on the raised airframe (flip), speed_limit.py (1 and 3 m/s at hover_tilt 10 and 15, and 3 m/s at hover_nudge_accel 1.5) and nudge_replay.py on 2026-11-12T00-53-56. The flip's headline checks print exactly what a721541 did and what "Robust retune on the raised airframe" below has: per rotor_momentum band 99.6/99.6/100/100/97.6% clean and 0/0/0/0/2.0% on the ground (256 a band, seed 95000), the bursts 100/100/100/100/98.4% with none on the ground, the fitted plant 100% clean with 0.23 m lost at worst (seed 95000; 0.31 m at seed 90000).
+
+**The recovery on the raised airframe** (recover_firmware's new default, 256 runs a row, 2 m / 3 m): tip 95.7 / 95.7% recovered (1.6% touched), tilt 73.4 / 85.5% (19.5 / 7.0%), tumble 27.3 / 46.5% (69.9 / 50.0%), link-loss landing 53.5 / 55.1% recovered (68.8 / 51.6% touched), Level 98.0 / 98.0%, and from 3 m the robust flip 99.6% clean with none on the ground, 10 recoveries started. A few points better than on the pre-raise fitted plant in every row; the recovery's gains are unchanged and still take their authority from the settings' model (pivot_height 0.02 m), not flip.c's raised one.
+
+**Settings blob**: 2021 of its 2048 bytes (112 settings), room for one more name of up to 22 characters before the static assert stops the build.
+
 ## After the first flip (2026-11-12 02:27 UTC, william/flip-fit)
 
 **Do not fly the full flip on this firmware until stages A-D below have passed.** The first flip (step 7 below, as flown) failed: the spin rolled at 550 deg/s instead of the sim's 950 while the pitch swung to -36 degrees, the righting began with the pitch rate at +380 deg/s and rising, the drone went over the top in pitch and the pilot stopped it at 1.3 m; it crashed and the left ESC burnt at an internal joint. src/sw/sim/models/NOTES.md "The first flip, replayed" has the replay and the fit; this section has what the sim assumes, what changed in flip.c, the retuned flip's sim results and the staged tests.
@@ -172,10 +191,10 @@ Each stage has a prediction from the sim (the robust flip_defaults on models/air
 **Settings** (settings.def; every new one defaults to today's behavior):
 - `tip_limit`: 20-80 degrees, default 45 as the constant was.
 - `bank_tilt`: 0-80 degrees, default 0 = off. Past it the attitude estimate runs on the gyro alone, and in manual flight the collective grows by 1/cos(tilt), at most 2x.
-- `flip_enable`: 0 or 1, default 0, which refuses every request.
+- `flip_enable`: 0 or 1, default 0, which refuses every request (0-3 since william/flip-fit: 2 and 3 are the staged bursts).
 - `flip_height`: 2.5-5 m, default 3.
-- The caps on `hover_climb` and `hover_ceiling` go from 1.5 and 3 m to 3 and 3.5 m. Their defaults are unchanged.
-- The settings blob is 1966 of its 2048 bytes, and a static assert now keeps it inside.
+- The caps on `hover_climb` and `hover_ceiling` go from 1.5 and 3 m to 3 and 3.5 m (5 and 5.5 since william/flip-fit). Their defaults are unchanged.
+- The settings blob is 1966 of its 2048 bytes (2021 after recover_enable and hover_nudge_accel), and a static assert now keeps it inside.
 
 **Test pattern limits.** The roll and pitch channels go from 10 to 60 degrees: the drone refused the ladder's 20-35 degree steps. `pattern_tilt` (at most 60) and the tip cut bound what is flown. fw/controller/log_format.py `PATTERN_LIMITS` holds the same limits:
 - the bridge refuses a pattern past them before sending it;
@@ -404,7 +423,7 @@ Two safety features for aggressive maneuvers on drone 1, after the first real fl
 - **Righting** owns the motors: it flies its own quaternion on the gyro alone (the Euler estimate breaks down near 90 degrees of pitch), turns the thrust axis toward up on differential thrust (roll) and the servos' common tilt (pitch), rolling the long way round when far over and mostly pitched, with each motor kept at 20% of the weight or more, the flip's floor (a motor commanded to throttle 1 mid-spin on 2026-11-12 took 0.1 s or more to come back), and the throttles slewed and capped as the flip's (the full range in no less than 0.12 s, at most 1100).
 - **Leveling**, once within 58 degrees of upright and turning under 115 deg/s: the attitude controller at level, on the righting's quaternion's roll and pitch (within 90 degrees, so unambiguous), its integrators as before the event, the collective stopping the vertical speed. Once within 10 degrees, still and under 0.3 m/s vertically for 0.3 s (or after 2 s) it hands to the hover's hold. The estimate stays on the gyro for 1 s more.
 - **Level** (dashboard button between Flip and the STOP square; request `h`): from any mode, with or without `recover_enable`, ends a test pattern or a flip and starts the same recovery (straight to leveling when already near upright), then the hold. It needs nothing more from the laptop once taken: a lost link afterwards is the hold's, waited out 2 s then landed. STOP stays the motor cut.
-- **After either**, the hover holds (GPS or tag hold, whatever is set) whatever mode the laptop streams until the pilot picks another mode (L lands, manual takes the stick back); a hold engaged from manual flight climbs to `hover_climb` as pressing H in the air does. The laptop's tilt is dropped only while the recovery and its grace run. The dashboard's mode label shows the mode it sends, not this hold.
+- **After either**, the hover holds (GPS or tag hold, whatever is set) whatever mode the laptop streams until the pilot picks another mode (L lands, manual takes the stick back); a hold engaged from manual flight climbs to `hover_climb` as pressing H in the air does. The laptop's tilt is dropped only while the recovery and its grace run. The dashboard's mode label shows the drone's own mode while armed, so it reads Hover through this hold (it showed the mode sent until william/cleanup).
 - **The tip cut still applies:**
   - with `recover_enable` 0;
   - before the attitude controller has been airborne 1 s, or in a hover takeoff before liftoff: a takeoff that tips over still has its feet down, and driving the motors there rolls it along the ground;
@@ -516,7 +535,7 @@ Flash `william/merge-sim` (the recovery with the retuned flip) as in step 1 abov
 1. Props off, drone in hand or on a stand. `uv run -m sw.flight_steps recover --apply` (tip_limit 30, recover_enable 1).
 2. Arm, stay in manual, raise the collective past integrate_throttle (580) and hold it there more than 1 s (the recovery waits for 1 s airborne).
 3. Tilt the drone by hand past 30 degrees in roll: the status line shows `Recovering (tipped): righting`, the low side's motor speeds up and the high side's slows (never stopping, and ramping: the full throttle range takes at least 0.12 s, and no motor goes past 1100). Tilt it nose-down past 30: both servos tilt back (nose-up), with both motors up. Hold it tilted: after 2.5 s the motors stop with "Recovery failed".
-4. Arm again and repeat, bringing it back level within a second: `leveling`, then the drone's hold (the recording's hover mode, flags bits 1-2, goes to 1; the dashboard's mode label still shows what it sends). STOP.
+4. Arm again and repeat, bringing it back level within a second: `leveling`, then the drone's hold (the recording's hover mode, flags bits 1-2, goes to 1, and so does the dashboard's mode label). STOP.
 5. Arm, collective up past 580 for 1 s, press Level: `Recovering (level): leveling`, then the hold. STOP.
 6. In the recording: the `recovery` (1, 2) and `recovery_cause` (1, 4) columns, the throttles and servos against the gyro's sign, stop reason 10 on the held tilt.
 7. `uv run -m sw.flight_steps norecover --apply` before flying anything else.
