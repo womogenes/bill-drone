@@ -16,9 +16,8 @@ import numpy as np
 
 from sw.flight_log import events, metadata, parse_settings, read_flight, recording
 from sw.flight_log import settings as recording_settings
-from sw.sim.outdoor import plant as outdoor_plant
 from sw.sim.pitch_check import SWING, band
-from sw.sim.speed_limit import AIRFRAME, BAND_ACCEL, BAND_TILT, STOPPED
+from sw.sim.speed_limit import AIRFRAME, STOPPED, banded_plant
 from sw.sim.sweep import run
 
 # Liftoff after the motors start (s; sw/sim/gps_truth.py LIFTOFF).
@@ -78,12 +77,9 @@ def measure(t, target_pitch, target_roll, speed_t, speed, nudge):
 
 def fly(job):
     airframe, flown, segments, seconds, seed = job
-    rng = random.Random(seed + 77000)
-    p, _ = outdoor_plant(airframe, rng.uniform(0, 1), seed, True, False, flown["hover_climb"], baro=True, level_sd=1.3, pushes=True)
-    p |= {"tilt_offset": BAND_TILT, "flight_accel_bias": (BAND_ACCEL, 0.0, 0.0)}
+    p, _, s = banded_plant(airframe, flown, seed, random.Random(seed + 77000).uniform(0, 1))
     if segments:
         p["nudge"] = segments
-    s = flown | {"hover_gps_heading": p["gps"]["heading"] + random.Random(seed + 1).uniform(-30, 30)}
     log = []
     result = run(s, p, seconds=seconds, seed=seed, log=log, hover=True)
     lifted = result.get("liftoff_s")

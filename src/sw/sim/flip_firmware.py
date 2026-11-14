@@ -1,7 +1,7 @@
 """
-The firmware's roll flip (fw/drone/main/flip.c) as flight_rt.c flies it, from the GPS hold, in the full-attitude simulation: uv run -m sw.sim.flip_firmware [--n 256] [--bands 0 -2.5 -5] [--settings 2026-11-11T23-35] [--flip-at 25] [--workers 16] [--no-flip] [--airframe airframe_2026-11-12_flip.json] [--randomize wide|flip|none] [--batch 16]
+The firmware's roll flip (fw/drone/main/flip.c) as flight_rt.c flies it, from the GPS hold, in the full-attitude simulation: uv run -m sw.sim.flip_firmware [--n 256] [--bands 0 -2.5 -5] [--settings 2026-11-11T23-35] [--flip-at 25] [--workers 16] [--no-flip] [--airframe airframe_2026-11-12_raised.json] [--randomize flip|wide|none] [--batch 16]
 
-Each run flies drone 1 as of 2026-11-09 (sw/sim/toss.py plant, randomized as recover.randomization; --airframe another, --randomize flip draws every term the flip leans on that nothing real tests over its whole range: uncertain) in sw/sim/rigid.py on the firmware's own C, ticked in flight_rt.c's order: the attitude estimate (flight_math.c flight_attitude), the flip (flip.c flip_tick), the tip cut or with recover_enable the recovery in its place (recover.c recover_tick; tip_limit, off where flip_tip_exempt says), the fly-away failsafe (guard.c), the hover hold (hover.c) on the GPS (10 Hz, as sweep.run's, sw/sim/outdoor.py GPS) and the barometer (sweep.BARO), the attitude controller (flight_control), while the flip or the recovery's righting owns the motors flip_actuators, and flip_limit's slew and cap. It rests, arms, takes off in the hold and climbs to hover_climb; from --flip-at s after liftoff it asks for the flip once a second as the dashboard's Flip button does, through flip_refusal with the checks flight_runtime_flip makes, until one starts. The IMU reads no more than --gyro-range and --accel-range (the firmware's ±2000 deg/s and ±2 g by default). Calm air: rigid.py has no wind.
+Each run flies drone 1 on the raised pivots (models/airframe_2026-11-12_raised.json; --airframe another) with every term the flip leans on that nothing real tests drawn over its whole range (--randomize flip, uncertain; wide: the sw/sim/toss.py plant randomized as recover.randomization, as on airframe_2026-11-09.json before 2026-11-13) in sw/sim/rigid.py on the firmware's own C, ticked in flight_rt.c's order: the attitude estimate (flight_math.c flight_attitude), the flip (flip.c flip_tick), the tip cut or with recover_enable the recovery in its place (recover.c recover_tick; tip_limit, off where flip_tip_exempt says), the fly-away failsafe (guard.c), the hover hold (hover.c) on the GPS (10 Hz, as sweep.run's, sw/sim/outdoor.py GPS) and the barometer (sweep.BARO), the attitude controller (flight_control), while the flip or the recovery's righting owns the motors flip_actuators, and flip_limit's slew and cap. It rests, arms, takes off in the hold and climbs to hover_climb; from --flip-at s after liftoff it asks for the flip once a second as the dashboard's Flip button does, through flip_refusal with the checks flight_runtime_flip makes, until one starts. The IMU reads no more than --gyro-range and --accel-range (the firmware's ±2000 deg/s and ±2 g by default). Calm air: rigid.py has no wind.
 
 Settings: the recording's (--settings), then FLIGHT (the GPS hold as the roll-step ladder was cleared with on 2026-11-12, the hold at 3 m, the flip on), then --set. The firmware's thrust scales and hover_mass are set to each drawn plant's, as the drone's are calibrated to its own motors and weight.
 
@@ -51,7 +51,9 @@ RECOVER_MAX = 3
 RECOVER_AIRBORNE_S = 1.0
 RECOVER_LAND_HEIGHT = 1.0
 LINK_HOLD_S = 2.0
-# flight_rt.c slews and caps the recovery's throttles as the flip's (flip_limit_with while recover_gyro_only); options["recover_limit"] False flies them unlimited, as before.
+# The plant by default: drone 1 on the raised pivots (models/NOTES.md "Raised pivots"), with the flip's untested terms drawn (--randomize flip).
+AIRFRAME = "airframe_2026-11-12_raised.json"
+# flight_rt.c slews and caps the recovery's throttles as the flip's (flip_limit while recover_gyro_only); options["recover_limit"] False flies them unlimited, as before.
 RECOVER_LIMIT = True
 
 
@@ -124,8 +126,7 @@ for name in ("recover_active", "recover_gyro_only"):
     getattr(library, name).argtypes = [ctypes.POINTER(RecoverRun)]
     getattr(library, name).restype = ctypes.c_bool
 library.recover_tick.argtypes = [ctypes.POINTER(RecoverRun), ctypes.POINTER(RecoverParams), ctypes.POINTER(RecoverInput), ctypes.c_void_p, ctypes.c_void_p, FLOATS, ctypes.POINTER(RecoverOutput)]
-library.flip_limit.argtypes = [ctypes.POINTER(Run), ctypes.c_float * 2, ctypes.c_float]
-library.flip_limit_with.argtypes = [ctypes.POINTER(Run), ctypes.c_bool, ctypes.c_float * 2, ctypes.c_float]
+library.flip_limit.argtypes = [ctypes.POINTER(Run), ctypes.c_bool, ctypes.c_float * 2, ctypes.c_float]
 library.flip_actuators.argtypes = [ctypes.POINTER(Output), ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float * 2, ctypes.c_float * 2]
 DEFAULTS = Params.in_dll(library, "flip_defaults")
 RECOVER_DEFAULTS = RecoverParams.in_dll(library, "recover_defaults")
@@ -428,7 +429,7 @@ def fly(job):
                 servos = (ctypes.c_float * 2)()
                 library.flip_actuators(ctypes.byref(recovered.motors if recovered.owned else out), controller.command.buffer_info()[0], scales[i], scales[i], 1200.0, 60.0, throttles, servos)
                 left_angle, right_angle = math.radians(servos[0]), math.radians(servos[1])
-            library.flip_limit_with(ctypes.byref(run), limit_recovery and library.recover_gyro_only(ctypes.byref(recovery)), throttles, R.DT)
+            library.flip_limit(ctypes.byref(run), limit_recovery and library.recover_gyro_only(ctypes.byref(recovery)), throttles, R.DT)
             left, right = round(throttles[0]), round(throttles[1])
             lane["commanded"] = (left, right)
             # An ESC that stops its motor under its deadband (options["deadband"]), so it restarts from standstill (motor_start).
@@ -519,8 +520,8 @@ def main():
     parser.add_argument("--gyro-range", type=float, default=2000.0, help="the gyro's full scale (deg/s; the firmware's ±2000)")
     parser.add_argument("--accel-range", type=float, default=2.0, help="the accelerometer's full scale (g)")
     parser.add_argument("--no-flip", action="store_true", help="the same plants without the request only")
-    parser.add_argument("--airframe", default="airframe_2026-11-09.json", help="the plant's airframe in sw/sim/models (airframe_2026-11-12_flip.json: fitted to the first real flip)")
-    parser.add_argument("--randomize", choices=("wide", "flip", "none"), default="wide", help="wide: recover.randomization about the airframe (as before); flip: every term the flip leans on that nothing real tests, drawn over its whole plausible range (uncertain); none: the airframe as saved")
+    parser.add_argument("--airframe", default=AIRFRAME, help="the plant's airframe in sw/sim/models (airframe_2026-11-12_flip.json: fitted to the first real flip before the raise; airframe_2026-11-09.json --randomize wide: the plant of FLIP.md's first tables)")
+    parser.add_argument("--randomize", choices=("wide", "flip", "none"), default="flip", help="wide: recover.randomization about the airframe (the default before 2026-11-13); flip: every term the flip leans on that nothing real tests, drawn over its whole plausible range (uncertain); none: the airframe as saved")
     parser.add_argument("--batch", type=int, default=16, help="runs per job; with --randomize flip each job draws its own untested terms")
     args = parser.parse_args()
     settings = recording_settings(recording(args.settings)) | FLIGHT | parse_settings(args.set)

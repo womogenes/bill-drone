@@ -96,7 +96,8 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
     run->vertical += ((up[0] * in->accel[0] + up[1] * in->accel[1] + up[2] * in->accel[2]) - 1) * GRAVITY * dt;
     const FlipAuthority *a = &in->authority;
     bool slow = fabsf(w[0]) < p->right_rate && fabsf(w[1]) < p->right_rate;
-    if (run->stage == RECOVER_LEVEL && tilt > in->tip_limit) run->stage = RECOVER_RIGHT;
+    // Leveling goes back to righting only beyond both right_angle and tip_limit: with tip_limit under right_angle (45 against 58 degrees by default) a drone between them was handed to leveling and back every tick, its integrators restored and its settling restarted each time.
+    if (run->stage == RECOVER_LEVEL && tilt > fmaxf(in->tip_limit, p->right_angle)) run->stage = RECOVER_RIGHT;
     if (run->stage == RECOVER_RIGHT && tilt < p->right_angle && slow) {
         // To the attitude controller, which ran on meanwhile with its outputs unused: the integrators and dead-reckoned velocity from before.
         run->stage = RECOVER_LEVEL;

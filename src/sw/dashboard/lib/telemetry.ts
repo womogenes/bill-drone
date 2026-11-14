@@ -98,6 +98,7 @@ export type ControlSettings = {
   hover_yaw_rate?: number;
   hover_climb_rate?: number;
   hover_nudge_speed?: number;
+  hover_nudge_accel?: number;
   hover_speed_tilt?: number;
   hover_speed_pitch?: number;
   hover_speed_takeoff?: number;
@@ -119,6 +120,8 @@ export type ControlSettings = {
   failsafe_time?: number;
   failsafe_land?: number;
   failsafe_tilt?: number;
+  pattern_distance?: number;
+  pattern_tilt?: number;
   tip_limit?: number;
   bank_tilt?: number;
   flip_enable?: number;
@@ -273,10 +276,17 @@ export type Reading = {
   control_status?: {
     reason: string;
     throttle_latched?: boolean;
-    // The drone's guards (fw/drone/main/guard.h): the fly-away failsafe's phase, whether distance (not speed) set it off, and why the test pattern stopped.
+    // The drone's guards (fw/drone/main/guard.h): the fly-away failsafe's phase, whether distance (not speed) set it off, and why the test pattern stopped (log_format.py PATTERN_STOPS).
     failsafe?: 'brake' | 'hold' | 'land' | null;
     failsafe_far?: boolean;
-    pattern_stop?: 'distance' | 'tag lost' | 'tilt' | 'stick' | 'landing' | null;
+    pattern_stop?:
+      | 'distance'
+      | 'tag lost'
+      | 'tilt'
+      | 'stick'
+      | 'landing'
+      | 'recovery'
+      | null;
     // The roll flip's phase (fw/drone/main/flip.h), null when none runs.
     flip?: 'climb' | 'flip' | 'arrest' | null;
     // A recovery's stage and what started it (fw/drone/main/recover.h), null when none runs.

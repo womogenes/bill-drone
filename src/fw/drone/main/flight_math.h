@@ -60,7 +60,7 @@ typedef struct {
     float tip_limit;
     // Banked flight past this setpoint (radians, 0 = off; settings.def bank_tilt). Runtime-only, last.
     float bank_tilt;
-    // The roll flip (flip.h): whether the laptop may start one (1) and the least height it starts from (m). Runtime-only, last.
+    // The roll flip (flip.h): whether the laptop may start one (1) or a staged burst (2 and 3, flip_turn), 0 none, and the least height it starts from (m). Runtime-only, last.
     float flip_enable, flip_height;
     // Tumble recovery in place of the tip cut in flight (recover.h; settings.def recover_enable). Runtime-only, last.
     float recover_enable;

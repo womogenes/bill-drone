@@ -1,5 +1,5 @@
 """
-A logged flight replayed open loop in the full-attitude simulation (sw/sim/rigid.py): the plant is driven by the recording's own motor throttles and servo angles from the logged state at the start, and its body rates, specific force and height are compared with the log's: uv run -m sw.sim.flip_replay [--recording 2026-11-12T02-27-04] [--start 9.85] [--end 11.0] [--airframe airframe_2026-11-09.json] [--plot out.png]
+A logged flight replayed open loop in the full-attitude simulation (sw/sim/rigid.py): the plant is driven by the recording's own motor throttles and servo angles from the logged state at the start, and its body rates, specific force and height are compared with the log's: uv run -m sw.sim.flip_replay [--recording 2026-11-12T02-27-04] [--start 9.85] [--end 11.0] [--airframe airframe_2026-11-12_raised.json] [--plot out.png]
 
 For the flip of 2026-11-12 02:27:04 UTC (drone 1's first, which failed): what the plant must have to make the logged rates from the logged commands. The attitude starts from the logged estimate (gyro-only through the flip, so as good as the gyro), the rates from the gyro, the climb rate from the hold's, the horizontal speed zero; the motors and servos start steady at the first logged commands. The thrust trim is the recording's own (its airborne median table thrusts carry the weight, as identify_airframe takes each flight's), so the start holds its height. The gyro is clipped at the recording's full scale as the drone's was.
 """
@@ -210,7 +210,7 @@ def main():
     parser.add_argument("--recording", default=FLIP)
     parser.add_argument("--start", type=float, default=START)
     parser.add_argument("--end", type=float, default=END)
-    parser.add_argument("--airframe", default="airframe_2026-11-09.json")
+    parser.add_argument("--airframe", default="airframe_2026-11-12_raised.json", help="the plant's airframe in sw/sim/models (NOTES.md's first replay: airframe_2026-11-09.json)")
     parser.add_argument("--geometry", help="a geometry file in sw/sim/models instead of the airframe's own")
     parser.add_argument("--plot", type=Path, help="save real against the replay on --airframe and on --fitted, open and closed loop, to this file")
     parser.add_argument("--fitted", default="airframe_2026-11-12_flip.json")

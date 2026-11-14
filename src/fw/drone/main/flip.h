@@ -25,7 +25,7 @@ typedef struct {
 } FlipParams;
 
 extern const FlipParams flip_defaults;
-// Each motor's least thrust while the flip or a recovery (recover.c) owns the motors, of the weight: flip_defaults' floor and recover_defaults' idle.
+// The least thrust each motor keeps while the flip or a recovery (recover.c) owns the motors, of the weight: recover_defaults' idle, and the floor below which sw/sim/tune_flip.py does not search flip_defaults' own (0.2645 since the robust retune).
 #define FLIP_FLOOR 0.2f
 
 enum { FLIP_IDLE, FLIP_CLIMB, FLIP_SPIN, FLIP_RIGHT, FLIP_ARREST };
@@ -122,9 +122,7 @@ bool flip_tip_exempt(const FlipRun *run);
 int flip_phase(const FlipRun *run);
 // One control tick, right after the attitude estimate: the flip's step; while the estimate is on the gyro alone (flip_gyro_only: the climb to FLIP_GRACE after the hand-back) it takes the roll and pitch of the flip's own quaternion every tick, at the hand-back the controller takes its integrators and dead-reckoned velocity from before the flip; at its end the hover's height integral is given back too, so neither carries what the flip wound into them.
 void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, Attitude *attitude, Controller *controller, float *height_integral, FlipOutput *out);
-// Every control tick, on the throttles about to be sent (flight_rt.c, after the attitude controller and flip_actuators): from the flip's start until FLIP_GRACE after its hand-back each moves at most params->slew a second from the last tick's and stays under params->throttle_cap, so neither motor jumps between idle and full throttle (the ESCs' current and voltage spikes); a stopped motor (0) stays stopped. Otherwise it only follows them.
-void flip_limit(FlipRun *run, float *throttle, float dt);
-// flip_limit, limiting also while recovering holds: flight_rt.c slews and caps a recovery's throttles and its grace's (recover_gyro_only) as the flip's, so a righting's bang-bang demands cannot jump a motor between idle and full throttle either (sw/sim/recover_firmware.py: unlimited, the tuned righting stepped a throttle by up to 1000 in one tick).
-void flip_limit_with(FlipRun *run, bool recovering, float *throttle, float dt);
+// Every control tick, on the throttles about to be sent (flight_rt.c, after the attitude controller and flip_actuators): from the flip's start until FLIP_GRACE after its hand-back, and while recovering holds (flight_rt.c: a recovery and its grace, recover_gyro_only), each moves at most params->slew a second from the last tick's and stays under params->throttle_cap, so neither motor jumps between idle and full throttle (the ESCs' current and voltage spikes; sw/sim/recover_firmware.py: unlimited, the recovery's tuned righting stepped a throttle by up to 1000 in one tick); a stopped motor (0) stays stopped. Otherwise it only follows them.
+void flip_limit(FlipRun *run, bool recovering, float *throttle, float dt);
 // While the flip owns the motors: its thrusts (N) as throttles through the thrust table and each motor's thrust scale (as flight_control's, battery compensation included), a running motor never stopped, and its tilts as servo angles (degrees, as flight_rt.c's state.servo, within servo_limit).
 void flip_actuators(const FlipOutput *out, const Command *command, float left_scale, float right_scale, float throttle_max, float servo_limit, float *throttle, float *servo);

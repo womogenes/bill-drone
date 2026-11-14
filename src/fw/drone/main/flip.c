@@ -271,11 +271,7 @@ void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, At
     if (flip_gyro_only(run)) flip_euler(run->flip.q, &attitude->roll, &attitude->pitch);
 }
 
-void flip_limit(FlipRun *run, float *throttle, float dt) {
-    flip_limit_with(run, false, throttle, dt);
-}
-
-void flip_limit_with(FlipRun *run, bool recovering, float *throttle, float dt) {
+void flip_limit(FlipRun *run, bool recovering, float *throttle, float dt) {
     const FlipParams *p = run->params;
     bool limited = flip_active(run) || grace(run) || recovering;
     for (int side = 0; side < 2; side++) {

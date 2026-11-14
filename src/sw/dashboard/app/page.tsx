@@ -936,6 +936,7 @@ export default function Page() {
               viewing={status === 'viewing'}
               imu={imu}
               mode={mode}
+              droneMode={armed ? hoverState?.mode : undefined}
               nudge={nudge}
               onChange={sendControl}
               onMode={setMode}
