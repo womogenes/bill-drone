@@ -1,7 +1,10 @@
-// FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB at 1 Mbaud (this board's CP2102 stops there, about 98 KB/s of chunks) as [length u16][rssi i8][chunk], the shard starting with its FPV2 header. While no chunks arrive it sends FPVR twice a second, by which the laptop knows this port from the other boards' (every CP2102 here has the same USB serial number). Every camera sends with the same BSSID and its own MAC as the frame's sender, so once the laptop names its camera (FPVF and the six bytes of its MAC, written to this port) only that camera's frames pass and steady the channel search; until then every camera's do. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
+// FPV receiver: hears the camera's raw 802.11 video (action frames) (fw/esp32cam/src/fpv.h) and passes each chunk to the laptop over USB as [length u16][rssi i8][chunk], the shard starting with its FPV2 header. On an ESP32 the USB is its board's CP2102 at 1 Mbaud, about 98 KB/s of chunks (a 12 KB frame took 120 ms to cross); on an ESP32-S3 (make s3) it is the chip's own USB (USB-Serial-JTAG, /dev/ttyACM*), with no baud rate to stop it. While no chunks arrive it sends FPVR (ESP32) or FPVS (S3, so the laptop gives the camera the larger budget) twice a second, by which the laptop knows this port from the other boards' (every CP2102 here has the same USB serial number). Every camera sends with the same BSSID and its own MAC as the frame's sender, so once the laptop names its camera (FPVF and the six bytes of its MAC, written to this port) only that camera's frames pass and steady the channel search; until then every camera's do. Until it hears a chunk it steps through channels 1-13 every 150 ms; it stays on a channel while chunks arrive and resumes searching after a second without one.
 #include <string.h>
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#if CONFIG_IDF_TARGET_ESP32S3
+#include "driver/usb_serial_jtag.h"
+#endif
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -15,7 +18,15 @@
 #define SEARCH_US 150000
 #define LOST_US 1000000
 #define CHUNK 1400 // the camera's largest chunk payload
+#if CONFIG_IDF_TARGET_ESP32S3
+// The S3 camera board's GPIO3 drives its flash LEDs, so no LED; its buffer holds a whole frame of the larger budget.
+#define BEACON "FPVS"
+#define BUFFER (96 * 1024)
+#else
 #define LED GPIO_NUM_2 // the board's blue LED
+#define BEACON "FPVR"
+#define BUFFER (32 * 1024)
+#endif
 
 // The camera sends broadcast action frames with this BSSID.
 static const uint8_t bssid[6] = {'F', 'P', 'V', 'R', 'A', 'W'};
@@ -59,24 +70,44 @@ static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     xRingbufferSend(chunks, out, 3 + length, 0);
 }
 
+static void write_out(const void *data, size_t size) {
+#if CONFIG_IDF_TARGET_ESP32S3
+    usb_serial_jtag_write_bytes(data, size, portMAX_DELAY);
+#else
+    uart_write_bytes(UART_NUM_0, data, size);
+#endif
+}
+
+static int read_in(uint8_t *data, size_t size) {
+#if CONFIG_IDF_TARGET_ESP32S3
+    return usb_serial_jtag_read_bytes(data, size, portMAX_DELAY);
+#else
+    return uart_read_bytes(UART_NUM_0, data, size, portMAX_DELAY);
+#endif
+}
+
 static void forward(void *unused) {
     for (;;) {
         size_t size;
         uint8_t *item = xRingbufferReceiveUpTo(chunks, &size, portMAX_DELAY, 4096);
-        uart_write_bytes(UART_NUM_0, item, size);
+        write_out(item, size);
         vRingbufferReturnItem(chunks, item);
     }
 }
 
-// The LED: solid while a camera's chunks arrive (within LOST_US), blinking at 1 Hz while none do, with FPVR to the laptop at each change.
+// The LED (ESP32): solid while a camera's chunks arrive (within LOST_US), blinking at 1 Hz while none do, with the beacon to the laptop at each change.
 static void blink(void *unused) {
+#ifdef LED
     gpio_reset_pin(LED);
     gpio_set_direction(LED, GPIO_MODE_OUTPUT);
+#endif
     for (bool lit = false;; vTaskDelay(pdMS_TO_TICKS(500))) {
         const bool hearing = esp_timer_get_time() - heard_us < LOST_US;
-        if (!hearing) xRingbufferSend(chunks, "FPVR", 4, 0);
+        if (!hearing) xRingbufferSend(chunks, BEACON, 4, 0);
         lit = hearing || !lit;
+#ifdef LED
         gpio_set_level(LED, lit);
+#endif
     }
 }
 
@@ -85,7 +116,7 @@ static void choose(void *unused) {
     uint8_t got[10];
     int have = 0;
     for (;;) {
-        if (uart_read_bytes(UART_NUM_0, got + have, 1, portMAX_DELAY) != 1) continue;
+        if (read_in(got + have, 1) != 1) continue;
         ++have;
         // Not the start of a command: drop bytes from the front until what is left could be.
         while (have && memcmp(got, "FPVF", have < 4 ? have : 4)) memmove(got, got + 1, --have);
@@ -98,11 +129,16 @@ static void choose(void *unused) {
 
 void app_main(void) {
     // A byte buffer, whose free size is all of its free space: a no-split buffer reports only the largest contiguous piece, which near its end refused frames that would have fitted.
-    chunks = xRingbufferCreate(32 * 1024, RINGBUF_TYPE_BYTEBUF);
+    chunks = xRingbufferCreate(BUFFER, RINGBUF_TYPE_BYTEBUF);
+#if CONFIG_IDF_TARGET_ESP32S3
+    usb_serial_jtag_driver_config_t usb = {.tx_buffer_size = 16384, .rx_buffer_size = 256};
+    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb));
+#else
     uart_config_t uart = {.baud_rate = BAUD, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT};
     ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 1024, 8192, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart));
     ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0, 1, 3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+#endif
     xTaskCreatePinnedToCore(forward, "forward", 4096, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(choose, "choose", 2048, NULL, 4, NULL, 1);
     xTaskCreatePinnedToCore(blink, "blink", 2048, NULL, 1, NULL, 1);

@@ -14,7 +14,7 @@ extern volatile uint32_t fpvRadioMs;
 namespace fpv {
 extern esp_err_t rawError;
 extern uint32_t rawSent;
-extern float radioBudget;
+extern float radioBudget, radioShardBudget;
 extern volatile uint32_t previewRadioMs;
 extern wifi_phy_rate_t rateOverride;
 extern int nativeLines, frameLines;
@@ -140,9 +140,10 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
     }
     if (op == 'V') {
         fpvRadioMs = millis();
-        // The receiver's byte budget (KB/s, little-endian), when the request carries one.
+        // The receiver's byte budget (KB/s, little-endian), when the request carries one, then its shard budget (shards/s), when it carries that too.
         if (length >= 2)
             fpv::radioBudget = max(20, body[0] | body[1] << 8) * 1000.0f;
+        fpv::radioShardBudget = length >= 4 ? max(20, body[2] | body[3] << 8) : config::fpvRadioShardsPerSecond;
         return nullptr;
     }
     if (op == 'X') {

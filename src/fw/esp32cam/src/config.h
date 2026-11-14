@@ -60,6 +60,8 @@ constexpr size_t fpvTargetBytes = 12000;
 constexpr float fpvRadioBytesPerSecond = 90000, fpvFramePeriodS = 0.0312f;
 // The monitor-mode adapter took in about 210 shards a second however many were sent (2026-10-31); paced a little under it, frames arrive whole and evenly.
 constexpr float fpvRadioShardsPerSecond = 190;
+// The largest frame over the radio when the receiver's budget allows it (the S3 receiver, fw/fpv_rx make s3: its own USB has no 1 Mbaud limit), for finer JPEGs than fpvTargetBytes: under the driver's JPEG buffer for 480x320 (width x height / 5, about 30 KB), which a larger frame would overrun.
+constexpr size_t fpvRadioMaxBytes = 24000;
 constexpr int fpvQualityRange[2] = {10, 63};
 constexpr uint32_t fpvLingerMs = 3000;
 // While tracking, detector allocations below this size go to internal RAM.

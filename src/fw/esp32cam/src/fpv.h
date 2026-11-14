@@ -52,6 +52,8 @@ esp_err_t rawError = ESP_OK;
 uint32_t rawSent = 0;
 // The receiver's byte budget (bytes/s), from the drone's K V request: the ESP32 receiver's USB link or the monitor-mode adapter's air.
 float radioBudget = config::fpvRadioBytesPerSecond;
+// And its shard budget (shards/s), with it in K V since 2026-11-14: the monitor-mode adapter's limit unless the receiver says otherwise.
+float radioShardBudget = config::fpvRadioShardsPerSecond;
 
 // Only with Wi-Fi started (startWifi), which brings up the network stack.
 inline void start() {
@@ -199,9 +201,9 @@ inline void pace(sensor_t *sensor, size_t bytes, int shards) {
     if (nativeLines <= 0 || frameNumber % 8)
         return;
     // Aimed at 85% of the budget, which then only catches bursts: aimed at all of it, one frame in five was skipped.
-    // And no more shards a second than the monitor-mode adapter takes in (config::fpvRadioShardsPerSecond): sent beyond it, the excess was lost from random frames, which showed as uneven gaps.
+    // And no more shards a second than the receiver takes in (radioShardBudget; the monitor-mode adapter's config::fpvRadioShardsPerSecond): sent beyond it, the excess was lost from random frames, which showed as uneven gaps.
     const int wanted = max({nativeLines, int(nativeLines * averageBytes / (0.85f * radioBudget * config::fpvFramePeriodS)),
-                            int(nativeLines * averageShards / (config::fpvRadioShardsPerSecond * config::fpvFramePeriodS))});
+                            int(nativeLines * averageShards / (radioShardBudget * config::fpvFramePeriodS))});
     // A change of less than 5% is left alone, so the rate does not wander.
     if (abs(wanted - frameLines) * 20 > frameLines && sensor->set_reg(sensor, 0x380e, 0xffff, wanted) == 0)
         frameLines = wanted;
@@ -221,8 +223,8 @@ inline bool send() {
     const int shardsSent = sendShards(frame->buf, frame->len, uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec),
                                       radioWanted(), udp, &to, rate, gapUs);
     // A step of quality per frame, with a dead band so it settles.
-    // Over the radio no more than the budget's share of a frame at the sensor's own rate.
-    const size_t target = udp ? config::fpvTargetBytes : size_t(min(float(config::fpvTargetBytes), 0.85f * radioBudget * config::fpvFramePeriodS));
+    // Over the radio the budget's share of a frame at the sensor's own rate, up to fpvRadioMaxBytes.
+    const size_t target = udp ? config::fpvTargetBytes : size_t(min(float(config::fpvRadioMaxBytes), 0.85f * radioBudget * config::fpvFramePeriodS));
     const int step = frame->len > target ? 1 : frame->len < target * 3 / 4 ? -1 : 0;
     const size_t frameBytes = frame->len;
     esp_camera_fb_return(frame);

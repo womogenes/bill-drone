@@ -301,7 +301,7 @@ function serialPorts() {
   for (const path of [
     ...RECEIVERS,
     ...readdirSync('/dev')
-      .filter((name) => name.startsWith('ttyUSB'))
+      .filter((name) => name.startsWith('ttyUSB') || name.startsWith('ttyACM'))
       .map((name) => `/dev/${name}`),
   ]) {
     if (!existsSync(path)) continue;
@@ -336,13 +336,14 @@ a[6][termios.VMIN], a[6][termios.VTIME] = 1, 0
 termios.tcflush(fd, termios.TCIOFLUSH)
 termios.tcsetattr(fd, termios.TCSANOW, a)
 termios.tcflow(fd, termios.TCOON)`;
-// heard: when the monitor last said anything, serial: when the ESP32 receiver did; copies: every chunk copy heard, chunks: the first of each, signal: the monitor's last (dBm), for the status.
+// heard: when the monitor last said anything, serial: when the ESP32 receiver did; fast: the open port's receiver is an S3 (its beacon is FPVS, fw/fpv_rx make s3), whose own USB carries far more than the ESP32's 1 Mbaud; copies: every chunk copy heard, chunks: the first of each, signal: the monitor's last (dBm), for the status.
 // choose: takes only this camera's shards from now on (its MAC, as K N reports it).
 type Receiver = {
   listeners: Set<(chunk: Buffer) => void>;
   choose: (mac: string) => void;
   heard: number;
   serial: number;
+  fast: boolean;
   copies: number;
   chunks: number;
   signal?: number;
@@ -379,6 +380,7 @@ function receiver() {
     listeners: new Set(),
     heard: 0,
     serial: 0,
+    fast: false,
     copies: 0,
     chunks: 0,
   };
@@ -411,6 +413,7 @@ function receiver() {
     port?.destroy();
     port = undefined;
     portPath = undefined;
+    opened.fast = false;
     for (const path of candidates()) {
       try {
         // Not stty: it applies settings only once the output has drained, and a port left at its defaults echoes the receiver's bytes back while a 0x13 among them (XOFF) holds the output, so it waited forever and froze the server (2026-10-31). This flushes and applies at once, and the timeout bounds it anyway.
@@ -435,6 +438,10 @@ function receiver() {
     port.on('data', (data: Buffer) => {
       buffer = Buffer.concat([buffer, data]);
       if (buffer.includes('FPVR')) opened.serial = heard = Date.now();
+      if (buffer.includes('FPVS')) {
+        opened.serial = heard = Date.now();
+        opened.fast = true;
+      }
       for (;;) {
         const at = buffer.indexOf('FPV2', 3);
         if (at < 0) {
@@ -461,10 +468,19 @@ function receiver() {
   return (store.fpvReceiver = opened);
 }
 
-// The camera's byte budget for the receiver, KB/s little-endian in its K V request: the ESP32 receiver's USB link carries about 98 KB/s; the monitor-mode adapter takes in about 210 shards/s whatever is sent (2026-10-31: 12 KB frames, 15 shards each at 32 fps, reached the dashboard at 16 fps, where 190 KB/s, about 5 KB frames, gave 28 fps), so frames stay near 5 KB (the camera aims at 85%).
+// The camera's byte budget for the receiver, KB/s little-endian in its K V request: the ESP32 receiver's USB link carries about 98 KB/s; the monitor-mode adapter takes in about 210 shards/s whatever is sent (2026-10-31: 12 KB frames, 15 shards each at 32 fps, reached the dashboard at 16 fps, where 190 KB/s, about 5 KB frames, gave 28 fps), so frames stay near 5 KB (the camera aims at 85%). The S3 receiver gets FAST_BUDGET and, after it, a shard budget (shards/s, little-endian; camera firmware from 2026-11-14, which takes the monitor's 190 when none comes), so the camera's frames grow toward its fpvRadioMaxBytes.
+const FAST_BUDGET = { kilobytes: 400, shards: 1500 };
 function radioBudget() {
-  const kilobytes = Date.now() - receiver().heard < 2000 ? 190 : 90;
-  return [kilobytes & 0xff, kilobytes >> 8];
+  const fast = receiver().fast && Date.now() - receiver().serial < 5000;
+  const kilobytes = fast
+    ? FAST_BUDGET.kilobytes
+    : Date.now() - receiver().heard < 2000
+      ? 190
+      : 90;
+  const budget = [kilobytes & 0xff, kilobytes >> 8];
+  return fast
+    ? [...budget, FAST_BUDGET.shards & 0xff, FAST_BUDGET.shards >> 8]
+    : budget;
 }
 
 // A receiver is there: the monitor or the ESP32 receiver heard from lately, or a port a receiver has been on (one from before FPVR is silent until video comes).
