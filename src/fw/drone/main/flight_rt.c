@@ -309,17 +309,17 @@ static float held_nudge(int axis) {
     return nudge[axis] + (axis < 2 ? excite.hold[axis] : 0);
 }
 
-// ESC calibration (flight_runtime_esc_calibration): 0 off, 1 the top of the range (ESC_TOP_US), 2 its bottom (1000 us), on both ESCs while disarmed, until ESC_CALIBRATION_US after it began. Teaching the ESCs this range is what makes the thrust table's throttles mean the same thrust on both, flight to flight.
-#define ESC_TOP_US 2200
+// ESC calibration (flight_runtime_esc_calibration): 0 off, 1 the top of the range (ESC_TOP_US), 2 its bottom (1000 us), on both ESCs while disarmed, until ESC_CALIBRATION_US after it began. Teaching the ESCs this range is what makes the thrust table's throttles mean the same thrust on both, flight to flight. The Nuofany 40A ESCs (from 2026-11-14, Hobbywing Skywalker-40A clones) were taught 1000-2000 us on the thrust stand at 50 Hz; the Flylin 30As before them took 1000-2200 us.
+#define ESC_TOP_US 2000
 #define ESC_CALIBRATION_US 120000000LL
 static int esc_calibration;
 static int64_t esc_calibration_us;
 
-// The ESC pulse (us) for a throttle: 1000 us plus the throttle, or ESC_STOP_US for a stopped motor; during ESC calibration its stage's pulse instead.
+// The ESC pulse (us) for a throttle: THROTTLE_MAX spans 1000 us to ESC_TOP_US, so a throttle is the same fraction of the ESC's range whatever range it was taught (the thrust table's throttles kept their meaning across the ESC swap: the stand's 40A with a 10" prop matched the table within about 5% from mid throttle up, 2026-11-14), or ESC_STOP_US for a stopped motor; during ESC calibration its stage's pulse instead.
 static float esc_us(int throttle) {
     if (esc_calibration && esp_timer_get_time() - esc_calibration_us > ESC_CALIBRATION_US) esc_calibration = 0;
     if (esc_calibration) return esc_calibration == 1 ? ESC_TOP_US : 1000;
-    return throttle > 0 ? 1000 + throttle : ESC_STOP_US;
+    return throttle > 0 ? 1000 + throttle * (ESC_TOP_US - 1000.0f) / THROTTLE_MAX : ESC_STOP_US;
 }
 
 // Caller holds lock so an emergency stop cannot race a later duty write.
