@@ -515,7 +515,10 @@ static void runtime_task(void *arg) {
         bool recording = log_active;
         // now was read before the lock, so a target accepted on the network core in between leaves heartbeat_us just after it; signed, that is a fresh heartbeat rather than an unsigned wrap to a huge age.
         bool stale = (int64_t)(now - state.heartbeat_us) > HEARTBEAT_MS * 1000LL;
-        bool lost = hover_mode == HOVER_HOLD ? (int64_t)(now - state.heartbeat_us) > (int64_t)(LINK_HOLD_S * 1e6f) : stale;
+        // Airborne, as the link-loss landing takes it. Flying in the hold, a stale link is lost only once it has been gone LINK_HOLD_S and a recovery ended that long ago (the hold it hands to is waited out too, as sw/sim/flip_firmware.py flies it); until then it neither lands nor stops.
+        bool flying = state.controller.airborne > 0 && !hover.landed && hover.bias > 0.5f;
+        bool waited = (int64_t)(now - state.heartbeat_us) > (int64_t)(LINK_HOLD_S * 1e6f) && !(recovery.since >= 0 && recovery.since < LINK_HOLD_S);
+        bool lost = flying && hover_mode == HOVER_HOLD ? waited : stale;
         if (link_landing && !stale && (requested_mode == HOVER_HOLD || (requested_mode == HOVER_OFF && command.base >= command.integrate_throttle))) {
             link_landing = false;
             hover_mode = requested_mode;
@@ -524,14 +527,14 @@ static void runtime_task(void *arg) {
         if (state.enabled && stale) flip_abort(&flip, &hover.integral);
         if (state.enabled && (flip_active(&flip) || recover_active(&recovery))) {
             // The landing or the stop below, once it is done.
-        } else if (state.enabled && (link_landing || (lost && state.controller.airborne > 0 && !hover.landed && hover.bias > 0.5f))) {
+        } else if (state.enabled && (link_landing || (lost && flying))) {
             if (!link_landing) {
                 link_landing = true;
                 link_land_us = now;
             }
             hover_mode = HOVER_LAND;
             if (now - link_land_us > (uint64_t)(LINK_LAND_S * 1e6f)) stop_locked(2);
-        } else if (!quiet() && stale) {
+        } else if (!quiet() && lost) {
             stop_locked(2);
         }
 
