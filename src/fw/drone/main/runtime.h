@@ -85,7 +85,7 @@ const char *flight_runtime_record(bool on, bool recorder);
 bool flight_runtime_begin_maintenance(void);
 void flight_runtime_end_maintenance(void);
 void flight_runtime_log(LogState *log);
-size_t flight_runtime_read_log(uint8_t *output, size_t count);
+size_t flight_runtime_read_log(uint8_t *output, size_t skip, size_t count);
 void flight_runtime_consume_log(size_t count);
 // Collective, roll, pitch, yaw rate, then servo angles and throttles applied while disarmed. False if rejected.
 bool flight_runtime_targets(const float *targets);

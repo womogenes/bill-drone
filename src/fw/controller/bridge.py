@@ -11,9 +11,10 @@ The laptop's drone service. It owns the controller's USB port and serves, on 127
 - /update: raw id-tagged requests (tools/ota_direct.py, the dashboard's camera requests), from any number of clients at once; each reply goes to the client that sent its id.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
 - POST /radio {"rate": i, "power": dBm, "channel": c}: the controller's sending rate (fw/link.h link_rates index), maximum transmit power (0 = the driver's own) and channel until it resets, each optional; only while the drone is disarmed, and another channel than 6 only to a drone that follows its controller (its radio_follow setting). Replies with the controller's next link report.
+- POST /log_test {"drop": fraction, "ack_drop": fraction, "ack_delay_ms": n}: induced flight-log loss for testing the log's repair (drop arriving log fragments, drop or delay the acknowledgements); off until set, cleared by a restart.
 - POST /pattern {"after": s, "repeat": n, "segments": [{"ticks": n, "<channel>": value, ...}, ...]}: load the identification test pattern (log_format.py PATTERN_CHANNELS; drone/main/flight_rt.c excite), or clear it with no segments. It lasts until the drone restarts, and every recording from then on starts with it as a "pattern" event. sw/excite.py builds and sends them.
 
-It records every armed session into src/sw/recordings/<time>_<session>.bin (FLG1 batches) and .jsonl (start, metadata, gap, error, stop, closed, gps, command, link and dropout events; sw/flight_log.py decodes both).
+It records every armed session into src/sw/recordings/<time>_<session>.bin (FLG1 batches) and .jsonl (start, metadata, gap, error, stop, log_stats, closed, gps, command, link and dropout events; sw/flight_log.py decodes both).
 """
 
 import argparse
@@ -22,6 +23,7 @@ from collections import deque
 from datetime import datetime, timezone
 import json
 import os
+import random
 from pathlib import Path
 import struct
 import sys
@@ -31,7 +33,7 @@ from aiohttp import WSMsgType, web
 import serial
 
 from find_port import candidates, listen
-from log_format import FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, PATTERN_CHANNELS, STOP_REASONS, decode_reason, guard_state, pattern_refusal
+from log_format import FORMATS, HOVER_SIZE, batches, PATTERN_CHANNELS, STOP_REASONS, decode_reason, guard_state, pattern_refusal
 from wire import LINK_CHANNEL, PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 # Messages of more fragments than this go out twice (send_message).
@@ -245,6 +247,13 @@ def encode_pattern(pattern):
     return body, {"after": after, "repeat": repeat, "segments": recorded}
 
 
+def log_counts():
+    """
+    One recording's flight-log delivery counts (Recorder.counts; /status reading.recorder.log, and the recording's "log_stats" event when it closes): log messages, FLG1 batches and samples written; gaps in the samples' sequence and the samples in them, which the drone dropped at capture and no resend can bring back; repair requests (the fragments this service had of a message whose last fragment came with others missing, which a newer drone answers by resending only those), the messages completed after one, and messages that came again after they were written (their acknowledgement lost or slow) and were acknowledged again; and what the induced-loss test (POST /log_test) dropped.
+    """
+    return {"messages": 0, "batches": 0, "samples": 0, "gaps": 0, "missing": 0, "repair_requests": 0, "repaired": 0, "duplicates": 0, "test_dropped": 0}
+
+
 class Recorder:
     """
     One file pair per armed session, kept open through link hiccups until the drone's stop record arrives.
@@ -267,9 +276,10 @@ class Recorder:
         self.firmware = None
         # The physical drone, its station MAC (fw/pairs.h; the I reply's "drone"), from the same reply into the same start record.
         self.drone = None
+        self.counts = log_counts()
 
     def status(self):
-        return {"file": self.file, "bytes": self.bytes, "writing": self.data is not None, "error": self.error}
+        return {"file": self.file, "bytes": self.bytes, "writing": self.data is not None, "error": self.error, "log": dict(self.counts)}
 
     def event(self, message):
         self.events.write(json.dumps({**message, "received_at": now()}) + "\n")
@@ -315,14 +325,22 @@ class Recorder:
                                 "pose_zero_deg": list(pose), "calibrated": bool(payload[32])})
             self.next_sequence = 0
         elif magic == b"FLG1":
-            _, session, count, size = struct.unpack_from(HEADER_FORMAT, payload)
+            found = batches(payload)
+            session = found[0][1]
             if session != self.session or self.data is None:
                 # This service started during the session and missed its start record.
                 self.begin(session, {"resumed": True})
-            first = struct.unpack_from("<I", payload, HEADER_SIZE + 4)[0]
-            if self.next_sequence is not None and first != self.next_sequence:
-                self.event({"type": "gap", "after": self.next_sequence - 1, "missing": first - self.next_sequence})
-            self.next_sequence = first + count
+            for offset, _, count, _ in found:
+                first = struct.unpack_from("<I", payload, offset + 4)[0]
+                if self.next_sequence is not None and first != self.next_sequence:
+                    # Messages arrive in order and each is resent until acknowledged, so a gap is samples the drone never sent: its ring was full (counted in the stop record's dropped).
+                    self.event({"type": "gap", "after": self.next_sequence - 1, "missing": first - self.next_sequence})
+                    self.counts["gaps"] += 1
+                    self.counts["missing"] += max(0, first - self.next_sequence)
+                self.next_sequence = first + count
+                self.counts["batches"] += 1
+                self.counts["samples"] += count
+            self.counts["messages"] += 1
             self.data.write(payload)
             self.bytes += len(payload)
         elif magic == b"LGE1":
@@ -340,6 +358,7 @@ class Recorder:
         stem = self.directory / f"{now().replace(':', '-').replace('.', '-')}_{session}"
         self.data, self.events = open(f"{stem}.bin", "xb"), open(f"{stem}.jsonl", "x")
         self.file, self.bytes, self.session, self.next_sequence, self.error = f"{stem.name}.bin", 0, session, None, None
+        self.counts = log_counts()
         # The first line describes the whole recording.
         self.event({**(self.metadata or {}), "type": "start", "session": session, "drone": self.drone, "firmware": self.firmware, **start})
         if self.pattern:
@@ -365,6 +384,7 @@ class Recorder:
     def close(self, reason):
         if self.data is None:
             return
+        self.event({"type": "log_stats", **self.counts})
         if reason is not None:
             self.event({"type": "closed", "reason": reason})
         self.sync()
@@ -489,6 +509,8 @@ class Service:
         self.firmware_task = None
         self.firmware_retry = 0
         self.delivered = {}
+        # Induced loss for testing the log's repair (POST /log_test): the fraction of arriving log fragments and of outgoing log acknowledgements (and repair requests) to drop, and a delay before each acknowledgement, which stands in for a busy channel's slow sends. Off until set; a restart clears it.
+        self.log_test = {"drop": 0.0, "ack_drop": 0.0, "ack_delay_ms": 0}
         self.stopping = None
         self.stop_reply = None
         # Dashboards closed by disconnect() (a lost link or a drone restart), whose close must not stop the drone.
@@ -621,10 +643,13 @@ class Service:
         """
         The newest flight record's hover state, for the dashboard's tag chart: {"type": "hover", ...} in the hover loop's yaw-turned level frame (m; forward, left, up), with the tag relative to the drone (None without a sighting), the range and arc targets as nudged (None before they are set), and the mode and tracking flags.
         """
-        _, _, count, size = struct.unpack_from(HEADER_FORMAT, payload)
-        if size not in FORMATS or size < HOVER_SIZE or not count:
+        try:
+            offset, _, count, size = batches(payload)[-1]
+        except ValueError:
             return
-        fields = struct.unpack_from(FORMATS[size], payload, HEADER_SIZE + (count - 1) * size)
+        if size < HOVER_SIZE:
+            return
+        fields = struct.unpack_from(FORMATS[size], payload, offset + (count - 1) * size)
         flags = fields[20]
         x, y, z, age = fields[22:26]
         targeted = flags >> 7 & 1
@@ -669,7 +694,7 @@ class Service:
                     self.record_pending.discard((session, channel, sequence))
                     if session == self.session:
                         self.delivered[channel] = sequence
-                        self.send(5, bytes([channel]), sequence)
+                        self.send_log_ack(bytes([channel]), sequence)
                 else:
                     await asyncio.to_thread(getattr(self.recorder, operation), *arguments)
             except (OSError, ValueError, struct.error) as error:
@@ -800,20 +825,36 @@ class Service:
             return
         if session != self.session or channel not in (2, 3, 6):
             return
+        if channel != 6 and self.log_test["drop"] and random.random() < self.log_test["drop"]:
+            self.recorder.counts["test_dropped"] += 1
+            return
         if channel != 6 and self.delivered.get(channel) == sequence:
             # The acknowledgement was lost; the recorder already has this message.
-            self.send(5, bytes([channel]), sequence)
+            self.recorder.counts["duplicates"] += 1
+            self.send_log_ack(bytes([channel]), sequence)
             return
+        repaired = False
         if count > 1:
             entry = self.fragments.get(channel)
-            if entry is None or entry[0] != sequence or len(entry[1]) != count:
-                entry = (sequence, [None] * count)
+            if entry is None or entry["sequence"] != sequence or len(entry["parts"]) != count:
+                entry = {"sequence": sequence, "parts": [None] * count, "requested": False, "reported": set()}
                 self.fragments[channel] = entry
-            entry[1][index] = payload
-            if None in entry[1]:
+            entry["parts"][index] = payload
+            if None in entry["parts"]:
+                lost = {number for number in range(index) if entry["parts"][number] is None} - entry["reported"]
+                if channel != 6 and (lost or index == count - 1):
+                    # The drone sends a message's fragments in order and its repairs end with the last one, so a fragment arriving after a missing one, or the last with any missing, means they were lost: say which fragments are here, and a newer drone resends only the missing ones at once, while still sending the rest, instead of all of them after a timeout (an older one ignores this longer acknowledgement). Each loss is reported once, and again with each last fragment.
+                    have = sum(1 << number for number, part in enumerate(entry["parts"]) if part is not None)
+                    self.send_log_ack(bytes([channel]) + have.to_bytes((count + 7) // 8, "little"), sequence)
+                    entry["requested"] = True
+                    entry["reported"] |= lost
+                    self.recorder.counts["repair_requests"] += 1
                 return
-            payload = b"".join(entry[1])
+            payload = b"".join(entry["parts"])
+            repaired = entry["requested"]
             del self.fragments[channel]
+        if repaired:
+            self.recorder.counts["repaired"] += 1
         if channel == 6:
             reply = self.waiting.get(payload[:4])
             if reply is not None:
@@ -828,6 +869,31 @@ class Service:
             key = (session, channel, sequence)
             if key not in self.record_pending and self.queue_record("receive", session, channel, sequence, payload):
                 self.record_pending.add(key)
+
+    def send_log_ack(self, payload, sequence):
+        """
+        A log acknowledgement or repair request (channel 5), through the induced-loss test's drop and delay when they are set.
+        """
+        if self.log_test["ack_drop"] and random.random() < self.log_test["ack_drop"]:
+            self.recorder.counts["test_dropped"] += 1
+            return
+        if self.log_test["ack_delay_ms"]:
+            asyncio.get_running_loop().call_later(self.log_test["ack_delay_ms"] / 1000, self.send, 5, payload, sequence)
+            return
+        self.send(5, payload, sequence)
+
+    async def post_log_test(self, request):
+        """
+        POST /log_test {"drop": fraction, "ack_drop": fraction, "ack_delay_ms": n}, each optional: induced flight-log loss for testing (Service.log_test). Replies with the settings now in force.
+        """
+        body = await request.json()
+        for key, limit in (("drop", 0.9), ("ack_drop", 0.9), ("ack_delay_ms", 1000)):
+            if key in body:
+                value = body[key]
+                if not isinstance(value, (int, float)) or not 0 <= value <= limit:
+                    return web.json_response({"error": f"{key} must be between 0 and {limit}"}, status=400)
+                self.log_test[key] = value
+        return web.json_response({"log_test": self.log_test})
 
     async def write(self):
         while True:
@@ -1132,6 +1198,7 @@ async def main(args):
         web.post("/settings", service.post_settings),
         web.post("/pattern", service.post_pattern),
         web.post("/radio", service.post_radio),
+        web.post("/log_test", service.post_log_test),
         web.get("/schema", service.schema),
     ])
     runner = web.AppRunner(app, access_log=None)

@@ -1,5 +1,5 @@
 // Direct ESP-NOW link: status messages, streamed targets, stop, and the request service for updates and transactions. Framing: src/fw/controller/wire.py.
-// Channels: 0 status (drone, every 50 ms), 1 targets (laptop, newest wins; each one is the controller heartbeat), 2/3 binary/JSON flight log (one message in flight, resent until acknowledged), 4 recorder subscription, 5 log acknowledgement, 6 requests and replies (id-tagged, fragmented).
+// Channels: 0 status (drone, every 50 ms), 1 targets (laptop, newest wins; each one is the controller heartbeat), 2/3 binary/JSON flight log (one message in flight, resent until acknowledged), 4 recorder subscription, 5 log acknowledgement (or, longer, the fragments the laptop has of an incomplete message), 6 requests and replies (id-tagged, fragmented).
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_now.h"
 #include "esp_ota_ops.h"
 #include "miniz.h"
@@ -65,7 +66,16 @@ static volatile bool radio_ready;
 // Most records per FLG1 batch (controller/log_format.py MAX_BATCH) and the batch header size: a full batch fits two fragments, so one goes out per tick.
 #define LOG_MAX 4
 #define LOG_HEADER 12
+#define LOG_SPAN (LOG_HEADER + LOG_MAX * RECORD_SIZE)
 _Static_assert(LOG_HEADER + LOG_MAX * RECORD_SIZE <= 2 * PAYLOAD, "A full log batch fits two fragments");
+// Most FLG1 batches per log message. With one batch per message the log waited a round trip (the drone's send, the laptop's write, the controller's send of the acknowledgement) for every 40 ms of samples; on a busy channel that took 50-180 ms, the ring filled and whole batches were dropped at capture (2026-11-14: 989 of 6006 samples, every one counted in the stop record's dropped, none lost in the air). A backlog now goes out as up to LOG_BATCHES consecutive batches in one message, so one round trip carries up to 480 ms of samples; a drone that keeps up still sends one batch per message. The batches are laid end to end as in the recording, which an older laptop service writes unchanged.
+#define LOG_BATCHES 12
+#define LOG_FRAGMENTS(length) (((length) + PAYLOAD - 1) / PAYLOAD)
+// A message has at most 32 fragments (wire.py unpack, the controller's relay.c valid_header), tracked in a 64-bit mask.
+_Static_assert(LOG_FRAGMENTS(LOG_BATCHES * LOG_SPAN) <= 32 && LOG_FRAGMENTS(META) <= 32, "Log messages fit the wire's fragment count");
+// An unacknowledged message is repaired after the round trip's usual time plus four times its spread (as TCP's retransmission timer), between these bounds: a fixed 100 ms resent whole messages whose acknowledgement was merely slow, which on a busy channel spent airtime the log needed. The first repair sends only the last fragment, which a laptop service that tracks fragments answers with the ones it has (or the acknowledgement, if it was the last one missing); the next sends every fragment not yet confirmed, which an older service needs.
+#define LOG_RTO_MIN_US 100000
+#define LOG_RTO_MAX_US 1000000
 
 // Request states, each with one owner of the request and reply buffers: the receive callback fills IDLE, the update task handles READY and sends REPLIED.
 enum { IDLE, READY, REPLIED };
@@ -81,14 +91,27 @@ static bool stop_pending;
 static bool log_requested;
 static int64_t log_us;
 static uint32_t log_acks[CHANNELS];
+// The latest fragments-held report per log channel: for which message, the fragments the laptop has, and whether the streamer has taken it yet.
+static uint32_t log_have_number[CHANNELS];
+static uint64_t log_have_mask[CHANNELS];
+static bool log_have_fresh[CHANNELS];
 // The flight-log streamer runs in tick(); meta is the latest metadata JSON (main.c).
-static uint8_t log_message[LOG_HEADER + LOG_MAX * RECORD_SIZE];
+static uint8_t log_message[LOG_BATCHES * LOG_SPAN];
 static const uint8_t *log_data;
 static size_t log_length, log_records;
 static uint8_t log_channel;
 static uint32_t log_number, streamed_session;
-static int log_fragment, log_count;
+static int log_count;
+// The message's fragments still to send, those the laptop's latest report says it has (only the latest: the laptop forgets a partial message when its link times out, and fragments taken as held for good were never resent, which stalled the log for good on 2026-11-14 after an 83 s dropout), and every fragment.
+static uint64_t log_unsent, log_confirmed, log_all;
+// When the message's last unsent fragment went out; whether it timed out (an answer then may be to an earlier send, so it says nothing of the round trip: Karn's rule), and whether the next repair sends everything unconfirmed rather than probing with the last fragment.
 static int64_t log_sent_us;
+static bool log_timed_out, log_probed;
+// The smoothed round trip from a message's last fragment to the laptop's answer (its acknowledgement or fragments-held report) and its mean deviation (us), and the timeouts in a row, each of which doubles the next wait until an answer comes. Answers after a fragments-held repair still measure the round trip: on a lossy link most messages need one, and without their samples the estimate only grew (2026-11-14, stalls of a second).
+static int32_t log_rtt_us = 60000, log_rtt_spread_us = 30000;
+static int log_backoff;
+// Counts since boot for the I reply: messages sent, repairs after a fragments-held report, repairs after a timeout, fragments sent again, and the most records one message carried.
+static uint32_t log_messages, log_partial_repairs, log_timeouts, log_fragments_resent, log_most_records;
 static bool log_busy, session_open;
 static uint8_t meta[META];
 static size_t meta_length;
@@ -388,6 +411,15 @@ static void on_received(const esp_now_recv_info_t *info, const uint8_t *packet, 
     if (channel == 5) {
         if (length == 1 && data[0] < CHANNELS) {
             portENTER_CRITICAL(&lock); log_acks[data[0]] = number; portEXIT_CRITICAL(&lock);
+        } else if (length >= 2 && length <= 9 && data[0] < CHANNELS) {
+            // The fragments the laptop has of message number (bit i for fragment i), sent when one arrives after a missing one, or the last with any missing.
+            uint64_t mask = 0;
+            memcpy(&mask, data + 1, length - 1);
+            portENTER_CRITICAL(&lock);
+            log_have_number[data[0]] = number;
+            log_have_mask[data[0]] = mask;
+            log_have_fresh[data[0]] = true;
+            portEXIT_CRITICAL(&lock);
         }
         return;
     }
@@ -460,14 +492,25 @@ static void next_log_message(void) {
         log_data = meta;
         log_length = meta_length;
     } else if (session_open && (state.pending >= LOG_BATCH || (state.pending && !state.active))) {
-        log_records = flight_runtime_read_log(log_message + LOG_HEADER, LOG_MAX);
-        memcpy(log_message, "FLG1", 4);
-        put32(log_message + 4, state.session);
-        log_message[8] = log_records;
-        log_message[9] = 0;
-        log_message[10] = RECORD_SIZE;
-        log_message[11] = 0;
-        log_length = LOG_HEADER + log_records * RECORD_SIZE;
+        // Whole batches while recording, so a drone that keeps up sends one batch per message; the remainder once the recording has ended.
+        size_t batches = state.active ? state.pending / LOG_MAX : (state.pending + LOG_MAX - 1) / LOG_MAX;
+        if (batches > LOG_BATCHES) batches = LOG_BATCHES;
+        log_length = 0;
+        for (size_t batch = 0; batch < batches; batch++) {
+            uint8_t *at = log_message + log_length;
+            size_t records = flight_runtime_read_log(at + LOG_HEADER, log_records, LOG_MAX);
+            if (!records) break;
+            memcpy(at, "FLG1", 4);
+            put32(at + 4, state.session);
+            at[8] = records;
+            at[9] = 0;
+            at[10] = RECORD_SIZE;
+            at[11] = 0;
+            log_length += LOG_HEADER + records * RECORD_SIZE;
+            log_records += records;
+        }
+        if (!log_records) return;
+        if (log_records > log_most_records) log_most_records = log_records;
     } else if (session_open && !state.active) {
         memcpy(log_message, "LGE1", 4);
         put32(log_message + 4, state.session);
@@ -483,35 +526,76 @@ static void next_log_message(void) {
         return;
     }
     log_number = next_sequence();
-    log_count = (log_length + PAYLOAD - 1) / PAYLOAD;
-    log_fragment = 0;
+    log_count = LOG_FRAGMENTS(log_length);
+    log_all = log_count == 64 ? UINT64_MAX : (1ULL << log_count) - 1;
+    log_unsent = log_all;
+    log_confirmed = 0;
+    log_timed_out = log_probed = false;
     log_busy = true;
+    log_messages++;
 }
 
-// Background traffic: at most two log fragments per tick, after the status message and the stop reply.
+static int32_t log_timeout_us(void) {
+    int32_t timeout = log_rtt_us + 4 * log_rtt_spread_us;
+    if (timeout < LOG_RTO_MIN_US) timeout = LOG_RTO_MIN_US;
+    for (int i = 0; i < log_backoff && timeout < LOG_RTO_MAX_US; i++) timeout *= 2;
+    return timeout > LOG_RTO_MAX_US ? LOG_RTO_MAX_US : timeout;
+}
+
+// One round trip, from the last fragment sent to the laptop's answer, unless the message timed out.
+static void log_answered(int64_t now) {
+    log_backoff = 0;
+    if (log_timed_out || log_unsent) return;
+    int32_t rtt = now - log_sent_us, error = rtt - log_rtt_us;
+    log_rtt_us += error / 8;
+    log_rtt_spread_us += ((error < 0 ? -error : error) - log_rtt_spread_us) / 4;
+}
+
+// Background traffic: at most two log fragments per tick, after the status message and the stop reply; a repair sends only what the laptop lacks, under the same limit.
 static void stream_log(int64_t now) {
     portENTER_CRITICAL(&lock);
     bool active = subscribed(now);
     uint32_t acked = log_acks[log_channel];
+    bool have = log_have_fresh[log_channel] && log_have_number[log_channel] == log_number;
+    uint64_t have_mask = log_have_mask[log_channel];
+    log_have_fresh[log_channel] = false;
     portEXIT_CRITICAL(&lock);
-    if (log_busy && log_fragment == log_count) {
-        if (acked == log_number) {
-            if (log_records) flight_runtime_consume_log(log_records);
-            if (log_channel == 3) {
-                portENTER_CRITICAL(&lock); meta_sending = false; portEXIT_CRITICAL(&lock);
-            }
-            log_busy = false;
-        } else if (now - log_sent_us > 100000) {
-            log_fragment = 0;
+    if (log_busy && acked == log_number) {
+        if (log_records) flight_runtime_consume_log(log_records);
+        if (log_channel == 3) {
+            portENTER_CRITICAL(&lock); meta_sending = false; portEXIT_CRITICAL(&lock);
         }
+        log_answered(now);
+        log_busy = false;
+    } else if (log_busy && have) {
+        log_answered(now);
+        log_confirmed = have_mask & log_all;
+        // Fragments go out in order, so only those below the highest one held are lost; the rest may still be on their way.
+        uint64_t below = have_mask & log_all ? (1ULL << (63 - __builtin_clzll(have_mask & log_all))) - 1 : 0;
+        uint64_t missing = log_all & below & ~log_confirmed & ~log_unsent;
+        log_fragments_resent += __builtin_popcountll(missing);
+        log_unsent |= missing;
+        log_partial_repairs++;
+    } else if (log_busy && !log_unsent && now - log_sent_us > log_timeout_us()) {
+        uint64_t last = 1ULL << (log_count - 1);
+        log_unsent = log_probed ? log_all & ~log_confirmed : last;
+        if (!log_unsent) log_unsent = last;
+        log_fragments_resent += __builtin_popcountll(log_unsent);
+        log_probed = !log_probed;
+        log_timed_out = true;
+        log_timeouts++;
+        // Backs off while nothing comes back, so a link that is down is not flooded.
+        if (log_backoff < 4) log_backoff++;
     }
     if (!active) return;
     if (!log_busy) next_log_message();
-    for (int sent_now = 0; log_busy && log_fragment < log_count && sent_now < 2; sent_now++) {
-        size_t offset = log_fragment * PAYLOAD;
+    for (int sent_now = 0; log_busy && log_unsent && sent_now < 2; sent_now++) {
+        int fragment = __builtin_ctzll(log_unsent);
+        size_t offset = fragment * PAYLOAD;
         size_t length = log_length - offset < PAYLOAD ? log_length - offset : PAYLOAD;
-        if (!transmit(log_channel, log_number, log_data + offset, length, log_fragment, log_count)) break;
-        if (++log_fragment == log_count) log_sent_us = now;
+        if (!transmit(log_channel, log_number, log_data + offset, length, fragment, log_count)) break;
+        log_unsent &= log_unsent - 1;
+        if (!log_unsent) log_sent_us = now;
     }
 }
 
@@ -819,9 +903,14 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         describe(running_sha, sizeof(running_sha), running);
         describe(target_sha, sizeof(target_sha), target);
         // reset is esp_reset_reason_t: 1 power-on, 3 software, 4 panic, 5-7 watchdogs, 9 brownout.
-        *size = snprintf(text, REPLY - 5, "{\"drone\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"radio\":\"%s\",\"running\":\"%s\",\"target\":%s%s%s,\"size\":%lu,\"running_sha\":%s,\"target_sha\":%s,\"reset\":%d}",
+        // heap: internal RAM free now and at its lowest since boot (bytes), for sizing buffers such as the log ring; log: the streamer's counts since boot (messages, repairs after the laptop's fragments-held report and after a timeout, fragments sent again, the most records in one message) and its current round-trip estimate (ms).
+        *size = snprintf(text, REPLY - 5, "{\"drone\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"radio\":\"%s\",\"running\":\"%s\",\"target\":%s%s%s,\"size\":%lu,\"running_sha\":%s,\"target_sha\":%s,\"reset\":%d,"
+                         "\"heap\":{\"free\":%u,\"lowest\":%u},\"log\":{\"messages\":%lu,\"partial_repairs\":%lu,\"timeouts\":%lu,\"fragments_resent\":%lu,\"most_records\":%lu,\"rtt_ms\":%ld,\"timeout_ms\":%ld}}",
                          own[0], own[1], own[2], own[3], own[4], own[5], relay ? "camera" : "own", running->label, target ? "\"" : "", target ? target->label : "null", target ? "\"" : "",
-                         target ? (unsigned long)target->size : 0UL, running_sha, target_sha, esp_reset_reason());
+                         target ? (unsigned long)target->size : 0UL, running_sha, target_sha, esp_reset_reason(),
+                         heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                         (unsigned long)log_messages, (unsigned long)log_partial_repairs, (unsigned long)log_timeouts, (unsigned long)log_fragments_resent,
+                         (unsigned long)log_most_records, (long)(log_rtt_us / 1000), (long)(log_timeout_us() / 1000));
         return NULL;
     }
     if (op == 'V') {

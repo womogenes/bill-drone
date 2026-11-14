@@ -16,7 +16,7 @@ from pathlib import Path
 
 import bridge
 import log_format
-from wire import LINK_CHANNEL, pack, serial_encode
+from wire import LINK_CHANNEL, PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 SESSION = 7
 
@@ -52,6 +52,74 @@ def frame(channel, payload, sequence):
     return bytes(serial_encode(pack(channel, SESSION, sequence, 1, payload)))
 
 
+def log_message(first, counts):
+    """A log message of FLG1 batches laid end to end (drone/main/radio.c LOG_BATCHES), records numbered from first."""
+    message = b""
+    for count in counts:
+        message += struct.pack(log_format.HEADER_FORMAT, b"FLG1", SESSION, count, log_format.RECORD_SIZE)
+        for sequence in range(first, first + count):
+            message += struct.pack("<II", sequence * 10000, sequence) + bytes(log_format.RECORD_SIZE - 8)
+        first += count
+    return message
+
+
+def fragments(channel, message, sequence):
+    parts = [message[start:start + PAYLOAD_SIZE] for start in range(0, len(message), PAYLOAD_SIZE)]
+    return [bytes(serial_encode(pack(channel, SESSION, sequence, 1, part, index, len(parts)))) for index, part in enumerate(parts)]
+
+
+def sent(service):
+    """The packets the service queued for the controller since the last call, unpacked."""
+    packets = [unpack(SerialDecoder().feed(packet)[0]) for _, packet, _ in service.outgoing]
+    service.outgoing.clear()
+    return [packet for packet in packets if packet[0] == 5]
+
+
+async def log_repair(service, device, directory):
+    """
+    A two-batch log message (a newer drone catching up) with its second fragment lost: the next fragment's arrival and the last's ask for a repair with the fragments held, the lost one completes it, it is written and acknowledged once, a resent copy is acknowledged again without a second write, and a later message after samples the drone dropped is a gap. The recording reads back in order and closes with its counts.
+    """
+    writer = asyncio.create_task(service.record())
+    service.outgoing.clear()
+    service.last_status = bridge.time.monotonic()
+    device.data = frame(2, b"LGS1" + struct.pack("<II5fB", SESSION, 0, 0, 0, 0, 0, 0, 1), 99)
+    service.read()
+    await service.record_queue.join()
+    sent(service)
+    first = fragments(2, log_message(0, [4, 4]), 100)
+    assert len(first) == 4
+    for index in (0, 2, 3):
+        device.data = first[index]
+        service.read()
+    # Fragment 2 shows 1 lost; the last fragment says again what is held.
+    reports = [(p[0], p[2], p[6]) for p in sent(service)]
+    assert reports == [(5, 100, bytes([2, 0b101])), (5, 100, bytes([2, 0b1101]))], reports
+    device.data = first[1]
+    service.read()
+    await service.record_queue.join()
+    acks = [(p[0], p[2], p[6]) for p in sent(service)]
+    assert acks == [(5, 100, bytes([2]))], (acks, service.recorder.error, service.recorder.counts)
+    device.data = first[0]
+    service.read()
+    assert [(p[0], p[2], p[6]) for p in sent(service)] == [(5, 100, bytes([2]))]
+    # Samples 8-11 were dropped on the drone; an older drone's single-batch message follows.
+    for packet in fragments(2, log_message(12, [4]), 101):
+        device.data = packet
+        service.read()
+    await service.record_queue.join()
+    counts = service.recorder.status()["log"]
+    assert counts == {"messages": 2, "batches": 3, "samples": 12, "gaps": 1, "missing": 4, "repair_requests": 2, "repaired": 1, "duplicates": 1, "test_dropped": 0}, counts
+    service.recorder.close("test")
+    data = (directory / service.recorder.file).read_bytes()
+    sequences = [struct.unpack_from("<I", data, offset + 4 + record * size)[0] for offset, _, count, size in log_format.batches(data) for record in range(count)]
+    assert sequences == [*range(8), *range(12, 16)], sequences
+    events = [bridge.json.loads(line) for line in (directory / service.recorder.file).with_suffix(".jsonl").read_text().splitlines()]
+    assert [event["type"] for event in events] == ["start", "gap", "log_stats", "closed"], events
+    assert events[2]["repaired"] == 1 and events[1]["missing"] == 4
+    writer.cancel()
+    await asyncio.gather(writer, return_exceptions=True)
+
+
 async def main():
     with tempfile.TemporaryDirectory() as directory:
         service = bridge.Service(Path(directory))
@@ -84,6 +152,8 @@ async def main():
         device.data = frame(0, b"bad", 30) + frame(LINK_CHANNEL, link, 31)
         service.read()
         assert service.errors == 1 and service.link["controller"] is not None, (service.errors, service.link)
+
+        await log_repair(service, device, Path(directory))
 
         device.unplugged = True
         service.read()

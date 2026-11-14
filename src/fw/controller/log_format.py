@@ -24,6 +24,23 @@ BARO_NONE = -(2**31)
 FORMATS = {BASE_SIZE: BASE_FORMAT, HOVER_SIZE: HOVER_FORMAT, BARO_RECORD_SIZE: BARO_RECORD_FORMAT, GUARD_RECORD_SIZE: GUARD_RECORD_FORMAT, EKF_RECORD_SIZE: EKF_RECORD_FORMAT, RECORD_SIZE: SAMPLE_FORMAT}
 MAX_BATCH = 8  # Records per FLG1 batch at most (radio.c LOG_MAX: 4 since the 108-byte record (112 now), 5 since the 80-byte one, 8 before).
 
+
+def batches(payload):
+    """
+    The FLG1 batches in one flight-log message as (offset of the first record, session, record count, record size): one per message from older drones, up to radio.c LOG_BATCHES laid end to end (as the recording holds them) while a newer drone catches up a backlog. Raises ValueError for anything else.
+    """
+    found, offset = [], 0
+    while offset < len(payload):
+        if len(payload) - offset < HEADER_SIZE:
+            raise ValueError("Truncated FLG1 header")
+        magic, session, count, size = struct.unpack_from(HEADER_FORMAT, payload, offset)
+        offset += HEADER_SIZE
+        if magic != b"FLG1" or size not in FORMATS or not 1 <= count <= MAX_BATCH or len(payload) - offset < count * size:
+            raise ValueError("Invalid FLG1 batch")
+        found.append((offset, session, count, size))
+        offset += count * size
+    return found
+
 STOP_REASONS = (
     "", "Stopped", "Controller heartbeat lost", "IMU read failed",
     "Tilt limit exceeded", "Control sample delayed", "IMU calibration", "Landed", "Landed after link loss", "Landed by the fly-away failsafe",

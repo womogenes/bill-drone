@@ -23,7 +23,8 @@
 #include "hover.h"
 #include "recover.h"
 
-#define LOG_CAPACITY 200
+// Samples kept while the radio catches up: 5 s at 100 Hz (2 s until 2026-11-14). 500 records take 56 KB; with 200 the drone had 129 KB of internal RAM left at its lowest (radio.c I reply), so this leaves about 95 KB.
+#define LOG_CAPACITY 500
 #define DEG (180.0f / 3.14159265358979323846f)
 // One g as the Kalman filter and the hover take it (m/s²).
 #define GRAVITY 9.81f
@@ -1057,11 +1058,13 @@ void flight_runtime_log(LogState *log) {
     portEXIT_CRITICAL(&lock);
 }
 
-// Copies up to count of the oldest records without removing them; the radio consumes them once acknowledged.
-size_t flight_runtime_read_log(uint8_t *output, size_t count) {
+// Copies up to count of the oldest records after the first skip without removing them; the radio consumes them once acknowledged. The radio reads a backlog one batch at a time, so the lock is never held for more than a batch's copy while the control task waits on it.
+size_t flight_runtime_read_log(uint8_t *output, size_t skip, size_t count) {
     portENTER_CRITICAL(&lock);
-    if (count > log_head - log_tail) count = log_head - log_tail;
-    for (size_t i = 0; i < count; i++) memcpy(output + i * sizeof(Record), &records[(log_tail + i) % LOG_CAPACITY], sizeof(Record));
+    size_t pending = log_head - log_tail;
+    if (skip > pending) skip = pending;
+    if (count > pending - skip) count = pending - skip;
+    for (size_t i = 0; i < count; i++) memcpy(output + i * sizeof(Record), &records[(log_tail + skip + i) % LOG_CAPACITY], sizeof(Record));
     portEXIT_CRITICAL(&lock);
     return count;
 }
