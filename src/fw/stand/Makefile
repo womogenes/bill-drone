@@ -9,7 +9,7 @@ build:
 	$(IDF) idf.py build
 
 flash: build
-	$(IDF) idf.py -p $(PORT) -b 921600 flash
+	$(IDF) idf.py -p $(PORT) -b 460800 flash
 
 # Over Wi-Fi to the stand found by its broadcast (main/stand.c, port 3335).
 ota: build
