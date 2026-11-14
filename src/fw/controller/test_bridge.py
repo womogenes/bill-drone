@@ -102,6 +102,10 @@ async def main():
     causes = header.split("enum { RECOVER_NONE, ")[1].split("}")[0].split(", ")
     assert len(stages) == len([s for s in log_format.RECOVERY_STAGES if s]) and len(causes) == len([c for c in log_format.RECOVERY_CAUSES if c]), (stages, causes)
     assert log_format.STOP_REASONS[int(header.split("#define RECOVER_FAILED_REASON ")[1].split()[0])] == "Recovery failed"
+    # The pattern's stop reasons in the drone's order (drone/main/guard.h): a new one there needs its name here.
+    guard = (Path(__file__).parents[1] / "drone/main/guard.h").read_text()
+    stops = guard.split("enum { PATTERN_PLAYING, ")[1].split("}")[0].split(", ")
+    assert len(stops) == len([s for s in log_format.PATTERN_STOPS if s]), stops
     print("ok")
 
 
