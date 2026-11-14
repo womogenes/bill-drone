@@ -1,7 +1,7 @@
 """
 A recording of the camera's FPV frames with the drone's IMU (sw/vio/record_camera.py --imu) as a visual-inertial dataset (sw/vio/dataset.py) with its OpenVINS configuration (sw/vio/openvins/configure.py).
 
-uv run --with opencv-python-headless -m sw.vio.recorded --footage ~/sw/vio/footage/room_imu --log sw/recordings/<flight>.csv --out ~/sw/vio/data/room_imu [--offset S] [--calibration <dataset>]
+uv run --with opencv-python-headless -m sw.vio.recorded --footage ~/sw/vio/footage/room_imu --log sw/recordings/<flight>.bin --out ~/sw/vio/data/room_imu [--offset S] [--calibration <dataset>]
 
 Frames are stamped through the log when it names the camera's frames (camera_sequence and camera_age_us, the camera sending each FPV frame's sequence and SYNC pulse to the drone): the frame numbers match the log's frames and a straight line maps the camera's clock onto the drone's (sw/vio/blackbox_dataset.py clock_line), to the frame's start as the drone dated it, plus half the readout. Otherwise offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is another dataset's (--calibration, fitted from tags by sw/vio/tags.py --save), or else the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to the frames' size (camera); its distortion coefficients act on normalized coordinates, so they carry over.
 """
@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from sw.flight_log import read_flight
 from sw.vio import dataset, scene
 from sw.vio.blackbox_dataset import clock_line
 from sw.vio.openvins import configure
@@ -85,7 +86,7 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     out = dataset.Writer(args.out.expanduser())
-    log = pd.read_csv(args.log)
+    log = read_flight(args.log)[0] if args.log.suffix == ".bin" else pd.read_csv(args.log)
     for row in log.itertuples():
         gyro = [math.radians(v) for v in (row.gx_deg_s, row.gy_deg_s, row.gz_deg_s)]
         out.inertial(row.esp_time_us / 1e6, gyro, [v * GRAVITY for v in (row.ax_g, row.ay_g, row.az_g)])
