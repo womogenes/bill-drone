@@ -27,7 +27,7 @@ EKF_COLUMNS = [
     "ekf_roll_deg", "ekf_pitch_deg", "ekf_yaw_deg", "ekf_north_m_s", "ekf_west_m_s", "ekf_up_m_s", "ekf_north_m", "ekf_west_m", "ekf_height_m",
     "ekf_velocity_sd_m_s", "ekf_height_sd_m", *("ekf_" + name for name in EKF_FLAGS), "ekf_rejected",
 ]
-# The camera's newest dated frame: its sequence's low 16 bits, and how long before esp_time_us its centre row was read (us).
+# The camera's newest dated frame: its sequence's low 16 bits, and how long before esp_time_us its centre row was read (us; the drone truncates to 10 us, so the middle of that step).
 CAMERA_COLUMNS = ["camera_sequence", "camera_age_us"]
 NAN = float("nan")
 
@@ -158,7 +158,7 @@ def read_flight(path):
                     *((fields[38] / 1000, True) if len(fields) > 38 and fields[38] != BARO_NONE else (NAN, False)),
                     *((fields[39] & 3, fields[39] >> 2 & 1, fields[39] >> 3 & 7, fields[39] >> 6 & 3, fields[39] >> 8 & 3, fields[39] >> 10 & 7) if len(fields) > 39 else (NAN,) * 6),
                     *ekf_values(fields[40:52]),
-                    *((fields[52], NAN if fields[53] == 65535 else fields[53] * 10) if len(fields) > 52 else (NAN, NAN)),
+                    *((fields[52], NAN if fields[53] == 65535 else fields[53] * 10 + 5) if len(fields) > 52 else (NAN, NAN)),
                 ])
             if len(payload) != count * size:
                 truncated = True

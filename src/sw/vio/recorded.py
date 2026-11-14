@@ -1,9 +1,9 @@
 """
 A recording of the camera's FPV frames with the drone's IMU (sw/vio/record_camera.py --imu) as a visual-inertial dataset (sw/vio/dataset.py) with its OpenVINS configuration (sw/vio/openvins/configure.py).
 
-uv run --with opencv-python-headless -m sw.vio.recorded --footage ~/sw/vio/footage/room_imu --log sw/recordings/<flight>.csv --out ~/sw/vio/data/room_imu [--offset S]
+uv run --with opencv-python-headless -m sw.vio.recorded --footage ~/sw/vio/footage/room_imu --log sw/recordings/<flight>.csv --out ~/sw/vio/data/room_imu [--offset S] [--calibration <dataset>]
 
-Frames are stamped through the log when it names the camera's frames (camera_sequence and camera_age_us, the camera sending each FPV frame's sequence and SYNC pulse to the drone): the frame numbers match the log's frames and a straight line maps the camera's clock onto the drone's (sw/vio/blackbox_dataset.py clock_line), to the frame's centre row as the drone dated it. Otherwise offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to FPV's 480x320, which takes the array's full width and its middle 2/3 of the height; its distortion coefficients act on normalized coordinates, so they carry over.
+Frames are stamped through the log when it names the camera's frames (camera_sequence and camera_age_us, the camera sending each FPV frame's sequence and SYNC pulse to the drone): the frame numbers match the log's frames and a straight line maps the camera's clock onto the drone's (sw/vio/blackbox_dataset.py clock_line), to the frame's centre row as the drone dated it. Otherwise offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is another dataset's (--calibration, fitted from tags by sw/vio/tags.py --save), or else the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to the frames' size (camera); its distortion coefficients act on normalized coordinates, so they carry over.
 """
 
 import argparse
@@ -14,6 +14,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
+import yaml
 
 from sw.vio import dataset, scene
 from sw.vio.blackbox_dataset import clock_line
@@ -24,11 +25,20 @@ GRAVITY = 9.80665
 GYRO_NOISE, ACCEL_NOISE = 2e-3, 4e-2
 
 
-def camera():
-    scale = 480 / 320
-    fx, fy, cx, cy = 369.494757463 * scale, 370.922837184 * scale, 160.420727397 * scale, 160 + (110.831046213 - 120) * scale
+def camera(width, height):
+    """The tracking calibration (320x240 over the whole array) scaled to an FPV frame of this size, which takes the array's full width and, when it is wider than 4:3, its middle rows (480x320: 2/3 of them); 640x480 is the whole array. Turned upright."""
+    scale = width / 320
+    fx, fy, cx, cy = 369.494757463 * scale, 370.922837184 * scale, 160.420727397 * scale, height / 2 + (110.831046213 - 120) * scale
     # Turning the image by 180 degrees moves the principal point to the opposite side.
-    return {"fx": fx, "fy": fy, "cx": 479 - cx, "cy": 319 - cy, "k1": -0.031215286, "k2": 0.896256747}
+    return {"fx": fx, "fy": fy, "cx": width - 1 - cx, "cy": height - 1 - cy, "k1": -0.031215286, "k2": 0.896256747}
+
+
+def calibrated(folder):
+    """The camera calibration of another dataset (sw/vio/tags.py --save writes the one it fits from the tags)."""
+    cam = yaml.safe_load((Path(folder).expanduser() / "kalibr_imucam_chain.yaml").read_text().replace("%YAML:1.0", ""))["cam0"]
+    fx, fy, cx, cy = cam["intrinsics"]
+    k1, k2, p1, p2 = cam["distortion_coeffs"]
+    return {"fx": fx, "fy": fy, "cx": cx, "cy": cy, "k1": k1, "k2": k2, "p1": p1, "p2": p2}
 
 
 def find_offset(footage, frames, log):
@@ -71,6 +81,7 @@ def main():
     parser.add_argument("--footage", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--offset", type=float)
+    parser.add_argument("--calibration", type=Path, help="a dataset whose camera calibration to use (sw/vio/tags.py --save)")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     out = dataset.Writer(args.out.expanduser())
@@ -92,12 +103,13 @@ def main():
     else:
         offset = find_offset(footage, frames, log) if args.offset is None else args.offset
         stamps = capture / 1e6 + offset + scene.READOUT_S / 2
+    height, width = cv2.imread(str(footage / frames[0]["file"]), cv2.IMREAD_GRAYSCALE).shape
     for frame, time in zip(frames, stamps):
         if start < time < end:
             gray = cv2.rotate(cv2.imread(str(footage / frame["file"]), cv2.IMREAD_GRAYSCALE), cv2.ROTATE_180)
             out.frame(time, cv2.imencode(".png", gray)[1].tobytes())
     out.close()
-    print(configure.write(args.out.expanduser(), GYRO_NOISE, ACCEL_NOISE, camera=camera(), dynamic=True), f"{len(out.frames)} frames, {len(out.imu)} IMU samples")
+    print(configure.write(args.out.expanduser(), GYRO_NOISE, ACCEL_NOISE, camera=calibrated(args.calibration) if args.calibration else camera(width, height), dynamic=True, size=(width, height)), f"{len(out.frames)} frames, {len(out.imu)} IMU samples")
 
 
 if __name__ == "__main__":
