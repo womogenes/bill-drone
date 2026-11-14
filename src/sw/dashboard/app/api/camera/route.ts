@@ -16,6 +16,7 @@ import {
 } from 'node:fs';
 import { resolve } from 'node:path';
 import { decode } from '@/lib/fec';
+import { fpvRecording, recordFpvFrame } from '@/lib/fpv-recorder';
 import { indexOf } from '@/lib/multipart';
 
 export const runtime = 'nodejs';
@@ -169,6 +170,7 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
     }
     hub.received!++;
     const { jpeg, tag } = splitTag(frameBytes);
+    recordFpvFrame(jpeg, message.readUInt32LE(12), frame);
     const part = new Uint8Array(
       Buffer.concat([
         Buffer.from(
@@ -614,6 +616,7 @@ export async function GET(request: Request) {
         copies: store.fpvReceiver?.copies,
         chunks: store.fpvReceiver?.chunks,
         signal: store.fpvReceiver?.signal,
+        recording: fpvRecording(),
         // The receiver's last second: shards passed and their RSSI (dBm).
         rssi: rssi.length
           ? {
