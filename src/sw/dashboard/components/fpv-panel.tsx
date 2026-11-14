@@ -26,8 +26,16 @@ function save(key: string, value: string) {
   } catch {}
 }
 
-// The camera's own state through the drone (running, fpv, stalled or stopped) and the FPV frame rate, or null while it does not answer.
-type CameraStatus = { state: string; fps?: number } | null;
+// The camera's own state through the drone (running, fpv, stalled or stopped), or null while it does not answer.
+type CameraStatus = { state: string } | null;
+// The FPV video over the last second as this page got it: picture size, frames, average JPEG size and the share of the camera's numbered frames that never arrived.
+type VideoStats = {
+  width: number;
+  height: number;
+  fps: number;
+  kilobytes: number;
+  lost: number;
+};
 
 // Rendered in the browser only (the page loads it without server rendering), so the saved address is there from the start. Always streams, by the drone's hover_camera setting: the tracking preview (the flow's 80x60 reduction, tracking undisturbed, over the camera's network) or FPV, the camera's own 480x320 video over the radio to the FPV receiver or over its network, during which it does not track the tag, so camera hover has no sightings; it resumes tracking 3 s after FPV ends.
 export function FpvPanel({
@@ -57,30 +65,41 @@ export function FpvPanel({
     rollRef.current = roll;
   }, [roll]);
   const [status, setStatus] = useState<CameraStatus>(null);
+  const [video, setVideo] = useState<VideoStats | null>(null);
+  // Each FPV frame this second: when it came, its JPEG bytes and its number (X-Time's third field).
+  const arrivals = useRef<{ time: number; bytes: number; number: number }[]>(
+    []
+  );
+  const size = useRef({ width: 0, height: 0 });
   const where = host ? `&host=${encodeURIComponent(host)}` : '';
 
   useEffect(() => {
     const controller = new AbortController();
-    let previous: { count: number; time: number } | undefined;
     const timer = setInterval(async () => {
+      const now = performance.now();
+      const recent = (arrivals.current = arrivals.current.filter(
+        (arrival) => now - arrival.time < 1000
+      ));
+      if (recent.length < 2) setVideo(null);
+      else {
+        const span = ((recent.at(-1)!.number - recent[0].number) & 0xffff) + 1;
+        setVideo({
+          ...size.current,
+          fps: recent.length,
+          kilobytes:
+            recent.reduce((sum, arrival) => sum + arrival.bytes, 0) /
+            recent.length /
+            1000,
+          lost: Math.max(0, 1 - recent.length / span),
+        });
+      }
       try {
         const response = await fetch(`/api/camera?mode=status${where}`, {
           signal: controller.signal,
         });
         const value = await response.json();
         if (!response.ok) throw new Error(value.error);
-        const time = performance.now();
-        // FPV frames the dashboard received; the camera's own state otherwise.
-        const fps =
-          previous && value.received >= previous.count
-            ? ((value.received - previous.count) * 1000) /
-              (time - previous.time)
-            : undefined;
-        previous =
-          value.received === undefined
-            ? undefined
-            : { count: value.received, time };
-        setStatus({ state: value.camera, fps });
+        setStatus({ state: value.camera });
       } catch {
         if (!controller.signal.aborted) setStatus(null);
       }
@@ -154,7 +173,13 @@ export function FpvPanel({
     frame = requestAnimationFrame(render);
     const show = async (jpeg: Uint8Array, header: string) => {
       const arrived = performance.now();
-      const stamp = /X-Time: *(\d+)/i.exec(header);
+      const stamp = /X-Time: *(\d+) +\d+ +(\d+)/i.exec(header);
+      if (stamp)
+        arrivals.current.push({
+          time: arrived,
+          bytes: jpeg.length,
+          number: Number(stamp[2]),
+        });
       let at = arrived;
       if (stamp) {
         const us = Number(stamp[1]);
@@ -170,6 +195,7 @@ export function FpvPanel({
         new Blob([jpeg as BlobPart], { type: 'image/jpeg' })
       ).catch(() => undefined);
       if (!bitmap || closed.signal.aborted) return bitmap?.close();
+      size.current = { width: bitmap.width, height: bitmap.height };
       const index = queue.findIndex((queued) => queued.at > at);
       queue.splice(index < 0 ? queue.length : index, 0, {
         at,
@@ -216,9 +242,9 @@ export function FpvPanel({
             className={`text-sm tabular-nums ${status ? 'text-muted-foreground' : 'text-red-700'}`}
           >
             {status
-              ? status.fps === undefined
-                ? status.state
-                : `${status.state} · ${Math.round(status.fps)} fps`
+              ? video
+                ? `${video.width}×${video.height} · ${video.fps} fps · ${Math.round(video.kilobytes)} KB · ${Math.round(video.lost * 100)}% lost`
+                : status.state
               : 'Offline'}
           </span>
           <Input

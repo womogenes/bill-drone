@@ -5,10 +5,12 @@
 #if CONFIG_IDF_TARGET_ESP32S3
 #include "driver/usb_serial_jtag.h"
 #endif
+#include "esp_now.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
+#include "freertos/semphr.h"
 #include "nvs_flash.h"
 
 #define BAUD 1000000
@@ -34,9 +36,14 @@ static RingbufHandle_t chunks;
 static uint8_t camera[6];
 static volatile bool chosen;
 static volatile int64_t heard_us;
+// Camera updates (fw/esp32cam/src/air_update.h, fw/tools/camera_air_ota.py): the laptop's FPVE messages go to the chosen camera over ESP-NOW, and the camera's go back as FPVE, the length (u16) and the message. FPVC and a channel holds the radio there while they flow (held_us), where the channel search would wander off with no video coming. The last send's outcome comes from the send callback.
+static volatile int64_t held_us;
+static SemaphoreHandle_t send_done;
+static volatile bool send_ok;
+#define HOLD_US 5000000
 static uint16_t admitted;
-// Where frames go missing, sent to the laptop every second as FPVT and six u32 (since boot): frames heard (their first shard), frames declined for want of buffer room for all their data shards, frames admitted but short of shards when the next began (the air), shards the buffer refused, and the longest a USB write took in the last second (us; long means the laptop is not reading) and the bytes written.
-static volatile uint32_t frames_heard, frames_declined, frames_short, shards_refused, usb_longest_us, usb_bytes;
+// Where frames go missing, sent to the laptop every second as FPVT and eight u32 (since boot): frames heard (their first shard), frames declined for want of buffer room for all their data shards, frames admitted but short of shards when the next began (the air), shards the buffer refused, the longest a USB write took in the last second (us; long means the laptop is not reading) and the bytes written, then the shards the heard frames had (data and parity) and the distinct ones of them heard, whose shortfall is the air's loss.
+static volatile uint32_t frames_heard, frames_declined, frames_short, shards_refused, usb_longest_us, usb_bytes, shards_sent, shards_heard;
 
 static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     const wifi_promiscuous_pkt_t *packet = buffer;
@@ -49,21 +56,26 @@ static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     const uint8_t *chunk = frame + HEADER + 4;
     const uint16_t number = chunk[4] | chunk[5] << 8;
     static uint16_t seen_frame;
-    static uint64_t seen;
+    static uint64_t seen, heard_bits;
     static int passed, data_wanted;
     static bool started;
     if (!started || number != seen_frame) {
         if (started && admitted == seen_frame && passed < data_wanted) ++frames_short;
         started = true;
         seen_frame = number;
-        seen = 0;
+        seen = heard_bits = 0;
         passed = 0;
+        shards_sent += chunk[7];
         data_wanted = chunk[8];
         ++frames_heard;
         admitted = xRingbufferGetCurFreeSize(chunks) >= chunk[8] * (3 + 20 + CHUNK) ? number : number - 1;
         if (admitted != number) ++frames_declined;
     }
     const uint64_t bit = 1ull << (chunk[6] & 63);
+    if (!(heard_bits & bit)) {
+        heard_bits |= bit;
+        ++shards_heard;
+    }
     if (number != admitted || (seen & bit) || passed >= chunk[8]) return;
     seen |= bit;
     ++passed;
@@ -115,7 +127,7 @@ static void blink(void *unused) {
         const bool hearing = esp_timer_get_time() - heard_us < LOST_US;
         if (!hearing) xRingbufferSend(chunks, BEACON, 4, 0);
         if ((report = !report)) {
-            uint32_t stats[7] = {0, frames_heard, frames_declined, frames_short, shards_refused, usb_longest_us, usb_bytes};
+            uint32_t stats[9] = {0, frames_heard, frames_declined, frames_short, shards_refused, usb_longest_us, usb_bytes, shards_sent, shards_heard};
             memcpy(stats, "FPVT", 4);
             usb_longest_us = 0;
             xRingbufferSend(chunks, stats, sizeof(stats), 0);
@@ -127,19 +139,82 @@ static void blink(void *unused) {
     }
 }
 
-// The laptop's choice of camera: FPVF and its MAC, looked for anywhere in what arrives.
-static void choose(void *unused) {
-    uint8_t got[10];
+static void espnow_received(const esp_now_recv_info_t *info, const uint8_t *data, int length) {
+    if (!chosen || memcmp(info->src_addr, camera, 6) || length > ESP_NOW_MAX_DATA_LEN) return;
+    uint8_t out[6 + ESP_NOW_MAX_DATA_LEN];
+    memcpy(out, "FPVE", 4);
+    out[4] = length & 0xff;
+    out[5] = length >> 8;
+    memcpy(out + 6, data, length);
+    xRingbufferSend(chunks, out, 6 + length, 0);
+}
+
+static void espnow_sent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
+    send_ok = status == ESP_NOW_SEND_SUCCESS;
+    xSemaphoreGive(send_done);
+}
+
+// One message to the camera, tried until it is acknowledged (up to 5 times); FPVX goes back to the laptop if it never is.
+static void to_camera(const uint8_t *data, int length) {
+    static uint8_t peer[6];
+    if (memcmp(peer, camera, 6)) {
+        if (esp_now_is_peer_exist(peer)) esp_now_del_peer(peer);
+        esp_now_peer_info_t info = {.ifidx = WIFI_IF_STA};
+        memcpy(info.peer_addr, camera, 6);
+        if (esp_now_add_peer(&info) != ESP_OK) return;
+        memcpy(peer, camera, 6);
+        // 24 Mbps, as the video comes: at the default 1 Mbps a 4 KB sector took 40 ms of air.
+        esp_now_rate_config_t rate = {.phymode = WIFI_PHY_MODE_11G, .rate = WIFI_PHY_RATE_24M};
+        esp_now_set_peer_rate_config(peer, &rate);
+    }
+    held_us = esp_timer_get_time();
+    for (int tries = 0; tries < 5; ++tries) {
+        xSemaphoreTake(send_done, 0);
+        if (esp_now_send(camera, data, length) == ESP_OK && xSemaphoreTake(send_done, pdMS_TO_TICKS(100)) == pdTRUE && send_ok) return;
+    }
+    xRingbufferSend(chunks, "FPVX", 4, 0);
+}
+
+// The laptop's commands, looked for anywhere in what arrives: FPVF and a camera's MAC (only its frames pass from then on), FPVC and a channel (held while updates flow), FPVE, a length (u16) and a message for the camera.
+static void commands(void *unused) {
+    static uint8_t got[512];
     int have = 0;
     for (;;) {
-        if (read_in(got + have, 1) != 1) continue;
-        ++have;
-        // Not the start of a command: drop bytes from the front until what is left could be.
-        while (have && memcmp(got, "FPVF", have < 4 ? have : 4)) memmove(got, got + 1, --have);
-        if (have < 10) continue;
-        memcpy(camera, got + 4, 6);
-        chosen = true;
-        have = 0;
+        const int n = read_in(got + have, sizeof(got) - have);
+        if (n <= 0) continue;
+        have += n;
+        for (;;) {
+            // Not the start of a command: drop bytes from the front until what is left could be.
+            int skip = 0;
+            while (skip < have && memcmp(got + skip, "FPV", have - skip < 3 ? have - skip : 3)) ++skip;
+            if (skip) memmove(got, got + skip, have -= skip);
+            if (have < 5) break;
+            const uint8_t kind = got[3];
+            int used = 1;
+            if (kind == 'F') {
+                if (have < 10) break;
+                memcpy(camera, got + 4, 6);
+                chosen = true;
+                used = 10;
+            } else if (kind == 'C') {
+                if (got[4] >= 1 && got[4] <= 13) {
+                    held_us = esp_timer_get_time();
+                    esp_wifi_set_channel(got[4], WIFI_SECOND_CHAN_NONE);
+                }
+                used = 5;
+            } else if (kind == 'E') {
+                if (have < 6) break;
+                const int length = got[4] | got[5] << 8;
+                if (length <= ESP_NOW_MAX_DATA_LEN) {
+                    if (have < 6 + length) break;
+                    if (chosen) to_camera(got + 6, length);
+                    used = 6 + length;
+                }
+            }
+            memmove(got, got + used, have -= used);
+        }
+        // A buffer full of nothing usable starts over.
+        if (have == sizeof(got)) have = 0;
     }
 }
 
@@ -147,7 +222,7 @@ void app_main(void) {
     // A byte buffer, whose free size is all of its free space: a no-split buffer reports only the largest contiguous piece, which near its end refused frames that would have fitted.
     chunks = xRingbufferCreate(BUFFER, RINGBUF_TYPE_BYTEBUF);
 #if CONFIG_IDF_TARGET_ESP32S3
-    usb_serial_jtag_driver_config_t usb = {.tx_buffer_size = 16384, .rx_buffer_size = 256};
+    usb_serial_jtag_driver_config_t usb = {.tx_buffer_size = 16384, .rx_buffer_size = 8192};
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb));
 #else
     uart_config_t uart = {.baud_rate = BAUD, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT};
@@ -156,15 +231,22 @@ void app_main(void) {
     ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0, 1, 3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 #endif
     xTaskCreatePinnedToCore(forward, "forward", 4096, NULL, 5, NULL, 1);
-    xTaskCreatePinnedToCore(choose, "choose", 2048, NULL, 4, NULL, 1);
+    send_done = xSemaphoreCreateBinary();
+    xTaskCreatePinnedToCore(commands, "commands", 4096, NULL, 4, NULL, 1);
     xTaskCreatePinnedToCore(blink, "blink", 2048, NULL, 1, NULL, 1);
 
     ESP_ERROR_CHECK(nvs_flash_init());
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&config));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_NULL));
+    // A station joined to nothing, for ESP-NOW; the video comes by promiscuous receive either way.
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
+    // No power save: a sleeping station hears nothing.
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    ESP_ERROR_CHECK(esp_now_init());
+    ESP_ERROR_CHECK(esp_now_register_recv_cb(espnow_received));
+    ESP_ERROR_CHECK(esp_now_register_send_cb(espnow_sent));
     wifi_promiscuous_filter_t filter = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT};
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filter));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(received));
@@ -172,9 +254,9 @@ void app_main(void) {
 
     int channel = 1;
     for (;;) {
-        esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+        if (esp_timer_get_time() - held_us >= HOLD_US) esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
         vTaskDelay(pdMS_TO_TICKS(SEARCH_US / 1000));
-        while (esp_timer_get_time() - heard_us < LOST_US) vTaskDelay(pdMS_TO_TICKS(100));
+        while (esp_timer_get_time() - heard_us < LOST_US || esp_timer_get_time() - held_us < HOLD_US) vTaskDelay(pdMS_TO_TICKS(100));
         channel = channel % 13 + 1;
     }
 }
