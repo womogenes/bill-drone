@@ -260,6 +260,18 @@ const gainSections: {
         max: 5,
       },
       {
+        key: 'hover_nudge_speed',
+        label: 'Arrow and stick speed (m/s)',
+        min: 0.05,
+        max: 5,
+      },
+      {
+        key: 'hover_nudge_accel',
+        label: 'Arrow and stick acceleration (m/s², 0 off)',
+        min: 0,
+        max: 5,
+      },
+      {
         key: 'hover_ekf',
         label: 'Kalman filter (0 logged, 1 flown, 2 and its height)',
         min: 0,
@@ -275,6 +287,23 @@ const gainSections: {
       { key: 'failsafe_time', label: 'Time over the speed (s)', min: 0.2 },
       { key: 'failsafe_land', label: 'Brake before landing (s)', min: 1 },
       { key: 'failsafe_tilt', label: 'Brake tilt (°)', min: 0, max: 30 },
+    ],
+  },
+  {
+    title: 'Test pattern',
+    fields: [
+      {
+        key: 'pattern_distance',
+        label: 'Stop past (m, 0 off)',
+        min: 0,
+        max: 10,
+      },
+      {
+        key: 'pattern_tilt',
+        label: 'Stop past tilt (°, 0 off)',
+        min: 0,
+        max: 60,
+      },
     ],
   },
   {
@@ -331,6 +360,7 @@ export const ControlPanel = memo(function ControlPanel({
   connected,
   viewing,
   mode,
+  droneMode,
   nudge,
   onChange,
   onMode,
@@ -352,6 +382,8 @@ export const ControlPanel = memo(function ControlPanel({
   arming: boolean;
   connected: boolean;
   mode: number;
+  // The hover mode the armed drone reports flying (fw/controller/bridge.py push_hover): after a recovery or Level it holds whatever mode the laptop streams until the laptop asks for another, so the label shows it.
+  droneMode?: number;
   nudge: [number, number, number];
   onChange: (settings: Partial<ControlSettings>) => void;
   onMode: (mode: number) => void;
@@ -690,6 +722,7 @@ export const ControlPanel = memo(function ControlPanel({
     return () => clearInterval(timer);
   }, [available, open, onChange, setMode, onNudge, onStop, onHover]);
 
+  const shownMode = droneMode ?? mode;
   return (
     <Panel
       title="Flight control"
@@ -800,10 +833,10 @@ export const ControlPanel = memo(function ControlPanel({
             </DialogContent>
           </Dialog>
           <span
-            className={`text-sm tabular-nums ${mode === MANUAL ? 'text-muted-foreground' : 'font-medium text-blue-700 dark:text-blue-400'}`}
+            className={`text-sm tabular-nums ${shownMode === MANUAL ? 'text-muted-foreground' : 'font-medium text-blue-700 dark:text-blue-400'}`}
             aria-label="Flight mode"
           >
-            {FLIGHT_MODES[mode] ?? `Mode ${mode}`}
+            {FLIGHT_MODES[shownMode] ?? `Mode ${shownMode}`}
           </span>
           <Button
             variant={settings.enabled || arming ? 'destructive' : 'outline'}
