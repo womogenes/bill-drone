@@ -201,6 +201,10 @@ static bool flow_input(const HoverGains *gains, HoverFlow *out) {
     return true;
 }
 static Command command;
+// The collective throttle for a total thrust (N) along the thrust axis at pitch_trim, as the hover, the flip and the recovery's leveling ask for it.
+static float collective_throttle(float force) {
+    return fminf(THROTTLE_MAX, flight_interpolate(force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1));
+}
 // The controller's tilt setpoint for bank_tilt: its roll, or its pitch beyond pitch_trim, whichever is larger (radians).
 static float bank_angle(const Controller *c) {
     return fmaxf(fabsf(c->setpoint_roll), fabsf(c->setpoint_pitch - command.pitch_trim));
@@ -753,7 +757,7 @@ static void runtime_task(void *arg) {
                              have_flow ? &flow : NULL, have_gps ? &gps : NULL, have_baro ? &baro : NULL, &out);
                 // A finished landing disarms, ending the session like a stop, so the laptop can take off again (H or Enable) instead of being left armed with hover holding thrust at zero.
                 if (hover.landed && out.force <= 0 && !flip_active(&flip) && !recover_active(&recovery)) stop_locked(link_landing ? 8 : guard.failsafe == FAILSAFE_LAND ? 9 : 7);
-                scaled.base = out.force > 0 ? fminf(THROTTLE_MAX, flight_interpolate(out.force / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1)) : 0;
+                scaled.base = out.force > 0 ? collective_throttle(out.force) : 0;
                 scaled.target_roll = out.roll;
                 scaled.target_pitch = out.pitch;
                 // The tag steers the heading; without the camera nothing does, so the laptop's yaw (A and D) turns the drone, as in manual flight.
@@ -799,11 +803,11 @@ static void runtime_task(void *arg) {
                 scaled.base = fminf(THROTTLE_MAX, flight_interpolate(force, &flight_thrust[0][0], flight_thrust_count, 1));
             }
             // The flip's climb and arrest set the collective under the attitude controller.
-            if (flipped.collective_set) scaled.base = fminf(THROTTLE_MAX, flight_interpolate(flipped.collective / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1));
+            if (flipped.collective_set) scaled.base = collective_throttle(flipped.collective);
             // Leveling after a righting: the attitude controller at level, its collective stopping the vertical speed.
             if (recovered.level) {
                 scaled.target_roll = scaled.target_pitch = 0;
-                scaled.base = fminf(THROTTLE_MAX, flight_interpolate(recovered.motors.collective / 2 / cosf(command.pitch_trim), &flight_thrust[0][0], flight_thrust_count, 1));
+                scaled.base = collective_throttle(recovered.motors.collective);
             }
             flown = scaled;
             if (command.thrust_voltage > 0 && battery_v > 0) {
