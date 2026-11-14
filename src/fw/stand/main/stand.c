@@ -1,5 +1,5 @@
-// Thrust stand: one ESC on GPIO25 and up to two HX711 load cells (A: DT GPIO32, SCK GPIO33; B: DT GPIO39, SCK GPIO17), driven from the laptop by sw/stand.py over USB at 921600 baud. The ESC pulse is the drone's (fw/drone/main/flight_rt.c): 400 Hz, 1000 us plus the throttle (0-1200), so a throttle here is a throttle there.
-// Laptop to stand, one command per line: "T <throttle>" sets the throttle, "P <us>" sets a raw pulse for the ESC's range calibration (1000-2200 us), "C <mask>" chooses the cells read (bit 0 A, bit 1 B; A alone at start, since an unwired B on GPIO39, which has no pull-up, floats). T and P are held for WATCHDOG_US; without a fresh one the pulse falls back to 1000 us (motor stopped).
+// Thrust stand: one ESC on GPIO25 and up to two HX711 load cells (A: DT GPIO32, SCK GPIO33; B: DT GPIO39, SCK GPIO17), driven from the laptop by sw/stand.py over USB at 921600 baud. The ESC pulse is the drone's (fw/drone/main/flight_rt.c esc_us): 400 Hz, 1000 us plus the throttle (1-1200), and 950 us for throttle 0 (stopped, below the calibrated bottom so the ESC arms and stays off), so a throttle here is a throttle there.
+// Laptop to stand, one command per line: "T <throttle>" sets the throttle, "P <us>" sets a raw pulse for the ESC's range calibration (1000-2200 us), "C <mask>" chooses the cells read (bit 0 A, bit 1 B; A alone at start, since an unwired B on GPIO39, which has no pull-up, floats). T and P are held for WATCHDOG_US; without a fresh one the pulse falls back to 950 us (motor stopped).
 // Stand to laptop, one line each: "F <cell> <us> <raw>" a load cell's reading and when its conversion finished (this board's clock, us), "E <us> <pulse>" the ESC pulse from that moment on, "H <us>" a heartbeat every 100 ms.
 // The HX711 converts at 10 Hz unless its RATE pin is high (80 Hz); step timing wants 80 Hz.
 #include <stdio.h>
@@ -17,6 +17,7 @@
 #define BAUD 921600
 #define ESC_PIN 25
 #define ESC_HZ 400
+#define PULSE_STOP 950
 #define PULSE_MIN 1000
 #define PULSE_MAX 2200
 #define THROTTLE_MAX 1200
@@ -26,7 +27,8 @@
 
 static const int dout_pins[CELLS] = {32, 39}, sck_pins[CELLS] = {33, 17};
 static portMUX_TYPE transfer = portMUX_INITIALIZER_UNLOCKED;
-static volatile int64_t commanded_us;
+static portMUX_TYPE command = portMUX_INITIALIZER_UNLOCKED;
+static int64_t commanded_us;
 static volatile int cells = 1;
 static SemaphoreHandle_t esc;
 
@@ -37,7 +39,7 @@ static void write_line(const char *line) {
 // The ESC pulse width (us) at 400 Hz: a 2500 us period in 14-bit duty.
 static void set_pulse(int pulse) {
     static int current = -1;
-    if (pulse < PULSE_MIN) pulse = PULSE_MIN;
+    if (pulse < PULSE_STOP) pulse = PULSE_STOP;
     if (pulse > PULSE_MAX) pulse = PULSE_MAX;
     xSemaphoreTake(esc, portMAX_DELAY);
     if (pulse == current) {
@@ -73,6 +75,13 @@ static bool read_cell(int cell, int32_t *value) {
     return true;
 }
 
+static void mark_command(void) {
+    int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL(&command);
+    commanded_us = now;
+    portEXIT_CRITICAL(&command);
+}
+
 // Every millisecond: each chosen cell's finished conversion, the watchdog, the heartbeat.
 static void sample_task(void *arg) {
     int64_t heartbeat_us = 0;
@@ -87,13 +96,17 @@ static void sample_task(void *arg) {
             }
         }
         int64_t now = esp_timer_get_time();
-        if (now - commanded_us > WATCHDOG_US) set_pulse(PULSE_MIN);
+        // The command time is 64-bit and written on the other core: read under the lock so it can't tear.
+        portENTER_CRITICAL(&command);
+        bool fresh = now - commanded_us <= WATCHDOG_US;
+        portEXIT_CRITICAL(&command);
+        if (!fresh) set_pulse(PULSE_STOP);
         if (now - heartbeat_us >= 100000) {
             heartbeat_us = now;
             char line[32];
             snprintf(line, sizeof(line), "H %lld\n", (long long)now);
             write_line(line);
-            gpio_set_level(LED, now - commanded_us <= WATCHDOG_US);
+            gpio_set_level(LED, fresh);
         }
         vTaskDelay(1);
     }
@@ -109,7 +122,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(ledc_timer_config(&timer));
     ledc_channel_config_t channel = {.gpio_num = ESC_PIN, .speed_mode = LEDC_HIGH_SPEED_MODE, .channel = LEDC_CHANNEL_0, .timer_sel = LEDC_TIMER_0, .duty = 0};
     ESP_ERROR_CHECK(ledc_channel_config(&channel));
-    set_pulse(PULSE_MIN);
+    set_pulse(PULSE_STOP);
 
     gpio_config_t led = {.pin_bit_mask = 1ULL << LED, .mode = GPIO_MODE_OUTPUT};
     ESP_ERROR_CHECK(gpio_config(&led));
@@ -136,10 +149,10 @@ void app_main(void) {
         length = 0;
         int value;
         if (sscanf(line, "T %d", &value) == 1 && value >= 0 && value <= THROTTLE_MAX) {
-            commanded_us = esp_timer_get_time();
-            set_pulse(PULSE_MIN + value);
+            mark_command();
+            set_pulse(value ? PULSE_MIN + value : PULSE_STOP);
         } else if (sscanf(line, "P %d", &value) == 1 && value >= PULSE_MIN && value <= PULSE_MAX) {
-            commanded_us = esp_timer_get_time();
+            mark_command();
             set_pulse(value);
         } else if (sscanf(line, "C %d", &value) == 1 && value >= 0 && value < 1 << CELLS) {
             cells = value;
