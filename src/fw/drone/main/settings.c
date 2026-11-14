@@ -194,9 +194,11 @@ bool settings_calibration(float sensor_frame, float *bias, float *pose_zero) {
 void settings_apply(Command *command, const float *source) {
 #define TUNE(name, member, scale, min, max, value) command->member = source[SETTING_##name] * (scale);
 #define STATE(name, min, max, value)
+#define BOOT(name, min, max, value)
 #include "settings.def"
 #undef TUNE
 #undef STATE
+#undef BOOT
 }
 
 // {"name":value,...} for every entry, in table order; the S reply and the T reply.

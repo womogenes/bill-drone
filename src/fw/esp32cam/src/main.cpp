@@ -12,6 +12,7 @@
 #include "tag.h"
 #include "flow.h"
 #include "ota.h"
+#include "relay.h"
 #include "update.h"
 
 #include "web.h"
@@ -99,8 +100,10 @@ void serviceTask(void *) {
         while ((n = uart_read_bytes(linkPort, received, sizeof(received), 0)) > 0) {
             linkReceived = linkReceived + n;
             update::receive(linkPort, received, n);
+            relay::receive(received, n);
         }
         update::poll();
+        relay::poll();
 #endif
         delay(2);
     }
@@ -236,9 +239,17 @@ void setup() {
     digitalWrite(config::flashLedPin, LOW);
     health::countBoot();
     health::watchWifi();
-    startWifi();
-    if (wifiConfigured())
-        fpv::start();
+    // The drone's radio relay (relay.h) takes the radio instead when the drone asked for it.
+#ifdef DEBUG_CONSOLE
+    const bool relayed = false;
+#else
+    const bool relayed = relay::start(linkPort);
+#endif
+    if (!relayed) {
+        startWifi();
+        if (wifiConfigured())
+            fpv::start();
+    }
     assert(psramFound());
     heap_caps_malloc_extmem_enable(4096);
     // Mounting leaves the sync line low (on the ESP32-CAM, the card's DAT3, held high until the card is up).
@@ -320,7 +331,8 @@ void setup() {
 void publish(PosePacket &packet) {
     size_t room = 0;
     uart_get_tx_buffer_free_size(linkPort, &room);
-    const bool clear = room >= linkTxBytes;
+    // In relay mode the drone's packets share the buffer, so room for this one is enough: at most the buffer's 1 KB (5 ms) goes out ahead of it, inside the drone's 10 ms SYNC window.
+    const bool clear = room >= (relay::active ? sizeof(packet) : size_t(linkTxBytes));
     portENTER_CRITICAL(&syncLock);
     const uint32_t now = uint32_t(esp_timer_get_time());
     if (clear)

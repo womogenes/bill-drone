@@ -63,11 +63,14 @@ inline void findCameraName() {
 }
 
 // The network joined, the access point or the parked station, its address, and the camera's state, as the drone's K S request reports them (update.h).
+namespace relay {
+extern bool on, active;
+}
 inline void wifiState(char *text, size_t size) {
     uint8_t channel = 0;
     wifi_second_chan_t second;
     esp_wifi_get_channel(&channel, &second);
-    snprintf(text, size, "%s %s %s ch%u", apStarted ? "ap" : parked ? "radio" : WiFi.status() == WL_CONNECTED ? "joined" : wifiChosen ? "joining" : "off",
+    snprintf(text, size, "%s %s %s ch%u", relay::active ? "relay" : relay::on ? "relay-failed" : apStarted ? "ap" : parked ? "radio" : WiFi.status() == WL_CONNECTED ? "joined" : wifiChosen ? "joining" : "off",
              apStarted ? apSsid : wifiChosen ? wifiChosen->ssid : "-", (apStarted ? WiFi.softAPIP() : WiFi.localIP()).toString().c_str(), unsigned(channel));
 }
 
