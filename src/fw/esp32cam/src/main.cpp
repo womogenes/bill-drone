@@ -14,6 +14,7 @@
 #include "ota.h"
 #include "relay.h"
 #include "update.h"
+#include "air_update.h"
 
 #include "web.h"
 #include "record.h"
@@ -103,6 +104,7 @@ void serviceTask(void *) {
             relay::receive(received, n);
         }
         update::poll();
+        air::poll();
         relay::poll();
 #endif
         delay(2);
@@ -250,6 +252,9 @@ void setup() {
         startWifi();
         if (wifiConfigured())
             fpv::start();
+        // Updates over the FPV receiver's ESP-NOW (air_update.h), wherever the radio is up.
+        if (WiFi.getMode() != WIFI_MODE_NULL)
+            air::start();
     }
     assert(psramFound());
     heap_caps_malloc_extmem_enable(4096);
@@ -407,6 +412,7 @@ void loop() {
             delay(300);
         restartCamera();
         fpv::nativeLines = 0;
+        fpv::lastCaptureUs = 0;
         recoveries += retry && cameraReady;
         return;
     }

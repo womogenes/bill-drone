@@ -98,7 +98,7 @@ inline void startAp() {
     parked = !apStarted;
 }
 
-// The network a K J request has the camera join for one boot, for a firmware update over Wi-Fi in seconds (make camera-fast) instead of the drone's radio link: the repository's .env WIFI_SSID and WIFI_PASSWORD, built in by build.py. The camera otherwise lists no networks, keeping its radio for FPV.
+// The network a K J request has the camera join for one boot, for a firmware update over Wi-Fi in seconds (make camera-fast-wifi) instead of the drone's radio link: the repository's .env WIFI_SSID and WIFI_PASSWORD, built in by build.py. The camera otherwise lists no networks, keeping its radio for FPV.
 #ifndef UPDATE_SSID
 #define UPDATE_SSID ""
 #define UPDATE_PASSWORD ""

@@ -167,7 +167,8 @@ def camera(drone, path):
     hurried = fast(drone, 1)
     for index in range(count):
         digest = hashlib.sha256(local[index]).digest()[:HASH_SIZE]
-        drone.request(b"K", b"W" + struct.pack("<H", index) + digest + local[index], timeout=4, patience=300)
+        # A sector takes about 0.25 s, and a request the drone drops (it drops any that arrives while it handles another, such as the dashboard's camera status each second, and a new one's fragment wipes one half collected) is only noticed by its timeout: at 4 s those took a deploy from about 1 minute to over 10 (2026-11-14). The same id asked again is replayed if it did arrive.
+        drone.request(b"K", b"W" + struct.pack("<H", index) + digest + local[index], timeout=1, patience=300)
         rate = (index + 1) * SECTOR / 1024 / (time.monotonic() - started)
         print(f"\rWrote {index + 1}/{count} sectors ({rate:.0f} KB/s)", end="", flush=True)
     print()

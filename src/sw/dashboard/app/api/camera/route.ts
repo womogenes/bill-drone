@@ -368,7 +368,7 @@ type Receiver = {
   fast: boolean;
   // Bytes from the receiver's port the parser passed over to find a shard: beacons and reports, and any stream that lost bytes on the way.
   skipped: number;
-  // The S3 receiver's FPVT report (fw/fpv_rx), since its boot: frames heard, declined for buffer room, short of shards (the air), shards its buffer refused, its longest USB write in the last second (us) and bytes written.
+  // The S3 receiver's FPVT report (fw/fpv_rx), since its boot: frames heard, declined for buffer room, short of shards (the air), shards its buffer refused, its longest USB write in the last second (us) and bytes written, and the heard frames' shards sent and heard (receiver firmware from 2026-11-14 on; 28 bytes before, 36 now).
   stats?: {
     heard: number;
     declined: number;
@@ -376,6 +376,8 @@ type Receiver = {
     refused: number;
     usbLongestUs: number;
     usbBytes: number;
+    shardsSent: number;
+    shardsHeard: number;
   };
   copies: number;
   chunks: number;
@@ -384,6 +386,7 @@ type Receiver = {
   rssi: [number, number][];
 };
 const store = globalThis as { fpvReceiver?: Receiver };
+const REPORT_BYTES = 36;
 
 function receiver() {
   if (store.fpvReceiver) return store.fpvReceiver;
@@ -488,7 +491,7 @@ function receiver() {
         const at = buffer.indexOf('FPV2', 3);
         const report = buffer.indexOf('FPVT');
         if (report >= 0 && (at < 0 || report < at - 3)) {
-          if (buffer.length < report + 28) break;
+          if (buffer.length < report + REPORT_BYTES) break;
           const value = (index: number) =>
             buffer.readUInt32LE(report + 4 + 4 * index);
           opened.stats = {
@@ -498,9 +501,11 @@ function receiver() {
             refused: value(3),
             usbLongestUs: value(4),
             usbBytes: value(5),
+            shardsSent: value(6),
+            shardsHeard: value(7),
           };
           opened.skipped += report;
-          buffer = buffer.subarray(report + 28);
+          buffer = buffer.subarray(report + REPORT_BYTES);
           continue;
         }
         // No shard's start yet: the last 6 bytes stay, which may be the next shard's length and RSSI and the first three of its FPV2. Keeping only 3 tore the shard whenever a read ended inside its marker, about 2% of the S3 receiver's shards, a quarter of the VGA frames (2026-11-14).

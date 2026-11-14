@@ -3,7 +3,7 @@
 IDF_PATH ?= $(HOME)/esp/esp-idf
 IDF = bash -c 'source $(IDF_PATH)/export.sh >/dev/null && "$$@"' idf
 
-.PHONY: build deploy usb accel level camera-test gps-test camera-fast camera-wifi camera-deploy camera-usb
+.PHONY: build deploy usb accel level camera-test gps-test camera-fast camera-fast-wifi camera-wifi camera-deploy camera-usb
 build:
 	$(IDF) idf.py -C drone build
 
@@ -26,8 +26,13 @@ camera-usb:
 	$(if $(PORT),,$(error Set PORT to the camera's USB device, e.g. /dev/ttyACM0))
 	uvx --from platformio==6.1.18 --with intelhex pio run -d esp32cam -e s3cam -t upload --upload-port $(PORT)
 
-# The drone's camera over Wi-Fi in seconds, without wiring: it joins the update network (the repository's .env, which this laptop must be on) for one boot, takes the image, and goes back to its usual radio-only mode. The drone powered and disarmed, the laptop service running.
+# The drone's camera in seconds without wiring or a network: over ESP-NOW from the FPV receiver on this laptop's USB (fw/fpv_rx, tools/camera_air_ota.py), sending only the sectors that differ. The drone powered and disarmed, the laptop service running.
 camera-fast:
+	uvx --from platformio==6.1.18 --with intelhex pio run -d esp32cam -e s3cam
+	uv run tools/camera_air_ota.py
+
+# The same over Wi-Fi: the camera joins the update network (the repository's .env, which this laptop must be on and which must let its clients reach each other) for one boot, takes the image, and goes back to its usual radio-only mode.
+camera-fast-wifi:
 	uv run tools/camera_wifi_ota.py --join
 
 # The camera over Wi-Fi: finds it on any network this laptop is on, then builds and uploads.

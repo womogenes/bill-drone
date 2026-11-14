@@ -52,9 +52,12 @@ portMUX_TYPE viewerLock = portMUX_INITIALIZER_UNLOCKED;
 uint16_t frameNumber = 0;
 uint8_t datagram[macHeader + sizeof(Chunk) + chunkBytes];
 int rateSet = -1;
-// The last raw send's result, for K S.
+// The last raw send's result, for K S, and for K F the raw sends that failed after their retries, the retries a full transmit queue cost, frames the driver captured that FPV never sent (by their timestamps), and how long each frame's send took (us: the most and the sum since the last K F, and the frames in it).
 esp_err_t rawError = ESP_OK;
-uint32_t rawSent = 0;
+uint32_t rawSent = 0, rawFailed = 0, rawRetries = 0, framesSkipped = 0, sendLongestUs = 0, sendTotalUs = 0, sendFrames = 0;
+// The capture time of the last frame sent, and the frame period measured from the driver's timestamps (us, for K G).
+uint32_t lastCaptureUs = 0;
+float measuredPeriodUs = 0;
 // The receiver's byte budget (bytes/s), from the drone's K V request: the ESP32 receiver's USB link or the monitor-mode adapter's air.
 float radioBudget = config::fpvRadioBytesPerSecond;
 // And its shard budget (shards/s), with it in K V since 2026-11-14: the monitor-mode adapter's limit unless the receiver says otherwise.
@@ -105,8 +108,12 @@ inline bool shareRadio() {
     return true;
 }
 
-// A PHY rate every raw frame uses instead of its own (the drone's K Q, update.h), for testing receivers; WIFI_PHY_RATE_MAX for none. Not kept across restarts.
+// A PHY rate every raw frame uses instead of its own (the drone's K Q, update.h), for testing receivers; WIFI_PHY_RATE_MAX for none. With it a gap between a frame's shards (us, negative for the frame's own) and a parity count (negative for the frame's own). Not kept across restarts.
 wifi_phy_rate_t rateOverride = WIFI_PHY_RATE_MAX;
+int gapOverrideUs = -1, parityOverride = -1;
+// The JPEG quality may change every qualityEvery frames (K Q's fifth byte); the changes made, for K F.
+int qualityEvery = 1;
+uint32_t qualityChanges = 0;
 
 // One chunk (at datagram + macHeader) as a raw frame; a full transmit queue gets a moment to drain.
 inline void broadcast(size_t length, wifi_phy_rate_t phyRate = rate) {
@@ -122,9 +129,13 @@ inline void broadcast(size_t length, wifi_phy_rate_t phyRate = rate) {
     esp_wifi_get_mac(ifx, datagram + 10);
     memcpy(datagram + 16, bssid, 6);
     memcpy(datagram + 24, actionBody, sizeof(actionBody));
-    for (int tries = 0; tries < 3 && (rawError = esp_wifi_80211_tx(ifx, datagram, macHeader + length, true)) == ESP_ERR_NO_MEM; ++tries)
+    // On a busy channel 11 (2026-11-14) the queue was full for about one shard in two at VGA; waits of 200 us instead of a tick (up to 10) neither sent more nor skipped fewer frames.
+    for (int tries = 0; tries < 3 && (rawError = esp_wifi_80211_tx(ifx, datagram, macHeader + length, true)) == ESP_ERR_NO_MEM; ++tries) {
+        ++rawRetries;
         delay(1);
+    }
     rawSent += rawError == ESP_OK;
+    rawFailed += rawError != ESP_OK;
 }
 
 // The last time the drone asked for tag mode's preview over the radio (K P, web.h radioPreviewLoop).
@@ -133,8 +144,8 @@ volatile uint32_t previewRadioMs = 0;
 // A whole JPEG as shards: the data shards over UDP to the viewer (to) when udp, and with as many parity shards plus one (up to maxParity) as raw frames at phyRate when radio. Parity replaced whole copies of the frame: the monitor-mode adapter misses a shard at random, 30-45% of them (2026-10-30, as it misses access points' beacons: its receiver, not the air or the camera), and a frame of three shards sent twice lost one 29% of the time, where any three of seven should lose about 2%. A one-shard preview frame goes out three times, as before. The adapter also goes deaf for a few shards at a time (runs of 2-6 missed, up to 14, 2026-10-30), so the shards are spread gapUs apart over the frame rather than sent back to back, which lost 8% of FPV frames with 77% of shards heard.
 // The parity is built from each data shard's copy in internal RAM as it goes out, so the frame is read from PSRAM once: computing it from the frame in PSRAM, five passes over it, competed with the driver writing the next frame and corrupted most JPEGs (2026-10-30). At most maxParity parity shards.
 // Internal RAM has no room for all of them at once: two serve tag mode's one-shard preview, and FPV borrows maxParity from the heap while it runs (useLargeParity), taken after the camera's JPEG start so it cannot take that driver's DMA memory.
-// 8 keeps a 12 KB frame (7 data shards) whole with more than half its 15 shards lost: at 6 the adapter, hearing 41% of shards, rebuilt half the frames (2026-10-31).
-constexpr int maxParity = 8;
+// 8 keeps a 12 KB frame (7 data shards) whole with more than half its 15 shards lost: at 6 the adapter, hearing 41% of shards, rebuilt half the frames (2026-10-31). 16 for VGA through the S3 receiver (2026-11-14, indoors at -62 dBm, 8-13% of shards lost in bursts, 17-data-shard frames over 15 s): 8 lost 0.7-4% of frames, 12 0.3%, 16 none, at the same 25 fps. Its 22 KB of internal RAM fit beside the camera and Wi-Fi (84 KB free after); with less free it takes 12, then 8.
+constexpr int maxParity = 16;
 uint8_t smallParity[2 * chunkBytes];
 uint8_t *parityStore = smallParity;
 int parityCapacity = 2;
@@ -146,16 +157,20 @@ inline void useLargeParity(bool on) {
     parityCapacity = 2;
     if (!on)
         return;
-    if (uint8_t *large = static_cast<uint8_t *>(heap_caps_malloc(maxParity * chunkBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT))) {
-        parityStore = large;
-        parityCapacity = maxParity;
-    }
+    for (int capacity = maxParity; capacity > 2 && parityStore == smallParity; capacity -= 4)
+        if (uint8_t *large = static_cast<uint8_t *>(heap_caps_malloc(capacity * chunkBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT))) {
+            parityStore = large;
+            parityCapacity = capacity;
+        }
 }
 
 // Returns the shards sent.
 inline int sendShards(const uint8_t *data, size_t length, uint32_t captureUs, bool radio, bool udp, const sockaddr_in *to,
                       wifi_phy_rate_t phyRate, uint32_t gapUs) {
-    const int shards = max(1, int((length + chunkBytes - 1) / chunkBytes)), parity = radio ? min(shards + 1, parityCapacity) : 0;
+    const int shards = max(1, int((length + chunkBytes - 1) / chunkBytes));
+    const int parity = !radio ? 0 : min(parityOverride >= 0 ? parityOverride : shards + 1, parityCapacity);
+    if (radio && gapOverrideUs >= 0)
+        gapUs = gapOverrideUs;
     const size_t size = (length + shards - 1) / shards;
     if (length > 0xffff)
         return 0;
@@ -196,6 +211,8 @@ inline void broadcastFrame(const uint8_t *data, size_t length, uint32_t captureU
 
 // Over the radio the sensor's frame (VTS, register 0x380e, in lines) is lengthened until the average frame fits within radioBudget at the frame rate, and shortened back as frames shrink, never below its own; nativeLines is cleared at each camera start.
 int nativeLines = 0, frameLines = 0;
+// The sensor's readout at FPV's start, for the rolling shutter (K G): the window's first and last rows (0x3802, 0x3806), its row increments (0x3815: odd and even steps, 0x31 reads every other row), timing control (0x3820, 0x3821: binning), output rows (0x380a) and the line length (HTS, 0x380c, in pixel clocks).
+int windowRegisters[7];
 float averageBytes = 0;
 
 // Shards a frame took on average, for the shard rate's share of the pacing.
@@ -204,8 +221,12 @@ float averageShards = 0;
 inline void pace(sensor_t *sensor, size_t bytes, int shards) {
     averageBytes = averageBytes ? averageBytes * 0.9f + bytes * 0.1f : bytes;
     averageShards = averageShards ? averageShards * 0.9f + shards * 0.1f : shards;
-    if (!nativeLines)
+    if (!nativeLines) {
         nativeLines = frameLines = sensor->get_reg(sensor, 0x380e, 0xffff);
+        const int registers[7][2] = {{0x3802, 0xffff}, {0x3806, 0xffff}, {0x3815, 0xff}, {0x3820, 0xff}, {0x3821, 0xff}, {0x380a, 0xffff}, {0x380c, 0xffff}};
+        for (int i = 0; i < 7; ++i)
+            windowRegisters[i] = sensor->get_reg(sensor, registers[i][0], registers[i][1]);
+    }
     if (nativeLines <= 0 || frameNumber % 8)
         return;
     // Aimed at 85% of the budget, which then only catches bursts: aimed at all of it, one frame in five was skipped.
@@ -222,19 +243,30 @@ inline bool send() {
     camera_fb_t *frame = esp_camera_fb_get();
     if (!frame)
         return false;
+    const uint32_t began = esp_timer_get_time();
     portENTER_CRITICAL(&viewerLock);
     const sockaddr_in to = viewer;
     portEXIT_CRITICAL(&viewerLock);
     const bool udp = udpWanted();
     // Each FPV frame is dated to the drone as a tag-mode frame is: a TAG3 packet with no pose and its SYNC pulse, under the next sequence number, whose low 16 bits number the frame's FPV2 shards, so a recorder matches the video to the drone's log of sequences and SYNC-dated capture times (for visual odometry, 2026-11-14). Its capture time is the driver's frame timestamp (the frame's start), as the FPV2 header carries.
     const uint32_t captureUs = uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec);
+    // Frames between this one and the last sent: the driver's latest-frame grab drops those that came while a send ran.
+    if (lastCaptureUs) {
+        const float since = float(captureUs - lastCaptureUs);
+        const float period = framePeriodS() * 1e6f * (nativeLines > 0 ? float(frameLines) / nativeLines : 1);
+        if (since < 1.5f * period)
+            measuredPeriodUs = measuredPeriodUs ? measuredPeriodUs * 0.95f + since * 0.05f : since;
+        framesSkipped += max(0, int(since / period + 0.5f) - 1);
+    }
+    lastCaptureUs = captureUs;
     PosePacket packet;
     packet.sequence = sequence++;
     packet.captureUs = captureUs;
     publish(packet);
     frameNumber = uint16_t(packet.sequence);
-    // Spread over most of a frame period, leaving time to fetch the next.
-    const uint32_t gapUs = uint32_t(framePeriodS() * 0.8e6f) / (2 * max(1u, unsigned((frame->len + chunkBytes - 1) / chunkBytes)) + 1);
+    // Spread over three quarters of a frame period, data and parity shards alike, less each send's own 0.4 ms or so, so the next frame is fetched in time: sending for longer than a period skipped every other frame or so (2026-11-14, VGA with 16 parity shards spaced for 8: 41.6 ms a frame, 18.5 fps), while sending back to back cost frames too (the driver lost more of them with Wi-Fi sending in bursts).
+    const int dataShards = max(1, int((frame->len + chunkBytes - 1) / chunkBytes)), allShards = dataShards + min(dataShards + 1, parityCapacity);
+    const uint32_t gapUs = uint32_t(max(0.0f, framePeriodS() * 0.75e6f / allShards - 400));
     const int shardsSent = sendShards(frame->buf, frame->len, captureUs, radioWanted(), udp, &to, rate, gapUs);
     // A step of quality per frame, with a dead band so it settles.
     // Over the radio the budget's share of a frame at the sensor's own rate, up to fpvRadioMaxBytes.
@@ -244,10 +276,16 @@ inline bool send() {
     esp_camera_fb_return(frame);
     const int quality = constrain(fpvQuality + step, config::fpvQualityRange[0], config::fpvQualityRange[1]);
     sensor_t *sensor = esp_camera_sensor_get();
-    if (quality != fpvQuality && sensor->set_quality(sensor, quality) == 0)
+    if (quality != fpvQuality && frameNumber % qualityEvery == 0 && sensor->set_quality(sensor, quality) == 0) {
         fpvQuality = quality;
+        ++qualityChanges;
+    }
     if (radioWanted() && !udp)
         pace(sensor, frameBytes, shardsSent);
+    const uint32_t took = uint32_t(esp_timer_get_time()) - began;
+    sendLongestUs = max(sendLongestUs, took);
+    sendTotalUs += took;
+    ++sendFrames;
     ++previewCount;
     return true;
 }
