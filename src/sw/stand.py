@@ -11,7 +11,7 @@ Profiles (throttles are the drone's, 0-1200; FLIP.md stage A): steps (A1: hover 
 
 --port is wifi (the default: the stand found by its broadcast on the local network), a host or host:port, or a serial device such as /dev/ttyUSB1.
 
-The stand stamps each load-cell reading with its own clock; the laptop stamps every line as it arrives and maps the stand's clock onto its own by the earliest arrivals (the least delayed). The audio starts on the laptop's clock with pw-record's own buffering unknown, so analyze shifts the audio by the lag that best matches rpm² to thrust (thrust goes as rpm²), within half a second.
+The stand stamps each load-cell reading with its own clock; the laptop stamps every line as it arrives and maps the stand's clock onto its own by the earliest arrivals (the least delayed). The audio starts on the laptop's clock with pw-record's own buffering unknown, so analyze shifts the audio by the lag at which the sound's changes line up with the throttle's, or failing that the lag that best matches rpm² to thrust (thrust goes as rpm²).
 """
 
 import argparse
@@ -389,7 +389,9 @@ def analyze(args):
             continue
         t = rows[:, 0] - start
         tare = rows[t < TARE_S - 0.5, 1].mean()
-        thrust[cell] = (t, (rows[:, 1] - tare) * per_count.get(cell, 1.0))
+        grams = (rows[:, 1] - tare) * per_count.get(cell, 1.0)
+        # Lift reads positive whichever way the scale's mass loaded the cell.
+        thrust[cell] = (t, grams if np.mean(grams[t >= TARE_S]) >= 0 else -grams)
     fig, axes = plt.subplots(4, 1, figsize=(11, 12), sharex=True, gridspec_kw={"height_ratios": [1, 1, 1, 2]})
     if len(pulses):
         axes[0].step(pulses[:, 0] - start, pulses[:, 1] - 1000, where="post", color="#555")
@@ -402,9 +404,15 @@ def analyze(args):
     if meta.get("audio") and (directory / "audio.wav").exists():
         audio_t, rpm = rpm_track(directory / "audio.wav", args.blades)
         audio_t = audio_t + meta["audio"]["started_monotonic"] - start
-        lag, matched = 0.0, np.nan
+        frequencies, times, power = spectrum(directory / "audio.wav")
+        times = times + meta["audio"]["started_monotonic"] - start
+        # The audio's buffering delay, from the sound's own changes against the throttle's: the motor's tones move the moment its speed does.
+        lag, strength = 0.0, 0.0
+        if len(pulses) > 1:
+            lag, strength = step_lag(frequencies, times, power, pulses[1:, 0] - start, np.arange(-1.0, 1.0, 0.005))
+            print(f"audio lag {lag * 1000:.0f} ms from the throttle steps in the sound (match strength {strength:.1f})")
         if thrust:
-            # The audio's buffering delay: the lag within ±0.5 s at which rpm² best follows the thrust.
+            # The lag at which rpm² best follows the thrust: it includes the load cell's own delay (the HX711 averages over each conversion), so it is the fallback, and against the steps' lag it measures that delay.
             t, grams = next(iter(thrust.values()))
             grid = np.arange(max(t[0], audio_t[0]) + 0.5, min(t[-1], audio_t[-1]) - 0.5, 0.01)
             force = np.interp(grid, t, grams)
@@ -414,16 +422,11 @@ def analyze(args):
                 valid = ~np.isnan(heard)
                 return np.corrcoef(force[valid], heard[valid])[0, 1] if valid.sum() > 100 else np.nan
             scores = [score(shift) for shift in lags]
-            if not np.all(np.isnan(scores)):
-                matched = np.nanmax(scores)
-                lag = float(lags[int(np.nanargmax(scores))])
-                print(f"audio lag {lag * 1000:.0f} ms (rpm² against thrust correlation {matched:.2f})")
-        frequencies, times, power = spectrum(directory / "audio.wav")
-        times = times + meta["audio"]["started_monotonic"] - start
-        # Without thrust to follow (props off, or no tone), the sound's own changes against the throttle's set the delay.
-        if not matched > 0.5 and len(pulses) > 1:
-            lag, strength = step_lag(frequencies, times, power, pulses[1:, 0] - start, np.arange(-1.0, 1.0, 0.005))
-            print(f"audio lag {lag * 1000:.0f} ms from the throttle steps in the sound (match strength {strength:.1f})")
+            if not np.all(np.isnan(scores)) and np.nanmax(scores) > 0.5:
+                followed = float(lags[int(np.nanargmax(scores))])
+                print(f"rpm² follows thrust at audio lag {followed * 1000:.0f} ms (correlation {np.nanmax(scores):.2f})" + (f": the load cell trails the sound by {(lag - followed) * 1000:.0f} ms" if strength >= 3 else ""))
+                if strength < 3:
+                    lag = followed
         floor = np.percentile(power, 20)
         axes[3].pcolormesh(times - lag, frequencies, power, shading="auto", cmap="magma", vmin=floor)
         if len(pulses):
