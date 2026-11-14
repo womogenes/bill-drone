@@ -98,11 +98,42 @@ inline void startAp() {
     parked = !apStarted;
 }
 
+// The network a K J request has the camera join for one boot, for a firmware update over Wi-Fi in seconds (make camera-fast) instead of the drone's radio link: the repository's .env WIFI_SSID and WIFI_PASSWORD, built in by build.py. The camera otherwise lists no networks, keeping its radio for FPV.
+#ifndef UPDATE_SSID
+#define UPDATE_SSID ""
+#define UPDATE_PASSWORD ""
+#endif
+const WifiNetwork updateNetwork = {UPDATE_SSID, UPDATE_PASSWORD};
+// That boot gives up and restarts into its usual mode after updateJoinMs without an update.
+constexpr uint32_t updateJoinMs = 180000;
+bool joinedForUpdate = false;
+
+// The K J flag (Preferences "update"), read and cleared at boot so a failed join costs one boot only.
+inline bool takeUpdateJoin() {
+    Preferences store;
+    if (!store.begin("update", false))
+        return false;
+    const bool join = store.getBool("join", false);
+    if (join)
+        store.putBool("join", false);
+    store.end();
+    return join;
+}
+
+inline void requestUpdateJoin() {
+    Preferences store;
+    if (store.begin("update", false)) {
+        store.putBool("join", true);
+        store.end();
+    }
+}
+
 inline void startWifi() {
     loadRadio();
     findCameraName();
+    joinedForUpdate = updateNetwork.ssid[0] && takeUpdateJoin();
     // Nothing is printed: UART0 is the drone link. Without wifi.h there is no Wi-Fi and no OTA.
-    if (!wifiConfigured())
+    if (!wifiConfigured() && !joinedForUpdate)
         return;
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(cameraName);
@@ -130,6 +161,8 @@ inline void startWifi() {
             if (WiFi.SSID(i) == network.ssid)
                 wifiChosen = &network;
     WiFi.scanDelete();
+    if (joinedForUpdate)
+        wifiChosen = &updateNetwork;
     if (wifiChosen)
         WiFi.begin(wifiChosen->ssid, wifiChosen->password);
     else
@@ -150,9 +183,11 @@ inline void serviceOta() {
     static uint32_t lastRetry = 0;
     static bool joined = false;
     if (!wifiChosen && !apStarted) return;
+    if (joinedForUpdate && millis() > updateJoinMs)
+        ESP.restart();
     joined |= WiFi.status() == WL_CONNECTED;
     // A network in range that never lets the camera join (a changed password) parks the station too.
-    if (!joined && wifiChosen && millis() > parkAfterMs) {
+    if (!joined && wifiChosen && millis() > parkAfterMs && !joinedForUpdate) {
         park();
         return;
     }

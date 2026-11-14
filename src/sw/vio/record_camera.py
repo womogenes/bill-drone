@@ -53,7 +53,7 @@ def main():
                     stream, buffer = None, b""
                     continue
                 while True:
-                    header = re.search(rb"Content-Length: (\d+)\r\nX-Time: (\d+) \d+\r\nX-Frame: (\d+)\r\n\r\n", buffer)
+                    header = re.search(rb"Content-Length: (\d+)\r\nX-Time: (\d+) \d+ (\d+)\r\n\r\n", buffer)
                     if not header:
                         break
                     start, length = header.end(), int(header.group(1))

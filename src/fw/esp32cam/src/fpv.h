@@ -6,6 +6,11 @@
 #include "lwip/sockets.h"
 #include "config.h"
 #include "fec.h"
+#include "packet.h"
+
+// The frame sequence and the drone link's TAG3 packet with its SYNC pulse (main.cpp), which FPV frames send too.
+extern uint32_t sequence;
+void publish(PosePacket &packet);
 
 // FPV video. While a viewer has asked in the last fpvLingerMs the loop on core 1 stops tracking and sends each JPEG frame as chunks of up to chunkBytes, each with a Chunk header, by whichever way it was asked: over UDP to the latest viewer that sent "FPVW" to port (the dashboard's /api/camera on the camera's network), and as raw broadcast 802.11 action frames on the camera's current channel for the FPV receiver (fw/fpv_rx) when the drone forwards request K V (update.h), which needs no network. A lost chunk costs its frame; over TCP a lost segment stalled the stream for the retransmission timeout (one 2.6 s gap in 2 minutes on 2026-10-30, with the camera's network on the drone's channel). Raw frames go unacknowledged at rate, so there are no retries either.
 namespace fpv {
@@ -52,6 +57,11 @@ esp_err_t rawError = ESP_OK;
 uint32_t rawSent = 0;
 // The receiver's byte budget (bytes/s), from the drone's K V request: the ESP32 receiver's USB link or the monitor-mode adapter's air.
 float radioBudget = config::fpvRadioBytesPerSecond;
+// And its shard budget (shards/s), with it in K V since 2026-11-14: the monitor-mode adapter's limit unless the receiver says otherwise.
+float radioShardBudget = config::fpvRadioShardsPerSecond;
+// FPV at fpvLargeFrameSize, chosen at the camera's start (startCamera) from the budget then.
+bool large = false;
+inline float framePeriodS() { return large ? config::fpvLargeFramePeriodS : config::fpvFramePeriodS; }
 
 // Only with Wi-Fi started (startWifi), which brings up the network stack.
 inline void start() {
@@ -199,9 +209,9 @@ inline void pace(sensor_t *sensor, size_t bytes, int shards) {
     if (nativeLines <= 0 || frameNumber % 8)
         return;
     // Aimed at 85% of the budget, which then only catches bursts: aimed at all of it, one frame in five was skipped.
-    // And no more shards a second than the monitor-mode adapter takes in (config::fpvRadioShardsPerSecond): sent beyond it, the excess was lost from random frames, which showed as uneven gaps.
-    const int wanted = max({nativeLines, int(nativeLines * averageBytes / (0.85f * radioBudget * config::fpvFramePeriodS)),
-                            int(nativeLines * averageShards / (config::fpvRadioShardsPerSecond * config::fpvFramePeriodS))});
+    // And no more shards a second than the receiver takes in (radioShardBudget; the monitor-mode adapter's config::fpvRadioShardsPerSecond): sent beyond it, the excess was lost from random frames, which showed as uneven gaps.
+    const int wanted = max({nativeLines, int(nativeLines * averageBytes / (0.85f * radioBudget * framePeriodS())),
+                            int(nativeLines * averageShards / (radioShardBudget * framePeriodS()))});
     // A change of less than 5% is left alone, so the rate does not wander.
     if (abs(wanted - frameLines) * 20 > frameLines && sensor->set_reg(sensor, 0x380e, 0xffff, wanted) == 0)
         frameLines = wanted;
@@ -216,13 +226,19 @@ inline bool send() {
     const sockaddr_in to = viewer;
     portEXIT_CRITICAL(&viewerLock);
     const bool udp = udpWanted();
+    // Each FPV frame is dated to the drone as a tag-mode frame is: a TAG3 packet with no pose and its SYNC pulse, under the next sequence number, whose low 16 bits number the frame's FPV2 shards, so a recorder matches the video to the drone's log of sequences and SYNC-dated capture times (for visual odometry, 2026-11-14). Its capture time is the driver's frame timestamp (the frame's start), as the FPV2 header carries.
+    const uint32_t captureUs = uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec);
+    PosePacket packet;
+    packet.sequence = sequence++;
+    packet.captureUs = captureUs;
+    publish(packet);
+    frameNumber = uint16_t(packet.sequence);
     // Spread over most of a frame period, leaving time to fetch the next.
-    const uint32_t gapUs = uint32_t(config::fpvFramePeriodS * 0.8e6f) / (2 * max(1u, unsigned((frame->len + chunkBytes - 1) / chunkBytes)) + 1);
-    const int shardsSent = sendShards(frame->buf, frame->len, uint32_t(uint64_t(frame->timestamp.tv_sec) * 1000000 + frame->timestamp.tv_usec),
-                                      radioWanted(), udp, &to, rate, gapUs);
+    const uint32_t gapUs = uint32_t(framePeriodS() * 0.8e6f) / (2 * max(1u, unsigned((frame->len + chunkBytes - 1) / chunkBytes)) + 1);
+    const int shardsSent = sendShards(frame->buf, frame->len, captureUs, radioWanted(), udp, &to, rate, gapUs);
     // A step of quality per frame, with a dead band so it settles.
-    // Over the radio no more than the budget's share of a frame at the sensor's own rate.
-    const size_t target = udp ? config::fpvTargetBytes : size_t(min(float(config::fpvTargetBytes), 0.85f * radioBudget * config::fpvFramePeriodS));
+    // Over the radio the budget's share of a frame at the sensor's own rate, up to fpvRadioMaxBytes.
+    const size_t target = udp ? config::fpvTargetBytes : size_t(min(float(large ? config::fpvLargeMaxBytes : config::fpvRadioMaxBytes), 0.85f * radioBudget * framePeriodS()));
     const int step = frame->len > target ? 1 : frame->len < target * 3 / 4 ? -1 : 0;
     const size_t frameBytes = frame->len;
     esp_camera_fb_return(frame);

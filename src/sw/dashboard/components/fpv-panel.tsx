@@ -8,8 +8,8 @@ import { typing } from '@/lib/keys';
 import { parseTag, readParts, type PreviewTag } from '@/lib/multipart';
 
 const HOST_KEY = 'camera-host';
-// FPV frames go on screen this long after the earliest any frame could have, by their capture time, so the link's jitter up to it does not show.
-const PLAYOUT_MS = 80;
+// FPV frames go on screen this long after the earliest any frame could have, by their capture time, so the link's jitter up to it does not show. 50 from 2026-11-14: through the S3 receiver frames arrived within 16 ms of the fastest at p90 and 46-56 ms at p99 (80 before, for the ESP32 receiver and the monitor).
+const PLAYOUT_MS = 50;
 type Mode = 'tag' | 'fpv';
 
 function saved(key: string) {

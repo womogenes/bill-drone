@@ -1,0 +1,3 @@
+# The S3 receiver (make s3): its own USB carries the chunks, so nothing else may print there.
+CONFIG_ESP_CONSOLE_NONE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y

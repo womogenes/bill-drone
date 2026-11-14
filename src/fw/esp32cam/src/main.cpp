@@ -147,7 +147,8 @@ void flowLoop(void *) {
 // Starts the camera: the driver, then mirror and flip, and on the OV3660 the PLL and window of config.h. The driver's raw-QVGA clock (20 MHz SYSCLK, 11 fps) becomes its small-frame one, 40 MHz SYSCLK with the same 10 MHz PCLK; a faster line rate panicked within minutes. FPV takes the driver's JPEG mode as it comes.
 bool startCamera(bool jpeg) {
     cameraConfig.pixel_format = jpeg ? PIXFORMAT_JPEG : PIXFORMAT_GRAYSCALE;
-    cameraConfig.frame_size = jpeg ? config::fpvFrameSize : FRAMESIZE_QVGA;
+    fpv::large = jpeg && fpv::radioWanted() && fpv::radioBudget >= config::fpvLargeBudget;
+    cameraConfig.frame_size = !jpeg ? FRAMESIZE_QVGA : fpv::large ? config::fpvLargeFrameSize : config::fpvFrameSize;
     cameraConfig.xclk_freq_hz = jpeg ? config::fpvXclkHz : 20000000;
     cameraConfig.jpeg_quality = fpvQuality;
     startError = esp_camera_init(&cameraConfig);

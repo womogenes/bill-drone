@@ -3,7 +3,7 @@ A recording of the camera's FPV frames with the drone's IMU (sw/vio/record_camer
 
 uv run --with opencv-python-headless -m sw.vio.recorded --footage ~/sw/vio/footage/room_imu --log sw/recordings/<flight>.csv --out ~/sw/vio/data/room_imu [--offset S] [--calibration <dataset>]
 
-Frames are stamped through the log when it names the camera's frames (camera_sequence and camera_age_us, the camera sending each FPV frame's sequence and SYNC pulse to the drone): the frame numbers match the log's frames and a straight line maps the camera's clock onto the drone's (sw/vio/blackbox_dataset.py clock_line), to the frame's centre row as the drone dated it. Otherwise offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is another dataset's (--calibration, fitted from tags by sw/vio/tags.py --save), or else the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to the frames' size (camera); its distortion coefficients act on normalized coordinates, so they carry over.
+Frames are stamped through the log when it names the camera's frames (camera_sequence and camera_age_us, the camera sending each FPV frame's sequence and SYNC pulse to the drone): the frame numbers match the log's frames and a straight line maps the camera's clock onto the drone's (sw/vio/blackbox_dataset.py clock_line), to the frame's start as the drone dated it, plus half the readout. Otherwise offset: drone time minus camera time in seconds; without it, found from the motion (find_offset). Frames are turned upright (the camera is mounted upside down, hover_cam_roll 180) and stamped at the middle of their readout. The camera's calibration is another dataset's (--calibration, fitted from tags by sw/vio/tags.py --save), or else the tracking one (fw/esp32cam/src/config.h: fx 369.5 at 320x240 over the whole array) scaled to the frames' size (camera); its distortion coefficients act on normalized coordinates, so they carry over.
 """
 
 import argparse
@@ -99,7 +99,8 @@ def main():
         numbers += np.concatenate([[0], np.cumsum(np.diff(numbers) < -(1 << 15))]) << 16
         slope, intercept, residual, wrong = clock_line(numbers, capture, log)
         print(f"clock from the log: {len(residual)} frames matched ({wrong} refused), drift {(slope - 1) * 1e6:+.1f} ppm, residual RMS {np.sqrt(np.mean(residual ** 2)):.1f} us")
-        stamps = (slope * capture + intercept) / 1e6
+        # FPV frames are dated at their start (fw/esp32cam/src/fpv.h), as capture_us is: the middle of the readout is half of it later.
+        stamps = (slope * capture + intercept) / 1e6 + scene.READOUT_S / 2
     else:
         offset = find_offset(footage, frames, log) if args.offset is None else args.offset
         stamps = capture / 1e6 + offset + scene.READOUT_S / 2
