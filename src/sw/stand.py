@@ -306,7 +306,7 @@ def scale(args):
 
 
 class BeepListener:
-    """The laptop's microphone, listening for the ESC's beeps (it beeps through the motor's windings) while esc-cal runs: sound is a 20 ms frame whose strongest 800-6000 Hz line (beeps are pure tones) is 10 dB over the quiet before the battery went on; a burst is a run of such frames (gaps under 60 ms bridged), a group is bursts with under 0.5 s of quiet between them. A burst over SPINNING_S is the motor running, not a beep. The raw audio is saved for a later look."""
+    """The laptop's microphone, listening for the ESC's beeps (it beeps through the motor's windings) while esc-cal runs: sound is a 20 ms frame whose strongest 800-12000 Hz line is 10 dB over the quiet before the battery went on (the Nuofany 40A's beeps are harmonic stacks up to 12 kHz, strongest near 6 kHz: 2026-11-14); a burst is a run of such frames, at least 40 ms (shorter is a click), a group is bursts with under 0.5 s of quiet between them. A burst over SPINNING_S is the motor running, not a beep. The raw audio is saved for a later look."""
 
     FRAME = AUDIO_RATE // 50
     SPINNING_S = 1.2
@@ -336,7 +336,7 @@ class BeepListener:
             spectrum = np.abs(np.fft.rfft(samples * np.hanning(len(samples)))) ** 2
             if band is None:
                 frequencies = np.fft.rfftfreq(len(samples), 1 / AUDIO_RATE)
-                band = (frequencies >= 800) & (frequencies <= 6000)
+                band = (frequencies >= 800) & (frequencies <= 12000)
             power = spectrum[band].max()
             now = self.elapsed
             self.elapsed += self.FRAME / AUDIO_RATE
@@ -354,9 +354,11 @@ class BeepListener:
                     self.last_sound = now
                     if now - self.burst_start > self.SPINNING_S:
                         self.spinning = True
-                elif self.burst_start is not None and now - self.last_sound > 0.06:
+                elif self.burst_start is not None and now - self.last_sound > 0.03:
                     burst = (self.burst_start, self.last_sound + 0.02 - self.burst_start)
                     self.burst_start = None
+                    if burst[1] < 0.04:
+                        continue
                     self.bursts.append(burst)
                     self.group.append(burst)
                     print(f"   heard a {burst[1] * 1000:.0f} ms {'tone' if burst[1] > 0.35 else 'beep'} at {burst[0]:.1f} s")
@@ -401,12 +403,15 @@ def esc_cal(args):
             reason = until(groups, spinning)
             if reason:
                 return reason
-    # Hobbywing Skywalker's sequence (the Nuofany 40A's likely firmware): powered at the top, "beep-beep" after about 2 s stores it; staying about 5 s more enters its programming menu instead, so the bottom follows the beep-beep at once. At the bottom it beeps the cell count, then one long beep stores it.
+    # Hobbywing Skywalker's sequence (the Nuofany 40A's likely firmware): powered at the top it plays its power-up notes, then about 1.3 s later "beep-beep" stores the top (heard 2026-11-14; its two beeps are 60 ms apart and blur into one group); staying about 5 s more may enter its programming menu, so the bottom follows at once. At the bottom it beeps the cell count, then a long tone stores it.
     started = time.monotonic()
+    heard = []
     def top_done(groups, spinning):
         if spinning:
             return "spinning"
-        if any(len(group) == 2 and all(length < 0.35 for _, length in group) for group in groups):
+        heard.extend(groups)
+        # The first group is the power-up notes, the next the top's confirmation.
+        if len(heard) >= 2:
             return "beep-beep"
         if time.monotonic() - started > 30:
             return "timeout"
@@ -418,17 +423,16 @@ def esc_cal(args):
            "Enter": "Dropping to the bottom."}[top])
     bottom_started = time.monotonic()
     def bottom_done(groups, spinning):
-        if any(group[-1][1] > 0.35 for group in groups):
+        if groups:
             return "long tone"
-        if time.monotonic() - bottom_started > 8:
+        if time.monotonic() - bottom_started > 5:
             return "timeout"
     bottom = hold(1000, bottom_done)
     port.write(b"T 0\n")
     port.close()
     listener.close()
-    cells = next((sum(1 for _, length in group[:-1] if length <= 0.35) for group in listener.groups if group[-1][1] > 0.35), None)
     if top == "beep-beep" and bottom == "long tone":
-        print(f"done: calibrated, the ESC now takes 1000-{args.top} us" + (f" ({cells} cell beeps before the long tone)" if cells else "") + ("" if args.top == 2200 else "; the drone's firmware assumes 1000-2200 us, so its throttle range has to follow"))
+        print(f"done: calibrated, the ESC now takes 1000-{args.top} us" + ("" if args.top == 2200 else "; the drone's firmware assumes 1000-2200 us, so its throttle range has to follow"))
     else:
         print(f"not confirmed: top {top}, bottom {bottom}; the ESC likely keeps its old range. The sound is in {audio}")
 
