@@ -3,7 +3,8 @@ The thrust stand (fw/stand): runs a throttle profile on one motor while recordin
 
   run PROFILE [--port P] [--max 1100] [--cells 1|2] [--no-audio]   fly a profile on the stand and save it under sw/recordings/stand/<UTC time>/
   scale --mass GRAMS [--cell 0|1]                                    with that mass on the cell, store its grams per count (~/.config/bill-drone/stand.json)
-  esc-cal                                                            teach a new ESC the drone's pulse range, 1000-2200 us (props off)
+  esc-cal [--top 2000] [--hz 400]                                    teach a new ESC its pulse range, 1000 us to --top (props off); --hz 50 for ESCs that only read servo-rate signals
+  spin [--throttle 50] [--seconds 2] [--hz 400]                      spin the motor gently to check the signal reaches the ESC (props off)
   analyze RUN_DIR [--blades 2]                                       thrust, rpm from the audio, and each step's timing, as a plot and CSV beside the run
 
 Profiles (throttles are the drone's, 0-1200; FLIP.md stage A): steps (A1: hover 600 to 1000, to the flip's floor near 290 and to 1, each and back, 1.5 s apiece), full (A2: 1100 for 1 s from hover), table (0 to the cap in steps of 100, 2 s each, for the thrust table).
@@ -191,6 +192,7 @@ def esc_cal(args):
     if input("Props OFF the motor, battery DISCONNECTED from the ESC. Type go: ").strip() != "go":
         return
     port = open_port(args.port)
+    port.write(f"Z {args.hz}\n".encode())
     stop = threading.Event()
     reasons = {1: "power-on", 3: "software", 4: "panic", 5: "interrupt watchdog", 6: "task watchdog", 9: "brownout"}
     def hold(pulse):
@@ -205,9 +207,9 @@ def esc_cal(args):
                 # A reset drops the pulse for the half second the board takes to boot: an ESC powered up in that gap never sees the top and arms as usual instead.
                 if parts[:1] == [b"R"] and len(parts) == 2:
                     print(f"\n!! the stand reset ({reasons.get(int(parts[1]), parts[1].decode())}); if that was as the battery went on, the ESC missed the top. Fix the reset and run esc-cal again.")
-                elif parts[:1] == [b"E"] and len(parts) == 3:
-                    print(f"   stand sending {int(parts[2])} us")
-    for pulse, prompt in ((2200, "Sending the top (2200 us). Connect the battery, wait for the ESC's top-confirm beeps, then press Enter."),
+                elif parts[:1] == [b"E"] and len(parts) >= 3:
+                    print(f"   stand sending {int(parts[2])} us" + (f" at {int(parts[3])} Hz" if len(parts) > 3 else ""))
+    for pulse, prompt in ((args.top, f"Sending the top ({args.top} us). Connect the battery, wait for the ESC's top-confirm beeps, then press Enter."),
                           (1000, "Sending the bottom (1000 us). Wait for the confirm beeps, then press Enter.")):
         stop.clear()
         thread = threading.Thread(target=hold, args=(pulse,), daemon=True)
@@ -217,7 +219,27 @@ def esc_cal(args):
         thread.join()
     port.write(b"T 0\n")
     port.close()
-    print("done: the ESC now takes 1000-2200 us, the drone's range")
+    print(f"done: if the ESC confirmed both, it now takes 1000-{args.top} us" + ("" if args.top == 2200 else " (the drone's firmware assumes 1000-2200 us; its throttle range has to follow)"))
+
+
+def spin(args):
+    if input(f"Props OFF, motor free to turn. Spins at throttle {args.throttle} ({1000 + args.throttle} us) for {args.seconds} s at {args.hz} Hz. Type go: ").strip() != "go":
+        return
+    port = open_port(args.port)
+    port.write(f"Z {args.hz}\n".encode())
+    end = time.monotonic() + 2.0
+    while time.monotonic() < end:
+        port.write(b"T 0\n")
+        time.sleep(COMMAND_S)
+    end = time.monotonic() + args.seconds
+    while time.monotonic() < end:
+        port.write(f"T {args.throttle}\n".encode())
+        time.sleep(COMMAND_S)
+    for _ in range(10):
+        port.write(b"T 0\n")
+        time.sleep(COMMAND_S)
+    port.close()
+    print("done: did the motor turn?")
 
 
 def rpm_track(path, blades):
@@ -332,14 +354,20 @@ def main():
     weighing = commands.add_parser("scale")
     weighing.add_argument("--mass", type=float, required=True, help="the known mass (g)")
     weighing.add_argument("--cell", type=int, choices=(0, 1), default=0)
-    commands.add_parser("esc-cal")
+    calibrating = commands.add_parser("esc-cal")
+    calibrating.add_argument("--top", type=int, default=2000, help="the top pulse (us); many generic ESCs take only up to 2000")
+    calibrating.add_argument("--hz", type=int, default=400, help="PWM rate, 50-400")
+    spinning = commands.add_parser("spin")
+    spinning.add_argument("--throttle", type=int, default=50)
+    spinning.add_argument("--seconds", type=float, default=2.0)
+    spinning.add_argument("--hz", type=int, default=400)
     looking = commands.add_parser("analyze")
     looking.add_argument("run")
     looking.add_argument("--blades", type=int, default=2)
-    for sub in (flying, weighing, commands.choices["esc-cal"]):
+    for sub in (flying, weighing, calibrating, spinning):
         sub.add_argument("--port", default="/dev/ttyUSB0")
     args = parser.parse_args()
-    {"run": run, "scale": scale, "esc-cal": esc_cal, "analyze": analyze}[args.command](args)
+    {"run": run, "scale": scale, "esc-cal": esc_cal, "spin": spin, "analyze": analyze}[args.command](args)
 
 
 if __name__ == "__main__":

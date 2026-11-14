@@ -1,5 +1,5 @@
 // Thrust stand: one ESC on GPIO25 and up to two HX711 load cells (A: DT GPIO32, SCK GPIO33; B: DT GPIO39, SCK GPIO17), driven from the laptop by sw/stand.py over USB at 921600 baud. The ESC pulse is the drone's (fw/drone/main/flight_rt.c esc_us): 400 Hz, 1000 us plus the throttle (1-1200), and 950 us for throttle 0 (stopped, below the calibrated bottom so the ESC arms and stays off), so a throttle here is a throttle there.
-// Laptop to stand, one command per line: "T <throttle>" sets the throttle, "P <us>" sets a raw pulse for the ESC's range calibration (1000-2200 us), "C <mask>" chooses the cells read (bit 0 A, bit 1 B; A alone at start, since an unwired B on GPIO39, which has no pull-up, floats). T and P are held for WATCHDOG_US; without a fresh one the pulse falls back to 950 us (motor stopped).
+// Laptop to stand, one command per line: "T <throttle>" sets the throttle, "P <us>" sets a raw pulse for the ESC's range calibration (1000-2200 us), "Z <hz>" sets the ESC's PWM rate (50-400; some ESCs read only 50 Hz servo-style signals, so calibrating or testing those needs it), "C <mask>" chooses the cells read (bit 0 A, bit 1 B; A alone at start, since an unwired B on GPIO39, which has no pull-up, floats). T and P are held for WATCHDOG_US; without a fresh one the pulse falls back to 950 us (motor stopped).
 // Stand to laptop, one line each: "R <reason>" once at boot, why the board last reset (esp_reset_reason: 1 power-on, 3 software, 4 panic, 9 brownout, ...), "F <cell> <us> <raw>" a load cell's reading and when its conversion finished (this board's clock, us), "E <us> <pulse>" the ESC pulse from that moment on, "H <us>" a heartbeat every 100 ms.
 // The HX711 converts at 10 Hz unless its RATE pin is high (80 Hz); step timing wants 80 Hz.
 #include <stdio.h>
@@ -32,28 +32,32 @@ static portMUX_TYPE command = portMUX_INITIALIZER_UNLOCKED;
 static int64_t commanded_us;
 static volatile int cells = 1;
 static SemaphoreHandle_t esc;
+static int esc_hz = ESC_HZ, pulse_now = -1;
 
 static void write_line(const char *line) {
     uart_write_bytes(UART_NUM_0, line, strlen(line));
 }
 
-// The ESC pulse width (us) at 400 Hz: a 2500 us period in 14-bit duty.
-static void set_pulse(int pulse) {
-    static int current = -1;
+// The ESC pulse width (us) at esc_hz in 14-bit duty. force sets it even if unchanged (after a rate change).
+static void apply_pulse(int pulse, bool force) {
     if (pulse < PULSE_STOP) pulse = PULSE_STOP;
     if (pulse > PULSE_MAX) pulse = PULSE_MAX;
     xSemaphoreTake(esc, portMAX_DELAY);
-    if (pulse == current) {
+    if (pulse == pulse_now && !force) {
         xSemaphoreGive(esc);
         return;
     }
-    current = pulse;
-    ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, (uint32_t)pulse * ESC_HZ * (1 << 14) / 1000000);
+    pulse_now = pulse;
+    ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, (uint32_t)((uint64_t)pulse * esc_hz * (1 << 14) / 1000000));
     ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
     char line[48];
-    snprintf(line, sizeof(line), "E %lld %d\n", (long long)esp_timer_get_time(), pulse);
+    snprintf(line, sizeof(line), "E %lld %d %d\n", (long long)esp_timer_get_time(), pulse, esc_hz);
     write_line(line);
     xSemaphoreGive(esc);
+}
+
+static void set_pulse(int pulse) {
+    apply_pulse(pulse, false);
 }
 
 // A finished conversion, if the cell has one (DOUT low): 24 bits, then a 25th pulse for channel A at gain 128. A clock-high pause over 60 us powers the HX711 down, so the transfer runs with interrupts off.
@@ -158,6 +162,10 @@ void app_main(void) {
         } else if (sscanf(line, "P %d", &value) == 1 && value >= PULSE_MIN && value <= PULSE_MAX) {
             mark_command();
             set_pulse(value);
+        } else if (sscanf(line, "Z %d", &value) == 1 && value >= 50 && value <= ESC_HZ) {
+            esc_hz = value;
+            ledc_set_freq(LEDC_HIGH_SPEED_MODE, LEDC_TIMER_0, esc_hz);
+            apply_pulse(pulse_now < 0 ? PULSE_STOP : pulse_now, true);
         } else if (sscanf(line, "C %d", &value) == 1 && value >= 0 && value < 1 << CELLS) {
             cells = value;
         }
