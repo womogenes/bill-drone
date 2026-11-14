@@ -186,6 +186,8 @@ def run(args):
     port = open_port(args.port)
     time.sleep(0.5)
     port.write(f"C {(1 << args.cells) - 1}\n".encode())
+    # The drone's 400 Hz, whatever rate an esc-cal or spin left the stand at.
+    port.write(b"Z 400\n")
     audio = None
     if not args.no_audio:
         audio_started = time.monotonic()
