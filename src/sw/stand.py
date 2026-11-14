@@ -3,7 +3,7 @@ The thrust stand (fw/stand): runs a throttle profile on one motor while recordin
 
   run PROFILE [--port P] [--max 1100] [--cells 1|2] [--no-audio]   fly a profile on the stand and save it under sw/recordings/stand/<UTC time>/
   scale --mass GRAMS [--cell 0|1]                                    with that mass on the cell, pulling the way the prop does, store its lift per count (~/.config/bill-drone/stand.json; signed: lift is (count - tare) times it)
-  esc-cal [--top 2000] [--hz 50]                                     teach a new ESC its pulse range, 1000 us to --top (props off, motor connected: it beeps through the motor); at 50 Hz as the stand's Nuofany 40A (a Hobbywing Skywalker-40A clone) wants it
+  esc-cal [--top 2000] [--hz 50]                                     teach a new ESC its pulse range, 1000 us to --top (props off, motor connected: it beeps through the motor), listening for its beeps on the laptop's mic and dropping to the bottom at the beep-beep; 50 Hz, as the stand's Nuofany 40A (a Hobbywing Skywalker-40A clone) wants it
   spin [--throttle 50] [--seconds 2] [--hz 400]                      spin the motor gently to check the signal reaches the ESC (props off)
   flash [--port wifi] [--image fw/stand/build/stand.bin]               send new stand firmware over Wi-Fi (build it with make -C fw/stand build); the stand restarts into it
   analyze RUN_DIR [--blades 2]                                       thrust, rpm from the audio, and each step's timing, as a plot and CSV beside the run
@@ -305,39 +305,132 @@ def scale(args):
     print(f"cell {args.cell}: {grams_per_count:.6g} g per count ({loaded - zero:.0f} counts for {args.mass} g), saved to {CONFIG}")
 
 
+class BeepListener:
+    """The laptop's microphone, listening for the ESC's beeps (it beeps through the motor's windings) while esc-cal runs: sound is a 20 ms frame whose strongest 800-6000 Hz line (beeps are pure tones) is 10 dB over the quiet before the battery went on; a burst is a run of such frames (gaps under 60 ms bridged), a group is bursts with under 0.5 s of quiet between them. A burst over SPINNING_S is the motor running, not a beep. The raw audio is saved for a later look."""
+
+    FRAME = AUDIO_RATE // 50
+    SPINNING_S = 1.2
+
+    def __init__(self, path):
+        self.recorder = subprocess.Popen(["pw-record", "--raw", "--rate", str(AUDIO_RATE), "--channels", "1", "--format", "s16", "-"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.file = wave.open(str(path), "wb")
+        self.file.setnchannels(1)
+        self.file.setsampwidth(2)
+        self.file.setframerate(AUDIO_RATE)
+        self.lock = threading.Lock()
+        self.floor, self.quiet = None, []
+        self.bursts, self.groups = [], []
+        self.burst_start, self.last_sound, self.group = None, None, []
+        self.spinning = False
+        self.elapsed = 0.0
+        threading.Thread(target=self.listen, daemon=True).start()
+
+    def listen(self):
+        band = None
+        while True:
+            chunk = self.recorder.stdout.read(self.FRAME * 2)
+            if len(chunk) < self.FRAME * 2:
+                return
+            self.file.writeframes(chunk)
+            samples = np.frombuffer(chunk, dtype=np.int16).astype(float)
+            spectrum = np.abs(np.fft.rfft(samples * np.hanning(len(samples)))) ** 2
+            if band is None:
+                frequencies = np.fft.rfftfreq(len(samples), 1 / AUDIO_RATE)
+                band = (frequencies >= 800) & (frequencies <= 6000)
+            power = spectrum[band].max()
+            now = self.elapsed
+            self.elapsed += self.FRAME / AUDIO_RATE
+            with self.lock:
+                # The first second (battery still off) sets the quiet level.
+                if self.floor is None:
+                    self.quiet.append(power)
+                    if now >= 1.0:
+                        self.floor = float(np.median(self.quiet))
+                    continue
+                sound = power > 10 * self.floor
+                if sound:
+                    if self.burst_start is None:
+                        self.burst_start = now
+                    self.last_sound = now
+                    if now - self.burst_start > self.SPINNING_S:
+                        self.spinning = True
+                elif self.burst_start is not None and now - self.last_sound > 0.06:
+                    burst = (self.burst_start, self.last_sound + 0.02 - self.burst_start)
+                    self.burst_start = None
+                    self.bursts.append(burst)
+                    self.group.append(burst)
+                    print(f"   heard a {burst[1] * 1000:.0f} ms {'tone' if burst[1] > 0.35 else 'beep'} at {burst[0]:.1f} s")
+                if self.group and self.burst_start is None and now - self.last_sound > 0.5:
+                    self.groups.append(self.group)
+                    print(f"   ({len(self.group)} in that group)")
+                    self.group = []
+
+    def new_groups(self, seen):
+        with self.lock:
+            return self.groups[seen:], self.spinning
+
+    def close(self):
+        self.recorder.terminate()
+        self.recorder.wait()
+        self.file.close()
+
+
 def esc_cal(args):
-    if input("Props OFF the motor, battery DISCONNECTED from the ESC. Type go: ").strip() != "go":
+    if input("Props OFF the motor, motor CONNECTED (the ESC beeps through it), battery DISCONNECTED from the ESC, the stand's ESP on USB power. Type go: ").strip() != "go":
         return
+    ROOT.mkdir(parents=True, exist_ok=True)
+    audio = ROOT / f"esc-cal_{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}.wav"
+    listener = BeepListener(audio)
     port = open_port(args.port)
     port.write(f"Z {args.hz}\n".encode())
-    stop = threading.Event()
-    reasons = {1: "power-on", 3: "software", 4: "panic", 5: "interrupt watchdog", 6: "task watchdog", 9: "brownout"}
-    def hold(pulse):
-        buffer = b""
-        while not stop.is_set():
+    pressed = threading.Event()
+    threading.Thread(target=lambda: (sys.stdin.readline(), pressed.set()), daemon=True).start()
+    def hold(pulse, until):
+        """Sends the pulse until until() says why it stopped, from the groups heard since it began; Enter also stops it."""
+        seen = len(listener.new_groups(0)[0])
+        while True:
             port.write(f"P {pulse}\n".encode())
             time.sleep(COMMAND_S)
-            buffer += port.read(4096)
-            *lines, buffer = buffer.split(b"\n")
-            for line in lines:
-                parts = line.split()
-                # A reset drops the pulse for the half second the board takes to boot: an ESC powered up in that gap never sees the top and arms as usual instead.
-                if parts[:1] == [b"R"] and len(parts) == 2:
-                    print(f"\n!! the stand reset ({reasons.get(int(parts[1]), parts[1].decode())}); if that was as the battery went on, the ESC missed the top. Fix the reset and run esc-cal again.")
-                elif parts[:1] == [b"E"] and len(parts) >= 3:
-                    print(f"   stand sending {int(parts[2])} us" + (f" at {int(parts[3])} Hz" if len(parts) > 3 else ""))
-    # Hobbywing Skywalker's sequence (the Nuofany 40A's likely firmware): powered at the top, "beep-beep" after about 2 s stores it; staying about 5 s more enters its programming menu instead, so drop to the bottom promptly. At the bottom it beeps the cell count, then one long beep stores it. If it spins or stays silent instead, it isn't calibrating: press Enter at once to drop to the bottom.
-    for pulse, prompt in ((args.top, f"Sending the top ({args.top} us at {args.hz} Hz). Connect the battery. At the beep-beep (about 2 s), press Enter at once."),
-                          (1000, "Sending the bottom (1000 us). Wait for the cell-count beeps and one long beep, then press Enter.")):
-        stop.clear()
-        thread = threading.Thread(target=hold, args=(pulse,), daemon=True)
-        thread.start()
-        input(prompt)
-        stop.set()
-        thread.join()
+            port.read(4096)
+            if pressed.is_set():
+                pressed.clear()
+                threading.Thread(target=lambda: (sys.stdin.readline(), pressed.set()), daemon=True).start()
+                return "Enter"
+            groups, spinning = listener.new_groups(seen)
+            seen += len(groups)
+            reason = until(groups, spinning)
+            if reason:
+                return reason
+    # Hobbywing Skywalker's sequence (the Nuofany 40A's likely firmware): powered at the top, "beep-beep" after about 2 s stores it; staying about 5 s more enters its programming menu instead, so the bottom follows the beep-beep at once. At the bottom it beeps the cell count, then one long beep stores it.
+    started = time.monotonic()
+    def top_done(groups, spinning):
+        if spinning:
+            return "spinning"
+        if any(len(group) == 2 and all(length < 0.35 for _, length in group) for group in groups):
+            return "beep-beep"
+        if time.monotonic() - started > 30:
+            return "timeout"
+    print(f"Sending the top ({args.top} us at {args.hz} Hz). Connect the battery now; listening for the beep-beep (Enter drops to the bottom yourself).")
+    top = hold(args.top, top_done)
+    print({"beep-beep": "Heard the beep-beep: top stored. Dropping to the bottom.",
+           "spinning": "!! The motor is running: the ESC armed instead of calibrating. Dropping to the bottom.",
+           "timeout": "!! No beep-beep in 30 s. Dropping to the bottom.",
+           "Enter": "Dropping to the bottom."}[top])
+    bottom_started = time.monotonic()
+    def bottom_done(groups, spinning):
+        if any(group[-1][1] > 0.35 for group in groups):
+            return "long tone"
+        if time.monotonic() - bottom_started > 8:
+            return "timeout"
+    bottom = hold(1000, bottom_done)
     port.write(b"T 0\n")
     port.close()
-    print(f"done: if the ESC confirmed both, it now takes 1000-{args.top} us" + ("" if args.top == 2200 else " (the drone's firmware assumes 1000-2200 us; its throttle range has to follow)"))
+    listener.close()
+    cells = next((sum(1 for _, length in group[:-1] if length <= 0.35) for group in listener.groups if group[-1][1] > 0.35), None)
+    if top == "beep-beep" and bottom == "long tone":
+        print(f"done: calibrated, the ESC now takes 1000-{args.top} us" + (f" ({cells} cell beeps before the long tone)" if cells else "") + ("" if args.top == 2200 else "; the drone's firmware assumes 1000-2200 us, so its throttle range has to follow"))
+    else:
+        print(f"not confirmed: top {top}, bottom {bottom}; the ESC likely keeps its old range. The sound is in {audio}")
 
 
 def spin(args):
