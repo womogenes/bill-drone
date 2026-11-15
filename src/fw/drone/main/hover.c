@@ -131,7 +131,7 @@
 #define LAND_EASE 0.5f
 // Held L (HOVER_LAND_FAST) descends this many times hover_land_rate: 2 m/s at the 1 m/s set on 2026-11-08 (was 3x of 0.2). Faster is not safer: about 1 kg on two 10-inch rotors has an induced velocity near 6.4 m/s, and a straight descent beyond roughly a quarter of it (1.5-2 m/s) enters the vortex ring state, where lift and control drop out unpredictably. Where the height knows the floor (LAND_DESCENT below) it only sets how fast held L may come down above LAND_FINAL_HEIGHT.
 #define LAND_FAST_FACTOR 2
-// Above LAND_FINAL_HEIGHT (m, by the height estimate) a landing comes down faster, at up to LAND_DESCENT (m/s), braking at LAND_BRAKE (m/s²) so it reaches the set rate by LAND_FINAL_HEIGHT; the touchdown itself stays at hover_land_rate (the tip-overs of 2026-11-12 touched down at 0.85-1 m/s, the upright ones at 0.5). Only on a height that knows the floor, the camera's or the barometer's, and the barometer read up to 0.9 m above the floor at contact on 2026-11-09, so the final height leaves that and more. LAND_DESCENT 0 (or under the set rate) keeps one rate throughout, as before 2026-11-12, when a landing from 3 m at 0.5 m/s took 6 s to the cut (01:55 UTC).
+// Above LAND_FINAL_HEIGHT (m, by the height estimate) a landing comes down faster, at up to LAND_DESCENT (m/s), braking at LAND_BRAKE (m/s²) so it reaches the set rate by LAND_FINAL_HEIGHT; the touchdown itself stays at hover_land_rate (the tip-overs of 2026-11-12 touched down at 0.85-1 m/s, the upright ones at 0.5). Only on a height that knows the floor, the camera's or the barometer's, and the barometer read up to 0.9 m above the floor at contact on 2026-11-09, so the final height leaves that and more; 1.5 m until 2026-11-14, when the 5 m landings spent 3 s of their 8 at the set rate below it (the user found the bottom too slow) and the barometer-and-IMU height read 0.0-0.14 m at contact, so 1.0 m (the 2026-11-09 offset with 10 cm to spare). LAND_DESCENT 0 (or under the set rate) keeps one rate throughout, as before 2026-11-12, when a landing from 3 m at 0.5 m/s took 6 s to the cut (01:55 UTC).
 #ifndef LAND_DESCENT
 #define LAND_DESCENT 1.2f
 #endif
@@ -139,7 +139,7 @@
 #define LAND_BRAKE 0.8f
 #endif
 #ifndef LAND_FINAL_HEIGHT
-#define LAND_FINAL_HEIGHT 1.5f
+#define LAND_FINAL_HEIGHT 1.0f
 #endif
 // Above this nudge speed (m/s) the hold point counts as moving.
 #ifndef NUDGE_MOVING
