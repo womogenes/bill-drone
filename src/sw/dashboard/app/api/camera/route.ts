@@ -405,6 +405,8 @@ type Port = {
   stats?: ReceiverStats;
   share?: string;
   taken?: string;
+  // The share of the camera's shards it heard over its last report (FPVT's shards heard against sent), smoothed.
+  air?: number;
   rssi: [number, number][];
 };
 // heard: when the monitor last said anything, signal: its last RSSI (dBm); copies: every chunk copy heard, chunks: the first of each; camera: the camera whose shards go on, as K N names it, kept on disk across restarts and drone-link outages (sw/recordings/fpv-camera.json).
@@ -418,6 +420,8 @@ type Receiver = {
   signal?: number;
   copies: number;
   chunks: number;
+  // The receivers split each frame's shards between them (FPVK) rather than each passing the first it hears.
+  split: boolean;
 };
 const store = globalThis as { fpvReceiver?: Receiver };
 const REPORT_BYTES = 36;
@@ -470,6 +474,7 @@ function receiver() {
     heard: 0,
     copies: 0,
     chunks: 0,
+    split: true,
   };
   // Each receiver's shards and the monitor's go into one stream, the first of each shard going on: several receivers hear the same shards, and pass the same ones whenever they fill in for each other. The capture time tells a restarted camera's frame numbers from the same numbers before it.
   const recent = new Set<string>();
@@ -537,6 +542,10 @@ function receiver() {
           if (buffer.length < report + REPORT_BYTES) break;
           const value = (index: number) =>
             buffer.readUInt32LE(report + 4 + 4 * index);
+          const sent = value(6) - (port.stats?.shardsSent ?? value(6));
+          const heard = value(7) - (port.stats?.shardsHeard ?? value(7));
+          if (sent >= 20)
+            port.air = (port.air ?? heard / sent) * 0.7 + (0.3 * heard) / sent;
           port.stats = {
             heard: value(0),
             declined: value(1),
@@ -589,21 +598,27 @@ function receiver() {
   // Every 500 ms: each receiver is told its camera and its share, which it forgets when it restarts. Every 5 s: a port silent for 5 s is closed (another program opening it, a flash or a serial monitor, can reset the receiver or leave the port at another baud), and every port not open, not locked and not tried in the last RETRY_MS is opened.
   setInterval(() => {
     const receivers = [...opened.ports.values()].filter(live);
-    // Each receiver's share in proportion to its USB link (an S3's about 9 ESP32s'), so the links add up: shards whose index modulo the weights' sum falls in its range are its own (fw/fpv_rx FPVK).
-    const modulus = receivers.reduce((sum, port) => sum + weight(port), 0);
+    // Each receiver's share in proportion to its USB link (an S3's about 9 ESP32s'), so the links add up: shards whose index modulo the weights' sum falls in its range are its own (fw/fpv_rx FPVK). That needs each receiver to hear over half of its own shards (a frame's are about half parity): at 61% heard by both (2026-11-14, the drone far off) 37% of frames were lost. So the shares split only while every receiver hears at least 80% of the shards, and below 70% each passes the first data shards it hears as one alone does, the union of the receivers' covering what each misses (receiver diversity), at one link's budget.
+    if (receivers.every((port) => (port.air ?? 1) >= 0.8)) opened.split = true;
+    if (receivers.some((port) => (port.air ?? 1) < 0.7)) opened.split = false;
+    const weigh = (port: Port) => (opened.split ? weight(port) : 1);
+    const modulus = opened.split
+      ? receivers.reduce((sum, port) => sum + weigh(port), 0)
+      : 1;
     let first = 0;
     for (const port of receivers) {
-      port.share = `${first} ${weight(port)} ${modulus}`;
+      const share = opened.split ? [first, weigh(port), modulus] : [0, 1, 1];
+      port.share = share.join(' ');
       tell(
         port,
         Buffer.concat([
           opened.camera
             ? Buffer.concat([Buffer.from('FPVF'), opened.camera])
             : Buffer.alloc(0),
-          Buffer.from([...Buffer.from('FPVK'), first, weight(port), modulus]),
+          Buffer.from([...Buffer.from('FPVK'), ...share]),
         ])
       );
-      first += weight(port);
+      first += weigh(port);
     }
   }, 500);
   const scan = () => {
@@ -645,6 +660,7 @@ function radioBudget() {
   );
   const shared =
     receivers.length > 1 &&
+    receiver().split &&
     receivers.every((port) => port.taken === port.share);
   const kilobytes = shared
     ? each.reduce((a, b) => a + b, 0)
@@ -716,6 +732,7 @@ export async function GET(request: Request) {
         signal: store.fpvReceiver?.signal,
         camera_mac: store.fpvReceiver?.camera?.toString('hex'),
         budget: store.fpvReceiver ? radioBudget() : undefined,
+        split: store.fpvReceiver?.split,
         recording: fpvRecording(),
         // Each serial receiver: its share and whether it took it, shards passed (all, and new to the stream) and their RSSI (dBm) over the last second, and its own report.
         receivers: [...(store.fpvReceiver?.ports.values() ?? [])].map(
@@ -727,6 +744,7 @@ export async function GET(request: Request) {
               path: port.path,
               fast: port.fast,
               live: live(port),
+              air: port.air,
               share: port.share,
               taken: port.taken,
               shards: port.shards,
