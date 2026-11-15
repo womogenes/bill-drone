@@ -248,14 +248,14 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
 }
 
 float flip_turn(float enable) {
-    return enable >= 3 ? TWO_PI / 4 : enable >= 2 ? TWO_PI / 6 : TWO_PI;
+    return enable >= 4 ? TWO_PI / 12 : enable >= 3 ? TWO_PI / 4 : enable >= 2 ? TWO_PI / 6 : TWO_PI;
 }
 
 const char *flip_refusal(const FlipCheck *c) {
     if (!c->enabled) return "Flip is off (setting flip_enable)";
     if (!c->armed) return "Not armed";
     if (c->done) return "One flip per arming: land and arm again";
-    if (c->whole_quaternion) return "The whole flip is not flown with quaternion 1 (bursts only: flip_enable 2 or 3)";
+    if (c->whole_quaternion) return "The whole flip is not flown with quaternion 1 (bursts only: flip_enable 2 to 4)";
     if (!c->holding || c->landing) return "Flip only from the hover hold";
     if (c->camera || !c->gps) return "Flip only from the GPS hold (hover_camera 0, hover_gps_tau on)";
     if (c->ekf) return "Flip only with the hold on its own estimates (hover_ekf 0)";

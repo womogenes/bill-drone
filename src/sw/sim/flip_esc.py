@@ -30,7 +30,7 @@ CASES = {"now": COM_LEFT, "rebalanced": 0.0, "battery15": COM_LEFT - 0.015 * BAT
 # The drone's settings on 2026-11-14 (this recording's equal GET /settings at 18:00 PST).
 SETTINGS = "2026-11-15T00-51-18"
 ROLL_BIAS = 12.871582
-KINDS = {"flip": 1, "burst60": 2, "burst90": 3}
+KINDS = {"flip": 1, "burst60": 2, "burst90": 3, "burst30": 4}
 
 
 def options_for(case, k, seed, band):
