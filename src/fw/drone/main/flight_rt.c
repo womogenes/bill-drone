@@ -932,6 +932,14 @@ bool flight_runtime_idle(void) {
     return idle;
 }
 
+// Whether the hover holds on the camera's tag sightings (hover_camera): while it does, nothing may switch the camera out of tag mode.
+bool flight_runtime_camera_hold(void) {
+    portENTER_CRITICAL(&lock);
+    bool camera = command.hover_camera != 0;
+    portEXIT_CRITICAL(&lock);
+    return camera;
+}
+
 // A target packet from the laptop is the controller heartbeat; the 500 ms watchdog stops the motors when they cease.
 bool flight_runtime_targets(const float *targets) {
     for (int i = 0; i < 12; i++) {

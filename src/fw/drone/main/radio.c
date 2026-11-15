@@ -817,8 +817,9 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
     }
     if (op == 'K') {
         if (!length) return "Expected a camera request";
-        // Only what is safe in flight passes while armed: the tag preview over the radio (P), status (S), slots (I) and log (L). Writing, booting or restarting the camera (W, B, X), its access point (A) and FPV (V, which stops tag tracking) wait for the drone to be disarmed with zero throttle. All of them used to, which stopped the dashboard's preview in hover (2026-10-31).
-        if (!flight_runtime_idle() && !strchr("PSIL", body[0])) return "Disable control and zero throttle first: only P, S, I and L reach the camera in flight";
+        // Only what is safe in flight passes while armed: the tag preview over the radio (P), status (S), slots (I) and log (L), and FPV (V) while the hover isn't holding on the camera (hover_camera 0, the GPS hold), since FPV stops tag tracking. Writing, booting or restarting the camera (W, B, X) and its access point (A) wait for the drone to be disarmed with zero throttle. All of them used to, which stopped the dashboard's preview in hover (2026-10-31); refusing V in flight stopped the FPV video and its recording about 2 s after every takeoff (2026-11-14).
+        if (!flight_runtime_idle() && !strchr("PSIL", body[0]) && !(body[0] == 'V' && !flight_runtime_camera_hold()))
+            return "Disable control and zero throttle first: in flight only P, S, I, L and (without the camera hold) V reach the camera";
         // Selecting the new image reads all of it to check its hash.
         const char *failure = camera_update(body[0], body + 1, length - 1, body[0] == 'B' ? 5000 : 2000, text, REPLY - 5);
         if (failure) return failure;
