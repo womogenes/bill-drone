@@ -845,16 +845,17 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     if (mode == HOVER_HOLD) {
         // The goal is climb; centring goes to the tag's height instead, climbs toward the ceiling to bring the tag into view until it has been flown on (a glimpse from the ground does not count), and holds the height reached when it is lost.
         // The height nudge raises the goal once flying (the takeoff climb and the search for the tag keep theirs), and its speed feeds the climb command.
-        // Without the tag, W and S move the height goal the same way once the drag model holds the drone (state->dragging: airborne).
-        float goal = g->climb, up = state->tracking || state->dragging ? g->nudge_up : 0;
-        if (g->center) goal = seeing ? clamp(state->tag_height + up, MIN_HEIGHT, g->ceiling) : state->tracking ? fmaxf(g->climb, state->target) : g->ceiling;
+        // Without the tag, W and S move the height goal the same way once airborne (2026-11-14: before the tag was flown on they did nothing), the search's climb to the ceiling included.
+        bool aloft = state->tracking || state->dragging || state->height >= AIRBORNE;
+        float goal = g->climb, up = aloft ? g->nudge_up : 0;
+        if (g->center) goal = seeing ? clamp(state->tag_height + up, MIN_HEIGHT, g->ceiling) : state->tracking ? fmaxf(g->climb, state->target) : clamp(g->ceiling + up, MIN_HEIGHT, g->ceiling);
         else goal += up;
         // With the barometer the height is the true one above the ground, so the ceiling holds for every goal and the nudge: above it the hold descends.
         bool capped = g->baro_tau > 0;
         if (capped) goal = fminf(goal, g->ceiling);
         state->target += clamp(goal - state->target, -g->climb_rate * dt, g->climb_rate * dt);
         if (capped) state->target = fminf(state->target, g->ceiling);
-        float rising = state->tracking || state->dragging ? state->nudge_rate[2] : 0;
+        float rising = aloft ? state->nudge_rate[2] : 0;
         if (capped && state->target >= g->ceiling) rising = fminf(rising, 0);
         command = clamp(g->kz * (state->target - state->height) + rising, -MAX_CLIMB, g->climb_rate);
     } else {
@@ -961,12 +962,17 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     float forward, left;
     if (!seeing) {
         // Tag lost after flying on it: keep damping the dead-reckoned velocity, with the trim learned on the tag. Before the tag is first flown on, the attitude controller's own damping holds the drone, unless the drag model keeps the velocity: then the hold flies on it from takeoff, and also returns to the place where the tag was last seen (or where it took off), as far as the dead reckoning knows it.
-        if ((!state->tracking && !dragging) || (state->height < AIRBORNE && !lifting)) return;
-        // With the drag model the arrows fly the drone: the nudge's speed (toward the drone's heading and to its left) moves the hold point, and the velocity damping aims at that speed, so holding an arrow flies at it and letting go stops where the hold point stopped.
-        float vx = 0, vy = 0;
+        if (state->height < AIRBORNE && !lifting) return;
+        if (!state->tracking && !dragging) {
+            // Nothing to hold on yet (the tag not flown on, no drag model): the arrows lean the drone the nudge's way, hover_tilt at nudge_speed, so a drone that lost the tag at liftoff can be flown back to it (2026-11-14: a liftoff's nose-down kick took the tag out of view and the arrows did nothing); let go, the attitude controller levels it.
+            float speed = fmaxf(g->nudge_speed, 0.1f);
+            output->pitch = clamp(g->tilt * state->nudge_rate[0] / speed, -g->tilt, g->tilt);
+            output->roll = clamp(-g->tilt * state->nudge_rate[1] / speed, -g->tilt, g->tilt);
+            return;
+        }
+        // The arrows fly the drone: the nudge's speed (toward the drone's heading and to its left) is what the velocity damping aims at, so holding an arrow flies at it; with the drag model it also moves the hold point, so letting go stops where the hold point stopped (without it, on the tag's dead reckoning, where the drone stopped).
+        float vx = state->nudge_rate[0] * cy - state->nudge_rate[1] * sy, vy = state->nudge_rate[0] * sy + state->nudge_rate[1] * cy;
         if (dragging) {
-            vx = state->nudge_rate[0] * cy - state->nudge_rate[1] * sy;
-            vy = state->nudge_rate[0] * sy + state->nudge_rate[1] * cy;
             // That speed changes by at most nudge_accel a second (hover.h), so a stick let go at speed moves the hold point on as far as the drone can stop in, instead of stopping it where the stick was let go and asking for kd times the speed at once; the fly-away failsafe's brake, which holds the nudge, slows along it too.
             float dx = vx - state->reference[0], dy = vy - state->reference[1], change = hypotf(dx, dy), most = g->nudge_accel * dt;
             if (g->nudge_accel > 0 && change > most) {

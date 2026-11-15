@@ -352,6 +352,7 @@ const gainKeys = gainSections.flatMap(({ fields }) =>
 export const ControlPanel = memo(function ControlPanel({
   settings,
   gpsHold,
+  tagHeld = false,
   recorderReady,
   recorderError,
   imu,
@@ -375,6 +376,8 @@ export const ControlPanel = memo(function ControlPanel({
   settings: ControlSettings;
   // A 3D GPS fix and the GPS hold on: without the tag the right stick then flies a speed instead of a tilt.
   gpsHold: boolean;
+  // The tag hold sees the tag now (its last sighting recent): without it the arrows fly the drone at their speed (fw/drone/main/hover.c), so their nudge wraps like the GPS hold's.
+  tagHeld?: boolean;
   recorderReady: boolean;
   recorderError?: string;
   imu: ImuState;
@@ -432,6 +435,8 @@ export const ControlPanel = memo(function ControlPanel({
   freeRef.current = free;
   const gpsHoldRef = useRef(gpsHold);
   gpsHoldRef.current = gpsHold;
+  const tagHeldRef = useRef(tagHeld);
+  tagHeldRef.current = tagHeld;
   const throttle = useRef(settings.base_throttle);
   // Key handlers read the mode through a ref so a mode change doesn't re-register them and forget held keys.
   const modeRef = useRef(mode);
@@ -514,7 +519,12 @@ export const ControlPanel = memo(function ControlPanel({
         }
       }
       if (forward || left || up)
-        onNudge(forward, left, up, freeRef.current && gpsHoldRef.current);
+        onNudge(
+          forward,
+          left,
+          up,
+          freeRef.current ? gpsHoldRef.current : !tagHeldRef.current
+        );
     }
 
     function stopNudging() {
@@ -715,7 +725,13 @@ export const ControlPanel = memo(function ControlPanel({
       const left =
         freeRef.current && !speed ? 0 : -tiltX * sizes.move * seconds;
       const up = -climbY * sizes.climb * seconds;
-      if (forward || left || up) onNudge(forward, left, up, speed);
+      if (forward || left || up)
+        onNudge(
+          forward,
+          left,
+          up,
+          freeRef.current ? speed : !tagHeldRef.current
+        );
     }
 
     const timer = setInterval(tick, GAMEPAD_TICK_MS);

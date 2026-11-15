@@ -87,6 +87,8 @@ const ZERO_TARGETS: Targets = {
 const NO_NUDGE: [number, number, number] = [0, 0, 0];
 // As far as the drone takes it (fw/drone/main/flight_rt.c NUDGE_MAX).
 const NUDGE_MAX = 1.5;
+// The tag counts as held while its last sighting is this recent (ms): then the arrows move the hold point on it, which stops at NUDGE_MAX; otherwise they fly the drone and wrap (nudgeHold).
+const TAG_HELD_MS = 300;
 // A steady rotor tilt beyond this (degrees, averaged over TILT_TAU_S seconds) means the CoM is well off center or moving: by about 15-20 degrees the drone has no pitch authority left.
 const TILT_WARNING = 10;
 const TILT_TAU_S = 1;
@@ -937,6 +939,11 @@ export default function Page() {
               imu={imu}
               mode={mode}
               droneMode={armed ? hoverState?.mode : undefined}
+              tagHeld={
+                armed &&
+                hoverState?.tag_age_ms != null &&
+                hoverState.tag_age_ms < TAG_HELD_MS
+              }
               nudge={nudge}
               onChange={sendControl}
               onMode={setMode}
