@@ -124,6 +124,19 @@
 #ifndef BLIND_DEEP
 #define BLIND_DEEP 0.6f
 #endif
+// The Kalman filter (gains land_ekf) can lift that veto. On soft ground the first touch is too soft for LAND_SHOCK and the barometer's false descent in the wash held the climb rate at -0.3 to -0.4 m/s on the grass (2026-11-15 07:13 UTC: contact at about 27.8 s at 0.88-1.17 g, the height estimate to -1.0 m, and every probe vetoed by "sinking" until the drone's rocking on the grass read as a fall: the motors ran at hover thrust 2 s until the pilot's stop). Near the floor the filter barely takes the barometer (ekf.c EKF_NEAR), and there it read -0.45 m/s at contact and -0.01 to +0.03 from 0.2 s after. But near the floor in the air it read as little: -0.04 to -0.17 m/s for 1.4 s at 06:49 (40.0-41.4 s, pitch swinging 8 degrees, until contact at 41.75 s), and through zero to +0.12 at 06:47 (40.3-41.4 s, a second before contact at 42.4 s), so stillness alone is not the floor. What contact adds is a stop: the filter's climb rate coming within EKF_STILL (m/s) of zero from a descent at least EKF_STOP (m/s) faster than EKF_RECOVER (m/s²) and the thrust over the hold's would slow it (its lowest climb rate recovering at that rate), and staying there for EKF_STILL_S (s). The stalls above slowed at 0.2-0.3 m/s², the contacts at 1.4-3; over the 81 landings recorded on 2026-11-09, 11-12 and 11-15 UTC such a stop began only 0.03-0.2 s after a contact, never in the air. The thrust's part is the hold braking: in landing_test --outdoor --tray --ekf, without it, the hold catching the sink a probe in the air had left stopped a 0.5 m/s descent at 1.1 m/s² with up to a quarter more thrust than the hold's, and 7 of 3318 landings were called on that 0.3-1.2 m up. Once such a stop has lasted EKF_STILL_S, a probe whose accelerometer saw under PROBE_SHARE of the air's loss (probe_settled) is on the floor whatever the hold's climb rate reads. The stop does not start a probe of its own: in the same simulator a filter step of 0.1 m/s on a drone pitched 22 degrees in the wind passed for one, and the probe it started made the blind tilt cut live 1.4 m up (seed 12046), which is what BLIND_FELT is for. The filter staying within EKF_STILL while the probe takes away PROBE_DEPTH of the air's speed is a floor test of its own: it integrates the same accelerometer, against gravity rather than the specific force at the probe's start, which after a jolt reads the jolt's fading back to 1 g as a fall (probe_velocity). Replayed with the filter as logged (landing_test --replay ... --contact 27.8 --set hover_land_ekf=1), 07:13 touches down 0.85 s after contact, at the end of the first probe after it, at 68 % of the hold's thrust.
+#ifndef EKF_STILL
+#define EKF_STILL 0.1f
+#endif
+#ifndef EKF_STOP
+#define EKF_STOP 0.15f
+#endif
+#ifndef EKF_RECOVER
+#define EKF_RECOVER 1.0f
+#endif
+#ifndef EKF_STILL_S
+#define EKF_STILL_S 0.3f
+#endif
 #ifndef LAND_SHOCK
 #define LAND_SHOCK 1.45f
 #endif
@@ -898,7 +911,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->hold_force += (state->force - state->hold_force) * pull;
             state->hold_g += (vertical_g - state->hold_g) * pull;
         }
-        state->land_time = state->stall_time = state->impulse = state->probe_wait = state->sink = state->land_wait = 0;
+        state->land_time = state->stall_time = state->impulse = state->probe_wait = state->sink = state->land_wait = state->filter_still = state->filter_low = 0;
         state->probing = state->descended = false;
     } else if (waiting) {
         state->land_wait += dt;
@@ -918,6 +931,16 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         float due = (LAND_EASE + (fmaxf(state->land_height, 0) + (blind ? BLIND_HEIGHT : 0)) / fmaxf(rate, 0.01f)) * (1 + LAND_MARGIN) + LAND_SLACK;
         bool stopped = state->land_time > LAND_EASE && state->impulse > fmaxf(IMPULSE * rate, IMPULSE_MIN);
         bool low = !blind && state->land_time > LAND_EASE && state->height < LOW_HEIGHT;
+        // The filter's stop (EKF_STILL_S), while it is sure of its height.
+        if (g->land_ekf > 0 && estimated && state->estimate.vertical) {
+            float up = state->estimate.velocity[2];
+            state->filter_still = fabsf(up) <= EKF_STILL && (state->filter_still > 0 || state->filter_low <= -EKF_STOP) ? state->filter_still + dt : 0;
+            // A stop the thrust explains is the hold braking, not the floor: the lowest climb rate recovers faster by what the thrust asks over the hold's.
+            float braking = state->hold_force > 0 ? fmaxf(0, state->force / state->hold_force - 1) * GRAVITY : 0;
+            state->filter_low = fminf(up, state->filter_low + (EKF_RECOVER + braking) * dt);
+        } else {
+            state->filter_still = state->filter_low = 0;
+        }
         if (!state->probing && state->probe_wait <= 0 && (state->stall_time >= STALL_S || stopped || low || state->land_time >= due)) {
             state->probing = true;
             state->ceiling = state->force;
@@ -941,7 +964,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->probe_settled += (vertical_g - state->probe_air_g) * GRAVITY * dt;
             bool falling = state->recent_g < state->hold_g - PROBE_FALL || state->probe_settled <= -PROBE_DEPTH;
             bool sinking = blind && state->climb_rate < -fmaxf(0.5f * rate, BLIND_CLIMB);
-            if (!falling && (!sinking || state->probe_expected <= -BLIND_DEEP) && state->probe_expected <= -PROBE_DEPTH && state->probe_settled > PROBE_SHARE * state->probe_expected) {
+            if (!falling && (!sinking || state->filter_still >= EKF_STILL_S || state->probe_expected <= -BLIND_DEEP) && state->probe_expected <= -PROBE_DEPTH && state->probe_settled > PROBE_SHARE * state->probe_expected) {
                 state->landed = true;
             } else if (falling || (!sinking && state->probe_expected <= -PROBE_DEPTH)) {
                 // In the air.
