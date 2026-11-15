@@ -1,61 +1,27 @@
-import { open, readdir, readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
-import {
-  analyzeFlight,
-  estimateSeconds,
-  HEADER_SIZE,
-  recordingStart,
-  type RecordingEntry,
-} from '@/lib/flight-report';
+import { analyzeFlight, RECORD_COLUMNS } from '@/lib/flight-report';
 
-export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-// The bridge's recordings (src/fw/controller/bridge.py RECORDINGS), beside this dashboard.
-const RECORDINGS = resolve(process.cwd(), '../recordings');
-// Recordings shorter than this (s, by size) are arm-and-disarm checks, not flights.
-const SHORTEST_S = 1;
+// The drone service's recordings (src/fw/controller/bridge.py GET /recordings).
+const RECORDINGS = 'http://127.0.0.1:8765/recordings';
 
-// GET lists the recordings, newest first; ?name=<stem> returns that flight's report (lib/flight-report.ts).
+// GET lists the recordings, newest first; ?name=<stem> returns that flight's report (lib/flight-report.ts) from the events and columns the service decodes.
 export async function GET(request: Request) {
   const name = new URL(request.url).searchParams.get('name');
+  const headers = { 'Cache-Control': 'no-store' };
   try {
-    if (name === null) {
-      const files = await readdir(RECORDINGS);
-      const stems = new Set(
-        files
-          .filter((file) => file.endsWith('.jsonl'))
-          .map((file) => file.slice(0, -6))
-      );
-      const entries: RecordingEntry[] = [];
-      for (const file of files) {
-        const stem = file.slice(0, -4);
-        const started = recordingStart(stem);
-        if (!file.endsWith('.bin') || !started || !stems.has(stem)) continue;
-        const handle = await open(resolve(RECORDINGS, file));
-        const header = new Uint8Array(HEADER_SIZE);
-        const [{ size }, { bytesRead }] = await Promise.all([
-          handle.stat(),
-          handle.read(header, 0, HEADER_SIZE, 0),
-        ]).finally(() => handle.close());
-        const seconds = estimateSeconds(size, header.subarray(0, bytesRead));
-        if (seconds >= SHORTEST_S)
-          entries.push({ name: stem, started, seconds });
-      }
-      entries.sort((a, b) => b.started.localeCompare(a.started));
-      return Response.json(entries, {
-        headers: { 'Cache-Control': 'no-store' },
-      });
-    }
-    // Only a recording's own name, so the query cannot reach other files.
-    if (!recordingStart(name))
-      return Response.json({ error: 'Unknown recording' }, { status: 404 });
-    const [bin, jsonl] = await Promise.all([
-      readFile(resolve(RECORDINGS, `${name}.bin`)),
-      readFile(resolve(RECORDINGS, `${name}.jsonl`), 'utf8'),
-    ]);
-    return Response.json(analyzeFlight(name, bin, jsonl), {
-      headers: { 'Cache-Control': 'no-store' },
+    const response = await fetch(
+      name === null
+        ? RECORDINGS
+        : `${RECORDINGS}?${new URLSearchParams({ name, columns: RECORD_COLUMNS.join(',') })}`,
+      { cache: 'no-store' }
+    ).catch(() => {
+      throw new Error('The drone service does not answer');
     });
+    const body = await response.json();
+    if (!response.ok || name === null)
+      return Response.json(body, { status: response.status, headers });
+    return Response.json(analyzeFlight(name, body), { headers });
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : String(error) },

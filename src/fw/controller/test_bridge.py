@@ -9,6 +9,7 @@ The bridge takes one packet of each kind the controller's USB carries, passes ov
 """
 
 import asyncio
+import json
 import os
 import struct
 import subprocess
@@ -17,6 +18,9 @@ import tempfile
 import time
 import tty
 from pathlib import Path
+
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 import bridge
 import find_port
@@ -274,6 +278,30 @@ async def usb_search(directory):
         assert bridge.search_order(["/dev/b", "/dev/a"], [], "") == ["/dev/a", "/dev/b"]
 
 
+async def recordings(directory):
+    """
+    GET /recordings: a recording of 120 records (1.2 s) with a batch resent is listed and a 3-record one is not; its columns come back once per record in sequence order with null for NaN, past a line cut off mid-write; an unknown name or column is refused.
+    """
+    name, short = "2026-11-15T07-02-48-960Z_7", "2026-11-15T07-03-00-000Z_7"
+    (directory / f"{name}.bin").write_bytes(log_message(0, [3] * 40, log_format.RECORD_SIZE) + log_message(5, [3], log_format.RECORD_SIZE))
+    (directory / f"{short}.bin").write_bytes(log_message(0, [3], log_format.RECORD_SIZE))
+    start = json.dumps({"type": "start", "session": SESSION, "gyro_bias_rad_s": [0, 0, 0], "sensor_to_body": [1, -1, -1]})
+    for stem in (name, short):
+        (directory / f"{stem}.jsonl").write_text(start + '\n{"type": "gps", "lat')
+    app = web.Application()
+    app.add_routes([web.get("/recordings", bridge.Service(directory).recordings)])
+    async with TestClient(TestServer(app)) as client:
+        listed = await (await client.get("/recordings")).json()
+        assert [(entry["name"], entry["started"]) for entry in listed] == [(name, "2026-11-15T07:02:48.960Z")], listed
+        response = await client.get("/recordings", params={"name": name, "columns": "sequence,esp_time_us,tag_qw"})
+        body = await response.json()
+        assert body["columns"]["sequence"] == list(range(120)) and body["columns"]["esp_time_us"] == [sequence * 10000 for sequence in range(120)], body["columns"]
+        assert body["columns"]["tag_qw"] == [None] * 120 and not body["truncated"] and [event["type"] for event in body["events"]] == ["start"], body
+        for query in ({"name": "../" + name}, {"name": name, "columns": "nope"}):
+            response = await client.get("/recordings", params=query)
+            assert response.status == 404, (query, await response.text())
+
+
 async def main():
     with tempfile.TemporaryDirectory() as directory:
         service = bridge.Service(Path(directory))
@@ -318,6 +346,9 @@ async def main():
 
     with tempfile.TemporaryDirectory() as directory:
         await usb_search(Path(directory))
+
+    with tempfile.TemporaryDirectory() as directory:
+        await recordings(Path(directory))
 
     # The pattern limits the bridge and the simulator check are the drone's own: until 2026-11-12 the drone capped roll at 10 degrees while the ladder was simmed at 35.
     source = (Path(__file__).parents[1] / "drone/main/flight_rt.c").read_text()

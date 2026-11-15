@@ -10,6 +10,7 @@ The laptop's drone service. It owns the controller's USB port and serves, on 127
 - /view: a dashboard that only watches (a second tab while the first has /ws): the same readings; what it sends is ignored.
 - /update: raw id-tagged requests (tools/ota_direct.py, the dashboard's camera requests), from any number of clients at once; each reply goes to the client that sent its id.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
+- GET /recordings: the recordings for the dashboard's flights page, newest first; ?name=<recording>&columns=<name>,... one recording's events and its records' columns as log_format.py decode_records gives them (each record once, in sequence order; null for NaN).
 - POST /radio {"rate": i, "power": dBm, "channel": c}: the controller's sending rate (fw/link.h link_rates index), maximum transmit power (0 = the driver's own) and channel until it resets, each optional; only while the drone is disarmed, and another channel than 6 only to a drone that follows its controller (its radio_follow setting). Replies with the controller's next link report.
 - POST /log_test {"drop": fraction, "ack_drop": fraction, "ack_delay_ms": n}: induced flight-log loss for testing the log's repair (drop arriving log fragments, drop or delay the acknowledgements); off until set, cleared by a restart.
 - POST /pattern {"after": s, "repeat": n, "segments": [{"ticks": n, "<channel>": value, ...}, ...]}: load the identification test pattern (log_format.py PATTERN_CHANNELS; drone/main/flight_rt.c excite), or clear it with no segments. It lasts until the drone restarts, and every recording from then on starts with it as a "pattern" event. sw/excite.py builds and sends them.
@@ -22,8 +23,10 @@ import asyncio
 from collections import deque
 from datetime import datetime, timezone
 import json
+import math
 import os
 import random
+import re
 from pathlib import Path
 import struct
 import sys
@@ -33,13 +36,19 @@ from aiohttp import WSMsgType, web
 import serial
 
 from find_port import LISTEN_S, by_path, candidates, holder, listen
-from log_format import FORMATS, HOVER_SIZE, batches, PATTERN_CHANNELS, STOP_REASONS, decode_reason, guard_state, pattern_refusal
+from log_format import COLUMNS, FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, RECORD_SIZE, batches, decode_records, PATTERN_CHANNELS, STOP_REASONS, decode_reason, guard_state, pattern_refusal
 from wire import LINK_CHANNEL, PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 # Messages of more fragments than this go out twice (send_message).
 COPY_ABOVE = 4
 
 RECORDINGS = Path(__file__).resolve().parents[2] / "sw/recordings"
+# A recording's name (Recorder.begin): its UTC start, then its session.
+RECORDING_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z_\d+", re.ASCII)
+# Recordings shorter than this (s, by size) are arm-and-disarm checks, not flights.
+SHORTEST_S = 1
+# The drone's control rate (records/s: flight_rt.c's 10 ms tick), for a recording's length from its size.
+CONTROL_HZ = 100
 
 # drone/main/runtime.h Status, then its camera link fields (absent from firmware before the camera link).
 STATUS_FORMAT = "<4sIIHB3f3f3f2f2H4f2IiIIHHf"
@@ -252,6 +261,71 @@ def log_counts():
     One recording's flight-log delivery counts (Recorder.counts; /status reading.recorder.log, and the recording's "log_stats" event when it closes): log messages, FLG1 batches and samples written; gaps in the samples' sequence and the samples in them, which the drone dropped at capture and no resend can bring back; repair requests (the fragments this service had of a message whose last fragment came with others missing, which a newer drone answers by resending only those), the messages completed after one, and messages that came again after they were written (their acknowledgement lost or slow) and were acknowledged again; and what the induced-loss test (POST /log_test) dropped.
     """
     return {"messages": 0, "batches": 0, "samples": 0, "gaps": 0, "missing": 0, "repair_requests": 0, "repaired": 0, "duplicates": 0, "test_dropped": 0}
+
+
+def recording_start(name):
+    """The UTC start in a recording's name as an ISO time, or None for another file."""
+    match = RECORDING_NAME.fullmatch(name)
+    return match and f"{match[1]}T{match[2]}:{match[3]}:{match[4]}.{match[5]}Z"
+
+
+def recording_list(directory):
+    """
+    The recordings with both files and at least SHORTEST_S long, newest first, as {name, started, seconds}; the length from the size and the first batch's record size (batches run about 4 records).
+    """
+    files = sorted(os.listdir(directory))
+    stems = {file[:-6] for file in files if file.endswith(".jsonl")}
+    entries = []
+    for file in files:
+        stem = file[:-4]
+        started = recording_start(stem)
+        if not file.endswith(".bin") or not started or stem not in stems:
+            continue
+        with open(directory / file, "rb") as data:
+            header = data.read(HEADER_SIZE)
+            size = os.fstat(data.fileno()).st_size
+        record = struct.unpack(HEADER_FORMAT, header)[3] if len(header) == HEADER_SIZE else 0
+        seconds = size / (((record or RECORD_SIZE) + HEADER_SIZE / 4) * CONTROL_HZ)
+        if seconds >= SHORTEST_S:
+            entries.append({"name": stem, "started": started, "seconds": seconds})
+    return sorted(entries, key=lambda entry: entry["started"], reverse=True)
+
+
+def refuse_constant(name):
+    raise ValueError(f"{name} is not JSON")
+
+
+def read_recording(directory, name, columns):
+    """
+    A recording for the dashboard's report (sw/dashboard/lib/flight-report.ts): its events (the .jsonl's lines, less one cut off mid-write), the columns asked for (log_format COLUMNS, decoded by decode_records), each record once in sequence order (the drone resends unacknowledged batches) with None for NaN, and whether the .bin ends mid-batch. Raises FileNotFoundError for an unknown recording, KeyError for an unknown column and ValueError for a recording that does not decode.
+    """
+    if not recording_start(name):
+        raise FileNotFoundError(f"No recording {name}")
+    unknown = [column for column in columns if column not in COLUMNS]
+    if unknown:
+        raise KeyError(f"No column {', '.join(unknown)}")
+    events = []
+    for line in (directory / f"{name}.jsonl").read_text(encoding="utf-8", errors="replace").split("\n"):
+        if line.strip():
+            try:
+                events.append(json.loads(line, parse_constant=refuse_constant))
+            except ValueError:
+                pass
+    if not any(event.get("type") == "start" for event in events):
+        raise ValueError("The recording has no start record")
+    # The start record wins over later metadata (sw/flight_log.py metadata); the calibration's defaults are those of recordings from before it was written.
+    meta = {}
+    for event in events:
+        if event.get("type") in ("start", "metadata"):
+            meta = event | meta
+    bias = [math.degrees(value) for value in meta.get("gyro_bias_rad_s", (0, 0, 0))]
+    rows, truncated = decode_records((directory / f"{name}.bin").read_bytes(), meta.get("session"), meta.get("sensor_to_body", (1, 1, 1)), bias, meta.get("gyro_counts_per_deg_s", 131))
+    first, sequence = {}, COLUMNS.index("sequence")
+    for row in rows:
+        first.setdefault(row[sequence], row)
+    ordered = [first[key] for key in sorted(first)]
+    picked = {column: [None if value != value else value for value in (row[COLUMNS.index(column)] for row in ordered)] for column in columns}
+    return {"events": events, "columns": picked, "truncated": truncated}
 
 
 class Recorder:
@@ -1149,6 +1223,26 @@ class Service:
         self.recorder.pattern = recorded if recorded["segments"] else None
         return web.json_response(summary)
 
+    async def recordings(self, request):
+        """
+        GET /recordings: recording_list; ?name=<recording>&columns=<name>,...: read_recording. Both off the event loop, which a long flight's decoding would hold up.
+        """
+        name = request.query.get("name")
+        try:
+            if name is None:
+                body = await asyncio.to_thread(recording_list, self.recorder.directory)
+            else:
+                columns = [column for column in request.query.get("columns", "").split(",") if column]
+                body = await asyncio.to_thread(read_recording, self.recorder.directory, name, columns)
+            text = await asyncio.to_thread(json.dumps, body, allow_nan=False)
+        except FileNotFoundError as error:
+            return web.json_response({"error": str(error)}, status=404)
+        except KeyError as error:
+            return web.json_response({"error": error.args[0]}, status=404)
+        except ValueError as error:
+            return web.json_response({"error": str(error)}, status=422)
+        return web.Response(text=text, content_type="application/json")
+
     async def schema(self, request):
         """
         Every setting as {name, min, max, default, tunable}, collected page by page (drone/main/settings.c).
@@ -1238,6 +1332,7 @@ async def main(args):
         web.post("/radio", service.post_radio),
         web.post("/log_test", service.post_log_test),
         web.get("/schema", service.schema),
+        web.get("/recordings", service.recordings),
     ])
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
