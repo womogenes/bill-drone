@@ -92,9 +92,9 @@ MODEL_KEYS = ("arm", "pivot_height", "com_x", "roll_inertia", "pitch_inertia", "
 # Model parameters tunable from the dashboard, in SI units.
 MODEL_TUNING_KEYS = ("pivot_height", "com_x", "roll_inertia", "pitch_inertia", "yaw_inertia", "reaction_torque_ratio", "arm")
 
-# Equivalent to retaining 0.99 / 0.9998 of gyro integration every 10 ms.
+# Equivalent to retaining 0.99 of gyro integration every 10 ms; with the motors spinning, settings.def attitude_tau (default 50 s, the 0.9998 it always was).
 GRAVITY_TAU = -0.01 / math.log(0.99)
-POWERED_GRAVITY_TAU = -0.01 / math.log(0.9998)
+POWERED_GRAVITY_TAU = 50.0
 ANGULAR_KEYS = ("roll", "pitch", "yaw_rate", "pitch_trim", "left_trim", "right_trim", "servo_compensation", "target_rate", "velocity_damping")
 
 GAIN_KEYS = ("roll_p", "roll_i", "roll_damping", "pitch_p", "pitch_i", "pitch_damping", "yaw_damping", "integral_limit", "pitch_trim", "left_trim", "right_trim")
@@ -121,9 +121,9 @@ class Attitude:
     def __init__(self, accel=(0.0, 0.0, 1.0)):
         self.state = array("f", [math.atan2(accel[1], accel[2]), math.atan2(-accel[0], math.sqrt(accel[1] ** 2 + accel[2] ** 2))])
 
-    def update(self, accel, gyro, dt, powered, banked=False):
+    def update(self, accel, gyro, dt, powered, banked=False, powered_tau=POWERED_GRAVITY_TAU):
         # banked: the gyro alone (flight_rt.c bank_tilt), an infinite time constant.
-        motion = array("f", list(accel) + list(gyro) + [dt, math.inf if banked else POWERED_GRAVITY_TAU if powered else GRAVITY_TAU])
+        motion = array("f", list(accel) + list(gyro) + [dt, math.inf if banked else powered_tau if powered else GRAVITY_TAU])
         library.flight_attitude(self.state.buffer_info()[0], motion.buffer_info()[0])
         return self.state[0], self.state[1]
 

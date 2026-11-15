@@ -100,7 +100,7 @@ static const float ticks[4] = {
 };
 
 typedef struct {
-    float accel_scale[3], gyro_scale[3], gravity_tau, powered_tau;
+    float accel_scale[3], gyro_scale[3], gravity_tau;
 } Config;
 
 typedef struct {
@@ -654,7 +654,7 @@ static void runtime_task(void *arg) {
         bool banked = command.bank_tilt > 0 && spinning() && bank_angle(&state.controller) > command.bank_tilt;
         Motion motion = {state.accel[0], state.accel[1], state.accel[2],
                          state.gyro[0], state.gyro[1], state.gyro[2], dt,
-                         banked || flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? config.powered_tau : config.gravity_tau};
+                         banked || flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? command.attitude_tau : config.gravity_tau};
         flight_attitude(&state.attitude, &motion);
         // The flip, once asked for (flight_runtime_flip): it flies on the gyro, and at its hand-back the estimate above takes its attitude.
         FlipOutput flipped = {0};
@@ -1392,9 +1392,8 @@ void flight_runtime_start(void) {
         config.accel_scale[i] = sensor_to_body[i] / 16384.0f;
         config.gyro_scale[i] = sensor_to_body[i] * 3.14159265358979323846 / (180 * GYRO_COUNTS_PER_DEG_S);
     }
-    // Equivalent to retaining 0.99 / 0.9998 of gyro integration every 10 ms.
+    // Equivalent to retaining 0.99 of gyro integration every 10 ms; with the motors spinning, settings.def attitude_tau.
     config.gravity_tau = -0.01 / log(0.99);
-    config.powered_tau = -0.01 / log(0.9998);
     float values[SETTINGS];
     settings_copy(values);
     // A calibration is valid only in the sensor frame it was taken in. Arming and the status both read state.calibrated, so a rejected calibration blocks arming.

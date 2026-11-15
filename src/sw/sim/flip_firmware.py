@@ -356,7 +356,7 @@ def fly(job):
             accel = np.clip(obs["accel"][i] / R.G, -accel_range, accel_range)
             lane["gyro"] = gyro
             spinning = sum(lane["commanded"]) > 0
-            estimate.update(accel, gyro, R.DT, spinning, banked=library.flip_gyro_only(ctypes.byref(run)) or library.recover_gyro_only(ctypes.byref(recovery)))
+            estimate.update(accel, gyro, R.DT, spinning, banked=library.flip_gyro_only(ctypes.byref(run)) or library.recover_gyro_only(ctypes.byref(recovery)), powered_tau=flown.get("attitude_tau", 50.0))
             enabled = k >= armed
             if enabled:
                 library.flip_tick(ctypes.byref(run), (ctypes.c_float * 3)(*gyro), (ctypes.c_float * 3)(*accel), R.DT, estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(out))

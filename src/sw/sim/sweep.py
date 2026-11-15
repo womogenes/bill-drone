@@ -314,7 +314,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         # flight_rt.c bank_tilt: past it (the controller's last setpoint) the gyro alone carries the attitude.
         bank_tilt = math.radians(settings.get("bank_tilt", 0.0))
         banked = bank_tilt > 0 and spinning and max(abs(controller.state[11]), abs(controller.state[12] - trim)) > bank_tilt
-        attitude = estimator.update(accel_filter, gyro_filter, DT, powered=True, banked=banked)
+        attitude = estimator.update(accel_filter, gyro_filter, DT, powered=True, banked=banked, powered_tau=settings.get("attitude_tau", 50.0))
         # The drone flies relative to its level reference: an error in it offsets the attitude both loops see.
         attitude = (attitude[0] - level_error[0], attitude[1] - level_error[1])
         # The body-to-world matrix until the physics substeps move the body.

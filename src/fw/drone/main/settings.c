@@ -12,7 +12,8 @@ static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
 #define RAD (3.14159265358979323846f / 180.0f)
 // NVS blob: "FS1", a reserved byte, then (name length, name, float32) pairs. Names rather than positions let entries be added or removed without losing the rest.
-#define BLOB 2048
+// 2048 until 2026-11-14, when attitude_tau did not fit; an older, smaller blob still loads by its names.
+#define BLOB 4096
 // Every entry must fit: settings_encode returns 0 for a list that does not, and nothing would be saved.
 _Static_assert(4 + SETTINGS_NAMES + 5 * SETTINGS <= BLOB, "Settings outgrow the NVS blob");
 
