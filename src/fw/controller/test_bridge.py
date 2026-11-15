@@ -3,7 +3,7 @@
 # dependencies = ["pyserial>=3.5", "aiohttp>=3.11,<4"]
 # ///
 """
-The bridge takes one packet of each kind the controller's USB carries, passes over one it cannot take, and outlives its controller's device: uv run src/fw/controller/test_bridge.py
+The bridge takes one packet of each kind the controller's USB carries, passes over one it cannot take, and outlives its controller's device; on simulated USB serial ports (pty pairs) it finds the controller by its packets among receivers, a console and a silent board, never opens a port another process holds, writes nothing while it looks, and finds the controller again after a re-plug onto another device or a silence: uv run src/fw/controller/test_bridge.py
 
 2026-11-10 a merge dropped the return after receive()'s GPS-report branch, and each report was decoded as a status message from then on; this fails on that.
 """
@@ -11,10 +11,15 @@ The bridge takes one packet of each kind the controller's USB carries, passes ov
 import asyncio
 import os
 import struct
+import subprocess
+import sys
 import tempfile
+import time
+import tty
 from pathlib import Path
 
 import bridge
+import find_port
 import log_format
 from wire import LINK_CHANNEL, PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
@@ -120,6 +125,155 @@ async def log_repair(service, device, directory):
     await asyncio.gather(writer, return_exceptions=True)
 
 
+class Board:
+    """A simulated USB serial board: a pty whose slave is the device the bridge sees and whose master is the board, sending what it is given every 50 ms while on."""
+
+    def __init__(self, sends=b""):
+        self.master, slave = os.openpty()
+        self.path = os.ttyname(slave)
+        tty.setraw(slave)
+        os.close(slave)
+        os.set_blocking(self.master, False)
+        self.sends = sends
+        self.on = bool(sends)
+        self.task = asyncio.create_task(self.run())
+
+    async def run(self):
+        while True:
+            if self.on and self.master is not None:
+                try:
+                    os.write(self.master, self.sends)
+                except (BlockingIOError, OSError):
+                    pass
+            await asyncio.sleep(0.05)
+
+    def written(self):
+        """What the bridge wrote to the board."""
+        try:
+            return os.read(self.master, 65536)
+        except (BlockingIOError, OSError):
+            return b""
+
+    def unplug(self):
+        os.close(self.master)
+        self.master = None
+
+
+def hold(path, lock):
+    """Another process holding the device: open and flocked (an upload, the dashboard's brief lock) or only open and read (the dashboard's FPV receiver reader)."""
+    code = f"""import fcntl, os, sys, time
+fd = os.open({path!r}, os.O_RDWR | os.O_NOCTTY)
+if {lock}:
+    fcntl.flock(fd, fcntl.LOCK_EX)
+print("held", flush=True)
+while True:
+    try:
+        os.read(fd, 4096)
+    except OSError:
+        time.sleep(0.05)"""
+    process = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    assert process.stdout.readline().strip() == "held"
+    return process
+
+
+async def until(condition, seconds=10):
+    deadline = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < deadline, "timed out"
+        await asyncio.sleep(0.02)
+
+
+async def status(service):
+    return bridge.json.loads((await service.status(None)).text)
+
+
+async def usb_search(directory):
+    """
+    The controller found among other boards by its packets, wherever it is plugged in. Boards: a silent one, an FPV receiver held open by the dashboard, a board flocked by another process, a flight controller's console that nobody holds, and two sockets the controller is plugged into in turn. Before the controller is plugged in, a search looks at every free board and passes over the held ones unopened; the controller is found on the first socket, then on the second after it is unplugged from the first, and again after a silence. The bridge writes nothing to any board while looking, and never opens a held one.
+    """
+    controller = bytes(serial_encode(pack(LINK_CHANNEL, SESSION, 1, 0, struct.pack(bridge.LINK_FORMAT, b"RLY1", *[0] * (len(struct.unpack(bridge.LINK_FORMAT, bytes(struct.calcsize(bridge.LINK_FORMAT)))) - 1)))))
+    silent, receiver, uploading, console, first, second = boards = [Board(), Board(b"FPVR"), Board(b"FPVR"), Board(b"I (1234) flight: armed 0\r\n"), Board(), Board()]
+    holders = [hold(receiver.path, False), hold(uploading.path, True)]
+    assert find_port.holder(receiver.path) == "open" and find_port.holder(uploading.path) == "locked" and find_port.holder(silent.path) is None
+    saved = bridge.LISTEN_S, bridge.SCAN_S, bridge.SILENT_S, bridge.RETRY_S, bridge.listen
+    bridge.LISTEN_S, bridge.SCAN_S, bridge.SILENT_S, bridge.RETRY_S = 0.3, 0.05, 0.6, 0.5
+    opened = []
+
+    def listen(path, *arguments):
+        opened.append(path)
+        return saved[4](path, *arguments)
+
+    bridge.listen = listen
+    service = bridge.Service(directory)
+    paths = [board.path for board in boards]
+    tasks = [asyncio.create_task(task) for task in (service.record(), service.monitor(), bridge.search(service, "", 921600, lambda: [path for path in paths if os.path.exists(path)]))]
+    try:
+        # No controller yet: every free board is listened to, the held ones are passed over unopened.
+        await until(lambda: service.usb["searches"] >= 2)
+        assert service.port is None and service.usb["skipped"] == {receiver.path: "open", uploading.path: "locked"}, service.usb
+        assert {silent.path, console.path, first.path, second.path} <= set(opened), opened
+        first.sends, first.on = controller, True
+        await until(lambda: service.port is not None)
+        assert service.port.port == first.path and service.state() == "drone_silent"
+        report = await status(service)
+        assert report["port"] == first.path and report["rescans"] == 0, report
+        # The dashboard skips the controller's port from the moment it is found.
+        seen = subprocess.run([sys.executable, "-c", f"import sys; sys.path.insert(0, {str(Path(__file__).parent)!r}); import find_port; print(find_port.holder({first.path!r}))"], capture_output=True, text=True, check=True).stdout.strip()
+        assert seen == "locked", seen
+        # Unplugged and plugged into another socket: another device name.
+        first.unplug()
+        second.sends, second.on = controller, True
+        await until(lambda: service.port is not None and service.port.port == second.path)
+        report = await status(service)
+        assert report["port"] == second.path and report["rescans"] == 1 and report["usb"]["last_loss"] == "[Errno 5] Input/output error", report
+        # A controller that stops sending is lost after SILENT_S and found again on the same device once it sends.
+        second.on = False
+        await until(lambda: service.port is None)
+        assert service.usb["last_loss"] == f"No packets for {bridge.SILENT_S:g} s"
+        second.on = True
+        await until(lambda: service.port is not None)
+        report = await status(service)
+        assert report["port"] == second.path and report["rescans"] == 2 and report["usb"]["silent_s"] < 1, report
+        assert receiver.path not in opened and uploading.path not in opened, opened
+        for board in (silent, console, receiver, uploading):
+            assert board.written() == b"", board.path
+    finally:
+        bridge.LISTEN_S, bridge.SCAN_S, bridge.SILENT_S, bridge.RETRY_S, bridge.listen = saved
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        service.detach("test")
+        for process in holders:
+            process.kill()
+            process.wait()
+        for board in boards:
+            board.task.cancel()
+            if board.master is not None:
+                os.close(board.master)
+
+    # DTR and RTS are released in one request, never DTR alone while RTS is still asserted (that state holds an ESP32's EN low).
+    calls = []
+    ioctl = find_port.fcntl.ioctl
+    find_port.fcntl.ioctl = lambda fd, request, argument: calls.append((request, struct.unpack("I", argument)[0]))
+    try:
+        port = find_port.QuietSerial()
+        port.dtr = port.rts = False
+        port.fd = -1
+        port._update_dtr_state()
+        port._update_rts_state()
+    finally:
+        find_port.fcntl.ioctl = ioctl
+    both = find_port.termios.TIOCM_DTR | find_port.termios.TIOCM_RTS
+    assert calls == [(find_port.termios.TIOCMBIC, both)] * 2, calls
+
+    # The controller's last physical port comes first, then the device --port named, then the rest by name.
+    with tempfile.TemporaryDirectory() as links:
+        link = os.path.join(links, "pci-0000:c1:00.3-usb-0:1:1.0-port0")
+        os.symlink("/dev/null", link)
+        assert bridge.search_order(["/dev/a", "/dev/null", "/dev/z", "/dev/zero"], [link], "/dev/zero") == ["/dev/null", "/dev/zero", "/dev/a", "/dev/z"]
+        assert bridge.search_order(["/dev/b", "/dev/a"], [], "") == ["/dev/a", "/dev/b"]
+
+
 async def main():
     with tempfile.TemporaryDirectory() as directory:
         service = bridge.Service(Path(directory))
@@ -161,6 +315,9 @@ async def main():
         for task in (service.settings_task, service.firmware_task):
             if task is not None:
                 task.cancel()
+
+    with tempfile.TemporaryDirectory() as directory:
+        await usb_search(Path(directory))
 
     # The pattern limits the bridge and the simulator check are the drone's own: until 2026-11-12 the drone capped roll at 10 degrees while the ladder was simmed at 35.
     source = (Path(__file__).parents[1] / "drone/main/flight_rt.c").read_text()

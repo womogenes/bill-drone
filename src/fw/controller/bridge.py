@@ -5,7 +5,7 @@
 """
 The laptop's drone service. It owns the controller's USB port and serves, on 127.0.0.1 only:
 
-- GET /status: {"online", "state", ...}. state says which part of the chain is missing: "controller_missing" (no controller heard on USB; the service keeps looking), "drone_silent" (the controller is there, the drone's status is not arriving) or "online". The dashboard shows it while it cannot connect.
+- GET /status: {"online", "state", ...}. state says which part of the chain is missing: "controller_missing" (no controller heard on USB; the service keeps looking), "drone_silent" (the controller is there, the drone's status is not arriving) or "online". The dashboard shows it while it cannot connect. port is the controller's device and rescans how often it was lost (unplugged, failing or silent for SILENT_S) and looked for again on every USB device; usb has its physical port and why the last search passed devices over.
 - /ws: the dashboard. The drone's status as JSON readings; the browser streams targets (including the manual/hover/land mode) every 50 ms and sends stop, arm, calibrate, zero and tune requests.
 - /view: a dashboard that only watches (a second tab while the first has /ws): the same readings; what it sends is ignored.
 - /update: raw id-tagged requests (tools/ota_direct.py, the dashboard's camera requests), from any number of clients at once; each reply goes to the client that sent its id.
@@ -32,7 +32,7 @@ import time
 from aiohttp import WSMsgType, web
 import serial
 
-from find_port import candidates, listen
+from find_port import LISTEN_S, by_path, candidates, holder, listen
 from log_format import FORMATS, HOVER_SIZE, batches, PATTERN_CHANNELS, STOP_REASONS, decode_reason, guard_state, pattern_refusal
 from wire import LINK_CHANNEL, PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
@@ -460,6 +460,10 @@ class Service:
     def __init__(self, recordings):
         # The controller's open USB device, None while there is none (main's search attaches it).
         self.port = None
+        # The controller's USB port as search() last found it: its physical port names (find_port.by_path), looked at first when it is lost; when it last sent a whole packet (monotonic), and the losses and searches since the service started. A controller silent for SILENT_S is taken as lost: the relay sends its link report once a second with or without a drone.
+        self.port_names = []
+        self.heard_at = 0.0
+        self.usb = {"losses": 0, "last_loss": None, "lost_at": None, "searches": 0, "skipped": {}}
         # Packets this service could not take (read), since it started.
         self.errors = 0
         self.error_at = 0
@@ -725,9 +729,11 @@ class Service:
 
     def attach(self, port):
         self.port = port
+        self.port_names = by_path(port.port) or self.port_names
+        self.heard_at = time.monotonic()
         self.decoder = SerialDecoder()
         asyncio.get_running_loop().add_reader(port.fileno(), self.read)
-        print(f"Controller on {port.port}; waiting for drone", flush=True)
+        print(f"Controller on {port.port}" + (f" ({self.port_names[0]})" if self.port_names else "") + "; waiting for drone", flush=True)
 
     def detach(self, reason):
         """
@@ -736,6 +742,9 @@ class Service:
         if self.port is None:
             return
         print(f"Controller lost: {reason}", flush=True)
+        self.usb["losses"] += 1
+        self.usb["last_loss"] = reason
+        self.usb["lost_at"] = time.monotonic()
         asyncio.get_running_loop().remove_reader(self.port.fileno())
         self.port.close()
         self.port = None
@@ -753,7 +762,10 @@ class Service:
         except (OSError, serial.SerialException) as error:
             self.detach(str(error))
             return
-        for packet in self.decoder.feed(data):
+        packets = self.decoder.feed(data)
+        if packets:
+            self.heard_at = time.monotonic()
+        for packet in packets:
             # A packet this service cannot take is counted and passed over, whatever the error, so it costs neither the packets behind it in this read nor the service: 2026-11-10 each GPS report, decoded as a status message by mistake, raised from here once a second, and only the journal showed it.
             try:
                 self.receive(packet)
@@ -931,6 +943,9 @@ class Service:
         ticks = 0
         while True:
             await asyncio.sleep(0.05)
+            # A port that stays open but carries no packets is not the controller any more (a stalled board, or one that stopped sending): close it and let search() look again, its own physical port first.
+            if self.port is not None and time.monotonic() - self.heard_at > SILENT_S:
+                self.detach(f"No packets for {SILENT_S:g} s")
             if self.session and time.monotonic() - self.last_status > 0.5 and (self.dashboard or self.updaters or self.viewers):
                 self.disconnect("Direct radio link timed out; waiting for drone")
                 self.last_status = 0
@@ -1102,9 +1117,12 @@ class Service:
         return web.json_response({"controller": report})
 
     async def status(self, request):
-        # heard_s: since the drone's last status (None before the first); controller: its newest link report, whose rx and rejected counts say whether it hears a drone at all, or one that is not its own; in_use: a dashboard holds /ws.
-        heard = None if self.status_at is None else round(time.monotonic() - self.status_at, 1)
-        return web.json_response({"online": self.fresh(), "state": self.state(), "port": self.port and self.port.port, "heard_s": heard,
+        # heard_s: since the drone's last status (None before the first); controller: its newest link report, whose rx and rejected counts say whether it hears a drone at all, or one that is not its own; in_use: a dashboard holds /ws; port: the controller's device (None while missing) and rescans: how often it was lost and looked for again; usb: its physical port (by_path), the seconds since its last packet, the last loss's reason and age, and the devices the last search passed over because another process held them (find_port.holder).
+        now = time.monotonic()
+        heard = None if self.status_at is None else round(now - self.status_at, 1)
+        usb = {"by_path": self.port_names[0] if self.port_names else None, "silent_s": round(now - self.heard_at, 1) if self.port is not None else None,
+               "last_loss": self.usb["last_loss"], "lost_s": None if self.usb["lost_at"] is None else round(now - self.usb["lost_at"], 1), "searches": self.usb["searches"], "skipped": self.usb["skipped"]}
+        return web.json_response({"online": self.fresh(), "state": self.state(), "port": self.port and self.port.port, "rescans": self.usb["losses"], "usb": usb, "heard_s": heard,
                                   "controller": self.link["controller"], "in_use": self.dashboard is not None, "errors": self.errors, "reading": self.reading})
 
     async def get_settings(self, request):
@@ -1152,20 +1170,38 @@ class Service:
 
 # A silent device is listened to again this often (s) after its first three tries.
 RETRY_S = 15.0
+# A search looks through the devices this often (s) while there is no controller.
+SCAN_S = 1.0
+# The controller is taken as lost after this long (s) without a whole packet: its relay sends a link report every second, a drone's status 20 times a second.
+SILENT_S = 5.0
 
 
-async def search(service, first, baud):
+def search_order(paths, names, hint):
+    """The devices to listen to, first the one at the controller's last physical port (its by-path names now point at whatever is plugged in there, the controller again after a re-plug into the same socket), then the device --port named, then the rest."""
+    first = [os.path.realpath(name) for name in names if os.path.exists(name)]
+    if hint:
+        first.append(os.path.realpath(hint))
+    rank = {path: index for index, path in reversed(list(enumerate(first)))}
+    return sorted(paths, key=lambda path: (rank.get(path, len(first)), path))
+
+
+async def search(service, hint, baud, ports=candidates):
     """
-    Attach the controller whenever the service has none: listen on each USB serial device (find_port.py) once a second, first the one named. A device that is silent is listened to three times and then once every RETRY_S, so a drone on USB is nearly always free for flashing; one that cannot be opened yet (just plugged in, or held a moment by the dashboard's search for the video receiver) does not count as heard. On 2026-11-11 the controller, plugged in again, failed its three tries within seconds and was then left alone for good.
+    Attach the controller whenever the service has none: listen on each USB serial device (find_port.py) once a SCAN_S, first the controller's last physical port and then the one --port named, so the device's name never matters (on 2026-11-14 re-plugging four boards moved the controller from /dev/ttyUSB0 to ttyUSB3). A device another process holds (find_port.holder: the dashboard's FPV receivers or its look at a new port, a serial monitor, an upload) is passed over unopened and does not count as tried. A device that is silent is listened to three times and then once every RETRY_S, so a drone on USB is nearly always free for flashing; one that cannot be opened yet (just plugged in) does not count as heard. On 2026-11-11 the controller, plugged in again, failed its three tries within seconds and was then left alone for good. The device is locked from the moment it is opened to listen (find_port.open_port), so the dashboard never opens the controller's port.
     """
     tried = {}
     while True:
         if service.port is None:
-            paths = candidates()
-            for path in sorted(paths, key=lambda path: path != first):
+            paths = ports()
+            skipped = {}
+            for path in search_order(paths, service.port_names, hint):
                 try:
                     plugged = os.stat(path).st_ctime
                 except OSError:
+                    continue
+                reason = holder(path)
+                if reason is not None:
+                    skipped[path] = reason
                     continue
                 if tried.get(path, (None, 0, 0.0))[0] != plugged:
                     tried[path] = (plugged, 0, 0.0)
@@ -1173,7 +1209,7 @@ async def search(service, first, baud):
                 if count >= 3 and time.monotonic() - last < RETRY_S:
                     continue
                 try:
-                    port = await asyncio.to_thread(listen, path, 1.0, baud, True)
+                    port = await asyncio.to_thread(listen, path, LISTEN_S, baud, True)
                 except (OSError, serial.SerialException):
                     continue
                 if port is not None:
@@ -1183,7 +1219,9 @@ async def search(service, first, baud):
                 tried[path] = (plugged, count + 1, time.monotonic())
             for path in set(tried) - set(paths):
                 del tried[path]
-        await asyncio.sleep(1)
+            service.usb["searches"] += 1
+            service.usb["skipped"] = skipped
+        await asyncio.sleep(SCAN_S)
 
 
 async def main(args):
@@ -1225,7 +1263,7 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--port", default="", help="The USB serial device to try first; the controller is found on any (find_port.py)")
+    parser.add_argument("--port", default="", help="Optional: a USB serial device to try first; the controller is found by its packets on any device (find_port.py) and found again wherever it is re-plugged")
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument("--listen", type=int, default=8765)
     parser.add_argument("--recordings", type=Path, default=RECORDINGS)
