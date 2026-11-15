@@ -62,7 +62,7 @@ class Estimate(ctypes.Structure):
 
 class State(ctypes.Structure):
     _fields_ = [(name, ctypes.c_bool) for name in ("engaged", "landed", "have_pose", "have_setpoint", "have_normal", "found", "tracking")] + [
-        (name, ctypes.c_float) for name in ("bias", "height", "climb_rate", "target", "command", "integral", "force", "yaw")
+        (name, ctypes.c_float) for name in ("bias", "height", "climb_rate", "target", "command", "integral", "force", "yaw", "yaw_hold")
     ] + [
         ("history_us", ctypes.c_int64 * HISTORY), ("history", (ctypes.c_float * 8) * HISTORY), ("next", ctypes.c_int),
         ("sequence", ctypes.c_uint32), ("capture_us", ctypes.c_int64), ("seen_us", ctypes.c_int64),

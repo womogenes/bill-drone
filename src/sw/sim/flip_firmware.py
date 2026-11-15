@@ -489,6 +489,7 @@ def fly(job):
                     lane["active"] = lane.get("active", 0.0) + R.DT
                 lane["last"] = commanded
                 lane["lowest"] = min(lane["lowest"], height)
+                lane["farthest"] = max(lane.get("farthest", 0.0), float(np.hypot(*(sim.pos[i, :2] - lane["start_place"]))))
                 lane["touched"] |= bool(sim.contact_now[i] > 0)
                 lane["carried"] = float(np.linalg.norm(sim.pos[i, :2] - lane["start_place"]))
             if lane["back"] is None and not library.flip_active(ctypes.byref(lane["run"])) and abs(height - lane["start_height"]) < 0.3:
@@ -506,7 +507,7 @@ def fly(job):
                     "full": float(lane.get("full", np.zeros(2)).max()), "peak_current": lane.get("peak_current", 0.0), "mean_current": float((lane.get("charge", np.zeros(2)) / max(lane.get("active", 0.0), R.DT)).max()),
                     "climbed": lane.get("highest", lane["start_height"]) - lane["start_height"], "handed": lane.get("handed") if lane.get("handed") is not None else LOST_WINDOW,
                     "rates": lane.get("rates", np.zeros(3)), "turned": math.degrees(turned), "travel": lane.get("travel", 0.0),
-                    "past90": lane.get("past90", 0.0), "after_tilt": lane.get("after_tilt", 0.0)}
+                    "past90": lane.get("past90", 0.0), "after_tilt": lane.get("after_tilt", 0.0), "farthest": lane.get("farthest", 0.0), "end_offset": float(np.hypot(*(sim.pos[i, :2] - lane["start_place"])))}
         if recovering or event is not None:
             row |= {"cut": lane["cut"], "recoveries": [list(r) for r in lane["stages"]], "recovered_at": lane["recovered_at"], "event": lane["event"], "event_height": lane.get("event_height"),
                     "event_lowest": lane["event_lowest"], "event_touched": lane["event_touched"], "end_height": float(sim.pos[i, 2] - BELLY), "upright": upright, "landed": lane["cut"] == 8, "event_trace": lane.get("event_trace"),
