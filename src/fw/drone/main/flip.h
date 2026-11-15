@@ -39,6 +39,8 @@ extern const FlipParams flip_defaults;
 // The height the quaternion flip never takes the drone over (m; the user's fixed cap: only the user changes it), whatever hover_ceiling says, and the margin it keeps under it.
 #define FLIP_CEILING 5.0f
 #define FLIP_ROOM_MARGIN 0.3f
+// The most room the quaternion flip's climb takes above where it starts (m), whatever the ceiling leaves: from a 3 m hold under the 5 m ceiling the 2026-11-15 07:03 UTC burst60 climbed to 4.85 m before it turned, and fell from about 4 m when it failed. With FLIP_ROOM_MARGIN it rises about half a meter.
+#define FLIP_CLIMB_ROOM 0.8f
 
 enum { FLIP_IDLE, FLIP_CLIMB, FLIP_SPIN, FLIP_RIGHT, FLIP_ARREST };
 

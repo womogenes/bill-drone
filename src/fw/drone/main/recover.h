@@ -46,6 +46,8 @@ typedef struct {
     int flip_phase;
     // The quaternion attitude (settings.def quaternion): q is then the attitude estimate's own every tick, nothing is written back to the estimate, and the righting is the one attitude law (attitude_error, attitude_rates) toward upright at the drone's own heading, without the roll-over (roll_over unused).
     bool quaternion;
+    // A staged burst (flip_enable 2 or 3: a roll short of the whole flip) is running: it keeps the nose level, so past BURST_LOST_PITCH of nose up or down in its spin or righting it is lost, and the recovery takes over then.
+    bool flip_burst;
     // The hold's climb rate (m/s), the collective being flown (N) and the airframe's authority (flip.h; weight in N).
     float climb_rate, collective;
     FlipAuthority authority;

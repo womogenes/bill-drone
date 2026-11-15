@@ -95,7 +95,7 @@ class RecoverRun(ctypes.Structure):
 
 class RecoverInput(ctypes.Structure):
     _fields_ = ([(name, ctypes.c_bool) for name in ("enabled", "tipped", "allowed")] + [("gyro", ctypes.POINTER(ctypes.c_float)), ("accel", ctypes.POINTER(ctypes.c_float))] + [(name, ctypes.c_float) for name in ("dt", "tip_limit")]
-                + [("flip_active", ctypes.c_bool), ("flip_gyro_only", ctypes.c_bool), ("flip_phase", ctypes.c_int), ("quaternion", ctypes.c_bool), ("climb_rate", ctypes.c_float), ("collective", ctypes.c_float), ("authority", Authority)])
+                + [("flip_active", ctypes.c_bool), ("flip_gyro_only", ctypes.c_bool), ("flip_phase", ctypes.c_int), ("quaternion", ctypes.c_bool), ("flip_burst", ctypes.c_bool), ("climb_rate", ctypes.c_float), ("collective", ctypes.c_float), ("authority", Authority)])
 
 
 class RecoverOutput(ctypes.Structure):
@@ -385,7 +385,7 @@ def fly(job):
                 given = RecoverInput(enabled=recovering, tipped=not library.flip_tip_exempt(ctypes.byref(run)) and max(abs(roll), abs(pitch)) > tip_limit,
                                      allowed=controller.state[10] >= RECOVER_AIRBORNE_S and not s.landed and not s.probing and not (s.engaged and s.lifted < 0) and not (landing and s.height < RECOVER_LAND_HEIGHT) and recovery.recoveries < RECOVER_MAX,
                                      gyro=gyro_c, accel=accel_c, dt=R.DT, tip_limit=tip_limit, flip_active=library.flip_active(ctypes.byref(run)), flip_gyro_only=library.flip_gyro_only(ctypes.byref(run)),
-                                     flip_phase=library.flip_phase(ctypes.byref(run)), quaternion=quaternion, climb_rate=s.climb_rate, collective=2 * flight.thrust(max(controller.command[BASE], 0.0)),
+                                     flip_phase=library.flip_phase(ctypes.byref(run)), quaternion=quaternion, flip_burst=library.flip_active(ctypes.byref(run)) and run.flip.turn < 2 * math.pi - 1e-3, climb_rate=s.climb_rate, collective=2 * flight.thrust(max(controller.command[BASE], 0.0)),
                                      authority=Authority(authority.roll, authority.pitch, authority.yaw, authority.weight, (ctypes.c_float * 3)(*lane["indi"].share()), (ctypes.c_float * 3)(*lane["indi"].unmodeled())))
                 before = library.recover_active(ctypes.byref(recovery))
                 library.recover_tick(ctypes.byref(recovery), ctypes.byref(recover_params), ctypes.byref(given), estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(recovered))

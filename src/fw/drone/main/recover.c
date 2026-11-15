@@ -54,6 +54,9 @@ static void begin(RecoverRun *run, const RecoverInput *in, int cause, RecoverOut
     out->cancel_flip = in->flip_active;
 }
 
+// The nose's angle from level past which a running burst is lost (radians; RecoverInput flip_burst).
+#define BURST_LOST_PITCH (30 * 3.14159265f / 180)
+
 void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *in, Attitude *attitude, Controller *controller, float *height_integral, RecoverOutput *out) {
     *out = (RecoverOutput){0};
     float dt = in->dt;
@@ -77,11 +80,13 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
     bool saturated = fabsf(w[0]) > SATURATED || fabsf(w[1]) > SATURATED || fabsf(w[2]) > SATURATED;
     // After the flip's hand-back (its arrest and grace, when the tip cut is off for it), a thrust axis past tip_limit is the flip failing, as on 2026-11-12 02:27:15 UTC.
     bool after_flip = in->flip_gyro_only && in->flip_phase != 1 && in->flip_phase != 2;
+    // A burst lost while it flies: its nose past BURST_LOST_PITCH (on 2026-11-15 07:03 UTC the quaternion burst60's nose went to -33 degrees at the roll's brake, then over +78 as roll passed upside down, and the flip, which hands back only once upright or at its timeout, flew on until the pilot's stop at 4 m).
+    bool lost = in->quaternion && in->flip_burst && in->flip_phase == 2 && fabsf(up[0]) > sinf(BURST_LOST_PITCH);
     if (run->abort) {
         run->abort = false;
         if (!recover_active(run)) begin(run, in, RECOVER_ABORT, out);
     } else if (!recover_active(run)) {
-        int cause = saturated ? RECOVER_SATURATED : in->tipped ? RECOVER_TILT : after_flip && tilt > in->tip_limit ? RECOVER_FLIP : RECOVER_NONE;
+        int cause = saturated ? RECOVER_SATURATED : in->tipped ? RECOVER_TILT : (after_flip && tilt > in->tip_limit) || lost ? RECOVER_FLIP : RECOVER_NONE;
         if (cause && in->enabled && in->allowed) begin(run, in, cause, out);
         else if (in->tipped) out->cut = RECOVER_TIP_REASON;
         if (!recover_active(run)) {

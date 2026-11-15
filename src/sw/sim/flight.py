@@ -231,17 +231,20 @@ class Incremental:
         self.controller = (m["arm"] / m["roll_inertia"], m["pivot_height"] / m["pitch_inertia"], m["com_x"] / m["pitch_inertia"], m["arm"] / m["yaw_inertia"], m["reaction_torque_ratio"] / m["yaw_inertia"])
         self.state = Indi()
         self.fade = 0.0
+        self.owned = False
 
     def update(self, gyro, holding, height, base, owned=False, flip=(0.0, 0.0, 0.0), dt=0.01):
         """gyro (rad/s); whether the hold flies (engaged in a hover mode and not landed), its height above where it engaged (m), last tick's collective throttle, whether the flip or a recovery flies the motors, and the flip's authority (roll, pitch, yaw)."""
         flying = self.on and (owned or (holding and height >= INDI_HEIGHT and base >= self.integrate))
+        self.owned = owned
         self.fade = min(max(self.fade + (dt if flying else -dt) / INDI_FADE_S, 0.0), 1.0)
         models = (IndiModel * INDI_MODELS)(IndiModel(*self.controller), IndiModel(flip[0], flip[1], 0.0, flip[2], 0.0))
         library.indi_update(ctypes.byref(self.state), (ctypes.c_float * 3)(*gyro), models, dt)
 
     def share(self):
-        """The share taken per axis now (roll, pitch, yaw): the settings faded in."""
-        return [self.fade * s for s in self.shares]
+        """The share taken per axis now (roll, pitch, yaw): the settings faded in, pitch taking roll's while the flip or a recovery flies the motors (flight_rt.c incremental)."""
+        roll, pitch, yaw = self.shares
+        return [self.fade * roll, self.fade * (roll if self.owned else pitch), self.fade * yaw]
 
     def unmodeled(self, which=INDI_CONTROLLER):
         return list(self.state.unmodeled[which])

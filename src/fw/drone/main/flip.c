@@ -285,7 +285,7 @@ void flip_begin(FlipRun *run, const Command *command, const Controller *controll
     flip_start(&run->flip, collective, roll, pitch, climb_rate);
     run->flip.turn = flip_turn(command->flip_enable);
     run->flip.quaternion = command->quaternion > 0;
-    run->flip.room = fminf(command->hover.ceiling, FLIP_CEILING) - height;
+    run->flip.room = fminf(fminf(command->hover.ceiling, FLIP_CEILING) - height, FLIP_CLIMB_ROOM);
 }
 
 void flip_cancel(FlipRun *run) {

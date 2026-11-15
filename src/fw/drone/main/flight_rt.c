@@ -676,7 +676,8 @@ static void incremental(float dt) {
     bool flying = (command.indi > 0 || command.indi_pitch > 0) && (owned || (hover_mode && hover.engaged && !hover.landed && hover.height >= INDI_HEIGHT && flown.base >= command.integrate_throttle));
     indi_fade = clampf(indi_fade + (flying ? dt : -dt) / INDI_FADE_S, 0, 1);
     indi_share[0] = indi_share[2] = indi_fade * command.indi;
-    indi_share[1] = indi_fade * command.indi_pitch;
+    // While the flip or a recovery flies the motors, pitch takes the roll's share: in the hover INDI's pitch doubled the 3 Hz shake (indi_pitch), but in the 2026-11-15 07:03 UTC burst a pitch the model had no term for (the assemblies' swing reaction as the servos slewed 40 degrees in 0.15 s at the roll's brake, the tilt's authority twice the model's and 40-70 ms later) took the nose 33 degrees over in a quarter second, and only the measured acceleration answers that in time.
+    indi_share[1] = indi_fade * (owned ? command.indi : command.indi_pitch);
     const Model *m = &command.model;
     const FlipAuthority *a = &flip.authority;
     IndiModel models[INDI_MODELS] = {
@@ -734,6 +735,7 @@ static void tip_or_recover(Tick *t) {
                    !(landing && hover.height < RECOVER_LAND_HEIGHT) && recovery.recoveries < RECOVER_MAX,
         .gyro = state.gyro, .accel = state.accel, .dt = t->dt, .tip_limit = command.tip_limit,
         .flip_active = flip_active(&flip), .flip_gyro_only = flip_gyro_only(&flip), .flip_phase = flip_phase(&flip), .quaternion = command.quaternion > 0,
+        .flip_burst = flip_active(&flip) && flip.flip.turn < flip_turn(1),
         .climb_rate = hover.climb_rate, .collective = 2 * thrust(fmaxf(flown.base, 0)),
         .authority = {command.model.arm / command.model.roll_inertia, command.model.pivot_height / command.model.pitch_inertia, command.model.arm / command.model.yaw_inertia, command.hover.mass * GRAVITY, {indi_share[0], indi_share[1], indi_share[2]},
                       {indi.unmodeled[INDI_CONTROLLER][0], indi.unmodeled[INDI_CONTROLLER][1], indi.unmodeled[INDI_CONTROLLER][2]}},
