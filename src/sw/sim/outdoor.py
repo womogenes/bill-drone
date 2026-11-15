@@ -134,6 +134,9 @@ def fly(job):
         p |= {"gyro_counts": args.gyro[0], "imu_range": (args.gyro[1], 2.0)}
     if args.flight_accel_bias:
         p["flight_accel_bias"] = (args.flight_accel_bias, 0.0, 0.0)
+    if args.gyro_bias:
+        # The gyro's in-flight bias, drawn per run (its own stream, so the other draws stay as they were).
+        p["gyro_bias"] = [math.radians(random.Random(seed + 13000 + axis).gauss(0, args.gyro_bias)) for axis in range(3)]
     s = dict(flown)
     if args.preload:
         # The wind's expected nose-up moment at liftoff, canceled by pitch_bias (rad/s², ramped in once airborne): preload per m/s of the wind.
@@ -243,6 +246,7 @@ def main():
     parser.add_argument("--speed-sticks", type=lambda text: [tuple(float(v) for v in item.split(",")) for item in text.split(";")], help="the same as speeds: start s after settling, forward and left m/s, seconds held (the gamepad's right stick on the GPS hold, which moves the hold point at up to hover_nudge_speed); reported as --sticks")
     parser.add_argument("--level-sd", type=float, default=0.0, help="degrees: each run's level-reference error drawn from a normal of this spread in roll and pitch (2026-11-09 flights: about 1.3)")
     parser.add_argument("--gps-outage", type=lambda text: tuple(float(v) for v in text.split(",")), help="start,seconds: the GPS gives no solution for this long, from start s after settling (sweep.run plant[\"gps\"][\"outage\"])")
+    parser.add_argument("--gyro-bias", type=float, default=0.0, help="the gyro's in-flight bias (degrees/s, one standard deviation per axis, drawn per run) on top of the boot calibration's; --set attitude_bias=1 has the attitude estimate take the Kalman filter's estimate of it (needs --ekf or hover_ekf)")
     parser.add_argument("--ekf", action="store_true", help="run the Kalman filter (fw/drone/main/ekf.c) beside the hover in every run and print its errors against the truth; --set hover_ekf=1 (or 2, its height too) has the hold fly on it")
     parser.add_argument("--flyaway", type=float, default=FLYAWAY, help="m from takeoff that counts as flown off")
     parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=(0.5, 3.0), help="range the forward speed moment is drawn in, times the airframe's (log-uniform; default 0.5,3 from before any flight measured it; models fitted to the outdoor flights warrant narrower)")

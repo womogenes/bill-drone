@@ -2,6 +2,7 @@
 The host flight simulation: run() flies the drone's C attitude estimator and controller (via sw.sim.flight), and with hover its camera-hover loop (via sw.sim.hover), against a lean 6-DOF rigid-body plant with actuator delay, lag, servo backlash/slew, IMU noise, drag and landing-leg ground contact; uv run -m sw.sim.sweep flies NOMINAL once with the flown gains. Free flight starts at hover in the air; a plant with "liftoff" starts on the ground at the dashboard's T collective instead, level or resting at "ground_pitch" degrees on its "feet" (contact points relative to the CoM, default FEET).
 """
 
+import ctypes
 import math
 import random
 from collections import deque
@@ -166,6 +167,9 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     accel_bias = list(plant.get("accel_bias", (0.0, 0.0))) + [0.0]
     flight_accel_bias = plant.get("flight_accel_bias", 0.0)
     flight_accel_bias = list(flight_accel_bias) if isinstance(flight_accel_bias, (list, tuple)) else [0.0, 0.0, flight_accel_bias]
+    # plant["gyro_bias"] (rad/s; forward, left, up): on the gyro only while the motors are commanded, the in-flight drift the resting calibration cannot remove. With settings attitude_bias the attitude estimate takes the Kalman filter's estimate of it off (flight_rt.c, ekf.c ekf_attitude_bias), held between the filter's good spells in lent.
+    gyro_bias = list(plant.get("gyro_bias", (0.0, 0.0, 0.0)))
+    lent = (ctypes.c_float * 3)()
     vibration = plant.get("vibration", 0.0)
     vibration = list(vibration) if isinstance(vibration, (list, tuple)) else [vibration] * 3
     level_error = [math.radians(value) for value in plant.get("level_error", (0.0, 0.0))]
@@ -302,7 +306,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 shaking[axis] = [a1 * shaking[axis][0] + a2 * shaking[axis][1] + shake_size[axis] * shake_rng.gauss(0, 1), shaking[axis][0]]
                 if spinning:
                     noise[axis] += shaking[axis][0]
-        gyro_filter = [g + 0.7 * (r + n - g) for g, r, n in zip(gyro_filter, rate, noise)]
+        gyro_filter = [g + 0.7 * (r + n + (b if spinning else 0.0) - g) for g, r, n, b in zip(gyro_filter, rate, noise, gyro_bias)]
         bias = [b + (f if spinning else 0.0) for b, f in zip(accel_bias, flight_accel_bias)]
         accel_filter = [a + 0.7 * (s + b + accel_rng.gauss(0, ACCEL_NOISE) + (accel_rng.gauss(0, v) if v and spinning else 0.0) - a) for a, s, b, v in zip(accel_filter, specific, bias, vibration)]
         if imu_range:
@@ -314,7 +318,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         # flight_rt.c bank_tilt: past it (the controller's last setpoint) the gyro alone carries the attitude.
         bank_tilt = math.radians(settings.get("bank_tilt", 0.0))
         banked = bank_tilt > 0 and spinning and max(abs(controller.state[11]), abs(controller.state[12] - trim)) > bank_tilt
-        attitude = estimator.update(accel_filter, gyro_filter, DT, powered=True, banked=banked, powered_tau=settings.get("attitude_tau", 50.0))
+        lending = settings.get("attitude_bias", 0) > 0
+        attitude = estimator.update(accel_filter, [g - b for g, b in zip(gyro_filter, lent)] if lending else gyro_filter, DT, powered=True, banked=banked, powered_tau=settings.get("attitude_tau", 50.0))
         # The drone flies relative to its level reference: an error in it offsets the attitude both loops see.
         attitude = (attitude[0] - level_error[0], attitude[1] - level_error[1])
         # The body-to-world matrix until the physics substeps move the body.
@@ -407,6 +412,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 if baro:
                     kalman.baro(*baro)
                 filtered = kalman.update(round((now + 1) * 1e6), gyro_filter, [a * G for a in accel_filter], DT, spinning)
+                kalman.attitude_bias(lent)
             if step < armed:
                 outer.rest(vertical, False, DT, baro)
             else:

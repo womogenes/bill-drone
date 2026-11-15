@@ -258,6 +258,8 @@ static HoverState hover;
 // The Kalman filter (ekf.h) and its newest estimate: it runs every tick, armed or not, beside the estimates above, and the hold flies on it only where the hover_ekf setting says (hover.h gains ekf).
 static Ekf ekf;
 static EkfOutput filtered;
+// The gyro bias the attitude estimate takes off with attitude_bias (rad/s; ekf_attitude_bias), zero until the filter first pins one and again when a calibration restarts it.
+static float lent_bias[3];
 // The fly-away failsafe and the test pattern's limits (guard.h).
 static Guard guard;
 // The roll flip (flip.h), started only by flight_runtime_flip.
@@ -604,6 +606,7 @@ static void take_imu(const float *body, uint64_t now) {
             state.calibration_ready = true;
             // The gyro's zero has just moved, so the filter starts over from this rest.
             ekf_reset(&ekf);
+            memset(lent_bias, 0, sizeof(lent_bias));
         }
     }
     for (int i = 0; i < 3; i++) state.gyro[i] -= state.bias[i];
@@ -620,8 +623,10 @@ static uint64_t estimate(Tick *t, bool first) {
     }
     // Banked past bank_tilt (last tick's setpoint, from pitch_trim), and through a flip or a recovery and their grace after, the accelerometer reads the thrust, not gravity: the gyro alone carries the attitude.
     bool banked = command.bank_tilt > 0 && spinning() && bank_angle(&state.controller) > command.bank_tilt;
+    float bias[3] = {0, 0, 0};
+    if (command.attitude_bias > 0) memcpy(bias, lent_bias, sizeof(bias));
     Motion motion = {state.accel[0], state.accel[1], state.accel[2],
-                     state.gyro[0], state.gyro[1], state.gyro[2], t->dt,
+                     state.gyro[0] - bias[0], state.gyro[1] - bias[1], state.gyro[2] - bias[2], t->dt,
                      banked || flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? command.attitude_tau : config.gravity_tau};
     flight_attitude(&state.attitude, &motion);
     if (state.enabled) flip_tick(&flip, state.gyro, state.accel, t->dt, &state.attitude, &state.controller, &hover.integral, &t->flipped);
@@ -636,6 +641,7 @@ static uint64_t estimate(Tick *t, bool first) {
     EkfSample sample = {.time_us = t->now, .gyro = {state.gyro[0], state.gyro[1], state.gyro[2]},
                         .accel = {state.accel[0] * GRAVITY, state.accel[1] * GRAVITY, state.accel[2] * GRAVITY}, .dt = t->dt, .spinning = spinning()};
     ekf_update(&ekf, &sample, &filtered);
+    ekf_attitude_bias(&filtered, lent_bias);
     HoverEstimate estimate;
     ekf_estimate(&filtered, &estimate);
     hover_estimate(&hover, &estimate);

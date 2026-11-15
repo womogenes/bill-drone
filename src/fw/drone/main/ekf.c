@@ -606,6 +606,13 @@ void ekf_estimate(const EkfOutput *output, HoverEstimate *estimate) {
                                 .vertical = output->height_sd > 0 && output->height_sd < EKF_FLOWN_HEIGHT_SD};
 }
 
+// The attitude estimate's gyro bias from the filter (flight_rt.c, settings.def attitude_bias), into held: the filter's own estimate while it holds the heading with its horizontal velocity good to EKF_FLOWN_VELOCITY_SD (the GPS's velocity then pins the tilt, and with it the bias) or rests still, each axis within EKF_LENT_BIAS; otherwise held where it last was. Indoors without the GPS it never takes one, so the attitude keeps only the boot calibration's bias, as before.
+#define EKF_LENT_BIAS 0.02f
+void ekf_attitude_bias(const EkfOutput *output, float *held) {
+    if (!(output->still || (output->aligned && output->velocity_sd < EKF_FLOWN_VELOCITY_SD))) return;
+    for (int i = 0; i < 3; i++) held[i] = clamp(output->gyro_bias[i], -EKF_LENT_BIAS, EKF_LENT_BIAS);
+}
+
 int ekf_size(void) {
     return sizeof(Ekf);
 }

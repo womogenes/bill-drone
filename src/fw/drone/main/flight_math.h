@@ -69,6 +69,8 @@ typedef struct {
     float recover_enable;
     // Mixer saturation (flight_math.c, settings.def mix_ceiling): the throttle no motor goes past, the roll differential kept before the collective and the integrators not winding into a limit (0 = off, as before). Runtime-only, last.
     float mix_ceiling;
+    // Whether the attitude estimate takes the Kalman filter's gyro bias (ekf.c ekf_attitude_bias; settings.def attitude_bias, 0 = off). Runtime-only, last.
+    float attitude_bias;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.

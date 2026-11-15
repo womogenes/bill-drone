@@ -111,6 +111,8 @@ TUNE(flip_height, flip_height, 1, 2.5, 5, 3)
 TUNE(recover_enable, recover_enable, 1, 0, 1, 0)
 // Mixer saturation (flight_math.c): with a throttle here, neither motor is asked for more than the thrust table gives there, the collective gives way before the roll differential does, and the roll, pitch and yaw integrators stop winding while their actuator is at its limit (a motor, or a servo at its stop); 0, the default, mixes as before (each motor's thrust only kept from going negative, anything past the top dropped). 1100 matches flip_limit's cap.
 TUNE(mix_ceiling, mix_ceiling, 1, 0, 1200, 0)
+// The attitude estimate's gyro bias from the Kalman filter (flight_rt.c, ekf.c ekf_attitude_bias): 1 takes the filter's in-flight estimate of the gyro's bias off the gyro the attitude integrates (each axis within 0.02 rad/s), learned while the filter holds the heading on the GPS or rests and held otherwise, so without the GPS it stays at what the last rest gave; 0, the default, only the boot calibration's, as before. bank_tilt's gyro-only attitude takes it too; the flip's and the recovery's own attitude, the controller's rate damping and the filter itself keep the calibrated gyro.
+TUNE(attitude_bias, attitude_bias, 1, 0, 1, 0)
 // BOOT(name, min, max, default): changed by the T request like TUNE, but read only at boot rather than copied into the controller's command. Where an include site does not name BOOT it is a TUNE without a member.
 #ifndef BOOT
 #define BOOT(name, min, max, value) TUNE(name, , 1, min, max, value)
