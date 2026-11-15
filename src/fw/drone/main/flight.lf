@@ -6,3 +6,8 @@ entries:
         text->flash_text ALIGN(4096, post),
         rodata->flash_rodata ALIGN(4096, post),
         bss->dram0_bss ALIGN(4, post)
+    # The control tick's hottest code runs from IRAM. Core 1's 32 KB flash cache cannot hold the tick's code (about 90 KB of it touched every 10 ms), so it missed on nearly every line, about 4 us a miss at 40 MHz DIO, and the cache refills queue behind core 0's on the shared flash: hover_update took 280-800 us cold against 56 us warm, and the whole armed tick 3.1 ms median, 4.5-9.3 ms at worst (make bench, 2026-11-15). With these in IRAM (about 27 KB; 4.7 KB of IRAM left) the rest of the tick's flash code nearly fits the cache, and the tick took 1.2-1.7 ms median, 2.0-3.6 ms at worst. What does not fit stays in flash: flight_rt.c (built -Os, CMakeLists.txt), ekf.c, flip.c, guard.c.
+    hover (noflash_text)
+    indi (noflash_text)
+    recover (noflash_text)
+    flight_math (noflash_text)

@@ -129,8 +129,8 @@ static void multiply(const float *a, const float *b, float *out) {
         a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
         a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
     };
-    float size = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-    for (int i = 0; i < 4; i++) out[i] = q[i] / size;
+    float scale = 1 / sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    for (int i = 0; i < 4; i++) out[i] = q[i] * scale;
 }
 
 static void rotation(const float *q, float R[3][3]) {
@@ -218,12 +218,14 @@ static bool fuse(Ekf *ekf, int count, const int *at, const float *h, float innov
     for (int k = 0; k < count; k++) variance += h[k] * ph[at[k]];
     if (ratio) *ratio = innovation / sqrtf(variance);
     if (gate > 0 && innovation * innovation > gate * gate * variance) return false;
-    float change[EKF_STATES];
+    // P -= ph phᵀ / variance, one half and mirrored: P stays exactly symmetric, and the ESP32, which divides in software, divides once.
+    float change[EKF_STATES], gain[EKF_STATES], inverse = 1 / variance;
     for (int i = 0; i < EKF_STATES; i++) {
-        float gain = ph[i] / variance;
-        change[i] = gain * innovation;
-        for (int j = 0; j < EKF_STATES; j++) ekf->P[i][j] -= gain * ph[j];
+        gain[i] = ph[i] * inverse;
+        change[i] = gain[i] * innovation;
     }
+    for (int i = 0; i < EKF_STATES; i++)
+        for (int j = i; j < EKF_STATES; j++) ekf->P[i][j] = ekf->P[j][i] = ekf->P[i][j] - gain[i] * ph[j];
     // The correction into the state: the tilt's as a small rotation in world axes.
     float turn[4] = {1, change[TILT] / 2, change[TILT + 1] / 2, change[TILT + 2] / 2};
     multiply(turn, ekf->q, ekf->q);
