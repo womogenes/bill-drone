@@ -90,6 +90,8 @@ typedef struct __attribute__((packed)) {
     uint16_t ekf_flags;
     // The camera's newest dated frame (camera_newest): its sequence's low 16 bits, and how long before this sample its centre row was read (10 us; 65535 none, or older than that), which ties the camera's black-box frames to the IMU (sw/vio/blackbox_dataset.py).
     uint16_t camera_sequence, camera_age;
+    // That frame's camera -> tag rotation (camera.h CameraPose rotation) as a unit quaternion w, x, y, z (32767 = 1), when the frame is a trusted sighting whose tilt the camera decided; all zero otherwise. With the tag flat on the floor it is the attitude's ground truth for checking the attitude estimate and the Kalman filter indoors (sw/flight_log.py tag_q*), which the tag's position alone cannot give.
+    int16_t tag_rotation[4];
 } Record;
 _Static_assert(sizeof(Record) == RECORD_SIZE, "Flight record layout");
 
@@ -349,8 +351,11 @@ static void pulse(int index, float us) {
     LEDC.channel_group[LEDC_HIGH_SPEED_MODE].channel[index].conf1.duty_start = 1;
 }
 
+// On USB alone (no pack: battery_v under NO_PACK_V, or not read yet) the servos get no pulses, so they are not commanded and do not hold against load on the USB supply (servos drawing power browned out the board on 2026-11-14); the commanded angle is sent again when a pack is connected (servo_pack).
+static bool servo_pack;
+
 static void write_servo(int side) {
-    pulse(side * 2, 1500 + (state.servo[side] + state.offsets[side]) * 1000 / 90);
+    pulse(side * 2, servo_pack ? 1500 + (state.servo[side] + state.offsets[side]) * 1000 / 90 : 0);
 }
 
 // Why the motors stopped, as the status and the log carry it (fw/controller/log_format.py STOP_REASONS; the tip cut, 4, and a failed recovery, 10, are recover.h's).
@@ -461,6 +466,26 @@ static int guard_bits(void) {
     return guard.failsafe | guard.far << 2 | guard.stopped << 3 | flip_phase(&flip) << 6;
 }
 
+// A row-major rotation matrix as a unit quaternion (w, x, y, z, w >= 0), from its largest diagonal term so it stays exact near half turns: a camera looking down at a floor tag sits near one.
+static void rotation_quaternion(const float *m, float *q) {
+    float trace = m[0] + m[4] + m[8];
+    if (trace > 0) {
+        float s = 2 * sqrtf(1 + trace);
+        q[0] = s / 4, q[1] = (m[7] - m[5]) / s, q[2] = (m[2] - m[6]) / s, q[3] = (m[3] - m[1]) / s;
+    } else if (m[0] > m[4] && m[0] > m[8]) {
+        float s = 2 * sqrtf(1 + m[0] - m[4] - m[8]);
+        q[0] = (m[7] - m[5]) / s, q[1] = s / 4, q[2] = (m[1] + m[3]) / s, q[3] = (m[2] + m[6]) / s;
+    } else if (m[4] > m[8]) {
+        float s = 2 * sqrtf(1 + m[4] - m[0] - m[8]);
+        q[0] = (m[2] - m[6]) / s, q[1] = (m[1] + m[3]) / s, q[2] = s / 4, q[3] = (m[5] + m[7]) / s;
+    } else {
+        float s = 2 * sqrtf(1 + m[8] - m[0] - m[4]);
+        q[0] = (m[3] - m[1]) / s, q[1] = (m[2] + m[6]) / s, q[2] = (m[5] + m[7]) / s, q[3] = s / 4;
+    }
+    float norm = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]) * (q[0] < 0 ? -1 : 1);
+    for (int i = 0; i < 4; i++) q[i] /= norm;
+}
+
 static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     log_elapsed = now - log_started;
     uint32_t sequence = log_samples++;
@@ -521,6 +546,10 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     int64_t camera_age = camera_newest(&camera_sequence, &centre_us) ? ((int64_t)now - centre_us) / 10 : UINT16_MAX;
     record->camera_sequence = camera_sequence & 0xffff;
     record->camera_age = camera_age < 0 ? 0 : camera_age > UINT16_MAX ? UINT16_MAX : camera_age;
+    CameraPose seen;
+    float q[4] = {0};
+    if (camera_candidates(&seen, HOVER_POSE_US) && seen.valid && seen.sequence == camera_sequence) rotation_quaternion(seen.rotation, q);
+    for (int i = 0; i < 4; i++) record->tag_rotation[i] = scaled(q[i], 32767);
 }
 
 static void reconfigure_sensor(void);
@@ -753,8 +782,10 @@ static bool hover_setpoint(Tick *t, Command *setpoint) {
     setpoint->base = out.force > 0 ? collective_throttle(out.force) : 0;
     setpoint->target_roll = out.roll;
     setpoint->target_pitch = out.pitch;
-    // The tag steers the heading; without the camera nothing does, so the laptop's yaw (A and D) turns the drone, as in manual flight.
-    setpoint->target_yaw = command.hover_camera ? out.yaw_rate : command.target_yaw;
+    // The tag steers the heading, and the laptop's yaw (A and D) overrides it while held, as in manual flight (and always without the camera, where nothing else steers it): on 2026-11-14 a liftoff yaw of 20-30 degrees turned the camera off the tag and the keys could not turn it back. Before the tag is first seen the hold then keeps the heading the keys left it at, not the one it started with.
+    bool pilot_yaw = command.target_yaw != 0;
+    setpoint->target_yaw = command.hover_camera && !pilot_yaw ? out.yaw_rate : command.target_yaw;
+    if (pilot_yaw) hover.yaw_hold = hover.yaw;
     // Once flying on the tag, hover damps the velocity itself, measured by the camera and dead-reckoned through losses: flight_math's damping is off, since its leaky integral of attitude error would cancel any steady tilt hover asks for, and its velocity follows hover's, so it would resume from the real velocity.
     if (!out.tracking) return false;
     state.controller.velocity[0] = out.velocity[0];
@@ -965,6 +996,11 @@ static void runtime_task(void *arg) {
             float volts = voltage_mv / 1000.0f;
             battery_v = battery_v ? battery_v + (volts - battery_v) * (1 - expf(-t.dt / VOLTAGE_TAU)) : volts;
         }
+        if ((battery_v > NO_PACK_V) != servo_pack) {
+            servo_pack = battery_v > NO_PACK_V;
+            write_servo(0);
+            write_servo(1);
+        }
         if (state.enabled && previous && t.now - previous > MAX_SAMPLE_MS * 1000ULL) stop_locked(STOP_LATE);
         take_imu(body, t.now);
         state.temperature = raw[3] / 340.0f + 36.53f;
@@ -1047,7 +1083,11 @@ bool flight_runtime_targets(const float *targets) {
         command.target_yaw = targets[3] / DEG;
         requested_mode = targets[8];
         if (held && requested_mode != held_from) held = false;
-        if (!link_landing && !held) hover_mode = requested_mode;
+        // Flying in the hold or a landing, a switch to manual with the collective under liftoff lands instead of stopping the motors in the air: on 2026-11-14 at 0.48 m the stream that came back after a controller restart carried mode 0 and zero collective (the dashboard had dropped to manual), and the drone fell and tumbled. Stopping on purpose is the stop request (Space), and manual flight is still taken with the collective raised; the landing ends as any does, or by asking for the hold again.
+        int mode = requested_mode;
+        bool flying = state.enabled && state.controller.airborne > 0 && !hover.landed && hover.bias > 0.5f;
+        if (flying && hover_mode != HOVER_OFF && mode == HOVER_OFF && command.base < command.integrate_throttle) mode = HOVER_LAND;
+        if (!link_landing && !held) hover_mode = mode;
         nudge[0] = targets[9];
         nudge[1] = targets[10];
         nudge[2] = targets[11];

@@ -10,19 +10,22 @@ HOVER_FORMAT = BASE_FORMAT + "3hH12h"
 BARO_RECORD_FORMAT = HOVER_FORMAT + "i"
 GUARD_RECORD_FORMAT = BARO_RECORD_FORMAT + "H"
 EKF_RECORD_FORMAT = GUARD_RECORD_FORMAT + "9h2BH"
-SAMPLE_FORMAT = EKF_RECORD_FORMAT + "2H"
+CAMERA_RECORD_FORMAT = EKF_RECORD_FORMAT + "2H"
+# Then the newest camera frame's camera -> tag rotation as a unit quaternion (w, x, y, z, 32767 = 1; all zero without a decided, trusted sighting in that frame).
+SAMPLE_FORMAT = CAMERA_RECORD_FORMAT + "4h"
 HEADER_FORMAT = "<4sIHH"
 BASE_SIZE = struct.calcsize(BASE_FORMAT)  # 48 bytes
 HOVER_SIZE = struct.calcsize(HOVER_FORMAT)  # 80 bytes
 BARO_RECORD_SIZE = struct.calcsize(BARO_RECORD_FORMAT)  # 84 bytes
 GUARD_RECORD_SIZE = struct.calcsize(GUARD_RECORD_FORMAT)  # 86 bytes
 EKF_RECORD_SIZE = struct.calcsize(EKF_RECORD_FORMAT)  # 108 bytes
-RECORD_SIZE = struct.calcsize(SAMPLE_FORMAT)  # 112 bytes
+CAMERA_RECORD_SIZE = struct.calcsize(CAMERA_RECORD_FORMAT)  # 112 bytes
+RECORD_SIZE = struct.calcsize(SAMPLE_FORMAT)  # 120 bytes
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)  # 12 bytes
 BARO_NONE = -(2**31)
 # Each FLG1 header's record size picks the layout, so older recordings still decode.
-FORMATS = {BASE_SIZE: BASE_FORMAT, HOVER_SIZE: HOVER_FORMAT, BARO_RECORD_SIZE: BARO_RECORD_FORMAT, GUARD_RECORD_SIZE: GUARD_RECORD_FORMAT, EKF_RECORD_SIZE: EKF_RECORD_FORMAT, RECORD_SIZE: SAMPLE_FORMAT}
-MAX_BATCH = 8  # Records per FLG1 batch at most (radio.c LOG_MAX: 4 since the 108-byte record (112 now), 5 since the 80-byte one, 8 before).
+FORMATS = {BASE_SIZE: BASE_FORMAT, HOVER_SIZE: HOVER_FORMAT, BARO_RECORD_SIZE: BARO_RECORD_FORMAT, GUARD_RECORD_SIZE: GUARD_RECORD_FORMAT, EKF_RECORD_SIZE: EKF_RECORD_FORMAT, CAMERA_RECORD_SIZE: CAMERA_RECORD_FORMAT, RECORD_SIZE: SAMPLE_FORMAT}
+MAX_BATCH = 8  # Records per FLG1 batch at most (radio.c LOG_MAX: 3 since the 120-byte record, 4 since the 108-byte one, 5 since the 80-byte one, 8 before).
 
 
 def batches(payload):

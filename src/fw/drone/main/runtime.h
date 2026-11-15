@@ -6,9 +6,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Control and log rate; must divide the 100 Hz FreeRTOS tick. Records per FLG1 batch: one batch every 40 ms.
+// Control and log rate; must divide the 100 Hz FreeRTOS tick. Records per FLG1 batch (radio.c LOG_MAX): one batch every 30 ms.
 #define SAMPLE_HZ 100
-#define LOG_BATCH 4
+#define LOG_BATCH 3
 // MPU6050 DLPF_CFG: 3 is 42 Hz gyro bandwidth with 4.8 ms delay, 2 is 98 Hz with 2.8 ms. Each tick averages the FIFO's 1 kHz samples (flight_rt.c read_fifo), which removes the aliasing a single sample had, so 2: the mean's own 4.5 ms plus 2.8 ms is about 2 ms more delay than one sample through 3.
 #define IMU_DLPF 2
 // MPU6050 gyro full scale: FS_SEL 3 is ±2000 deg/s at 16.4 counts per deg/s (0 was ±250 at 131 until 2026-11-12). A roll flip spins at about 950 deg/s, which at ±250 the gyro clipped: in sw/sim/flip_firmware.py every flip then hit the ground. The recording's metadata carries the scale (gyro_counts_per_deg_s; sw/flight_log.py takes 131 without it).
@@ -64,7 +64,7 @@ typedef struct {
 } LogState;
 
 // One binary flight-log record (controller/log_format.py SAMPLE_FORMAT), and the longest metadata JSON: the settings plus 1 KB for the header and thrust table.
-#define RECORD_SIZE 112
+#define RECORD_SIZE 120
 #define META (SETTINGS_JSON_SIZE + 1024)
 
 // Outputs at zero throttle and servos at their offsets, and the control task's lock; before the radio, so a stop always has outputs to stop. First of all flight_runtime_* calls.

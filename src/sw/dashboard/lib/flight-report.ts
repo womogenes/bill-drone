@@ -5,13 +5,14 @@ import { rotorTilt } from '@/lib/telemetry';
 
 // Each FLG1 batch: magic, session, record count, record size (log_format.py HEADER_FORMAT "<4sIHH").
 export const HEADER_SIZE = 12;
-// The record sizes log_format.py FORMATS knows: the 48-byte base record, plus the hover state (80), plus the barometer (84), plus the guards' word (86: fly-away failsafe phase and pattern stop, fw/drone/main/guard.h), plus the Kalman filter's estimate (108, fw/drone/main/ekf.h), plus the camera's newest frame (112); the report reads neither yet.
+// The record sizes log_format.py FORMATS knows: the 48-byte base record, plus the hover state (80), plus the barometer (84), plus the guards' word (86: fly-away failsafe phase and pattern stop, fw/drone/main/guard.h), plus the Kalman filter's estimate (108, fw/drone/main/ekf.h), plus the camera's newest frame (112), plus its tag rotation (120); the report reads none of the last three yet.
 const BASE_SIZE = 48;
 const HOVER_SIZE = 80;
 const BARO_SIZE = 84;
 const GUARD_SIZE = 86;
 const EKF_SIZE = 108;
-const RECORD_SIZE = 112;
+const CAMERA_SIZE = 112;
+const RECORD_SIZE = 120;
 const MAX_BATCH = 8;
 const BARO_NONE = -(2 ** 31);
 // The drone's esp_timer microseconds in the start record wrap at 2^32.
@@ -297,7 +298,7 @@ function decodeRecords(bin: Uint8Array, session: number) {
     if (
       magic !== 'FLG1' ||
       batchSession !== session ||
-      ![BASE_SIZE, HOVER_SIZE, BARO_SIZE, GUARD_SIZE, EKF_SIZE, RECORD_SIZE].includes(
+      ![BASE_SIZE, HOVER_SIZE, BARO_SIZE, GUARD_SIZE, EKF_SIZE, CAMERA_SIZE, RECORD_SIZE].includes(
         size
       ) ||
       count < 1 ||
