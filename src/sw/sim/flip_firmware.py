@@ -385,7 +385,7 @@ def fly(job):
             accel = np.clip(obs["accel"][i] / R.G, -accel_range, accel_range)
             lane["gyro"] = gyro
             spinning = sum(lane["commanded"]) > 0
-            estimate.update(accel, gyro, R.DT, spinning, banked=library.flip_gyro_only(ctypes.byref(run)) or library.recover_gyro_only(ctypes.byref(recovery)), powered_tau=flown.get("attitude_tau", 50.0))
+            estimate.update(accel, gyro, R.DT, spinning, gyro_only=library.flip_gyro_only(ctypes.byref(run)) or library.recover_gyro_only(ctypes.byref(recovery)), powered_tau=flown.get("attitude_tau", 50.0))
             enabled = k >= armed
             if enabled:
                 # flight_rt.c incremental: INDI's fade and its unmodeled acceleration on each model, before the flip, the recovery and the controller.

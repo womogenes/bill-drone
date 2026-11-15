@@ -78,8 +78,6 @@ void ekf_baro(Ekf *ekf, const HoverBaro *baro);
 void ekf_update(Ekf *ekf, const EkfSample *sample, EkfOutput *output);
 // The estimate as the hold flies it (hover.h hover_estimate, gains ekf): horizontal while the heading is known and the velocity's standard deviation is under EKF_FLOWN_VELOCITY_SD, vertical while the height's is under EKF_FLOWN_HEIGHT_SD.
 void ekf_estimate(const EkfOutput *output, HoverEstimate *estimate);
-// The gyro bias the attitude estimate takes from the filter (rad/s, body), into held: updated only while the filter's heading and velocity, or its rest, pin it, else left as it was.
-void ekf_attitude_bias(const EkfOutput *output, float *held);
 // The structure's size, for hosts that allocate it without the header.
 int ekf_size(void);
 

@@ -61,18 +61,12 @@ typedef struct {
     GuardGains guard;
     // The tilt past which flight_rt.c stops the motors (radians; settings.def tip_limit). Runtime-only, last.
     float tip_limit;
-    // Banked flight past this setpoint (radians, 0 = off; settings.def bank_tilt). Runtime-only, last.
-    float bank_tilt;
     // How fast the attitude estimate pulls toward the accelerometer with the motors spinning (s; settings.def attitude_tau). Runtime-only, last.
     float attitude_tau;
     // The roll flip (flip.h): whether the laptop may start one (1) or a staged burst (2 and 3, flip_turn), 0 none, and the least height it starts from (m). Runtime-only, last.
     float flip_enable, flip_height;
     // Tumble recovery in place of the tip cut in flight (recover.h; settings.def recover_enable). Runtime-only, last.
     float recover_enable;
-    // Mixer saturation (flight_math.c, settings.def mix_ceiling): the throttle no motor goes past, the roll differential kept before the collective and the integrators not winding into a limit (0 = off, as before). Runtime-only, last.
-    float mix_ceiling;
-    // Whether the attitude estimate takes the Kalman filter's gyro bias (ekf.c ekf_attitude_bias; settings.def attitude_bias, 0 = off). Runtime-only, last.
-    float attitude_bias;
     // Incremental nonlinear dynamic inversion (indi.h): the settings indi (roll and yaw) and indi_pitch, and per axis (roll, pitch, yaw) the share now taken (indi_share, the settings faded in by flight_rt.c; 0 = off, the controller as before) of the unmodeled angular acceleration INDI found on this controller's model (unmodeled, rad/s²), which flight_control takes off what it asks. Runtime-only, last.
     float indi, indi_pitch, indi_share[3], unmodeled[3];
     // The quaternion attitude (settings.def quaternion, 0 = off: the Euler errors, as before): the controller's roll and pitch errors are the tilt-prioritized error (attitude_error) of attitude (w, x, y, z; body to level, as roll and pitch are taken, from pose_zero) against the setpoint's roll and pitch at its own heading. Runtime-only, last.

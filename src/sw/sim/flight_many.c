@@ -3,7 +3,6 @@
 #include "indi.c"
 
 // Where Command's runtime-only fields that the host sets by name sit, in floats from its start.
-const size_t flight_command_mix_ceiling = offsetof(Command, mix_ceiling) / sizeof(float);
 const size_t flight_command_indi = offsetof(Command, indi_share) / sizeof(float);
 const size_t flight_command_quaternion = offsetof(Command, quaternion) / sizeof(float);
 const size_t flight_command_size = sizeof(Command) / sizeof(float);

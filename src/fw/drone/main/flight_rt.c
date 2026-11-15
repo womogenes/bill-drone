@@ -50,8 +50,6 @@
 #define SENSOR_RETRY_TICKS SAMPLE_HZ
 // Degrees. The tip cut is the setting tip_limit (settings.def).
 #define SERVO_LIMIT 60
-// Banked past bank_tilt the collective's thrust is divided by the cosine of the setpoint's tilt, at most this many times: at 60 degrees holding height needs twice the thrust (the motors give about 2.2 times the weight).
-#define BANK_THRUST_MAX 2.0f
 #define THROTTLE_MAX 1200
 // The ESC pulse for a stopped motor (us), below the 1000 us that calibration teaches as zero: an ESC calibrated at exactly 1000 us can read that, with pulse jitter, as just above its minimum and spin.
 #define ESC_STOP_US 950
@@ -184,10 +182,6 @@ static float throttle_for(float force) {
 static float collective_throttle(float force) {
     return throttle_for(force / 2 / cosf(command.pitch_trim));
 }
-// The controller's tilt setpoint for bank_tilt: its roll, or its pitch beyond pitch_trim, whichever is larger (radians).
-static float bank_angle(const Controller *c) {
-    return fmaxf(fabsf(c->setpoint_roll), fabsf(c->setpoint_pitch - command.pitch_trim));
-}
 static Record records[LOG_CAPACITY];
 static uint32_t log_head, log_tail, log_samples, log_dropped, log_elapsed, log_session;
 static uint64_t log_started;
@@ -226,8 +220,6 @@ static HoverState hover;
 // The Kalman filter (ekf.h) and its newest estimate: it runs every tick, armed or not, beside the estimates above; the landing's touchdown takes it (hover.c EKF_STILL_S) and the log records it.
 static Ekf ekf;
 static EkfOutput filtered;
-// The gyro bias the attitude estimate takes off with attitude_bias (rad/s; ekf_attitude_bias), zero until the filter first pins one and again when a calibration restarts it.
-static float lent_bias[3];
 // The fly-away failsafe and the test pattern's limits (guard.h).
 static Guard guard;
 // The roll flip (flip.h), started only by flight_runtime_flip.
@@ -620,7 +612,6 @@ static void take_imu(const float *body, uint64_t now) {
             state.calibration_ready = true;
             // The gyro's zero has just moved, so the filter starts over from this rest.
             ekf_reset(&ekf);
-            memset(lent_bias, 0, sizeof(lent_bias));
         }
     }
     for (int i = 0; i < 3; i++) state.gyro[i] -= state.bias[i];
@@ -658,13 +649,9 @@ static uint64_t estimate(Tick *t, bool first) {
         state.attitude.pitch = atan2f(-state.accel[0], hypotf(state.accel[1], state.accel[2]));
         state.attitude.synced = 0;
     }
-    // Banked past bank_tilt (last tick's setpoint, from pitch_trim), and through a flip or a recovery and their grace after, the accelerometer reads the thrust, not gravity: the gyro alone carries the attitude.
-    bool banked = command.bank_tilt > 0 && spinning() && bank_angle(&state.controller) > command.bank_tilt;
-    float bias[3] = {0, 0, 0};
-    if (command.attitude_bias > 0) memcpy(bias, lent_bias, sizeof(bias));
-    Motion motion = {state.accel[0], state.accel[1], state.accel[2],
-                     state.gyro[0] - bias[0], state.gyro[1] - bias[1], state.gyro[2] - bias[2], t->dt,
-                     banked || flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? command.attitude_tau : config.gravity_tau, command.quaternion};
+    // Through a flip or a recovery and their grace after, the accelerometer reads the thrust, not gravity: the gyro alone carries the attitude.
+    Motion motion = {state.accel[0], state.accel[1], state.accel[2], state.gyro[0], state.gyro[1], state.gyro[2], t->dt,
+                     flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? command.attitude_tau : config.gravity_tau, command.quaternion};
     flight_attitude(&state.attitude, &motion);
     incremental(t->dt);
     if (state.enabled) flip_tick(&flip, state.gyro, state.accel, t->dt, &state.attitude, &state.controller, &hover.integral, &t->flipped);
@@ -679,7 +666,6 @@ static uint64_t estimate(Tick *t, bool first) {
     EkfSample sample = {.time_us = t->now, .gyro = {state.gyro[0], state.gyro[1], state.gyro[2]},
                         .accel = {state.accel[0] * GRAVITY, state.accel[1] * GRAVITY, state.accel[2] * GRAVITY}, .dt = t->dt, .spinning = spinning()};
     ekf_update(&ekf, &sample, &filtered);
-    ekf_attitude_bias(&filtered, lent_bias);
     HoverEstimate estimate;
     ekf_estimate(&filtered, &estimate);
     hover_estimate(&hover, &estimate);
@@ -837,12 +823,6 @@ static void fly(Tick *t) {
     float add[EXCITE_CHANNELS] = {0};
     play_pattern(t, &setpoint, add);
     if (!tracking) setpoint.pitch_speed = 0;
-    // Banked past bank_tilt (last tick's setpoint, as the attitude estimate), the collective's thrust grows by 1 / cos(tilt) so the bank holds its height. Not under the hover, whose thrust is already divided by the cosine of the measured tilt (hover.c, at most twice): both made it up to four times.
-    const Controller *bank = &state.controller;
-    if (command.bank_tilt > 0 && setpoint.base > 0 && !hovering && bank_angle(bank) > command.bank_tilt) {
-        float lift = cosf(bank->setpoint_roll) * cosf(bank->setpoint_pitch - command.pitch_trim);
-        setpoint.base = throttle_for(thrust(setpoint.base) * fminf(1 / fmaxf(lift, 1 / BANK_THRUST_MAX), BANK_THRUST_MAX));
-    }
     if (t->flipped.collective_set) setpoint.base = collective_throttle(t->flipped.collective);
     if (t->recovered.level) {
         setpoint.target_roll = setpoint.target_pitch = 0;

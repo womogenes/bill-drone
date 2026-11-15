@@ -16,8 +16,6 @@ MASS = 0.940  # kg, the final assembly with the printed deck and IMU bracket (Bi
 DT = 0.01
 # The hold-point nudge's limit each way (m; fw/drone/main/flight_rt.c NUDGE_MAX).
 NUDGE_MAX = 1.5
-# The most the collective's thrust grows in a bank (fw/drone/main/flight_rt.c BANK_THRUST_MAX).
-BANK_THRUST_MAX = 2.0
 # Physics substeps per control step: the foot contacts' friction is stiff, and at 10 a gripping contact chatters (the sampled gyro and accelerometer read tens of deg/s and 2-3 g at rest). Clear of the floor the rigid body and actuators need far fewer.
 SUB = 40
 AIR_SUB = 4
@@ -166,9 +164,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     accel_bias = list(plant.get("accel_bias", (0.0, 0.0))) + [0.0]
     flight_accel_bias = plant.get("flight_accel_bias", 0.0)
     flight_accel_bias = list(flight_accel_bias) if isinstance(flight_accel_bias, (list, tuple)) else [0.0, 0.0, flight_accel_bias]
-    # plant["gyro_bias"] (rad/s; forward, left, up): on the gyro only while the motors are commanded, the in-flight drift the resting calibration cannot remove. With settings attitude_bias the attitude estimate takes the Kalman filter's estimate of it off (flight_rt.c, ekf.c ekf_attitude_bias), held between the filter's good spells in lent.
+    # plant["gyro_bias"] (rad/s; forward, left, up): on the gyro only while the motors are commanded, the in-flight drift the resting calibration cannot remove.
     gyro_bias = list(plant.get("gyro_bias", (0.0, 0.0, 0.0)))
-    lent = (ctypes.c_float * 3)()
     vibration = plant.get("vibration", 0.0)
     vibration = list(vibration) if isinstance(vibration, (list, tuple)) else [vibration] * 3
     level_error = [math.radians(value) for value in plant.get("level_error", (0.0, 0.0))]
@@ -313,11 +310,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         if plant.get("gyro_counts"):
             # The gyro read in whole counts (plant["gyro_counts"] per degree/s: 131 at ±250 deg/s, 16.4 at ±2000), as the log records it and the estimates took it before 2026-11-12.
             gyro_filter = [math.radians(round(math.degrees(g) * plant["gyro_counts"]) / plant["gyro_counts"]) for g in gyro_filter]
-        # flight_rt.c bank_tilt: past it (the controller's last setpoint) the gyro alone carries the attitude.
-        bank_tilt = math.radians(settings.get("bank_tilt", 0.0))
-        banked = bank_tilt > 0 and spinning and max(abs(controller.state[11]), abs(controller.state[12] - trim)) > bank_tilt
-        lending = settings.get("attitude_bias", 0) > 0
-        attitude = estimator.update(accel_filter, [g - b for g, b in zip(gyro_filter, lent)] if lending else gyro_filter, DT, powered=True, banked=banked, powered_tau=settings.get("attitude_tau", 50.0))
+        attitude = estimator.update(accel_filter, gyro_filter, DT, powered=True, powered_tau=settings.get("attitude_tau", 50.0))
         # The drone flies relative to its level reference: an error in it offsets the attitude both loops see. With the quaternion setting the estimate's quaternion is turned by it, as flight_rt.c relative_attitude does with pose_zero.
         body = None
         if estimator.quaternion:
@@ -396,7 +389,6 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 if baro:
                     kalman.baro(*baro)
                 filtered = kalman.update(round((now + 1) * 1e6), gyro_filter, [a * G for a in accel_filter], DT, spinning)
-                kalman.attitude_bias(lent)
             if step < armed:
                 outer.rest(vertical, False, DT, baro)
             else:
@@ -472,13 +464,6 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 controller.command[PITCH_SPEED] = settings.get("pitch_speed", 0.0) if out.tracking else 0.0
                 if out.tracking:
                     controller.state[13], controller.state[14] = out.velocity[0], out.velocity[1]
-        if bank_tilt > 0 and not hover:
-            # flight_rt.c bank_tilt: banked past it, the collective's thrust over the cosine of the setpoint's tilt (at most BANK_THRUST_MAX times); not under the hover, which divides its thrust by the cosine of the measured tilt itself.
-            base = settings["base_throttle"]
-            if base > 0 and banked:
-                lift = math.cos(controller.state[11]) * math.cos(controller.state[12] - trim)
-                base = min(1200, throttle(thrust(base) * min(1 / max(lift, 1 / BANK_THRUST_MAX), BANK_THRUST_MAX)))
-            controller.command[6 + TUNING_LAYOUT.index("base_throttle")] = base
         if incremental.on:
             incremental.update(gyro_filter, bool(hover and outer.state.engaged and not outer.state.landed), outer.state.height if hover else 0.0, controller.command[6 + TUNING_LAYOUT.index("base_throttle")], dt=DT)
             incremental.apply(controller)

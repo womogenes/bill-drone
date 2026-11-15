@@ -115,8 +115,6 @@ HOVER_GAINS = 48
 DAMPING_TAU = PITCH_SPEED + 1 + HOVER_GAINS + 2
 # The roll setpoint's own slew rate (rad/s, 0 = target_rate; flight_math.c), after pitch_damping_tau.
 ROLL_TARGET_RATE = DAMPING_TAU + 1
-# The mixer's ceiling throttle (0 = off; flight_math.c mix_ceiling), read from the library rather than counted.
-MIX_CEILING = ctypes.c_size_t.in_dll(library, "flight_command_mix_ceiling").value
 # INDI's share per axis (roll, pitch, yaw; 0 = off), then the unmodeled acceleration on the controller's model (rad/s²), which the harness sets each tick as flight_rt.c does (indi.h).
 INDI = ctypes.c_size_t.in_dll(library, "flight_command_indi").value
 # The quaternion attitude (settings quaternion, 0 = off; flight_math.c), then the attitude quaternion (w, x, y, z; body to level) the controller's error takes, which the harness sets each tick as flight_rt.c does (Controller.update q).
@@ -147,9 +145,9 @@ class Attitude:
     def q(self):
         return tuple(self.state[2:6])
 
-    def update(self, accel, gyro, dt, powered, banked=False, powered_tau=POWERED_GRAVITY_TAU):
-        # banked: the gyro alone (flight_rt.c bank_tilt), an infinite time constant. quaternion: settings.def quaternion (the estimate as one quaternion).
-        motion = array("f", list(accel) + list(gyro) + [dt, math.inf if banked else powered_tau if powered else GRAVITY_TAU, 1.0 if self.quaternion else 0.0])
+    def update(self, accel, gyro, dt, powered, gyro_only=False, powered_tau=POWERED_GRAVITY_TAU):
+        # gyro_only: the gyro alone (through a flip or a recovery and their grace), an infinite time constant. quaternion: settings.def quaternion (the estimate as one quaternion).
+        motion = array("f", list(accel) + list(gyro) + [dt, math.inf if gyro_only else powered_tau if powered else GRAVITY_TAU, 1.0 if self.quaternion else 0.0])
         library.flight_attitude(self.state.buffer_info()[0], motion.buffer_info()[0])
         return self.state[0], self.state[1]
 
@@ -187,7 +185,6 @@ class Controller:
             self.command[MODEL_OFFSET + MODEL_KEYS.index(key)] = settings[key]
         self.command[DAMPING_TAU] = settings.get("pitch_damping_tau", 0.0)
         self.command[ROLL_TARGET_RATE] = math.radians(settings.get("roll_target_rate", 0.0))
-        self.command[MIX_CEILING] = settings.get("mix_ceiling", 0.0)
         self.command[QUATERNION] = settings.get("quaternion", 0.0)
 
     def update(self, attitude, gyro, dt, q=None):

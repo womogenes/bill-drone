@@ -83,7 +83,7 @@ def main():
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=95000)
     parser.add_argument("--out", type=Path)
-    parser.add_argument("--set", default="", help="settings on top, name=value,... (e.g. mix_ceiling=1100)")
+    parser.add_argument("--set", default="", help="settings on top, name=value,...")
     parser.add_argument("--airframe", default=FF.AIRFRAME, help="the plant's airframe in sw/sim/models (airframe_2026-11-15_bursts.json: the 2026-11-15 bursts' plant, the bands off)")
     parser.add_argument("--params", default="{}", help="flip parameters over flip_defaults, as JSON (e.g. '{\"yaw_ff\": 2.7}')")
     args = parser.parse_args()

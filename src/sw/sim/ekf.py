@@ -43,7 +43,6 @@ def load(defines=()):
     library.ekf_baro.argtypes = [ctypes.c_void_p, ctypes.POINTER(Baro)]
     library.ekf_update.argtypes = [ctypes.c_void_p, ctypes.POINTER(Sample), ctypes.POINTER(Output)]
     library.ekf_estimate.argtypes = [ctypes.POINTER(Output), ctypes.POINTER(Estimate)]
-    library.ekf_attitude_bias.argtypes = [ctypes.POINTER(Output), ctypes.c_float * 3]
     return library
 
 
@@ -68,10 +67,6 @@ class Ekf:
         """One tick: gyro (rad/s) and specific force (m/s²) in the IMU's body axes; returns the Output (reused between calls)."""
         self.library.ekf_update(self.state, ctypes.byref(Sample(time_us=time_us, gyro=tuple(gyro), accel=tuple(accel), dt=dt, spinning=spinning)), ctypes.byref(self.output))
         return self.output
-
-    def attitude_bias(self, held):
-        """The gyro bias the attitude estimate takes from the last update (ekf.c ekf_attitude_bias), into held (ctypes float[3], rad/s)."""
-        self.library.ekf_attitude_bias(ctypes.byref(self.output), held)
 
     def estimate(self):
         """The last update's estimate as the hold flies it (sw.sim.hover Hover.estimate)."""
