@@ -20,7 +20,7 @@ typedef struct {
     double link_k, link_c, left_play, right_play, left_band, right_band, band_k, right_gain;
     double prop_torque, prop_momentum, inflow_damping, edgewise_damping, wash, pitch_wake, wake_tau;
     double roll_pendulum, pitch_pendulum, roll_from_yaw, yaw_from_roll;
-    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance, rotor_momentum, motor_tau_down, motor_idle, motor_floor, motor_coast, motor_ceiling, coast_below, climb_inflow;
+    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance, rotor_momentum, motor_tau_down, motor_idle, motor_floor, motor_coast, motor_ceiling, coast_below, climb_inflow, speed_range, speed_moment2;
     double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, J;
     double level, mean_left, mean_right;
     double mass, throttle_max, servo_limit, ground_k, ground_c, friction, air_drag, tilt_share;
@@ -137,7 +137,9 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         double rotated[3];
         apply_transpose(r0, v, rotated);
         // Clipped to the measured speeds and faded like the attitude (rigid.py SPEED_RANGE).
-        double vel0[2] = {clip(rotated[0], -1.5, 1.5) * fade, clip(rotated[1], -1.5, 1.5) * fade};
+        // Or, with speed_range, to it and unfaded (airframe.py).
+        double reach = p->speed_range > 0 ? p->speed_range : 1.5, faded = p->speed_range > 0 ? 1.0 : fade;
+        double vel0[2] = {clip(rotated[0], -reach, reach) * faded, clip(rotated[1], -reach, reach) * faded};
         // The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down (rigid.py).
         double flying = contact_now[e] == 0 ? clip((st_motor[0] + st_motor[1]) / (p->mass * G), 0, 1) : 0.0;
         // airframe.py step.
@@ -194,6 +196,7 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
             + p->pitch_wake * arm_tilt * wake[e]
             + p->cx * (left * c[0] + right * c[1])
             - p->edgewise_damping * p->hr * p->hr * total * w[1]
+            - flying * p->speed_moment2 * vel0[0] * fabs(vel0[0])
             - flying * p->pitch_pendulum * total * att0[1]
             - flying * p->hx * p->vx_drag * p->mass * vel0[0]
             + w[0] * hz - w[2] * hx;

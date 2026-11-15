@@ -40,6 +40,8 @@ PARAMS = {
     "prop_torque": (-0.05, 0.05, -0.015), "prop_momentum": (-0.05, 0.05, 0.003), "rotor_momentum": (0.0, 0.1, 0.0),
     # The bursts' terms (2026-11-15, sw/sim/burst_replay.py): the tilt's pitch authority over the geometry's (resolve's tilt_arm times it) and the thrust lost per newton per m/s of climb along the shafts (axial inflow, as inflow_damping has it for the roll).
     "tilt_authority": (0.2, 5.0, 1.0), "climb_inflow": (0.0, 0.3, 0.0),
+    # And the speed the speed terms see (m/s): the body-plane speed clipped to it and not faded with the tilt, where rigid.py otherwise clips to SPEED_RANGE and fades (0: as before). The bursts move at 4-6 m/s.
+    "speed_range": (0.0, 20.0, 0.0),
     "inflow_damping": (-2.0, 5.0, 0.2), "edgewise_damping": (-2.0, 5.0, 0.05),
     "wash": (-1.0, 1.5, 0.0), "wash_z": (-0.2, 0.3, 0.02), "pitch_wake": (-1.5, 1.5, 0.0), "wake_tau": (0.01, 2.0, 0.15), "pitch_ground": (-1, 3, 0.0), "ground_scale": (0.01, 2.0, 0.1),
     "roll_pendulum": (-0.2, 0.2, 0.0), "pitch_pendulum": (-0.2, 0.2, 0.0), "drag_z_x": (-0.5, 0.5, 0.017), "drag_z_y": (-0.5, 0.5, 0.06), "speed_moment2": (-0.05, 0.05, 0.0), "tilt_speed": (-0.3, 0.3, 0.0), "tilt_push_speed": (0.0, 0.2, 0.0),
@@ -49,7 +51,7 @@ PARAMS = {
 }
 KEYS = list(PARAMS)
 # Terms a parameter set may leave out (they then stay off).
-OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below", "climb_inflow")
+OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below", "climb_inflow", "speed_range")
 # The running time (s) of a motor that has long been spinning.
 RUNNING = 10.0
 

@@ -40,7 +40,7 @@ AIR_DRAG = 0.03
 SOURCE = Path(__file__).with_name("rigid_step.c")
 LIBRARY = Path(__file__).with_name("rigid_step.so")
 # The scalar parameters in rigid_step.c's Params order (airframe parameters, then the geometry's constants as airframe.resolve gives them, then the thrust trim, then this sim's constants, then HULL).
-C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_k", "link_c", "left_play", "right_play", "left_band", "right_band", "band_k", "right_gain", "prop_torque", "prop_momentum", "inflow_damping", "edgewise_damping", "wash", "pitch_wake", "wake_tau", "roll_pendulum", "pitch_pendulum", "roll_from_yaw", "yaw_from_roll", "vx_pitch", "vx_drag", "vy_roll", "vy_drag", "tilt_push", "motor_start", "servo_compliance", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below", "climb_inflow")
+C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_k", "link_c", "left_play", "right_play", "left_band", "right_band", "band_k", "right_gain", "prop_torque", "prop_momentum", "inflow_damping", "edgewise_damping", "wash", "pitch_wake", "wake_tau", "roll_pendulum", "pitch_pendulum", "roll_from_yaw", "yaw_from_roll", "vx_pitch", "vx_drag", "vy_roll", "vy_drag", "tilt_push", "motor_start", "servo_compliance", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below", "climb_inflow", "speed_range", "speed_moment2")
 C_GEOMETRY = ("Ixx", "Iyy", "Izz", "arm", "cx", "cy", "tilt_arm", "hr", "hx", "hy", "J")
 loaded = None
 
@@ -265,7 +265,9 @@ class Sim:
         fade = np.clip((math.pi / 2 - np.arccos(np.clip(up[:, 2], -1, 1))) / (math.pi / 2 - ATTITUDE_RANGE), 0, 1)
         st.att = np.clip(np.column_stack([np.arctan2(up[:, 1], up[:, 2]), np.arctan2(-up[:, 0], np.hypot(up[:, 1], up[:, 2]))]), -ATTITUDE_RANGE, ATTITUDE_RANGE) * fade[:, None]
         rotated = np.einsum("nji,nj->ni", R0, self.vel)
-        st.vel = np.clip(rotated[:, :2], -SPEED_RANGE, SPEED_RANGE) * fade[:, None]
+        # Models with speed_range see the body-plane speed to it, unfaded (airframe.py).
+        reach = self.p["speed_range"] or SPEED_RANGE
+        st.vel = np.clip(rotated[:, :2], -reach, reach) * (1.0 if self.p["speed_range"] else fade[:, None])
         st.axial = rotated[:, 2:3]
         # The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down, so a drone that has cut its motors is not pushed over.
         airborne = (self.contact_now == 0) * np.clip((self.state.motor[:, 0] + self.state.motor[:, 1]) / (self.mass * G), 0, 1)

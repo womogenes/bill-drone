@@ -26,7 +26,7 @@ BANDS = {"left_band": 0.07189, "right_band": 0.003407}
 BAND_TILT = -2.5
 # Bounds of what --fit may move: (low, high).
 BOUNDS = {"tilt_authority": (0.3, 5.0), "servo_delay": (0.0, 0.12), "servo_inertia": (0.0, 0.003), "servo_wn": (8.0, 150.0), "servo_slew": (100.0, 3000.0), "rotor_momentum": (0.0, 0.08), "wash": (-0.5, 1.2), "prop_torque": (-0.04, 0.04),
-          "yaw_from_roll": (-0.05, 0.05), "inflow_damping": (0.0, 2.0), "differential_slope": (0.2, 1.5), "link_c": (0.0, 0.3), "climb_inflow": (0.0, 0.3)}
+          "yaw_from_roll": (-0.05, 0.05), "inflow_damping": (0.0, 2.0), "differential_slope": (0.2, 1.5), "link_c": (0.0, 0.3), "climb_inflow": (0.0, 0.3), "servo_compliance": (0.0, 1.0), "link_k": (0.2, 20.0), "pitch_wake": (-1.5, 1.0), "wake_tau": (0.02, 2.0), "edgewise_damping": (-2.0, 2.0), "servo_zeta": (0.2, 2.0), "speed_moment2": (-0.05, 0.05), "vx_drag": (0.0, 2.0), "vy_drag": (0.0, 2.0), "drag_z_x": (-0.5, 0.5)}
 # Terms fitted as one for both sides.
 PAIRED = {"servo_delay": "right_servo_delay", "servo_wn": "right_servo_wn", "motor_tau": "right_motor_tau"}
 
@@ -43,6 +43,14 @@ class Window(F.Log):
         hover = (df["flip"].fillna(0) == 0) & (df["left_throttle"] > 300) & (df["right_throttle"] > 300) & (time < float(start))
         self.hover_throttle = df.loc[hover, ["left_throttle", "right_throttle"]].to_numpy(float)
         self.usable = np.abs(self.gyro).max(1) < 0.97 * self.gyro_range
+        # The velocity (m/s, world) from the logged attitude and specific force, from the hold's climb rate and no horizontal speed at the start: the bursts reach 4-6 m/s, where the speed terms matter, and the plant's own translation open loop drifts from it.
+        attitude, velocity = F.quaternion(*self.attitude[0])[None], np.array([0.0, 0.0, self.climb[0]])
+        self.velocity = np.zeros((len(self.time), 3))
+        for k in range(len(self.time)):
+            self.velocity[k] = velocity
+            velocity = velocity + (R.rotation(attitude)[0] @ (self.accel[k] * A.G) - np.array([0.0, 0.0, A.G])) * A.DT
+            if k + 1 < len(self.time):
+                attitude = R.integrate_quat(attitude, self.gyro[k + 1][None], A.DT)
 
 
 def plant(window, airframe, overrides):
@@ -76,6 +84,7 @@ def replay(window, plant, every):
         if k % stride == 0:
             sim.omega[:] = window.gyro[k - 1]
             sim.quat[:] = F.quaternion(*window.attitude[k - 1])
+            sim.vel[:] = window.velocity[k - 1]
         sim.step(window.throttle[k][None], tilt[k][None])
         rates[k] = sim.turned[0]
     return rates
