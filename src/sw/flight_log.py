@@ -29,6 +29,8 @@ EKF_COLUMNS = [
 ]
 # The camera's newest dated frame: its sequence's low 16 bits, and how long before esp_time_us its centre row was read (us; the drone truncates to 10 us, so the middle of that step).
 CAMERA_COLUMNS = ["camera_sequence", "camera_age_us"]
+# That frame's camera -> tag rotation as a unit quaternion (w, x, y, z; camera axes right, down, forward), NaN when the frame had no decided, trusted sighting and in recordings from before it was logged: the attitude's ground truth under a floor tag.
+TAG_ROTATION_COLUMNS = ["tag_qw", "tag_qx", "tag_qy", "tag_qz"]
 NAN = float("nan")
 
 
@@ -159,6 +161,7 @@ def read_flight(path):
                     *((fields[39] & 3, fields[39] >> 2 & 1, fields[39] >> 3 & 7, fields[39] >> 6 & 3, fields[39] >> 8 & 3, fields[39] >> 10 & 7) if len(fields) > 39 else (NAN,) * 6),
                     *ekf_values(fields[40:52]),
                     *((fields[52], NAN if fields[53] == 65535 else fields[53] * 10 + 5) if len(fields) > 52 else (NAN, NAN)),
+                    *((value / 32767 for value in fields[54:58]) if len(fields) > 54 and any(fields[54:58]) else (NAN,) * 4),
                 ])
             if len(payload) != count * size:
                 truncated = True
@@ -168,7 +171,7 @@ def read_flight(path):
         "session", "sequence", "esp_time_us", "ax_g", "ay_g", "az_g", "gx_deg_s", "gy_deg_s", "gz_deg_s", "temperature_c",
         "roll_deg", "pitch_deg", "left_throttle", "right_throttle", "left_servo_deg", "right_servo_deg",
         "target_roll_deg", "target_pitch_deg", "target_yaw_deg_s", "base_throttle", "control_us", "flags", "battery_v",
-        *HOVER_COLUMNS, *BARO_COLUMNS, *GUARD_COLUMNS, *EKF_COLUMNS, *CAMERA_COLUMNS,
+        *HOVER_COLUMNS, *BARO_COLUMNS, *GUARD_COLUMNS, *EKF_COLUMNS, *CAMERA_COLUMNS, *TAG_ROTATION_COLUMNS,
     ]
     data = pd.DataFrame(rows, columns=columns).drop_duplicates(["session", "sequence"])
     return data, truncated

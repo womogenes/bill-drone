@@ -88,6 +88,8 @@ typedef struct __attribute__((packed)) {
     uint16_t ekf_flags;
     // The camera's newest dated frame (camera_newest): its sequence's low 16 bits, and how long before this sample its centre row was read (10 us; 65535 none, or older than that), which ties the camera's black-box frames to the IMU (sw/vio/blackbox_dataset.py).
     uint16_t camera_sequence, camera_age;
+    // That frame's camera -> tag rotation (camera.h CameraPose rotation) as a unit quaternion w, x, y, z (32767 = 1), when the frame is a trusted sighting whose tilt the camera decided; all zero otherwise. With the tag flat on the floor it is the attitude's ground truth for checking the attitude estimate and the Kalman filter indoors (sw/flight_log.py tag_q*), which the tag's position alone cannot give.
+    int16_t tag_rotation[4];
 } Record;
 _Static_assert(sizeof(Record) == RECORD_SIZE, "Flight record layout");
 
@@ -441,6 +443,26 @@ static int16_t scaled(float value, float scale) {
     return x >= INT16_MAX ? INT16_MAX : x <= INT16_MIN ? INT16_MIN : (int16_t)lroundf(x);
 }
 
+// A row-major rotation matrix as a unit quaternion (w, x, y, z, w >= 0), from its largest diagonal term so it stays exact near half turns: a camera looking down at a floor tag sits near one.
+static void rotation_quaternion(const float *m, float *q) {
+    float trace = m[0] + m[4] + m[8];
+    if (trace > 0) {
+        float s = 2 * sqrtf(1 + trace);
+        q[0] = s / 4, q[1] = (m[7] - m[5]) / s, q[2] = (m[2] - m[6]) / s, q[3] = (m[3] - m[1]) / s;
+    } else if (m[0] > m[4] && m[0] > m[8]) {
+        float s = 2 * sqrtf(1 + m[0] - m[4] - m[8]);
+        q[0] = (m[7] - m[5]) / s, q[1] = s / 4, q[2] = (m[1] + m[3]) / s, q[3] = (m[2] + m[6]) / s;
+    } else if (m[4] > m[8]) {
+        float s = 2 * sqrtf(1 + m[4] - m[0] - m[8]);
+        q[0] = (m[2] - m[6]) / s, q[1] = (m[1] + m[3]) / s, q[2] = s / 4, q[3] = (m[5] + m[7]) / s;
+    } else {
+        float s = 2 * sqrtf(1 + m[8] - m[0] - m[4]);
+        q[0] = (m[3] - m[1]) / s, q[1] = (m[2] + m[6]) / s, q[2] = (m[5] + m[7]) / s, q[3] = s / 4;
+    }
+    float norm = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]) * (q[0] < 0 ? -1 : 1);
+    for (int i = 0; i < 4; i++) q[i] /= norm;
+}
+
 static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     log_elapsed = now - log_started;
     uint32_t sequence = log_samples++;
@@ -501,6 +523,10 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     int64_t camera_age = camera_newest(&camera_sequence, &centre_us) ? ((int64_t)now - centre_us) / 10 : UINT16_MAX;
     record->camera_sequence = camera_sequence & 0xffff;
     record->camera_age = camera_age < 0 ? 0 : camera_age > UINT16_MAX ? UINT16_MAX : camera_age;
+    CameraPose seen;
+    float q[4] = {0};
+    if (camera_candidates(&seen, HOVER_POSE_US) && seen.valid && seen.sequence == camera_sequence) rotation_quaternion(seen.rotation, q);
+    for (int i = 0; i < 4; i++) record->tag_rotation[i] = scaled(q[i], 32767);
 }
 
 static void reconfigure_sensor(void);

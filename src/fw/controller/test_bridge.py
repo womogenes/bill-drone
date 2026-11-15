@@ -57,13 +57,13 @@ def frame(channel, payload, sequence):
     return bytes(serial_encode(pack(channel, SESSION, sequence, 1, payload)))
 
 
-def log_message(first, counts):
-    """A log message of FLG1 batches laid end to end (drone/main/radio.c LOG_BATCHES), records numbered from first."""
+def log_message(first, counts, size=log_format.CAMERA_RECORD_SIZE):
+    """A log message of FLG1 batches laid end to end (drone/main/radio.c LOG_BATCHES), records numbered from first; 112-byte records by default, whose fragment layout log_repair counts on (the bridge takes every size log_format.FORMATS knows)."""
     message = b""
     for count in counts:
-        message += struct.pack(log_format.HEADER_FORMAT, b"FLG1", SESSION, count, log_format.RECORD_SIZE)
+        message += struct.pack(log_format.HEADER_FORMAT, b"FLG1", SESSION, count, size)
         for sequence in range(first, first + count):
-            message += struct.pack("<II", sequence * 10000, sequence) + bytes(log_format.RECORD_SIZE - 8)
+            message += struct.pack("<II", sequence * 10000, sequence) + bytes(size - 8)
         first += count
     return message
 
@@ -107,13 +107,13 @@ async def log_repair(service, device, directory):
     device.data = first[0]
     service.read()
     assert [(p[0], p[2], p[6]) for p in sent(service)] == [(5, 100, bytes([2]))]
-    # Samples 8-11 were dropped on the drone; an older drone's single-batch message follows.
-    for packet in fragments(2, log_message(12, [4]), 101):
+    # Samples 8-11 were dropped on the drone; a message of today's 120-byte records follows (a 3-record batch and a 1-record remainder).
+    for packet in fragments(2, log_message(12, [3, 1], log_format.RECORD_SIZE), 101):
         device.data = packet
         service.read()
     await service.record_queue.join()
     counts = service.recorder.status()["log"]
-    assert counts == {"messages": 2, "batches": 3, "samples": 12, "gaps": 1, "missing": 4, "repair_requests": 2, "repaired": 1, "duplicates": 1, "test_dropped": 0}, counts
+    assert counts == {"messages": 2, "batches": 4, "samples": 12, "gaps": 1, "missing": 4, "repair_requests": 2, "repaired": 1, "duplicates": 1, "test_dropped": 0}, counts
     service.recorder.close("test")
     data = (directory / service.recorder.file).read_bytes()
     sequences = [struct.unpack_from("<I", data, offset + 4 + record * size)[0] for offset, _, count, size in log_format.batches(data) for record in range(count)]

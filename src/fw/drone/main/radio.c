@@ -63,8 +63,8 @@ static volatile bool radio_ready;
 #define TARGETS 12
 // An image that is still unconfirmed this long after boot restarts, so the bootloader rolls back to the previous one.
 #define CONFIRM_US 90000000
-// Most records per FLG1 batch (controller/log_format.py MAX_BATCH) and the batch header size: a full batch fits two fragments, so one goes out per tick.
-#define LOG_MAX 4
+// Most records per FLG1 batch (controller/log_format.py MAX_BATCH) and the batch header size: a full batch fits two fragments, so one goes out per tick. 3 since the 120-byte record (the tag's rotation), 4 since the 108-byte one, 5 since the 80-byte one, 8 before.
+#define LOG_MAX 3
 #define LOG_HEADER 12
 #define LOG_SPAN (LOG_HEADER + LOG_MAX * RECORD_SIZE)
 _Static_assert(LOG_HEADER + LOG_MAX * RECORD_SIZE <= 2 * PAYLOAD, "A full log batch fits two fragments");
