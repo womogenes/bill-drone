@@ -13,10 +13,6 @@ const float flight_thrust[][2] = {
 };
 const size_t flight_thrust_count = sizeof(flight_thrust) / sizeof(flight_thrust[0]);
 
-static float clamp(float value, float low, float high) {
-    return fmaxf(low, fminf(high, value));
-}
-
 // Calibration rows are (throttle, thrust). Reverse lookup uses the rising curve.
 float flight_interpolate(float value, const float *table, size_t count, int reverse) {
     if (value <= table[reverse]) return table[1 - reverse];
@@ -78,7 +74,7 @@ void flight_attitude(Attitude *state, const Motion *m) {
 
 // The roll integrator starts from roll_bias so liftoff already counters a known disturbance. The pitch bias is instead faded in over PITCH_BIAS_RAMP after collective reaches integrate_throttle (flight_control): applied while the feet still hold the drone it only waits to kick the nose at liftoff, so it arrives just as the drone lifts.
 void flight_reset(Controller *state, const Command *c) {
-    state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);
+    state->roll_i = clampf(c->roll_bias, -c->integral_limit, c->integral_limit);
     state->pitch_i = 0;
     state->comp_dir[0] = state->comp_dir[1] = state->comp_ref[0] = state->comp_ref[1] = 0;
     state->airborne = 0;
@@ -106,9 +102,17 @@ static float compensate(Controller *state, int side, float angle, float amount) 
 // Armed without usable thrust: the servos wait at trim, tilted back for a tilted rest as the upright takeoff will want them, so they are already there when thrust comes.
 static void hold_servos(Controller *state, const Command *c) {
     const Model *model = &c->model;
-    float upright = state->upright ? clamp(UPRIGHT_GAIN * c->pitch, -UPRIGHT_MAX, UPRIGHT_MAX) : 0;
-    state->left_angle = clamp(c->left_trim - model->left_servo_direction * upright, model->servo_min, model->servo_max);
-    state->right_angle = clamp(c->right_trim - model->right_servo_direction * upright, model->servo_min, model->servo_max);
+    float upright = state->upright ? clampf(UPRIGHT_GAIN * c->pitch, -UPRIGHT_MAX, UPRIGHT_MAX) : 0;
+    state->left_angle = clampf(c->left_trim - model->left_servo_direction * upright, model->servo_min, model->servo_max);
+    state->right_angle = clampf(c->right_trim - model->right_servo_direction * upright, model->servo_min, model->servo_max);
+}
+
+void flight_restore(Controller *state, const Controller *saved) {
+    state->roll_i = saved->roll_i;
+    state->pitch_i = saved->pitch_i;
+    state->yaw_i = saved->yaw_i;
+    state->velocity[0] = saved->velocity[0];
+    state->velocity[1] = saved->velocity[1];
 }
 
 void flight_control(Controller *state, const Command *c, const float *table, size_t count) {
@@ -139,12 +143,12 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
         float keep = expf(-c->dt / c->velocity_leak);
         state->velocity[0] = keep * state->velocity[0] + 9.81f * tanf(c->roll) * c->dt;
         state->velocity[1] = keep * state->velocity[1] + 9.81f * tanf(c->pitch) * c->dt;
-        float brake_roll = clamp(-c->velocity_damping * state->velocity[0], -VELOCITY_TILT, VELOCITY_TILT);
-        float brake_pitch = clamp(-c->velocity_damping * state->velocity[1], -VELOCITY_TILT, VELOCITY_TILT);
+        float brake_roll = clampf(-c->velocity_damping * state->velocity[0], -VELOCITY_TILT, VELOCITY_TILT);
+        float brake_pitch = clampf(-c->velocity_damping * state->velocity[1], -VELOCITY_TILT, VELOCITY_TILT);
         float step = c->target_rate * c->dt;
         float roll_step = c->roll_target_rate > 0 ? c->roll_target_rate * c->dt : step;
-        state->setpoint_roll += clamp(c->target_roll + brake_roll - state->setpoint_roll, -roll_step, roll_step);
-        state->setpoint_pitch += clamp(c->target_pitch + trim + brake_pitch - state->setpoint_pitch, -step, step);
+        state->setpoint_roll += clampf(c->target_roll + brake_roll - state->setpoint_roll, -roll_step, roll_step);
+        state->setpoint_pitch += clampf(c->target_pitch + trim + brake_pitch - state->setpoint_pitch, -step, step);
     }
     // Resting tilted (no front legs), forward-pointing thrust would shove the drone along the floor and lever it over its nose. Until it first comes level the servos also tilt back by most of the pitch from level: the thrust points nearly up, and acting ahead of the back feet it lifts the nose. That back tilt is far more torque than the drone needs once it is pivoting or airborne, and the servos lag ~0.1 s, so it is withdrawn as the nose comes up (gone at UPRIGHT_RATE): the righting rotation stays slow enough for the pitch damping to stop at level. Meanwhile the setpoint follows the attitude, so the pitch P term and integrator stay out of it and the hand-over is smooth. Only pitch can be vectored this way. On the forward legs (2026-11-11) the tilted thrust's horizontal part pulls the body one way while the gripping feet hold it, a couple that pivots it further from level, faster than the servos' correction can stop: hover takeoffs, which had no vectoring, pitched 20-30 degrees past their -12 to +8 degree rests before the feet were 4 cm up (2026-11-12 00:53-01:31 UTC; sw/sim/takeoff_test.py).
     float tilt = c->pitch;
@@ -152,26 +156,26 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     float upright = 0;
     if (state->upright) {
         float rising = tilt > 0 ? -c->gy : c->gy;
-        upright = clamp(UPRIGHT_GAIN * tilt, -UPRIGHT_MAX, UPRIGHT_MAX) * clamp(1 - rising / UPRIGHT_RATE, 0, 1);
+        upright = clampf(UPRIGHT_GAIN * tilt, -UPRIGHT_MAX, UPRIGHT_MAX) * clampf(1 - rising / UPRIGHT_RATE, 0, 1);
         state->setpoint_pitch = c->pitch;
     }
     float roll_error = state->setpoint_roll - c->roll;
     float pitch_error = state->setpoint_pitch - c->pitch;
     // Below integrate_throttle the feet are still down: integrating an error the ground holds would only wind up.
     if (c->base < c->integrate_throttle) {
-        state->roll_i = clamp(c->roll_bias, -c->integral_limit, c->integral_limit);
+        state->roll_i = clampf(c->roll_bias, -c->integral_limit, c->integral_limit);
         state->pitch_i = 0;
         state->yaw_i = 0;
     } else {
-        state->yaw_i = clamp(state->yaw_i + c->yaw_i * (c->target_yaw - c->gz) * c->dt, -c->integral_limit, c->integral_limit);
-        float roll_seen = clamp(roll_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
-        float pitch_seen = clamp(pitch_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
-        state->roll_i = clamp(state->roll_i + c->roll_i * roll_seen * c->dt, -c->integral_limit, c->integral_limit);
-        state->pitch_i = clamp(state->pitch_i + c->pitch_i * pitch_seen * c->dt, -c->integral_limit, c->integral_limit);
+        state->yaw_i = clampf(state->yaw_i + c->yaw_i * (c->target_yaw - c->gz) * c->dt, -c->integral_limit, c->integral_limit);
+        float roll_seen = clampf(roll_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
+        float pitch_seen = clampf(pitch_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
+        state->roll_i = clampf(state->roll_i + c->roll_i * roll_seen * c->dt, -c->integral_limit, c->integral_limit);
+        state->pitch_i = clampf(state->pitch_i + c->pitch_i * pitch_seen * c->dt, -c->integral_limit, c->integral_limit);
     }
 
     float roll_torque = model->roll_inertia * (c->roll_p * roll_error + state->roll_i - c->roll_damping * c->gx);
-    float pitch_bias = clamp(c->pitch_bias, -c->integral_limit, c->integral_limit) * clamp(state->airborne / PITCH_BIAS_RAMP, 0, 1);
+    float pitch_bias = clampf(c->pitch_bias, -c->integral_limit, c->integral_limit) * clampf(state->airborne / PITCH_BIAS_RAMP, 0, 1);
     // Speed moment (pitch_speed, 0 = off): forward speed pitches this airframe nose-up (the rotors flap back; on the hover sim's model a backward drift likewise kept the nose falling through the braking tilt, as at 2026-11-02 04:55 UTC). The torque builds with the speed, so it lags the tilt that made it by the speed's own time constant, and the attitude loop meets it only as error; cancelled here from the forward velocity. flight_rt.c sets pitch_speed only while the hover flies on the tag, when velocity is the hover's measured one, not the g tan(pitch) dead reckoning above. With 0 the torque is exactly as before.
     float speed_torque = c->pitch_speed * state->velocity[1];
     // The pitch damping acts on the rate low-passed over pitch_damping_tau: above pitch_damping 6 the raw rate's damping drove a 2.6-2.8 Hz shake (2026-11-02 04:36 UTC, pitch rate 67 deg/s RMS there at pitch_damping 8), where the servo's lag and the assembly's rising tilt authority leave the loop without phase, while the 0.6-0.9 Hz swing of the 2026-11-08 hops wants more damping than 6 gives. The filter gives up damping above its corner to keep it below.
@@ -189,8 +193,8 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
 
     float left_angle = model->left_servo_direction * (atan2f(left_horizontal, left_vertical) - upright) + c->left_trim;
     float right_angle = model->right_servo_direction * (atan2f(right_horizontal, right_vertical) - upright) + c->right_trim;
-    state->left_angle = clamp(compensate(state, 0, left_angle, c->servo_compensation), model->servo_min, model->servo_max);
-    state->right_angle = clamp(compensate(state, 1, right_angle, c->servo_compensation), model->servo_min, model->servo_max);
+    state->left_angle = clampf(compensate(state, 0, left_angle, c->servo_compensation), model->servo_min, model->servo_max);
+    state->right_angle = clampf(compensate(state, 1, right_angle, c->servo_compensation), model->servo_min, model->servo_max);
     state->left = roundf(flight_interpolate(hypotf(left_horizontal, left_vertical) / c->left_thrust_scale, table, count, 1));
     state->right = roundf(flight_interpolate(hypotf(right_horizontal, right_vertical) / c->right_thrust_scale, table, count, 1));
 }

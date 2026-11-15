@@ -31,10 +31,6 @@ const FlipParams flip_defaults = {
     .spin_pitch = 8.217f, .spin_yaw = 9.34f, .gyro_ff = 8.8625f, .yaw_ff = 1.6f,
 };
 
-static float clampf(float value, float low, float high) {
-    return fmaxf(low, fminf(high, value));
-}
-
 void flip_attitude(float *q, float roll, float pitch) {
     // flight_attitude's roll and pitch (about forward, then left; positive right side down and nose down) as a quaternion, the heading zero.
     float cr = cosf(roll / 2), sr = sinf(roll / 2), cp = cosf(pitch / 2), sp = sinf(pitch / 2);
@@ -267,11 +263,7 @@ void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, At
     if (out->handed_back) {
         attitude->roll = out->roll;
         attitude->pitch = out->pitch;
-        controller->roll_i = run->saved.roll_i;
-        controller->pitch_i = run->saved.pitch_i;
-        controller->yaw_i = run->saved.yaw_i;
-        controller->velocity[0] = run->saved.velocity[0];
-        controller->velocity[1] = run->saved.velocity[1];
+        flight_restore(controller, &run->saved);
         run->since = 0;
     }
     if (active && !flip_active(run)) *height_integral = run->height_integral;

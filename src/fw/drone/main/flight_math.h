@@ -1,6 +1,7 @@
 #ifndef FLIGHT_MATH_H
 #define FLIGHT_MATH_H
 
+#include <math.h>
 #include <stddef.h>
 
 #include "guard.h"
@@ -77,5 +78,11 @@ void flight_reset(Controller *state, const Command *command);
 // Throttle to thrust (reverse 0) or thrust to throttle on the rising curve (reverse 1), on rows of (throttle, N).
 float flight_interpolate(float value, const float *table, size_t count, int reverse);
 void flight_control(Controller *state, const Command *command, const float *table, size_t count);
+// Gives back the integrators and velocity a maneuver saved when it took over (the flip's and the recovery's hand-back).
+void flight_restore(Controller *state, const Controller *saved);
+// value within [low, high].
+static inline float clampf(float value, float low, float high) {
+    return fmaxf(low, fminf(high, value));
+}
 
 #endif

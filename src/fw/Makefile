@@ -3,7 +3,7 @@
 IDF_PATH ?= $(HOME)/esp/esp-idf
 IDF = bash -c 'source $(IDF_PATH)/export.sh >/dev/null && "$$@"' idf
 
-.PHONY: build deploy usb accel level camera-test gps-test camera-fast camera-fast-wifi camera-wifi camera-deploy camera-usb
+.PHONY: build deploy usb accel level camera-test gps-test flight-test camera-fast camera-fast-wifi camera-wifi camera-deploy camera-usb
 build:
 	$(IDF) idf.py -C drone build
 
@@ -61,3 +61,17 @@ gps-test:
 	mkdir -p drone/build/host
 	cc -std=c11 -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -Idrone/main drone/test/gps_ubx_test.c -o drone/build/host/gps_ubx_test
 	drone/build/host/gps_ubx_test
+
+# Host test of the control task (drone/test/flight_rt_test.c: flight_rt.c and its modules on stubbed ESP-IDF, a crude closed-loop plant and every runtime request fuzzed): SEEDS seeds of TICKS ticks each, a digest of every output per seed. With BASE=<git ref> the same seeds also run on that commit's drone/main, and it fails unless every digest matches, for proving a change to the control task behavior-preserving.
+SEEDS ?= 16
+TICKS ?= 60000
+FLIGHT_SOURCES = flight_rt.c flight_math.c hover.c ekf.c guard.c recover.c settings.c
+flight-test:
+	mkdir -p drone/build/host
+	cc -std=gnu11 -O2 -Wall -Wextra -Wno-unused-parameter -Idrone/test/host -Idrone/main drone/test/flight_rt_test.c $(addprefix drone/main/,$(FLIGHT_SOURCES)) -o drone/build/host/flight_rt_test -lm
+	$(if $(BASE),rm -rf drone/build/host/base && mkdir -p drone/build/host/base && git archive $(BASE) drone/main | tar -x -C drone/build/host/base)
+	$(if $(BASE),cc -std=gnu11 -O2 -w -Idrone/test/host -Idrone/build/host/base/drone/main drone/test/flight_rt_test.c $(addprefix drone/build/host/base/drone/main/,$(FLIGHT_SOURCES)) -o drone/build/host/flight_rt_base -lm)
+	for seed in $$(seq 1 $(SEEDS)); do \
+		new=$$(drone/build/host/flight_rt_test $$seed $(TICKS) | tail -1); echo "seed $$seed: $$new"; \
+		$(if $(BASE),old=$$(drone/build/host/flight_rt_base $$seed $(TICKS) | tail -1); [ "$$old" = "$$new" ] || { echo "seed $$seed differs from $(BASE): $$old"; exit 1; };) \
+	done

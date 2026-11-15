@@ -18,10 +18,6 @@ const RecoverParams recover_defaults = {
     .level_angle = 10 * DEGREE, .level_rate = 0.5f, .level_time = 2.0f,
 };
 
-static float clampf(float value, float low, float high) {
-    return fmaxf(low, fminf(high, value));
-}
-
 void recover_reset(RecoverRun *run) {
     *run = (RecoverRun){.q = {1, 0, 0, 0}, .since = -1};
 }
@@ -102,11 +98,7 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
         // To the attitude controller, which ran on meanwhile with its outputs unused: the integrators and dead-reckoned velocity from before.
         run->stage = RECOVER_LEVEL;
         run->settled = 0;
-        controller->roll_i = run->saved.roll_i;
-        controller->pitch_i = run->saved.pitch_i;
-        controller->yaw_i = run->saved.yaw_i;
-        controller->velocity[0] = run->saved.velocity[0];
-        controller->velocity[1] = run->saved.velocity[1];
+        flight_restore(controller, &run->saved);
     }
     // The attitude estimate flies q while this runs: Euler angles from it stay sane at any attitude, and the leveling hands the attitude controller roll and pitch within 90 degrees: it runs only within right_angle (58 degrees) or tip_limit (at most 80) of upright, and beyond both it is righting again.
     flip_euler(q, &attitude->roll, &attitude->pitch);
