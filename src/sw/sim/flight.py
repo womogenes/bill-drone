@@ -103,7 +103,7 @@ MODEL_TUNING_KEYS = ("pivot_height", "com_x", "roll_inertia", "pitch_inertia", "
 # Equivalent to retaining 0.99 of gyro integration every 10 ms; with the motors spinning, settings.def attitude_tau (default 50 s, the 0.9998 it always was).
 GRAVITY_TAU = -0.01 / math.log(0.99)
 POWERED_GRAVITY_TAU = 50.0
-ANGULAR_KEYS = ("roll", "pitch", "yaw_rate", "pitch_trim", "left_trim", "right_trim", "servo_compensation", "target_rate", "velocity_damping")
+ANGULAR_KEYS = ("roll", "pitch", "yaw_rate", "pitch_trim", "left_trim", "right_trim", "servo_compensation", "target_rate")
 
 GAIN_KEYS = ("roll_p", "roll_i", "roll_damping", "pitch_p", "pitch_i", "pitch_damping", "yaw_damping", "integral_limit", "pitch_trim", "left_trim", "right_trim")
 COMMAND_KEYS = ("enabled", "roll", "pitch", "yaw_rate", "base_throttle") + GAIN_KEYS
@@ -111,7 +111,7 @@ BIAS_KEYS = ("roll_bias", "pitch_bias", "yaw_bias")
 THRUST_SCALE_KEYS = ("left_thrust_scale", "right_thrust_scale")
 FEEDFORWARD_KEYS = BIAS_KEYS + THRUST_SCALE_KEYS
 # C Command tuning layout after the six motion floats; the model block follows.
-TUNING_LAYOUT = COMMAND_KEYS + FEEDFORWARD_KEYS + ("servo_compensation", "integrate_throttle", "target_rate", "velocity_damping", "velocity_leak")
+TUNING_LAYOUT = COMMAND_KEYS + FEEDFORWARD_KEYS + ("servo_compensation", "integrate_throttle", "target_rate")
 MODEL_OFFSET = 6 + len(TUNING_LAYOUT)
 # The runtime-only Command fields after the model block: the battery voltage thrust compensation is relative to, and the yaw-rate integral gain.
 THRUST_VOLTAGE = MODEL_OFFSET + len(MODEL_KEYS)
@@ -119,7 +119,7 @@ YAW_I = THRUST_VOLTAGE + 1
 # The speed moment compensation (rad/s² per m/s, 0 = off; flight_math.c), runtime-only after yaw_i.
 PITCH_SPEED = YAW_I + 1
 # The pitch damping's rate low-pass time constant (s, 0 = raw rate; flight_math.c), the last runtime-only field: after pitch_speed come the hover gains (HOVER_GAINS of them: sw/sim/hover.py GAIN_KEYS, which checks the count; not imported here, since importing hover.py compiles hover.c), hover_camera and auto_trim.
-HOVER_GAINS = 48
+HOVER_GAINS = 47
 DAMPING_TAU = PITCH_SPEED + 1 + HOVER_GAINS + 2
 # The roll setpoint's own slew rate (rad/s, 0 = target_rate; flight_math.c), after pitch_damping_tau.
 ROLL_TARGET_RATE = DAMPING_TAU + 1

@@ -24,8 +24,6 @@ typedef struct {
     float kyaw, yaw_rate;
     // Tag hold (camera only): center 1 faces the tag, holds distance (m) from it (0: the range at takeoff) and flies at its height, moving the range target there at approach (m/s); center 0 holds the range and bearing where the tag was first seen at the height climb. ceiling is the most height above the engage point centring may ask for, and the height a takeoff climbs toward while looking for the tag (m).
     float center, distance, approach, ceiling;
-    // Centring only: 1 moves the place on the circle toward square in front of the tag as the wall's normal is learned, 0 keeps the place where the tag was first seen (the normal from a small tag at range can be several degrees off).
-    float square;
     // The camera's tilt up from the body's forward axis, and its roll about its own axis (pi when mounted upside down).
     float cam_pitch, cam_roll;
     // Rotor drag: the horizontal specific force the rotors' flapping and drag give per m/s of airspeed (1/s; 0 = off, leaving the tilt dead reckoning of before), the forward thrust tilt the servo commands miss (servo zero and mounting), and how slowly the drag-model velocity corrects the estimate (s). On, the velocity estimate runs on the measured specific force turned level and is pulled toward the drag model's, so without the camera it stays bounded instead of drifting, and the hold flies on it from takeoff.
@@ -62,11 +60,11 @@ typedef struct {
     float nudge_accel;
 } HoverGains;
 
-// One camera sighting: the tag centre in the camera frame (m; right, down, forward), the wall's normal into it in the camera frame when the camera settled the tag's tilt (zero otherwise), and its capture time.
+// One camera sighting: the tag centre in the camera frame (m; right, down, forward) and its capture time.
 typedef struct {
     uint32_t sequence;
     int64_t capture_us;
-    float tag[3], normal[3];
+    float tag[3];
 } HoverPose;
 
 // The accelerometer's specific force in the level reference's body axes (g; forward, left, up: the IMU turned by pose_zero) and the thrust vector's tilt forward of the body's up axis that the servos were last commanded to (radians, thrust-weighted over both sides); hover delays the tilt by the servos' dead time.
@@ -96,7 +94,7 @@ typedef struct {
 
 typedef struct {
     // engaged: running since the mode left HOVER_OFF; landed: a landing touched down and thrust is ramping to zero; found: the tag has been seen since engaging; tracking: the horizontal hold has flown on the tag since, so the velocity estimate is good.
-    bool engaged, landed, have_pose, have_setpoint, have_normal, found, tracking;
+    bool engaged, landed, have_pose, have_setpoint, found, tracking;
     // Vertical specific force at rest, in g, learned while not engaged.
     float bias;
     // Height above the engage point (m) and climb rate (m/s), from the IMU and the camera; the height target; the last climb-rate command (m/s); the climb-rate integral (m/s²); the last thrust (N).
@@ -111,7 +109,7 @@ typedef struct {
     // Camera: the newest sighting's sequence and capture time; the tag relative to the drone in the level frame turned by yaw (forward, left, up at yaw 0) and the drone's velocity in it; the tag's height above the engage point; the range target (m) and the bearing target (radians, positive right); the heading of the line to the tag that holds the drone's place on the circle about it, and the smoothed heading of the wall's normal, both in the yaw-turned frame.
     uint32_t sequence;
     int64_t capture_us, seen_us;
-    float position[3], velocity[3], tag_height, setpoint, bearing, arc, normal;
+    float position[3], velocity[3], tag_height, setpoint, bearing, arc;
     // Horizontal acceleration trim in body axes (m/s²; forward, left).
     float trim[2];
     // Rotor drag: the drag-model velocity's offset learned while the camera measures the velocity (m/s; body forward, left), the integrated acceleration's bias learned from the drag model without it (m/s²; body forward, left), and the place dead-reckoned since the tag was last seen (m; yaw-turned frame), which the hold returns to without it.

@@ -124,7 +124,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     wind_rng = random.Random(seed + 4000)
     settings = MODEL | {"roll": 0, "pitch": 0, "yaw_rate": 0, "pitch_trim": 0, "left_trim": 0, "right_trim": 0,
                                "roll_bias": 0, "pitch_bias": 0, "yaw_bias": 0, "left_thrust_scale": 1, "right_thrust_scale": 1,
-                               "servo_compensation": 0.75, "integrate_throttle": 580, "target_rate": 360, "velocity_damping": 8, "velocity_leak": 3} | gains
+                               "servo_compensation": 0.75, "integrate_throttle": 580, "target_rate": 360} | gains
     mass = plant.get("mass", MASS)
     weight = mass * 9.81
     k = plant["thrust_k"]

@@ -25,7 +25,7 @@ GPS_LATENCY = 0.06
 GPS_MAX_SPEED_ACCURACY = 0.6
 GPS_MAX_ACCURACY = 8.0
 BARO_LATENCY = 0.075
-GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "square", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "view", "gps_tau", "gps_place_tau", "baro_tau", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll", "thrust_direction", "gps_calibrate", "return_speed", "nudge_accel")
+GAIN_KEYS = ("kp", "kd", "tilt", "kside", "kz", "kdz", "kiz", "mass", "climb", "climb_rate", "land_rate", "kyaw", "yaw_rate", "center", "distance", "approach", "ceiling", "cam_pitch", "cam_roll", "drag", "drag_tilt", "drag_tau", "trim_tau", "trim_max", "thrust_tilt", "thrust_tilt_tau", "trim_start_x", "trim_start_y", "speed_tilt", "speed_pitch", "speed_takeoff", "speed_tau", "nudge_speed", "view", "gps_tau", "gps_place_tau", "baro_tau", "nudge_forward", "nudge_left", "nudge_up", "pitch_trim", "stick_pitch", "stick_roll", "thrust_direction", "gps_calibrate", "return_speed", "nudge_accel")
 # flight.py counts these to find the Command fields after them: a gain added here and not there shifts every one of them (the pitch damping's filter, the guards' gains) without an error.
 assert len(GAIN_KEYS) == flight.HOVER_GAINS, "sw/sim/flight.py HOVER_GAINS must be the number of hover.h HoverGains members"
 # Settings stored in degrees (hover_tilt, hover_yaw_rate, hover_cam_pitch, hover_cam_roll, hover_drag_tilt) and the attitude controller's pitch_trim.
@@ -37,7 +37,7 @@ class Gains(ctypes.Structure):
 
 
 class Pose(ctypes.Structure):
-    _fields_ = [("sequence", ctypes.c_uint32), ("capture_us", ctypes.c_int64), ("tag", ctypes.c_float * 3), ("normal", ctypes.c_float * 3)]
+    _fields_ = [("sequence", ctypes.c_uint32), ("capture_us", ctypes.c_int64), ("tag", ctypes.c_float * 3)]
 
 
 class Drag(ctypes.Structure):
@@ -57,13 +57,13 @@ class Estimate(ctypes.Structure):
 
 
 class State(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_bool) for name in ("engaged", "landed", "have_pose", "have_setpoint", "have_normal", "found", "tracking")] + [
+    _fields_ = [(name, ctypes.c_bool) for name in ("engaged", "landed", "have_pose", "have_setpoint", "found", "tracking")] + [
         (name, ctypes.c_float) for name in ("bias", "height", "climb_rate", "target", "command", "integral", "force", "yaw", "yaw_hold")
     ] + [
         ("history_us", ctypes.c_int64 * HISTORY), ("history", (ctypes.c_float * 8) * HISTORY), ("next", ctypes.c_int),
         ("sequence", ctypes.c_uint32), ("capture_us", ctypes.c_int64), ("seen_us", ctypes.c_int64),
         ("position", ctypes.c_float * 3), ("velocity", ctypes.c_float * 3),
-    ] + [(name, ctypes.c_float) for name in ("tag_height", "setpoint", "bearing", "arc", "normal")] + [
+    ] + [(name, ctypes.c_float) for name in ("tag_height", "setpoint", "bearing", "arc")] + [
         ("trim", ctypes.c_float * 2), ("drag_offset", ctypes.c_float * 2), ("drag_bias", ctypes.c_float * 2), ("place", ctypes.c_float * 2),
         ("drag_velocity", ctypes.c_float * 2), ("dragging", ctypes.c_bool), ("thrust_tilt", ctypes.c_float)] + [
         (name, ctypes.c_float) for name in ("hold_force", "hold_g", "recent_g", "land_time", "land_height", "stall_time", "impulse")] + [("probing", ctypes.c_bool)] + [
@@ -116,8 +116,8 @@ def gains(settings):
     """
     values = {}
     for key in GAIN_KEYS:
-        # Settings saved before an entry existed take its settings.def default (hover_square on, the trim's former constants), the rest zero.
-        value = settings.get("pitch_trim" if key == "pitch_trim" else "hover_" + key, {"square": 1.0, "trim_tau": 4.0, "trim_max": 0.5, "thrust_tilt_tau": 1.0}.get(key, 0.0))
+        # Settings saved before an entry existed take its settings.def default (the trim's former constants), the rest zero.
+        value = settings.get("pitch_trim" if key == "pitch_trim" else "hover_" + key, {"trim_tau": 4.0, "trim_max": 0.5, "thrust_tilt_tau": 1.0}.get(key, 0.0))
         values[key] = math.radians(value) if key in ANGULAR_KEYS else value
     return Gains(**values)
 

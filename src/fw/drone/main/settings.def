@@ -2,7 +2,7 @@
 // TUNE(name, Command member, scale to the member, min, max, default): changed by the T request.
 // STATE(name, min, max, default): set only by IMU calibration (G), servo zeroing (Z), accel correction (Q) and the level reference (L); read-only to T.
 // Every entry is persisted in NVS. Angles are degrees here; RAD converts trims to the controller's radians.
-// Defaults match sw/sim/flight.py DEFAULT_TUNING and MODEL, which the host simulation uses.
+// The model defaults match sw/sim/flight.py MODEL, which the host simulation uses.
 TUNE(roll_p, roll_p, 1, 0, 1000, 20)
 TUNE(roll_i, roll_i, 1, 0, 1000, 3)
 TUNE(roll_damping, roll_damping, 1, 0, 1000, 6)
@@ -30,8 +30,6 @@ TUNE(servo_compensation, servo_compensation, RAD, 0, 3, 0.75)
 TUNE(integrate_throttle, integrate_throttle, 1, 0, 1200, 580)
 TUNE(target_rate, target_rate, RAD, 1, 360, 360)
 TUNE(roll_target_rate, roll_target_rate, RAD, 0, 360, 0)
-TUNE(velocity_damping, velocity_damping, RAD, 0, 30, 8)
-TUNE(velocity_leak, velocity_leak, 1, 0.1, 30, 3)
 TUNE(thrust_voltage, thrust_voltage, 1, 0, 20, 0)
 TUNE(yaw_i, yaw_i, 1, 0, 100, 0)
 TUNE(pitch_speed, pitch_speed, 1, -50, 50, 0)
@@ -54,7 +52,6 @@ TUNE(hover_center, hover.center, 1, 0, 1, 1)
 TUNE(hover_distance, hover.distance, 1, 0, 5, 1.79)
 TUNE(hover_approach, hover.approach, 1, 0.02, 1, 0.25)
 TUNE(hover_ceiling, hover.ceiling, 1, 0.2, 5, 1.8)
-TUNE(hover_square, hover.square, 1, 0, 1, 1)
 TUNE(hover_cam_pitch, hover.cam_pitch, RAD, -30, 30, 4.3)
 TUNE(hover_cam_roll, hover.cam_roll, RAD, -180, 180, 0)
 TUNE(hover_drag, hover.drag, 1, 0, 2, 0)

@@ -162,8 +162,6 @@ void flight_attitude_start(Attitude *state, const float *accel) {
 #define MIN_THRUST 0.3f
 // A servo command reverses direction only after moving this far back, so gyro noise cannot toggle the compensation.
 #define COMPENSATION_HYSTERESIS (0.3f * 3.14159265f / 180)
-// Most tilt velocity damping may add to the roll/pitch target.
-#define VELOCITY_TILT (8.0f * 3.14159265f / 180)
 // The integrators see at most this much error, so a large transient (a tilted takeoff, a gust) winds them up only slowly while a steady error of any size is still trimmed out.
 #define INTEGRATE_ERROR (8.0f * 3.14159265f / 180)
 // Seconds over which the pitch bias fades in once collective reaches integrate_throttle.
@@ -260,16 +258,10 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
         state->setpoint_roll = c->roll;
         state->setpoint_pitch = c->pitch;
     } else {
-        // Dead-reckoned horizontal velocity: tilt accelerates the vehicle at g * tan(tilt); the leak bounds attitude-error drift. Positive roll (right side down) moves right; positive pitch (nose down) moves forward.
-        float keep = expf(-c->dt / c->velocity_leak);
-        state->velocity[0] = keep * state->velocity[0] + 9.81f * tanf(c->roll) * c->dt;
-        state->velocity[1] = keep * state->velocity[1] + 9.81f * tanf(c->pitch) * c->dt;
-        float brake_roll = clampf(-c->velocity_damping * state->velocity[0], -VELOCITY_TILT, VELOCITY_TILT);
-        float brake_pitch = clampf(-c->velocity_damping * state->velocity[1], -VELOCITY_TILT, VELOCITY_TILT);
         float step = c->target_rate * c->dt;
         float roll_step = c->roll_target_rate > 0 ? c->roll_target_rate * c->dt : step;
-        state->setpoint_roll += clampf(c->target_roll + brake_roll - state->setpoint_roll, -roll_step, roll_step);
-        state->setpoint_pitch += clampf(c->target_pitch + trim + brake_pitch - state->setpoint_pitch, -step, step);
+        state->setpoint_roll += clampf(c->target_roll - state->setpoint_roll, -roll_step, roll_step);
+        state->setpoint_pitch += clampf(c->target_pitch + trim - state->setpoint_pitch, -step, step);
     }
     // Resting tilted (no front legs), forward-pointing thrust would shove the drone along the floor and lever it over its nose. Until it first comes level the servos also tilt back by most of the pitch from level: the thrust points nearly up, and acting ahead of the back feet it lifts the nose. That back tilt is far more torque than the drone needs once it is pivoting or airborne, and the servos lag ~0.1 s, so it is withdrawn as the nose comes up (gone at UPRIGHT_RATE): the righting rotation stays slow enough for the pitch damping to stop at level. Meanwhile the setpoint follows the attitude, so the pitch P term and integrator stay out of it and the hand-over is smooth. Only pitch can be vectored this way. On the forward legs (2026-11-11) the tilted thrust's horizontal part pulls the body one way while the gripping feet hold it, a couple that pivots it further from level, faster than the servos' correction can stop: hover takeoffs, which had no vectoring, pitched 20-30 degrees past their -12 to +8 degree rests before the feet were 4 cm up (2026-11-12 00:53-01:31 UTC; sw/sim/takeoff_test.py).
     float tilt = c->pitch;

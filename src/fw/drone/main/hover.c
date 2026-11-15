@@ -15,10 +15,6 @@
 // With the drag model the velocity runs on the measured specific force, which already carries every real push (a thrust tilt the servo command does not show, the room's flow), so what the camera keeps correcting is that level acceleration's own error (the attitude estimate against the accelerometer): the corrections teach it as the drag model's bias, which the dead reckoning takes off, instead of the push, which it does not, so the push only ever grew. On 2026-11-11 with rubber bands on the servos the level acceleration read 0.1-0.4 m/s² forward, the push ran to -2.9 m/s² within 25 s, and the hold, cancelling it outright, leaned the drone at the tag 1-1.5 m inside its range target (sw/sim/hold_replay.py, sw/sim/band_hold.py).
 // Without the tag the dead-reckoned velocity leaks toward zero over this long (s), as the trim never quite matches the push it cancels.
 #define DRIFT_TAU 3.0f
-// Each sighting with a settled tilt moves the wall-normal estimate this fraction of the way to its own.
-#define NORMAL_WEIGHT 0.1f
-// The place on the circle follows that estimate over this long (s), at most at the approach speed.
-#define ARC_TAU 2.0f
 // How fast the camera pulls the IMU's height and climb rate toward its own (s).
 #define CAMERA_TAU 0.15f
 // Without the camera the integrated climb rate leaks over this long (s), so an accelerometer bias cannot run away: airborne in hold toward the last climb-rate command, so a long climb keeps the speed it really has; on the ground (where the drone cannot follow the command) and landing toward zero, so touchdown still shows as a stalled descent.
@@ -309,14 +305,6 @@ static void level(const HoverState *state, const HoverGains *g, int64_t capture_
 static void take(HoverState *state, const HoverGains *g, const HoverPose *pose) {
     float position[3];
     level(state, g, pose->capture_us, pose->tag, position);
-    // A settled tilt gives the wall's normal: its heading in the level frame, smoothed over many frames, is where the drone should be looking from. A sighting or two with the wrong tilt only nudges it.
-    if (pose->normal[0] || pose->normal[1] || pose->normal[2]) {
-        float normal[3];
-        level(state, g, pose->capture_us, pose->normal, normal);
-        float heading = atan2f(normal[1], normal[0]);
-        state->normal = state->have_normal ? wrap(state->normal + NORMAL_WEIGHT * wrap(heading - state->normal)) : heading;
-        state->have_normal = true;
-    }
     int64_t interval_us = pose->capture_us - state->capture_us;
     if (state->have_pose && interval_us > 0 && interval_us <= GAP_US) {
         float interval = interval_us / 1e6f, keep = expf(-interval / VELOCITY_TAU);
@@ -938,8 +926,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->arc = around;
             state->have_setpoint = true;
         }
-        // Centring: on the ground the targets follow the drone and nothing is commanded, since noisy camera velocity would only tilt it on its feet; airborne in hold the range target moves toward distance at the approach speed, so a large offset is flown out rather than lunged at, and the loop follows its rate; the place on the circle moves the same way toward square in front of the tag once the wall's normal is known; landing holds them where they are.
-        float rate = 0, arc_rate = 0;
+        // Centring: on the ground the targets follow the drone and nothing is commanded, since noisy camera velocity would only tilt it on its feet; airborne in hold the range target moves toward distance at the approach speed, so a large offset is flown out rather than lunged at, and the loop follows its rate; landing holds them where they are.
+        float rate = 0;
         if (g->center && mode == HOVER_HOLD) {
             if (state->height < AIRBORNE) {
                 state->setpoint = range;
@@ -949,12 +937,6 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             // distance 0 keeps the range from takeoff.
             rate = g->distance > 0 ? clamp(g->distance - state->setpoint, -g->approach * dt, g->approach * dt) / dt : 0;
             state->setpoint += rate * dt;
-            if (state->have_normal && g->square) {
-                // Smoothly rather than at full speed, as the estimate moves a little with each sighting.
-                float fastest = g->approach / range;
-                arc_rate = clamp(wrap(state->normal - state->arc) / ARC_TAU, -fastest, fastest);
-                state->arc = wrap(state->arc + arc_rate * dt);
-            }
         }
         // Toward the tag: close the range error and damp the closing speed toward the target's rate. Across it (positive left): damp the sideways speed toward the target's rate, and pull weakly toward the place on the circle, so the drone neither drifts around the tag nor fights the range and heading loops for it. Moving left turns the line to the tag right (smaller around).
         float ux = px / range, uy = py / range;
@@ -964,7 +946,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         float ease = state->reacquired_us ? clamp((now_us - state->reacquired_us) / (float)REACQUIRE_EASE_US, 0, 1) : 1;
         float hold = ease * g->kp * (range - (state->setpoint - g->nudge_forward)), place = ease * g->kside * range * wrap(around - (state->arc - g->nudge_left / range));
         // The velocity damping aims at the nudged hold point's own speed.
-        float toward = hold - g->kd * (closing + rate - state->nudge_rate[0]), across = place - g->kd * (sideways + arc_rate * range - state->nudge_rate[1]);
+        float toward = hold - g->kd * (closing + rate - state->nudge_rate[0]), across = place - g->kd * (sideways - state->nudge_rate[1]);
         // Cancel the learned push outright, in the yaw-turned frame, so a turn does not swing it sideways as a body-fixed trim would.
         float ax = toward * ux - across * uy - state->push[0];
         float ay = toward * uy + across * ux - state->push[1];

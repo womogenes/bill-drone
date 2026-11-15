@@ -689,11 +689,10 @@ static void tip_or_recover(Tick *t) {
 static bool hover_setpoint(Tick *t, Command *setpoint) {
     CameraPose camera;
     HoverPose seen, *tag = NULL;
-    // Every frame whose tag corners the camera trusted, whether or not it settled the tilt: hover flies on the tag centre, which the tilt does not affect, and takes the wall's normal (the tag's z axis in the camera frame) only from an unambiguous tilt.
+    // Every frame whose tag corners the camera trusted, whether or not it settled the tilt: hover flies on the tag centre, which the tilt does not affect.
     if (command.hover_camera && camera_candidates(&camera, HOVER_POSE_US)) {
         seen = (HoverPose){.sequence = camera.sequence, .capture_us = camera.capture_us,
                            .tag = {camera.tag_position_m[0], camera.tag_position_m[1], camera.tag_position_m[2]}};
-        if (camera.valid == 1) memcpy(seen.normal, &camera.rotation[6], sizeof(seen.normal));
         tag = &seen;
     }
     float flying = hover.engaged ? hover.force : command.base > 0 ? 2 * thrust(command.base) : 0;
@@ -731,11 +730,10 @@ static bool hover_setpoint(Tick *t, Command *setpoint) {
     bool pilot_yaw = command.target_yaw != 0;
     setpoint->target_yaw = command.hover_camera && !pilot_yaw ? out.yaw_rate : command.target_yaw;
     if (pilot_yaw) hover.yaw_hold = hover.yaw;
-    // Once flying on the tag, hover damps the velocity itself, measured by the camera and dead-reckoned through losses: flight_math's damping is off, since its leaky integral of attitude error would cancel any steady tilt hover asks for, and its velocity follows hover's, so it would resume from the real velocity.
+    // Flying on the tag, the controller takes the hover's measured velocity for the speed moment (pitch_speed).
     if (!out.tracking) return false;
     state.controller.velocity[0] = out.velocity[0];
     state.controller.velocity[1] = out.velocity[1];
-    setpoint->velocity_damping = 0;
     return true;
 }
 
@@ -786,7 +784,7 @@ static void fly(Tick *t) {
     command.dt = t->dt;
     Command setpoint = command;
     bool hovering = hover_mode && hover.bias > 0.5f;
-    // The pitch speed moment compensation needs a measured speed: the hover's while it flies on the tag; flight_math's own dead reckoning from g tan(pitch) reads a held trim pitch as speed.
+    // The pitch speed moment compensation needs a measured speed: the hover's while it flies on the tag.
     bool tracking = hovering && hover_setpoint(t, &setpoint);
     float add[EXCITE_CHANNELS] = {0};
     play_pattern(t, &setpoint, add);

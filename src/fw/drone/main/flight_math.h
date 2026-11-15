@@ -11,7 +11,7 @@
 // q: the attitude (w, x, y, z; body to level, its heading the gyro's own), of which roll and pitch are read (quaternion_euler).
 typedef struct { float roll, pitch, q[4]; } Attitude;
 typedef struct { float ax, ay, az, gx, gy, gz, dt, gravity_tau; } Motion;
-// comp_dir/comp_ref: each servo's last commanded direction (+1, -1, or 0 before it moved) and its extreme since. airborne counts seconds since collective first reached integrate_throttle (0 before); setpoint_* is the ramped roll/pitch target (with trim); velocity is the dead-reckoned (rightward, forward) velocity in m/s from g * tan(tilt).
+// comp_dir/comp_ref: each servo's last commanded direction (+1, -1, or 0 before it moved) and its extreme since. airborne counts seconds since collective first reached integrate_throttle (0 before); setpoint_* is the ramped roll/pitch target (with trim); velocity is the hover's measured (rightward, forward) velocity in m/s while it flies on the tag, for the speed moment (pitch_speed).
 // upright: 1 from arming at a tilted rest until the drone first comes level; meanwhile the servos also tilt back by most of the pitch from level, so the thrust points up, easing off as the nose comes up (flight_math.c).
 // yaw_i: the yaw-rate integrator (rad/s²), trimming out steady twist such as the motors' reaction torque at unequal throttles.
 // damped_gy: the pitch rate the pitch damping acts on, low-passed over pitch_damping_tau.
@@ -36,8 +36,6 @@ typedef struct {
     float integrate_throttle;
     // Fastest change of the roll/pitch setpoint, rad/s: after liftoff it moves from the ground attitude to the target.
     float target_rate;
-    // Velocity damping: target tilt per m/s of dead-reckoned velocity (rad per m/s, 0 = off), and that estimate's leak time (s).
-    float velocity_damping, velocity_leak;
     Model model;
     // Battery volts the thrust table is taken to hold at (0 = off): the runtime scales the thrust scales by (measured / this)² before flight_control, which does not read it. Last, so the host simulation's buffer layout is unchanged.
     float thrust_voltage;

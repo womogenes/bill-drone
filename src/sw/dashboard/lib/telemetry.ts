@@ -75,15 +75,12 @@ export type ControlSettings = {
   servo_compensation: number;
   integrate_throttle: number;
   target_rate: number;
-  velocity_damping: number;
-  velocity_leak: number;
   thrust_voltage: number;
   yaw_i: number;
   hover_center: number;
   hover_distance: number;
   hover_approach: number;
   hover_ceiling: number;
-  hover_square: number;
   hover_kside: number;
   hover_cam_pitch: number;
   hover_cam_roll: number;
