@@ -129,9 +129,6 @@ export type ControlSettings = {
   recover_enable?: number;
 };
 
-// A setting that is a number: all but enabled.
-export type NumberSetting = Exclude<keyof ControlSettings, 'enabled'>;
-
 // The drone service's recorder (src/fw/controller/bridge.py).
 export type RecorderStatus = {
   file: string | null;

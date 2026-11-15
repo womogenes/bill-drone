@@ -33,7 +33,6 @@ import {
   MANUAL,
   type ControlSettings,
   type ImuState,
-  type NumberSetting,
   type Reading,
 } from '@/lib/telemetry';
 
@@ -81,260 +80,14 @@ function nudgeText([forward, left, up]: [number, number, number]) {
 
 // The setpoints the keys stream (the drone's targets).
 type Setpoint = 'roll' | 'pitch' | 'yaw_rate' | 'base_throttle';
-// The gains dialog's sections: each field is a drone setting; label is read within its section's title.
-type Field = { key: NumberSetting; label: string; min?: number; max?: number };
-const gainSections: {
-  title: string;
-  needs?: NumberSetting;
-  fields: Field[];
-}[] = [
-  {
-    title: 'Roll',
-    fields: [
-      { key: 'roll_p', label: 'P', min: 0 },
-      { key: 'roll_i', label: 'I', min: 0 },
-      { key: 'roll_damping', label: 'Damping', min: 0 },
-      { key: 'roll_bias', label: 'Bias (rad/s²)', min: -20, max: 20 },
-    ],
-  },
-  {
-    title: 'Pitch',
-    fields: [
-      { key: 'pitch_p', label: 'P', min: 0 },
-      { key: 'pitch_i', label: 'I', min: 0 },
-      { key: 'pitch_damping', label: 'Damping', min: 0 },
-      { key: 'pitch_bias', label: 'Bias (rad/s²)', min: -20, max: 20 },
-      { key: 'pitch_trim', label: 'Trim (°)', min: -15, max: 15 },
-    ],
-  },
-  {
-    title: 'Yaw',
-    fields: [
-      { key: 'yaw_damping', label: 'Damping', min: 0 },
-      { key: 'yaw_i', label: 'I', min: 0 },
-      { key: 'yaw_bias', label: 'Bias (rad/s²)', min: -10, max: 10 },
-    ],
-  },
-  {
-    title: 'Attitude loop',
-    fields: [
-      { key: 'integral_limit', label: 'Integral limit', min: 0 },
-      { key: 'integrate_throttle', label: 'Integrate above throttle', min: 0 },
-      { key: 'target_rate', label: 'Target ramp (°/s)', min: 1 },
-      { key: 'velocity_damping', label: 'Velocity damping (°/(m/s))', min: 0 },
-      { key: 'velocity_leak', label: 'Velocity leak (s)', min: 0.1 },
-      { key: 'auto_trim', label: 'Self-trim per hop (0-1)', min: 0, max: 1 },
-    ],
-  },
-  {
-    title: 'Servos and thrust',
-    fields: [
-      { key: 'left_trim', label: 'Left servo trim (°)', min: -15, max: 15 },
-      { key: 'right_trim', label: 'Right servo trim (°)', min: -15, max: 15 },
-      { key: 'servo_compensation', label: 'Servo compensation (°)', min: 0 },
-      { key: 'thrust_voltage', label: 'Thrust reference (V, 0 off)', min: 0 },
-      {
-        key: 'left_thrust_scale',
-        label: 'Left thrust scale',
-        min: 0.5,
-        max: 1.5,
-      },
-      {
-        key: 'right_thrust_scale',
-        label: 'Right thrust scale',
-        min: 0.5,
-        max: 1.5,
-      },
-    ],
-  },
-  {
-    title: 'Hover on the tag',
-    fields: [
-      { key: 'hover_center', label: 'Center on tag (1 on, 0 off)', min: 0 },
-      {
-        key: 'hover_distance',
-        label: 'Distance (m, 0 = takeoff range)',
-        min: 0,
-      },
-      { key: 'hover_approach', label: 'Approach speed (m/s)', min: 0.02 },
-      { key: 'hover_ceiling', label: 'Ceiling above takeoff (m)', min: 0.2 },
-      {
-        key: 'hover_square',
-        label: 'Move square to tag (1 on, 0 off)',
-        min: 0,
-      },
-      { key: 'hover_kside', label: 'Pull to square-on (m/s² per m)', min: 0 },
-      { key: 'hover_cam_pitch', label: 'Camera tilt up (°)', min: -30 },
-      {
-        key: 'hover_cam_roll',
-        label: 'Camera roll (°, 180 upside down)',
-        min: -180,
-      },
-    ],
-  },
-  {
-    title: 'Hover without the tag',
-    fields: [
-      { key: 'hover_drag', label: 'Rotor drag (1/s, 0 off)', min: 0 },
-      {
-        key: 'hover_drag_tilt',
-        label: 'Drag thrust tilt offset (°)',
-        min: -10,
-      },
-      { key: 'hover_drag_tau', label: 'Drag correction time (s)', min: 0.1 },
-      {
-        key: 'hover_speed_tilt',
-        label: 'Servo speed tilt (°/(m/s), 0 off)',
-        min: 0,
-      },
-      { key: 'hover_speed_pitch', label: 'Servo speed pitch share', min: -2 },
-      {
-        key: 'hover_speed_takeoff',
-        label: 'Servo speed takeoff offset (°)',
-        min: -10,
-      },
-      {
-        key: 'hover_speed_tau',
-        label: 'Servo speed correction time (s)',
-        min: 0.05,
-      },
-      { key: 'hover_trim_tau', label: 'Trim build-up time (s)', min: 0.1 },
-      { key: 'hover_trim_max', label: 'Trim limit (m/s²)', min: 0 },
-      {
-        key: 'hover_gps_tau',
-        label: 'GPS velocity correction time (s, 0 off)',
-        min: 0,
-      },
-      {
-        key: 'hover_gps_place_tau',
-        label: 'GPS position correction time (s, 0 off)',
-        min: 0,
-      },
-      {
-        key: 'hover_gps_height_tau',
-        label: 'GPS height correction time (s, 0 off)',
-        min: 0,
-      },
-      {
-        key: 'hover_baro_tau',
-        label: 'Barometer height correction time (s, 0 off)',
-        min: 0,
-        max: 10,
-      },
-      {
-        key: 'hover_gps_heading',
-        label: 'Heading at takeoff (° from north)',
-        min: -180,
-        max: 180,
-      },
-      {
-        key: 'hover_gps_calibrate',
-        label: 'Heading search tilt (°, 0 off)',
-        min: 0,
-        max: 10,
-      },
-      {
-        key: 'hover_thrust_direction',
-        label: 'Thrust direction share (0 off)',
-        min: 0,
-        max: 1.5,
-      },
-      { key: 'hover_kd', label: 'Velocity damping (1/s)', min: 0 },
-      {
-        key: 'hover_return_speed',
-        label: 'Return speed to the hold point (m/s, 0 no limit)',
-        min: 0,
-        max: 5,
-      },
-      {
-        key: 'hover_nudge_speed',
-        label: 'Arrow and stick speed (m/s)',
-        min: 0.05,
-        max: 5,
-      },
-      {
-        key: 'hover_nudge_accel',
-        label: 'Arrow and stick acceleration (m/s², 0 off)',
-        min: 0,
-        max: 5,
-      },
-      {
-        key: 'hover_ekf',
-        label: 'Kalman filter (0 logged, 1 flown, 2 and its height)',
-        min: 0,
-        max: 2,
-      },
-    ],
-  },
-  {
-    title: 'Fly-away failsafe',
-    fields: [
-      { key: 'failsafe_speed', label: 'Speed (m/s, 0 off)', min: 0 },
-      { key: 'failsafe_distance', label: 'Distance (m, 0 off)', min: 0 },
-      { key: 'failsafe_time', label: 'Time over the speed (s)', min: 0.2 },
-      { key: 'failsafe_land', label: 'Brake before landing (s)', min: 1 },
-      { key: 'failsafe_tilt', label: 'Brake tilt (°)', min: 0, max: 30 },
-    ],
-  },
-  {
-    title: 'Test pattern',
-    fields: [
-      {
-        key: 'pattern_distance',
-        label: 'Stop past (m, 0 off)',
-        min: 0,
-        max: 10,
-      },
-      {
-        key: 'pattern_tilt',
-        label: 'Stop past tilt (°, 0 off)',
-        min: 0,
-        max: 60,
-      },
-    ],
-  },
-  {
-    title: 'Tilt and flip',
-    fields: [
-      { key: 'tip_limit', label: 'Tip cut (°)', min: 20, max: 80 },
-      { key: 'bank_tilt', label: 'Gyro-only past (°, 0 off)', min: 0, max: 80 },
-      {
-        key: 'flip_enable',
-        label: 'Flip allowed (0 off, 1 flip, 2 burst to 60 and back, 3 to 90)',
-        min: 0,
-        max: 3,
-      },
-      { key: 'flip_height', label: 'Flip from at least (m)', min: 2.5, max: 5 },
-      {
-        key: 'recover_enable',
-        label: 'Recover, no tip cut (0 or 1)',
-        min: 0,
-        max: 1,
-      },
-    ],
-  },
-  {
-    title: 'Model',
-    needs: 'arm',
-    fields: [
-      { key: 'pivot_height', label: 'Pivot height (m)', min: 0.000001 },
-      { key: 'com_x', label: 'CoM x (m)', min: -0.02, max: 0.02 },
-      { key: 'roll_inertia', label: 'Roll inertia (kg·m²)', min: 0.000001 },
-      { key: 'pitch_inertia', label: 'Pitch inertia (kg·m²)', min: 0.000001 },
-      { key: 'yaw_inertia', label: 'Yaw inertia (kg·m²)', min: 0.000001 },
-      {
-        key: 'reaction_torque_ratio',
-        label: 'Reaction torque ratio',
-        min: -0.1,
-        max: 0.1,
-      },
-      { key: 'arm', label: 'Arm (m)', min: 0.001 },
-    ],
-  },
-];
-const gainKeys = gainSections.flatMap(({ fields }) =>
-  fields.map(({ key }) => key)
-);
+// A drone setting as the bridge's GET /schema gives it (fw/drone/main/settings.def): its name, range and default, and whether the T request may change it.
+type SchemaEntry = {
+  name: string;
+  min: number;
+  max: number;
+  default: number;
+  tunable: boolean;
+};
 
 export const ControlPanel = memo(function ControlPanel({
   settings,
@@ -407,8 +160,13 @@ export const ControlPanel = memo(function ControlPanel({
   const [draft, setDraft] = useState<Partial<Record<Setpoint, number>>>({});
   const [gains, setGains] = useState<Record<string, string>>({});
   // A setting by name, undefined when this drone's firmware has none.
-  const setting = (key: NumberSetting): number | undefined => settings[key];
+  const setting = (key: string) =>
+    (settings as Record<string, unknown>)[key] as number | undefined;
   const [open, setOpen] = useState(false);
+  // The settings dialog's fields, the drone's own tunable settings (fetched as it opens), and the values it opened with: Apply sends only the ones changed.
+  const [fields, setFields] = useState<SchemaEntry[]>([]);
+  const [opened, setOpened] = useState<Record<string, string>>({});
+  const [schemaError, setSchemaError] = useState('');
   // Every key's size is a drone setting, so it can be tuned over the bridge like the rest: the arrows tilt as far as the hold itself may (hover_tilt; a per-browser step had been left at 5 degrees, too little to bring back a drifting drone, 2026-11-02), on the tag they move the hold point at hover_nudge_speed, A and D turn at hover_yaw_rate and W and S climb at hover_climb_rate.
   const keySizes = useRef({ tilt: 15, yaw: 30, climb: 0.3, move: 0.5 });
   keySizes.current = {
@@ -735,17 +493,28 @@ export const ControlPanel = memo(function ControlPanel({
             open={open}
             onOpenChange={(value) => {
               setOpen(value);
-              if (value)
-                setGains(
-                  Object.fromEntries(
-                    gainKeys
-                      .filter((key) => setting(key) !== undefined)
-                      .map((key) => [
-                        key,
-                        String(Number(setting(key)!.toPrecision(5))),
-                      ])
-                  )
-                );
+              if (!value) return;
+              setFields([]);
+              setSchemaError('');
+              fetch('/api/schema')
+                .then((response) => response.json())
+                .then((body: { settings?: SchemaEntry[]; error?: string }) => {
+                  if (!body.settings) throw new Error(body.error);
+                  const tunable = body.settings.filter(
+                    ({ name, tunable }) =>
+                      tunable && setting(name) !== undefined
+                  );
+                  const values = Object.fromEntries(
+                    tunable.map(({ name }) => [
+                      name,
+                      String(Number(setting(name)!.toPrecision(5))),
+                    ])
+                  );
+                  setFields(tunable);
+                  setOpened(values);
+                  setGains(values);
+                })
+                .catch((failure: Error) => setSchemaError(failure.message));
             }}
           >
             <EscCalibration
@@ -758,7 +527,7 @@ export const ControlPanel = memo(function ControlPanel({
                 <Button
                   variant="ghost"
                   size="icon"
-                  aria-label="Control gains"
+                  aria-label="Settings"
                   disabled={!available || settings.enabled}
                 />
               }
@@ -767,7 +536,7 @@ export const ControlPanel = memo(function ControlPanel({
             </DialogTrigger>
             <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-6xl">
               <DialogHeader>
-                <DialogTitle>Control gains</DialogTitle>
+                <DialogTitle>Settings</DialogTitle>
               </DialogHeader>
               <form
                 className="space-y-4"
@@ -775,55 +544,41 @@ export const ControlPanel = memo(function ControlPanel({
                   event.preventDefault();
                   onChange(
                     Object.fromEntries(
-                      Object.entries(gains).map(([key, value]) => [
-                        key,
-                        Number(value),
-                      ])
+                      Object.entries(gains)
+                        .filter(([key, value]) => value !== opened[key])
+                        .map(([key, value]) => [key, Number(value)])
                     )
                   );
                   setOpen(false);
                 }}
               >
-                <div className="grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
-                  {gainSections
-                    .filter(
-                      ({ fields, needs }) =>
-                        (!needs || setting(needs) !== undefined) &&
-                        fields.some(({ key }) => setting(key) !== undefined)
-                    )
-                    .map(({ title, fields }) => (
-                      <section key={title} className="space-y-2">
-                        <h3 className="border-b pb-1 font-medium">{title}</h3>
-                        {fields
-                          .filter(({ key }) => setting(key) !== undefined)
-                          .map(({ key, label, min, max }) => (
-                            <label
-                              key={key}
-                              className="flex items-center justify-between gap-3"
-                            >
-                              <span className="text-sm text-muted-foreground">
-                                {label}
-                              </span>
-                              <Input
-                                className="w-28 shrink-0 tabular-nums"
-                                aria-label={`${title}: ${label}`}
-                                type="number"
-                                min={min}
-                                max={max}
-                                step="any"
-                                required
-                                value={gains[key] ?? ''}
-                                onChange={(event) =>
-                                  setGains({
-                                    ...gains,
-                                    [key]: event.target.value,
-                                  })
-                                }
-                              />
-                            </label>
-                          ))}
-                      </section>
-                    ))}
+                {schemaError && (
+                  <p className="text-sm text-red-700">{schemaError}</p>
+                )}
+                <div className="grid gap-x-8 gap-y-2 md:grid-cols-2 xl:grid-cols-3">
+                  {fields.map(({ name, min, max }) => (
+                    <label
+                      key={name}
+                      className="flex items-center justify-between gap-3"
+                    >
+                      <span className="text-sm text-muted-foreground">
+                        {name}
+                      </span>
+                      <Input
+                        className="w-28 shrink-0 tabular-nums"
+                        aria-label={name}
+                        type="number"
+                        min={min}
+                        max={max}
+                        step="any"
+                        required
+                        value={gains[name] ?? ''}
+                        onChange={(event) =>
+                          setGains({ ...gains, [name]: event.target.value })
+                        }
+                      />
+                    </label>
+                  ))}
                 </div>
                 <Button
                   type="submit"
