@@ -20,8 +20,8 @@ typedef struct {
     double link_k, link_c, left_play, right_play, left_band, right_band, band_k, right_gain;
     double prop_torque, prop_momentum, inflow_damping, edgewise_damping, wash, pitch_wake, wake_tau;
     double roll_pendulum, pitch_pendulum, roll_from_yaw, yaw_from_roll;
-    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance, rotor_momentum, motor_tau_down, motor_idle, motor_floor, motor_coast, motor_ceiling, coast_below, climb_inflow, speed_range, speed_moment2;
-    double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, J;
+    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance, rotor_momentum, motor_tau_down, motor_idle, motor_floor, motor_coast, motor_ceiling, coast_below, climb_inflow, speed_range, speed_moment2, rotor_drag_h, rotor_inflow, momentum_tilt, flap_lever, inflow_recovery, inflow_steady;
+    double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, J, dz, lever;
     double level, mean_left, mean_right;
     double mass, throttle_max, servo_limit, ground_k, ground_c, friction, air_drag, tilt_share;
     double hull[POINTS][3];
@@ -92,12 +92,12 @@ static void cross(const double *a, const double *b, double *out) {
 
 static double norm3(const double *v) { return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
 
-// One control tick for n envs. Per env: tilt_gain (on the tilt's pitch torque), differential_slope, inertia_scale [n]; inertia, push [n, 3]; rotor_drag [n, 2]; throttle, tilt_command [n, 2] this tick's commands; disturbance [n, 6] forces then torques. Updated in place: throttles, commands [n, history, 2]; pos, vel, omega, accel [n, 3]; quat [n, 4]; the airframe state rate [n, 3], att, body_vel, motor, horn, hvel, tilt, tvel, spin [n, 2], wake [n]; contact, contact_now [n]; touched [n] (bytes).
+// One control tick for n envs. Per env: tilt_gain (on the tilt's pitch torque), differential_slope, inertia_scale [n]; inertia, push [n, 3]; rotor_drag [n, 2]; throttle, tilt_command [n, 2] this tick's commands; disturbance [n, 6] forces then torques. Updated in place: throttles, commands [n, history, 2]; pos, vel, omega, accel [n, 3]; quat [n, 4]; the airframe state rate [n, 3], att, body_vel, motor, horn, hvel, tilt, tvel, spin [n, 2], wake [n], recovered [n, 2]; contact, contact_now [n]; touched [n] (bytes).
 void rigid_step(size_t n, size_t history, const Params *p, const double *table, size_t count,
                 const double *tilt_gain, const double *differential_slope, const double *inertia, const double *inertia_scale, const double *rotor_drag, const double *push,
                 const double *throttle, const double *tilt_command, const double *disturbance,
                 double *throttles, double *commands, double *pos, double *vel, double *quat, double *omega,
-                double *rate, double *att, double *body_vel, double *motor, double *horn, double *hvel, double *tilt, double *tvel, double *wake, double *spin,
+                double *rate, double *att, double *body_vel, double *motor, double *horn, double *hvel, double *tilt, double *tvel, double *wake, double *spin, double *recovered,
                 double *accel, double *contact, double *contact_now, unsigned char *touched) {
     const double gain[2] = {1.0, p->right_gain};
     const double motor_delay[2] = {p->motor_delay, p->right_motor_delay}, servo_delay[2] = {p->servo_delay, p->right_servo_delay};
@@ -175,11 +175,48 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
         }
         // The rotors climbing along their shafts lose climb_inflow of their thrust per m/s (airframe.py step): the thrust every torque and force sees; the rotors' speed stays the motors'.
         double inflow = clip(1 - p->climb_inflow * rotated[2], 0.5, 1.5);
-        double left = st_motor[0] * inflow, right = st_motor[1] * inflow, total = left + right, a = p->arm, cy = p->cy;
+        double left = st_motor[0] * inflow, right = st_motor[1] * inflow, a = p->arm, cy = p->cy;
+        // The rotors' aerodynamics at their hubs (airframe.py hub_aero): each thrust less its axial inflow's share and the in-plane forces' torque and sum, from the hub's air speed (the body's velocity, its rates crossed with the hub's place, the assembly's swing).
+        double hub_torque[3] = {0, 0, 0}, hub_force[3] = {0, 0, 0};
+        if (p->rotor_drag_h != 0 || p->rotor_inflow != 0) {
+            double hover = p->mass * G / 2, thrusts[2] = {left, right};
+            for (int s = 0; s < 2; s++) {
+                double y = s == 0 ? a : -a, swing = st_tvel[s] * gain[s] * DEG;
+                double hub[3] = {p->lever * sn[s] - p->cx, y - cy, p->dz + p->lever * c[s]}, turn[3], air[3], shaft[3] = {sn[s], 0.0, c[s]};
+                cross(w, hub, turn);
+                air[0] = rotated[0] + turn[0] + swing * p->lever * c[s];
+                air[1] = rotated[1] + turn[1];
+                air[2] = rotated[2] + turn[2] - swing * p->lever * sn[s];
+                double axial = air[0] * shaft[0] + air[1] * shaft[1] + air[2] * shaft[2];
+                double root_thrust = sqrt(fmax(thrusts[s], 0.0) * hover), force[3], torque[3];
+                for (int i = 0; i < 3; i++) force[i] = -p->rotor_drag_h * root_thrust * (air[i] - axial * shaft[i]);
+                cross(hub, force, torque);
+                // The prop's flapping hub moment: the H-force flap_lever further up the shaft (airframe.py hub_aero).
+                double flap[3];
+                cross(shaft, force, flap);
+                for (int i = 0; i < 3; i++) hub_force[i] += force[i], hub_torque[i] += torque[i] + p->flap_lever * flap[i];
+                // With inflow_recovery the motor wins back what a steady climb takes, but inflow_steady of it (airframe.py hub_aero).
+                double seen = axial;
+                if (p->inflow_recovery > 0) {
+                    double *caught = recovered + 2 * e + s;
+                    seen = axial - (1 - p->inflow_steady) * *caught;
+                    *caught = axial + (*caught - axial) * exp(-DT / p->inflow_recovery);
+                }
+                thrusts[s] = fmax(thrusts[s] - p->rotor_inflow * root_thrust * seen, 0.0);
+            }
+            left = thrusts[0], right = thrusts[1];
+        }
+        double total = left + right;
         double root[2] = {sqrt(fmax(st_motor[0], 0.0)), sqrt(fmax(st_motor[1], 0.0))};
         // The rotors' spin angular momentum along their tilted shafts (airframe.py step): -ω × H and -dH/dt.
         double hx = p->rotor_momentum * (root[1] * sn[1] - root[0] * sn[0]), hz = p->rotor_momentum * (root[1] * c[1] - root[0] * c[0]);
         double dhx = p->rotor_momentum * ((root[1] - before[1]) * sn[1] - (root[0] - before[0]) * sn[0]) / DT, dhz = p->rotor_momentum * ((root[1] - before[1]) * c[1] - (root[0] - before[0]) * c[0]) / DT;
+        // With momentum_tilt the shafts' turning too (airframe.py step).
+        if (p->momentum_tilt != 0) {
+            double swing[2] = {st_tvel[0] * gain[0] * DEG, st_tvel[1] * gain[1] * DEG};
+            dhx = dhx + p->rotor_momentum * (root[1] * swing[1] * c[1] - root[0] * swing[0] * c[0]);
+            dhz = dhz - p->rotor_momentum * (root[1] * swing[1] * sn[1] - root[0] * swing[0] * sn[0]);
+        }
         double roll_torque = (a - cy) * left * c[0] - (a + cy) * right * c[1]
             - p->prop_torque * (left * sn[0] - right * sn[1])
             + p->prop_momentum * (root[0] * st_tvel[0] - root[1] * st_tvel[1]) * DEG
@@ -187,7 +224,8 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
             - flying * p->roll_pendulum * total * att0[0]
             + flying * p->hy * p->vy_drag * p->mass * vel0[1]
             + p->roll_from_yaw * w[2]
-            - w[1] * hz - dhx;
+            - w[1] * hz - dhx
+            + hub_torque[0];
         double roll = roll_torque / p->Ixx + push[3 * e] * flying;
         double tilted = left * sn[0] + right * sn[1];
         wake[e] = tilted + (wake[e] - tilted) * wake_keep;
@@ -199,13 +237,15 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
             - flying * p->speed_moment2 * vel0[0] * fabs(vel0[0])
             - flying * p->pitch_pendulum * total * att0[1]
             - flying * p->hx * p->vx_drag * p->mass * vel0[0]
-            + w[0] * hz - w[2] * hx;
+            + w[0] * hz - w[2] * hx
+            + hub_torque[1];
         double pitch_other = pitch_torque / p->Iyy + push[3 * e + 1] * flying;
         double yaw_torque = (1 - p->wash) * ((a + cy) * right * sn[1] - (a - cy) * left * sn[0])
             + p->prop_torque * (right * c[1] - left * c[0])
             - p->edgewise_damping * a * a * total * w[2]
             + p->yaw_from_roll * w[0]
-            + w[1] * hx - dhz;
+            + w[1] * hx - dhz
+            + hub_torque[2];
         double yaw = yaw_torque / p->Izz + push[3 * e + 2] * flying;
         double pq = w[1], pitch = att0[1], pitch_sum = 0.0;
         for (int sub = 0; sub < SUB; sub++) {
@@ -248,7 +288,7 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
             sn[s] = sin(angle), c[s] = cos(angle);
         }
         // The tilted thrust's horizontal force moves the drone by tilt_share of it (rigid.py).
-        double thrust_body[3] = {(left * sn[0] + right * sn[1]) * p->tilt_share, 0.0, left * c[0] + right * c[1]};
+        double thrust_body[3] = {(left * sn[0] + right * sn[1]) * p->tilt_share + hub_force[0], hub_force[1], left * c[0] + right * c[1] + hub_force[2]};
         double peak = 0.0;
         unsigned char touch = touched[e];
         for (int sub = 0; sub < SUB; sub++) {

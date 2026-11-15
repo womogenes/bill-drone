@@ -40,8 +40,8 @@ AIR_DRAG = 0.03
 SOURCE = Path(__file__).with_name("rigid_step.c")
 LIBRARY = Path(__file__).with_name("rigid_step.so")
 # The scalar parameters in rigid_step.c's Params order (airframe parameters, then the geometry's constants as airframe.resolve gives them, then the thrust trim, then this sim's constants, then HULL).
-C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_k", "link_c", "left_play", "right_play", "left_band", "right_band", "band_k", "right_gain", "prop_torque", "prop_momentum", "inflow_damping", "edgewise_damping", "wash", "pitch_wake", "wake_tau", "roll_pendulum", "pitch_pendulum", "roll_from_yaw", "yaw_from_roll", "vx_pitch", "vx_drag", "vy_roll", "vy_drag", "tilt_push", "motor_start", "servo_compliance", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below", "climb_inflow", "speed_range", "speed_moment2")
-C_GEOMETRY = ("Ixx", "Iyy", "Izz", "arm", "cx", "cy", "tilt_arm", "hr", "hx", "hy", "J")
+C_AIRFRAME = ("motor_delay", "right_motor_delay", "motor_tau", "right_motor_tau", "right_thrust_gain", "servo_delay", "right_servo_delay", "servo_wn", "right_servo_wn", "servo_zeta", "servo_slew", "link_k", "link_c", "left_play", "right_play", "left_band", "right_band", "band_k", "right_gain", "prop_torque", "prop_momentum", "inflow_damping", "edgewise_damping", "wash", "pitch_wake", "wake_tau", "roll_pendulum", "pitch_pendulum", "roll_from_yaw", "yaw_from_roll", "vx_pitch", "vx_drag", "vy_roll", "vy_drag", "tilt_push", "motor_start", "servo_compliance", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below", "climb_inflow", "speed_range", "speed_moment2", "rotor_drag_h", "rotor_inflow", "momentum_tilt", "flap_lever", "inflow_recovery", "inflow_steady")
+C_GEOMETRY = ("Ixx", "Iyy", "Izz", "arm", "cx", "cy", "tilt_arm", "hr", "hx", "hy", "J", "dz", "lever")
 loaded = None
 
 
@@ -56,7 +56,7 @@ def library():
             os.replace(partial, LIBRARY)
         loaded = ctypes.CDLL(str(LIBRARY))
         loaded.rigid_param_count.restype = ctypes.c_size_t
-        loaded.rigid_step.argtypes = [ctypes.c_size_t, ctypes.c_size_t] + [ctypes.c_void_p] * 2 + [ctypes.c_size_t] + [ctypes.c_void_p] * 29
+        loaded.rigid_step.argtypes = [ctypes.c_size_t, ctypes.c_size_t] + [ctypes.c_void_p] * 2 + [ctypes.c_size_t] + [ctypes.c_void_p] * 30
         loaded.rigid_step.restype = None
         assert loaded.rigid_param_count() == len(C_AIRFRAME) + len(C_GEOMETRY) + 3 + 8 + HULL.size
     return loaded
@@ -211,6 +211,8 @@ class Sim:
         self.accel = np.tile([0.0, 0.0, G], (n, 1))  # specific force, body frame (m/s²)
         self.contact_now = np.zeros(n)
         self.turned = self.omega.copy()
+        # A steady angular acceleration (rad/s², body axes) added to the sampled disturbances' torques, as they scale with the thrust over the weight: the disturbance state a predictor estimates from the log (sw/sim/scorecard.py observer).
+        self.torque_bias = np.zeros((n, 3))
         if self.backend == "c":
             self.bind()
         return self.observe()
@@ -218,7 +220,7 @@ class Sim:
     def bind(self):
         """The C backend's arguments: the parameters and pointers to every (contiguous, float64) array it reads or updates in place."""
         p, st = self.p, self.state
-        for name in ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel", "wake", "spin"):
+        for name in ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel", "wake", "spin", "recovered"):
             setattr(st, name, np.ascontiguousarray(getattr(st, name), float))
         for name in ("throttles", "commands", "pos", "vel", "quat", "omega", "accel", "contact", "contact_now", "inertia", "inertia_scale", "rotor_drag", "push"):
             setattr(self, name, np.ascontiguousarray(getattr(self, name), float))
@@ -235,7 +237,7 @@ class Sim:
         self.c_args = (
             [self.n, self.history, address(self.c_params), address(self.c_table), len(self.c_table)]
             + [address(a) for a in (p["tilt_gain"], p["differential_slope"], self.inertia, self.inertia_scale, self.rotor_drag, self.push, self.c_throttle, self.c_tilt, self.c_disturbance)]
-            + [address(a) for a in (self.throttles, self.commands, self.pos, self.vel, self.quat, self.omega, st.rate, st.att, st.vel, st.motor, st.horn, st.hvel, st.tilt, st.tvel, st.wake, st.spin, self.accel, self.contact, self.contact_now, self.touched)]
+            + [address(a) for a in (self.throttles, self.commands, self.pos, self.vel, self.quat, self.omega, st.rate, st.att, st.vel, st.motor, st.horn, st.hvel, st.tilt, st.tvel, st.wake, st.spin, st.recovered, self.accel, self.contact, self.contact_now, self.touched)]
         )
         self.c_bound = (self.pos, self.vel, self.quat, self.omega, self.state.motor, self.state.tilt, self.touched)
 
@@ -256,7 +258,7 @@ class Sim:
         self.throttles[:, -1] = np.clip(throttle, 0, THROTTLE_MAX)
         self.commands[:, -1] = np.degrees(np.clip(tilt_command, -SERVO_LIMIT, SERVO_LIMIT))
         sampled = self.disturbances.step(DT)
-        force_disturbance, torque_disturbance = sampled[:, :3], sampled[:, 3:]
+        force_disturbance, torque_disturbance = sampled[:, :3], sampled[:, 3:] + self.torque_bias
         # The identified airframe's actuators and angular accelerations for this tick, from the body's rates, tilt and speed now.
         R0 = rotation(self.quat)
         up = R0[:, 2, :]  # world up in the body frame
@@ -269,12 +271,12 @@ class Sim:
         reach = self.p["speed_range"] or SPEED_RANGE
         st.vel = np.clip(rotated[:, :2], -reach, reach) * (1.0 if self.p["speed_range"] else fade[:, None])
         st.axial = rotated[:, 2:3]
+        st.free = rotated
         # The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down, so a drone that has cut its motors is not pushed over.
         airborne = (self.contact_now == 0) * np.clip((self.state.motor[:, 0] + self.state.motor[:, 1]) / (self.mass * G), 0, 1)
         self.state, alpha_model = A.step(self.p, st, self.throttles, self.commands, np.full(self.n, self.history - 1), np.ones(self.n), self.push, self.trim, airborne, geometry=self.geometry, table=self.table)
         alpha_model = alpha_model / self.inertia_scale[:, None]
-        inflow = np.clip(1 - self.p["climb_inflow"] * st.axial[:, 0], 0.5, 1.5)
-        left, right = self.state.motor[:, 0] * inflow, self.state.motor[:, 1] * inflow
+        left, right = self.state.effective[:, 0], self.state.effective[:, 1]
         wash = np.clip((left + right) / (self.mass * G), 0, 1)
         force_disturbance, torque_disturbance = force_disturbance * wash[:, None], torque_disturbance * wash[:, None]
         tilt = self.tilt
@@ -301,7 +303,7 @@ class Sim:
             peak = np.maximum(peak, np.linalg.norm(contact_world, axis=-1).sum(1))
             self.touched |= touching.any(1)
             # Thrust, drag and gravity.
-            thrust_body = np.stack([(left * sl + right * sr) * self.tilt_share, np.zeros(self.n), left * cl + right * cr], -1)
+            thrust_body = np.stack([(left * sl + right * sr) * self.tilt_share, np.zeros(self.n), left * cl + right * cr], -1) + self.state.hforce
             v_body = np.einsum("nji,nj->ni", R, self.vel)
             drag_body = -np.concatenate([self.rotor_drag * v_body[:, :2] * self.mass, np.zeros((self.n, 1))], -1)
             force_world = np.einsum("nij,nj->ni", R, thrust_body + drag_body) - AIR_DRAG * np.linalg.norm(self.vel, axis=-1, keepdims=True) * self.vel + contact_force
@@ -321,6 +323,7 @@ class Sim:
         self.c_throttle[:] = throttle
         self.c_tilt[:] = tilt_command
         self.c_disturbance[:] = self.disturbances.step(DT)
+        self.c_disturbance[:, 3:] += self.torque_bias
         library().rigid_step(*self.c_args)
         self.time += DT
 

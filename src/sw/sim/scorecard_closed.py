@@ -84,7 +84,8 @@ def log_measures(name):
 
 def rerun(task):
     """One flight's settings flown n times on one plant (only the GPS and barometer noise differ between runs): each run's measures."""
-    name, plant_name, n, seed, overrides = task
+    name, plant_name, n, seed, overrides, *rest = task
+    flown_overrides = rest[0] if rest else {}
     listing = S.flight_list()
     entry = next(e for e in S.entries(listing) if e["name"].startswith(name))
     configuration = listing["configurations"][entry["configuration"]]
@@ -97,10 +98,10 @@ def rerun(task):
     for key, other in (("servo_delay", "right_servo_delay"), ("servo_wn", "right_servo_wn")):
         if key in overrides and other not in overrides:
             params[other] = overrides[key]
-    FF.plant_of = lambda airframe: {"airframe": params, "geometry": A.geometry_of(params), "disturbances": [], "rotor_drag": (0.07, 0.2)}
+    FF.plant_of = lambda airframe: {"airframe": params, "geometry": A.geometry_of(params), "disturbances": [], "rotor_drag": tuple(params.get("rotor_drag", (0.07, 0.2)))}
     FF.R.Sim = Tracing
     # The GPS hold in place of the camera's, the flight's own climb; no flip; the pack's sag is not simulated.
-    settings = flown | {"hover_camera": 0, "hover_center": 0, "flip_angle": 0, "thrust_voltage": 0.0}
+    settings = flown | {"hover_camera": 0, "hover_center": 0, "flip_angle": 0, "thrust_voltage": 0.0} | flown_overrides
     settings.setdefault("hover_gps_tau", 0.5)
     settings.setdefault("hover_gps_place_tau", 2.0)
     seconds = min(1.0 + listing_seconds(name) + 3.0, 1.0 + SPAN + 5.0)
@@ -189,12 +190,13 @@ def main():
     parser.add_argument("--n", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--set", default="", help="airframe terms over every plant's, name=value,... (servo_delay and servo_wn set both sides)")
+    parser.add_argument("--settings", default="", help="firmware settings over each flight's own, name=value,... (gains to try)")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--json")
     parser.add_argument("--plot", help="the pitch-rate figure here")
     args = parser.parse_args()
     overrides = parse_settings(args.set) if args.set else {}
-    tasks = [(name, plant, args.n, args.seed, overrides) for name in args.flights for plant in args.plant]
+    tasks = [(name, plant, args.n, args.seed, overrides, parse_settings(args.settings) if args.settings else {}) for name in args.flights for plant in args.plant]
     if args.workers > 1:
         with ProcessPoolExecutor(args.workers) as pool:
             results = list(pool.map(rerun, tasks))
