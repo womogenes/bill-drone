@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useSize } from '@/hooks/use-size';
 import type { TrajectoryChannel } from '@/lib/trajectory';
-import { GRAY, HAIRLINE, SHADES, SIGNAL } from './palette';
+import type { Palette } from './palette';
 
 // Small multiples, one strip per channel group, sharing the replay's time: each line labeled at its value under the cursor instead of a legend, the zero line where it falls, and nothing else (BRIEF.md). Dragging across a strip seeks.
 export function Strips({
@@ -11,11 +11,13 @@ export function Strips({
   rate,
   time,
   onSeek,
+  palette,
 }: {
   channels: TrajectoryChannel[];
   rate: number;
   time: number;
   onSeek: (time: number) => void;
+  palette: Palette;
 }) {
   const groups = useMemo(() => {
     const order: string[] = [];
@@ -23,9 +25,9 @@ export function Strips({
     return order.map((group) => channels.filter((channel) => channel.group === group));
   }, [channels]);
   return (
-    <div className="flex h-full flex-col divide-y divide-[var(--replay-hairline)]">
+    <div className="flex h-full flex-col divide-y divide-border">
       {groups.map((group) => (
-        <Strip key={group[0].group} channels={group} rate={rate} time={time} onSeek={onSeek} />
+        <Strip key={group[0].group} channels={group} rate={rate} time={time} onSeek={onSeek} palette={palette} />
       ))}
     </div>
   );
@@ -34,7 +36,7 @@ export function Strips({
 const LABEL_WIDTH = 92;
 const PAD = 6;
 
-function Strip({ channels, rate, time, onSeek }: { channels: TrajectoryChannel[]; rate: number; time: number; onSeek: (time: number) => void }) {
+function Strip({ channels, rate, time, onSeek, palette }: { channels: TrajectoryChannel[]; rate: number; time: number; onSeek: (time: number) => void; palette: Palette }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const { width, height } = useSize(box);
@@ -66,7 +68,7 @@ function Strip({ channels, rate, time, onSeek }: { channels: TrajectoryChannel[]
     context.scale(scale, scale);
     context.clearRect(0, 0, width, height);
     if (low < 0 && high > 0) {
-      context.strokeStyle = HAIRLINE;
+      context.strokeStyle = palette.hairline;
       context.lineWidth = 1;
       context.beginPath();
       context.moveTo(0, Math.round(y(0)) + 0.5);
@@ -76,7 +78,7 @@ function Strip({ channels, rate, time, onSeek }: { channels: TrajectoryChannel[]
     // Every channel decimated to one point per pixel column at most.
     const step = Math.max(1, Math.floor(frames / plot));
     channels.forEach((channel, index) => {
-      context.strokeStyle = channel.dashed ? GRAY : SHADES[Math.min(index, SHADES.length - 1)];
+      context.strokeStyle = channel.dashed ? palette.gray : palette.shades[Math.min(index, palette.shades.length - 1)];
       context.setLineDash(channel.dashed ? [3, 3] : []);
       context.lineWidth = 1.25;
       context.beginPath();
@@ -95,7 +97,7 @@ function Strip({ channels, rate, time, onSeek }: { channels: TrajectoryChannel[]
     });
     context.setLineDash([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channels, width, height, low, high, frames]);
+  }, [channels, width, height, low, high, frames, palette]);
 
   const frame = Math.min(Math.round(time * rate), frames - 1);
   const seek = (event: React.PointerEvent) => {
@@ -107,16 +109,16 @@ function Strip({ channels, rate, time, onSeek }: { channels: TrajectoryChannel[]
   return (
     <div ref={box} className="relative min-h-0 flex-1 touch-none select-none" onPointerDown={seek} onPointerMove={seek}>
       <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
-      <div className="pointer-events-none absolute top-0 h-full w-px" style={{ left: x(frame), background: SIGNAL }} />
+      <div className="pointer-events-none absolute top-0 h-full w-px" style={{ left: x(frame), background: palette.signal }} />
       <div className="pointer-events-none absolute inset-y-0 right-0 flex flex-col justify-center gap-0.5 pr-3 text-right" style={{ width: LABEL_WIDTH }}>
-        <span className="text-[11px] text-[var(--replay-gray)]">
+        <span className="text-[11px] text-muted-foreground">
           {channels[0].group}
           {channels[0].unit && ` ${channels[0].unit}`}
         </span>
         {solid.map((channel, index) => {
           const value = channel.values[frame];
           return (
-            <span key={channel.name} className="text-xs tabular-nums" style={{ color: SHADES[Math.min(index, SHADES.length - 1)] }}>
+            <span key={channel.name} className="text-xs tabular-nums" style={{ color: palette.shades[Math.min(index, palette.shades.length - 1)] }}>
               {channel.name} {value === null ? '–' : value.toFixed(Math.abs(value) >= 100 ? 0 : 1)}
             </span>
           );

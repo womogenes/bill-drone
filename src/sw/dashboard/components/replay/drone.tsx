@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import type { Pose } from '@/lib/trajectory';
-import { INK, SIGNAL } from './palette';
+import type { Palette } from './palette';
 
 // Drone 1 as line work, in its body axes (forward, left, up; meters): the arm to each rotor (sw/sim/flight.py MODEL arm), a 10-inch rotor disc on each tilting assembly, its pivot a little above the body.
 const ARM = 0.172;
@@ -30,7 +30,7 @@ function segment(from: [number, number, number], to: [number, number, number]) {
 }
 
 // One rotor assembly: tilted forward about the left axis by its tilt (degrees), its disc tinted and its thrust line drawn by its thrust (0-1).
-function Rotor({ side, tilt, thrust }: { side: 1 | -1; tilt: number; thrust: number }) {
+function Rotor({ side, tilt, thrust, palette }: { side: 1 | -1; tilt: number; thrust: number; palette: Palette }) {
   const shapes = useMemo(
     () => ({
       motor: edges(new THREE.CylinderGeometry(0.016, 0.016, 0.03, 12).rotateX(Math.PI / 2)),
@@ -43,22 +43,22 @@ function Rotor({ side, tilt, thrust }: { side: 1 | -1; tilt: number; thrust: num
   return (
     <group position={[0, side * ARM, PIVOT]} rotation={[0, (tilt * Math.PI) / 180, 0]}>
       <lineSegments geometry={shapes.motor} position={[0, 0, MAST - 0.015]}>
-        <lineBasicMaterial color={INK} />
+        <lineBasicMaterial color={palette.ink} />
       </lineSegments>
       <lineLoop geometry={shapes.disc} position={[0, 0, MAST]}>
-        <lineBasicMaterial color={INK} transparent opacity={0.55} />
+        <lineBasicMaterial color={palette.ink} transparent opacity={0.55} />
       </lineLoop>
       <mesh geometry={shapes.fill} position={[0, 0, MAST]}>
-        <meshBasicMaterial color={SIGNAL} transparent opacity={0.04 + 0.2 * thrust} side={THREE.DoubleSide} depthWrite={false} />
+        <meshBasicMaterial color={palette.signal} transparent opacity={0.04 + 0.2 * thrust} side={THREE.DoubleSide} depthWrite={false} />
       </mesh>
       <lineSegments geometry={shapes.line} position={[0, 0, MAST]} scale={[1, 1, Math.max(thrust * THRUST_LINE, 0.001)]}>
-        <lineBasicMaterial color={SIGNAL} />
+        <lineBasicMaterial color={palette.signal} />
       </lineSegments>
     </group>
   );
 }
 
-export function Drone({ pose }: { pose: Pose }) {
+export function Drone({ pose, palette }: { pose: Pose; palette: Palette }) {
   const shapes = useMemo(
     () => ({
       body: edges(new THREE.BoxGeometry(0.14, 0.07, 0.04)),
@@ -71,16 +71,16 @@ export function Drone({ pose }: { pose: Pose }) {
   return (
     <group position={pose.position} quaternion={[x, y, z, w]}>
       <lineSegments geometry={shapes.body}>
-        <lineBasicMaterial color={INK} />
+        <lineBasicMaterial color={palette.ink} />
       </lineSegments>
       <lineSegments geometry={shapes.arms}>
-        <lineBasicMaterial color={INK} />
+        <lineBasicMaterial color={palette.ink} />
       </lineSegments>
       <lineSegments geometry={shapes.nose}>
-        <lineBasicMaterial color={SIGNAL} />
+        <lineBasicMaterial color={palette.signal} />
       </lineSegments>
-      <Rotor side={1} tilt={pose.tilt[0]} thrust={pose.thrust[0]} />
-      <Rotor side={-1} tilt={pose.tilt[1]} thrust={pose.thrust[1]} />
+      <Rotor side={1} tilt={pose.tilt[0]} thrust={pose.thrust[0]} palette={palette} />
+      <Rotor side={-1} tilt={pose.tilt[1]} thrust={pose.thrust[1]} palette={palette} />
     </group>
   );
 }

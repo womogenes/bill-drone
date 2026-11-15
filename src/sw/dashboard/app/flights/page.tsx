@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { paletteStyle } from '@/components/replay/palette';
+import { paletteStyle, usePalette } from '@/components/replay/palette';
 import { Replay } from '@/components/replay/replay';
 import {
   Select,
@@ -40,9 +40,10 @@ function Flights() {
     label: `${startTime(entry.started)} · ${clock(entry.seconds)}`,
   }));
   const problem = listError || error;
+  const palette = usePalette();
   return (
-    <div className="flex h-dvh flex-col bg-[var(--replay-paper)] text-[var(--replay-ink)]" style={paletteStyle}>
-      <header className="flex h-12 shrink-0 items-center gap-4 border-b border-[var(--replay-hairline)] px-4">
+    <div className="flex h-dvh flex-col bg-background text-foreground" style={paletteStyle(palette)}>
+      <header className="flex h-12 shrink-0 items-center gap-4 border-b border-border px-4">
         <Select
           value={shown}
           items={items}
@@ -53,7 +54,7 @@ function Flights() {
             window.history.replaceState(null, '', url);
           }}
         >
-          <SelectTrigger aria-label="Flight" className="w-60 border-[var(--replay-hairline)] bg-transparent">
+          <SelectTrigger aria-label="Flight" className="w-60 border-border bg-transparent">
             <SelectValue placeholder="No flights yet" />
           </SelectTrigger>
           <SelectContent align="start" alignItemWithTrigger={false}>
@@ -67,12 +68,12 @@ function Flights() {
           </SelectContent>
         </Select>
         {report && (
-          <span className="text-sm text-[var(--replay-gray)] tabular-nums">
+          <span className="text-sm text-muted-foreground tabular-nums">
             {report.max_height !== null && `${report.max_height.toFixed(1)} m up`}
             {report.stop_reason && ` · ${report.stop_reason.toLowerCase()}`}
           </span>
         )}
-        {problem && <span className="text-sm text-[var(--replay-signal)]">{problem}</span>}
+        {problem && <span className="text-sm text-red-700">{problem}</span>}
       </header>
       <main className="min-h-0 flex-1">
         {report ? <Replay key={report.name} trajectory={report.trajectory} /> : <div className="h-full" />}

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Pose } from '@/lib/trajectory';
 import { Drone } from './drone';
-import { GRAY, HAIRLINE, PAPER } from './palette';
+import type { Palette } from './palette';
 
 // three.js is y-up; the trajectory is north, west, up. This turn takes one to the other (north to +x, up to +y, west to -z).
 const LEVEL: [number, number, number] = [-Math.PI / 2, 0, 0];
@@ -38,15 +38,15 @@ function Follow({ target }: { target: [number, number, number] }) {
 }
 
 // The path flown, darker up to now; a plumb line from the drone to the ground for its height.
-function Trail({ position, frame }: { position: number[]; frame: number }) {
+function Trail({ position, frame, palette }: { position: number[]; frame: number; palette: Palette }) {
   const lines = useMemo(() => {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(position, 3));
     return {
-      whole: new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: HAIRLINE })),
-      past: new THREE.Line(geometry.clone(), new THREE.LineBasicMaterial({ color: GRAY })),
+      whole: new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: palette.hairline })),
+      past: new THREE.Line(geometry.clone(), new THREE.LineBasicMaterial({ color: palette.gray })),
     };
-  }, [position]);
+  }, [position, palette]);
   lines.past.geometry.setDrawRange(0, frame + 1);
   return (
     <>
@@ -56,21 +56,21 @@ function Trail({ position, frame }: { position: number[]; frame: number }) {
   );
 }
 
-function Plumb({ at }: { at: [number, number, number] }) {
+function Plumb({ at, palette }: { at: [number, number, number]; palette: Palette }) {
   const geometry = useMemo(
     () => new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
     []
   );
   return (
     <lineSegments geometry={geometry} position={at} scale={[1, 1, Math.max(at[2], 0.001)]}>
-      <lineBasicMaterial color={GRAY} transparent opacity={0.6} />
+      <lineBasicMaterial color={palette.gray} transparent opacity={0.6} />
     </lineSegments>
   );
 }
 
 // Where the browser gives no WebGL (a sandboxed pane, a disabled GPU), the hero says so and the strips and timeline carry on.
 function NoWebGL() {
-  return <div className="grid h-full place-items-center text-sm text-[var(--replay-gray)]">3D needs WebGL, which this browser has off</div>;
+  return <div className="grid h-full place-items-center text-sm text-muted-foreground">3D needs WebGL, which this browser has off</div>;
 }
 
 class Guard extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -83,7 +83,7 @@ class Guard extends Component<{ children: ReactNode }, { failed: boolean }> {
   }
 }
 
-export function Scene(props: { pose: Pose; position: number[] | null; frame: number }) {
+export function Scene(props: { pose: Pose; position: number[] | null; frame: number; palette: Palette }) {
   return (
     <Guard>
       <View {...props} />
@@ -91,17 +91,17 @@ export function Scene(props: { pose: Pose; position: number[] | null; frame: num
   );
 }
 
-function View({ pose, position, frame }: { pose: Pose; position: number[] | null; frame: number }) {
+function View({ pose, position, frame, palette }: { pose: Pose; position: number[] | null; frame: number; palette: Palette }) {
   return (
-    <Canvas fallback={<NoWebGL />} camera={{ position: [-2.2, 1.6, 2.2], fov: 40, near: 0.05, far: 500 }} dpr={[1, 2]} style={{ background: PAPER }}>
-      <gridHelper args={[40, 40, HAIRLINE, HAIRLINE]} />
+    <Canvas fallback={<NoWebGL />} camera={{ position: [-2.2, 1.6, 2.2], fov: 40, near: 0.05, far: 500 }} dpr={[1, 2]} style={{ background: palette.paper }}>
+      <gridHelper key={palette.hairline} args={[40, 40, palette.hairline, palette.hairline]} />
       <group rotation={LEVEL}>
-        {position && <Trail position={position} frame={frame} />}
-        <Plumb at={pose.position} />
-        <Drone pose={pose} />
+        {position && <Trail position={position} frame={frame} palette={palette} />}
+        <Plumb at={pose.position} palette={palette} />
+        <Drone pose={pose} palette={palette} />
       </group>
       <Follow target={pose.position} />
-      <fog attach="fog" args={[PAPER, 12, 40]} />
+      <fog key={palette.paper} attach="fog" args={[palette.paper, 12, 40]} />
     </Canvas>
   );
 }

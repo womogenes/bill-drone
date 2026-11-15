@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useEffect } from 'react';
 import { duration, frameCount, poseAt, type Trajectory } from '@/lib/trajectory';
-import { paletteStyle } from './palette';
+import { paletteStyle, usePalette } from './palette';
 import { Strips } from './strips';
 import { Timeline } from './timeline';
 import { SPEEDS, usePlayback } from './use-playback';
@@ -15,6 +15,7 @@ const Scene = dynamic(() => import('./scene').then((module) => module.Scene), { 
 export function Replay({ trajectory }: { trajectory: Trajectory }) {
   const length = duration(trajectory);
   const { time, seek, playing, toggle, speed, setSpeed } = usePlayback(length);
+  const palette = usePalette();
   const frame = Math.min(Math.round(time * trajectory.rate), frameCount(trajectory) - 1);
 
   useEffect(() => {
@@ -36,18 +37,18 @@ export function Replay({ trajectory }: { trajectory: Trajectory }) {
 
   return (
     <div
-      className="grid h-full min-h-0 grid-rows-[1fr_auto] bg-[var(--replay-paper)] text-[var(--replay-ink)]"
-      style={paletteStyle}
+      className="grid h-full min-h-0 grid-rows-[1fr_auto] bg-background text-foreground"
+      style={paletteStyle(palette)}
     >
       <div className="grid min-h-0 grid-rows-[minmax(320px,1fr)_auto] lg:grid-cols-[1fr_minmax(320px,36%)] lg:grid-rows-1">
         <div className="min-h-0">
-          <Scene pose={poseAt(trajectory, time)} position={trajectory.position} frame={frame} />
+          <Scene pose={poseAt(trajectory, time)} position={trajectory.position} frame={frame} palette={palette} />
         </div>
-        <div className="h-[420px] min-h-0 border-t border-[var(--replay-hairline)] lg:h-auto lg:border-t-0 lg:border-l">
-          <Strips channels={trajectory.channels} rate={trajectory.rate} time={time} onSeek={seek} />
+        <div className="h-[420px] min-h-0 border-t border-border lg:h-auto lg:border-t-0 lg:border-l">
+          <Strips channels={trajectory.channels} rate={trajectory.rate} time={time} onSeek={seek} palette={palette} />
         </div>
       </div>
-      <div className="border-t border-[var(--replay-hairline)]">
+      <div className="border-t border-border">
         <Timeline
           time={time}
           length={length}

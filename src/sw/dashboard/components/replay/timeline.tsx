@@ -1,8 +1,8 @@
 'use client';
 
 import { Pause, Play } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import type { TrajectoryEvent } from '@/lib/trajectory';
-import { SIGNAL } from './palette';
 import { SPEEDS } from './use-playback';
 
 function clock(seconds: number) {
@@ -38,40 +38,30 @@ export function Timeline({
   };
   return (
     <div className="flex h-12 items-center gap-4 px-4">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-label={playing ? 'Pause' : 'Play'}
-        className="grid size-8 place-items-center rounded-full text-[var(--replay-ink)] transition-colors duration-150 hover:bg-[var(--replay-hairline)]"
-      >
-        {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
-      </button>
-      <span className="w-32 whitespace-nowrap text-sm tabular-nums text-[var(--replay-ink)]">
-        {clock(time)} <span className="text-[var(--replay-gray)]">/ {clock(length)}</span>
+      <Button variant="ghost" size="icon" onClick={onToggle} aria-label={playing ? 'Pause' : 'Play'}>
+        {playing ? <Pause /> : <Play />}
+      </Button>
+      <span className="w-32 whitespace-nowrap text-sm tabular-nums text-foreground">
+        {clock(time)} <span className="text-muted-foreground">/ {clock(length)}</span>
       </span>
       <div className="relative h-8 flex-1 cursor-pointer touch-none" onPointerDown={seek} onPointerMove={seek}>
-        <div className="absolute inset-x-0 top-1/2 h-px bg-[var(--replay-hairline)]" />
-        <div className="absolute left-0 top-1/2 h-px bg-[var(--replay-ink)]" style={{ width: share(time) }} />
+        <div className="absolute inset-x-0 top-1/2 h-px bg-border" />
+        <div className="absolute left-0 top-1/2 h-px bg-foreground" style={{ width: share(time) }} />
         {events.map((event, index) => (
           <div
             key={index}
             title={`${clock(event.time)} ${event.label}`}
             className="absolute top-1/2 h-3 w-px -translate-y-1/2"
-            style={{ left: share(event.time), background: event.signal ? SIGNAL : 'var(--replay-gray)' }}
+            style={{ left: share(event.time), background: event.signal ? 'var(--replay-signal)' : 'var(--muted-foreground)' }}
           />
         ))}
-        <div className="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ left: share(time), background: SIGNAL }} />
+        <div className="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ left: share(time), background: 'var(--replay-signal)' }} />
       </div>
       <div className="flex gap-1">
         {SPEEDS.map((value) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => onSpeed(value)}
-            className={`rounded px-1.5 py-0.5 text-xs tabular-nums transition-colors duration-150 ${value === speed ? 'bg-[var(--replay-ink)] text-[var(--replay-paper)]' : 'text-[var(--replay-gray)] hover:text-[var(--replay-ink)]'}`}
-          >
+          <Button key={value} size="xs" variant={value === speed ? 'secondary' : 'ghost'} onClick={() => onSpeed(value)} className="tabular-nums">
             {value}×
-          </button>
+          </Button>
         ))}
       </div>
     </div>
