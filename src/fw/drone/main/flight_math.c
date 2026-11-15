@@ -67,8 +67,7 @@ void quaternion_rotate(float *q, const float *w, float dt) {
     for (int i = 0; i < 4; i++) q[i] /= n;
 }
 
-// a ⊗ b into out (which may be either).
-static void multiply(const float *a, const float *b, float *out) {
+void quaternion_multiply(const float *a, const float *b, float *out) {
     float w = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
     float x = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
     float y = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
@@ -87,18 +86,18 @@ float quaternion_heading(const float *q) {
 void quaternion_target(float *q, float heading, float roll, float pitch) {
     float tilt[4], turn[4] = {cosf(heading / 2), 0, 0, sinf(heading / 2)};
     quaternion_from_euler(tilt, roll, pitch);
-    multiply(turn, tilt, q);
+    quaternion_multiply(turn, tilt, q);
 }
 
 void quaternion_roll(float *q, const float *from, float angle) {
     float turn[4] = {cosf(angle / 2), sinf(angle / 2), 0, 0};
-    multiply(from, turn, q);
+    quaternion_multiply(from, turn, q);
 }
 
 void attitude_error(const float *q, const float *target, float *error, float *turn) {
     // The rotation from q to target in q's body axes, q⁻¹ ⊗ target, the short way (w ≥ 0).
     float inverse[4] = {q[0], -q[1], -q[2], -q[3]}, e[4];
-    multiply(inverse, target, e);
+    quaternion_multiply(inverse, target, e);
     if (e[0] < 0)
         for (int i = 0; i < 4; i++) e[i] = -e[i];
     // Split as the tilt about a horizontal body axis (a, b, c, 0), then the turn about the thrust axis (w, 0, 0, z) / a: Brescianini and D'Andrea's q_e,red ⊗ q_e,yaw.
@@ -132,13 +131,9 @@ void attitude_rates(const AttitudeGains *g, const float *error, const float *rat
     for (int i = 0; i < 3; i++) wanted[i] = g->gain[i] * (rate[i] + want[i] - gyro[i]) + (accel ? accel[i] : 0);
 }
 
-// The attitude as one quaternion (Motion quaternion): q turned by the body rates, then, at the same weight as flight_attitude's Euler blend, the body turned about the axis between the up it has and the accelerometer's, toward the accelerometer's; that axis is horizontal, so the heading stays the gyro's. Roll and pitch are q's: no wrap at 90 degrees of pitch is needed.
-static void quaternion_attitude(Attitude *state, const Motion *m) {
+// The attitude estimate: q turned by the body rates, then the body turned about the axis between the up it has and the accelerometer's, toward the accelerometer's, by 1 - exp(-dt / gravity_tau) of the angle between them; that axis is horizontal, so the heading stays the gyro's. Roll and pitch are q's (pitch within ±90 degrees).
+void flight_attitude(Attitude *state, const Motion *m) {
     float *q = state->q;
-    if (!state->synced) {
-        quaternion_from_euler(q, state->roll, state->pitch);
-        state->synced = 1;
-    }
     float gyro[3] = {m->gx, m->gy, m->gz};
     quaternion_rotate(q, gyro, m->dt);
     float weight = 1.0f - expf(-m->dt / m->gravity_tau);
@@ -152,36 +147,16 @@ static void quaternion_attitude(Attitude *state, const Motion *m) {
         if (s > 1e-9f) {
             float half = weight * atan2f(s, a[0] * up[0] + a[1] * up[1] + a[2] * up[2]) / 2, k = sinf(half) / s;
             float turn[4] = {cosf(half), k * c[0], k * c[1], k * c[2]};
-            multiply(q, turn, q);
+            quaternion_multiply(q, turn, q);
         }
     }
     quaternion_euler(q, &state->roll, &state->pitch);
 }
 
-void flight_attitude(Attitude *state, const Motion *m) {
-    if (m->quaternion > 0) {
-        quaternion_attitude(state, m);
-        return;
-    }
-    state->synced = 0;
-    float roll = state->roll;
-    float pitch = state->pitch;
-    float sr = sinf(roll), cr = cosf(roll);
-    float roll_rate = m->gx + tanf(pitch) * (m->gy * sr + m->gz * cr);
-    float pitch_rate = m->gy * cr - m->gz * sr;
-    float gravity_roll = atan2f(m->ay, m->az);
-    float gravity_pitch = atan2f(-m->ax, sqrtf(m->ay * m->ay + m->az * m->az));
-    float weight = 1.0f - expf(-m->dt / m->gravity_tau);
-
-    roll += roll_rate * m->dt;
-    pitch += pitch_rate * m->dt;
-    // Past 90 degrees of pitch the same attitude is the pitch's supplement with the roll half a turn round: kept within ±90 degrees of pitch, so an estimate carried through the vertical never hands the attitude controller the other form's error (2026-11-12 02:27: roll 136, pitch 159 is roll -44, pitch 21, which it flew as 140 degrees of error). Never reached below 90 degrees.
-    if (fabsf(pitch) > HALF_TURN / 2) {
-        pitch = copysignf(HALF_TURN, pitch) - pitch;
-        roll += roll > 0 ? -HALF_TURN : HALF_TURN;
-    }
-    state->roll = roll + weight * (gravity_roll - roll);
-    state->pitch = pitch + weight * (gravity_pitch - pitch);
+void flight_attitude_start(Attitude *state, const float *accel) {
+    state->roll = atan2f(accel[1], accel[2]);
+    state->pitch = atan2f(-accel[0], hypotf(accel[1], accel[2]));
+    quaternion_from_euler(state->q, state->roll, state->pitch);
 }
 
 #define MIN_THRUST 0.3f
@@ -305,16 +280,11 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
         upright = clampf(UPRIGHT_GAIN * tilt, -UPRIGHT_MAX, UPRIGHT_MAX) * clampf(1 - rising / UPRIGHT_RATE, 0, 1);
         state->setpoint_pitch = c->pitch;
     }
-    float roll_error = state->setpoint_roll - c->roll;
-    float pitch_error = state->setpoint_pitch - c->pitch;
-    if (c->quaternion > 0) {
-        // The quaternion attitude: the setpoint's roll and pitch as an attitude at the drone's own heading (yaw is flown as a rate), and the tilt-prioritized error onto it in body axes, which near level is the Euler errors above and stays one rotation at any tilt.
-        float target[4], error[3];
-        quaternion_target(target, quaternion_heading(c->attitude), state->setpoint_roll, state->setpoint_pitch);
-        attitude_error(c->attitude, target, error, NULL);
-        roll_error = error[0];
-        pitch_error = error[1];
-    }
+    // The setpoint's roll and pitch as an attitude at the drone's own heading (yaw is flown as a rate), and the tilt-prioritized error onto it in body axes, which near level is the Euler angles' errors and stays one rotation at any tilt.
+    float target[4], error[3];
+    quaternion_target(target, quaternion_heading(c->attitude), state->setpoint_roll, state->setpoint_pitch);
+    attitude_error(c->attitude, target, error, NULL);
+    float roll_error = error[0], pitch_error = error[1];
     // Below integrate_throttle the feet are still down: integrating an error the ground holds would only wind up.
     if (c->base < c->integrate_throttle) {
         state->roll_i = clampf(c->roll_bias, -c->integral_limit, c->integral_limit);

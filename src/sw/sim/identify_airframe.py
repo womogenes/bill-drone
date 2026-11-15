@@ -23,7 +23,7 @@ import numpy as np
 from sw.flight_log import read_flight, test_pattern
 from sw.flight_log import settings as recording_settings
 from sw.sim import airframe as A
-from sw.sim.flight import MODEL, MODEL_TUNING_KEYS, PITCH_SPEED, THRUST_VOLTAGE, TUNING_LAYOUT, YAW_I, Controller, control_many, thrust_table
+from sw.sim.flight import ATTITUDE, MODEL, MODEL_TUNING_KEYS, PITCH_SPEED, THRUST_VOLTAGE, TUNING_LAYOUT, YAW_I, Controller, control_many, thrust_table
 
 DT = A.DT
 DEG = A.DEG
@@ -268,6 +268,9 @@ class Data:
         Step the lanes' controllers in place (lane j flying flight flights[j] at its sample k[j]) on the logged references with this attitude and gyro (rad, rad/s). Returns throttles [lane, side] and physical tilt commands [lane, side] (degrees, positive forward).
         """
         commands[:, 0:2] = attitude
+        # The attitude as the controller's quaternion (flight_math.c quaternion_from_euler, the heading zero).
+        cr, sr, cp, sp = np.cos(attitude[:, 0] / 2), np.sin(attitude[:, 0] / 2), np.cos(attitude[:, 1] / 2), np.sin(attitude[:, 1] / 2)
+        commands[:, ATTITUDE:ATTITUDE + 4] = np.column_stack([cr * cp, sr * cp, cr * sp, -sr * sp])
         commands[:, 2:5] = gyro
         commands[:, 5] = DT
         for j, key in enumerate(("enabled", "roll", "pitch", "yaw_rate", "base_throttle")):

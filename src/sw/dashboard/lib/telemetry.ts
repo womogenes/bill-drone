@@ -124,7 +124,7 @@ export type ControlSettings = {
   pattern_tilt?: number;
   tip_limit?: number;
   bank_tilt?: number;
-  flip_enable?: number;
+  flip_angle?: number;
   flip_height?: number;
   recover_enable?: number;
 };

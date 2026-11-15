@@ -99,7 +99,7 @@ def rerun(task):
     FF.plant_of = lambda airframe: {"airframe": params, "geometry": A.geometry_of(params), "disturbances": [], "rotor_drag": (0.07, 0.2)}
     FF.R.Sim = Tracing
     # The GPS hold in place of the camera's, the flight's own climb; no flip; the pack's sag is not simulated.
-    settings = flown | {"hover_camera": 0, "hover_center": 0, "flip_enable": 0, "thrust_voltage": 0.0}
+    settings = flown | {"hover_camera": 0, "hover_center": 0, "flip_angle": 0, "thrust_voltage": 0.0}
     settings.setdefault("hover_gps_tau", 0.5)
     settings.setdefault("hover_gps_place_tau", 2.0)
     seconds = min(1.0 + listing_seconds(name) + 3.0, 1.0 + SPAN + 5.0)

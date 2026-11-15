@@ -614,13 +614,13 @@ export const ControlPanel = memo(function ControlPanel({
           >
             {settings.enabled ? 'Disable' : arming ? 'Arming…' : 'Enable'}
           </Button>
-          {settings.flip_enable !== undefined && (
+          {settings.flip_angle !== undefined && (
             <Button
               variant="outline"
               disabled={
                 !connected ||
                 !settings.enabled ||
-                settings.flip_enable < 1 ||
+                !(settings.flip_angle > 0) ||
                 mode !== HOVER ||
                 !!status?.flip
               }

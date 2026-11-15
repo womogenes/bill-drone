@@ -211,8 +211,9 @@ static Ekf ekf;
 static EkfOutput filtered;
 // The fly-away failsafe and the test pattern's limits (guard.h).
 static Guard guard;
-// The roll flip (flip.h), started only by flight_runtime_flip.
+// The burst (flip.h), started only by flight_runtime_flip, and the authority it and the recovery fly on (flip.h FLIP_*_AUTHORITY, the weight from hover_mass, INDI's shares and unmodeled acceleration on it each tick).
 static FlipRun flip;
+static FlipAuthority maneuver = {.roll = FLIP_ROLL_AUTHORITY, .pitch = FLIP_PITCH_AUTHORITY, .yaw = FLIP_YAW_AUTHORITY};
 // Tumble recovery and the pilot's level-and-hold (recover.h). held: since a recovery or a level-and-hold began, the hover holds whatever mode the laptop streams, until the laptop asks for another mode than held_from, the one it streamed then (the pilot's L, or manual); the laptop's tilt is dropped only while the recovery and its grace run, so the pilot steers the hold again after it.
 static RecoverRun recovery;
 // INDI (indi.h; settings.def indi) and the share of its correction taken now: it fades in to the setting over INDI_FADE_S once the hold (or the flip, or a recovery) flies at least INDI_HEIGHT above where it engaged, and out as fast below that, on landing or in manual flight: on the ground the feet hold the drone against what INDI takes as unmodeled, and asking ever more against it winds up like an integrator (the 2026-11-15 bench run, motors off at collective 817: the servos swung -34 to +20 degrees). The controller's airborne count is no liftoff, since it starts when the collective reaches integrate_throttle, nor is the hold's lifted, which runs out after TAKEOFF_WAIT_S on the floor.
@@ -383,22 +384,14 @@ static float frame(void) {
 }
 
 static Attitude relative_attitude(const State *value) {
-    if (command.quaternion > 0 && value->attitude.synced) {
-        // The quaternion attitude: the estimate's (the IMU's) turned by the mounting pose_zero measured, body = imu ⊗ zero⁻¹, its roll and pitch read from it.
-        float zero[4];
-        Attitude pose = {.synced = 1};
-        quaternion_from_euler(zero, value->pose_zero.roll, value->pose_zero.pitch);
-        const float *q = value->attitude.q;
-        pose.q[0] = q[0] * zero[0] + q[1] * zero[1] + q[2] * zero[2] + q[3] * zero[3];
-        pose.q[1] = -q[0] * zero[1] + q[1] * zero[0] - q[2] * zero[3] + q[3] * zero[2];
-        pose.q[2] = -q[0] * zero[2] + q[1] * zero[3] + q[2] * zero[0] - q[3] * zero[1];
-        pose.q[3] = -q[0] * zero[3] - q[1] * zero[2] + q[2] * zero[1] + q[3] * zero[0];
-        quaternion_euler(pose.q, &pose.roll, &pose.pitch);
-        return pose;
-    }
-    float roll = value->attitude.roll - value->pose_zero.roll;
-    float pitch = value->attitude.pitch - value->pose_zero.pitch;
-    return (Attitude){.roll = atan2f(sinf(roll), cosf(roll)), .pitch = atan2f(sinf(pitch), cosf(pitch))};
+    // The estimate's (the IMU's) attitude turned by the mounting pose_zero measured, body = imu ⊗ zero⁻¹, its roll and pitch read from it.
+    float zero[4];
+    Attitude pose;
+    quaternion_from_euler(zero, value->pose_zero.roll, value->pose_zero.pitch);
+    for (int i = 1; i < 4; i++) zero[i] = -zero[i];
+    quaternion_multiply(value->attitude.q, zero, pose.q);
+    quaternion_euler(pose.q, &pose.roll, &pose.pitch);
+    return pose;
 }
 
 // Hover's rotor-drag inputs: the specific force turned from the IMU into the level reference's body axes (by pose_zero, the IMU's mounting on the frame), and the thrust vector's forward tilt the controller last commanded (each servo's physical tilt from its trim, weighted by its motor's thrust).
@@ -538,8 +531,7 @@ static bool watch_link(uint64_t now) {
         link_landing = false;
         hover_mode = requested_mode;
     }
-    // A flip that has begun its spin finishes first (flip.h): it needs nothing from the laptop and hands back within a few seconds; one still climbing ends here.
-    if (state.enabled && stale) flip_abort(&flip, &hover.integral);
+    // A burst finishes first (flip.h): it needs nothing from the laptop and hands back within a few seconds.
     if (state.enabled && (flip_active(&flip) || recover_active(&recovery))) {
         // The landing or the stop below, once it is done.
     } else if (state.enabled && (link_landing || (lost && flying))) {
@@ -594,8 +586,7 @@ static void take_imu(const float *body, uint64_t now) {
         // A result the settings table cannot hold is dropped: the IMU stays uncalibrated, as calibrate() left it.
         if (settings_calibration_fits(bias, pose_zero)) {
             memcpy(state.bias, bias, sizeof(bias));
-            state.attitude = (Attitude){.roll = atan2f(state.gravity_sum[1], state.gravity_sum[2]),
-                                        .pitch = atan2f(-state.gravity_sum[0], hypotf(state.gravity_sum[1], state.gravity_sum[2]))};
+            flight_attitude_start(&state.attitude, state.gravity_sum);
             state.controller = (Controller){0};
             state.calibrated = true;
             state.calibration_ready = true;
@@ -606,7 +597,7 @@ static void take_imu(const float *body, uint64_t now) {
     for (int i = 0; i < 3; i++) state.gyro[i] -= state.bias[i];
 }
 
-// INDI's tick (indi.h), before the flip, the recovery and the controller, which take its unmodeled acceleration on their own models: the controller's (Model, which the recovery's authority shares) and the flip's. Off and reset while disarmed.
+// INDI's tick (indi.h), before the burst, the recovery and the controller, which take its unmodeled acceleration on their own models: the controller's (Model) and the maneuvers' (maneuver, the burst's and the recovery's one authority). Off and reset while disarmed.
 static void incremental(float dt) {
     if (!state.enabled) {
         indi_reset(&indi);
@@ -618,32 +609,29 @@ static void incremental(float dt) {
     bool flying = (command.indi > 0 || command.indi_pitch > 0) && (owned || (hover_mode && hover.engaged && !hover.landed && hover.height >= INDI_HEIGHT && flown.base >= command.integrate_throttle));
     indi_fade = clampf(indi_fade + (flying ? dt : -dt) / INDI_FADE_S, 0, 1);
     indi_share[0] = indi_share[2] = indi_fade * command.indi;
-    // While the flip or a recovery flies the motors, pitch takes the roll's share: in the hover INDI's pitch doubled the 3 Hz shake (indi_pitch), but in the 2026-11-15 07:03 UTC burst a pitch the model had no term for (the assemblies' swing reaction as the servos slewed 40 degrees in 0.15 s at the roll's brake, the tilt's authority twice the model's and 40-70 ms later) took the nose 33 degrees over in a quarter second, and only the measured acceleration answers that in time.
-    indi_share[1] = indi_fade * (owned ? command.indi : command.indi_pitch);
+    indi_share[1] = indi_fade * command.indi_pitch;
     const Model *m = &command.model;
-    const FlipAuthority *a = &flip.authority;
+    FlipAuthority *a = &maneuver;
+    a->weight = command.hover.mass * GRAVITY;
     IndiModel models[INDI_MODELS] = {
         [INDI_CONTROLLER] = {m->arm / m->roll_inertia, m->pivot_height / m->pitch_inertia, m->com_x / m->pitch_inertia, m->arm / m->yaw_inertia, m->reaction_torque_ratio / m->yaw_inertia},
         [INDI_FLIP] = {a->roll, a->pitch, 0, a->yaw, 0},
     };
     indi_update(&indi, state.gyro, models, dt);
-    memcpy(flip.authority.indi, indi_share, sizeof(indi_share));
-    memcpy(flip.authority.unmodeled, indi.unmodeled[INDI_FLIP], sizeof(flip.authority.unmodeled));
+    memcpy(a->indi, indi_share, sizeof(indi_share));
+    memcpy(a->unmodeled, indi.unmodeled[INDI_FLIP], sizeof(a->unmodeled));
 }
 
-// The attitude estimate and the flip's own (it flies on the gyro, and at its hand-back the estimate takes its attitude), then the Kalman filter, which takes every tick, GPS solution and barometer reading, flying or not, and hands the hold its estimate. Returns when the timed part of the tick (the log's control_us) began.
+// The attitude estimate (on the gyro alone through a burst or a recovery), INDI and the burst's tick on the body attitude, then the Kalman filter, which takes every tick, GPS solution and barometer reading, flying or not, and hands the hold its estimate. Returns when the timed part of the tick (the log's control_us) began.
 static uint64_t estimate(Tick *t, bool first) {
-    if (first) {
-        state.attitude.roll = atan2f(state.accel[1], state.accel[2]);
-        state.attitude.pitch = atan2f(-state.accel[0], hypotf(state.accel[1], state.accel[2]));
-        state.attitude.synced = 0;
-    }
+    if (first) flight_attitude_start(&state.attitude, state.accel);
     // Through a flip or a recovery and their grace after, the accelerometer reads the thrust, not gravity: the gyro alone carries the attitude.
     Motion motion = {state.accel[0], state.accel[1], state.accel[2], state.gyro[0], state.gyro[1], state.gyro[2], t->dt,
-                     flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? command.attitude_tau : config.gravity_tau, command.quaternion};
+                     flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? command.attitude_tau : config.gravity_tau};
     flight_attitude(&state.attitude, &motion);
+    t->pose = relative_attitude(&state);
     incremental(t->dt);
-    if (state.enabled) flip_tick(&flip, state.gyro, state.accel, t->dt, &state.attitude, &state.controller, &hover.integral, &t->flipped);
+    if (state.enabled) flip_tick(&flip, &maneuver, t->pose.q, state.gyro, state.accel, t->dt, &state.controller, &hover.integral, &t->flipped);
     state.online = true;
     state.sample_us = t->now;
     // The barometer's newest reading, taken once this tick by whichever of the hover's calls runs.
@@ -658,7 +646,6 @@ static uint64_t estimate(Tick *t, bool first) {
     HoverEstimate estimate;
     ekf_estimate(&filtered, &estimate);
     hover_estimate(&hover, &estimate);
-    t->pose = relative_attitude(&state);
     return started;
 }
 
@@ -667,23 +654,18 @@ static void tip_or_recover(Tick *t) {
     bool landing = hover_mode > HOVER_HOLD || link_landing;
     RecoverInput input = {
         .enabled = command.recover_enable >= 1,
-        .tipped = !flip_tip_exempt(&flip) && (fabsf(t->pose.roll) > command.tip_limit || fabsf(t->pose.pitch) > command.tip_limit),
+        .tipped = !flip_gyro_only(&flip) && (fabsf(t->pose.roll) > command.tip_limit || fabsf(t->pose.pitch) > command.tip_limit),
         .allowed = state.controller.airborne >= RECOVER_AIRBORNE_S && !hover.landed && !hover.probing && !(hover_mode && hover.engaged && hover.lifted < 0) &&
                    !(landing && hover.height < RECOVER_LAND_HEIGHT) && recovery.recoveries < RECOVER_MAX,
         .gyro = state.gyro, .accel = state.accel, .dt = t->dt, .tip_limit = command.tip_limit,
-        .flip_active = flip_active(&flip), .flip_gyro_only = flip_gyro_only(&flip), .flip_phase = flip_phase(&flip), .quaternion = command.quaternion > 0,
-        .flip_burst = flip_active(&flip) && flip.flip.turn < flip_turn(1),
-        .climb_rate = hover.climb_rate, .collective = 2 * thrust(fmaxf(flown.base, 0)),
-        // With the quaternion setting the righting's authority in pitch and yaw is the flip's as the 2026-11-15 bursts measured it (flip.h), not the settings' model's: the tilt pitches 1.9 times and yaws 0.7 times what that predicts.
-        .authority = {command.model.arm / command.model.roll_inertia, command.quaternion > 0 ? FLIP_MEASURED_PITCH_AUTHORITY : command.model.pivot_height / command.model.pitch_inertia,
-                      command.quaternion > 0 ? FLIP_MEASURED_YAW_AUTHORITY : command.model.arm / command.model.yaw_inertia, command.hover.mass * GRAVITY, {indi_share[0], indi_share[1], indi_share[2]},
-                      {indi.unmodeled[INDI_CONTROLLER][0], indi.unmodeled[INDI_CONTROLLER][1], indi.unmodeled[INDI_CONTROLLER][2]}},
+        .flip_active = flip_active(&flip), .flip_gyro_only = flip_gyro_only(&flip), .flip_phase = flip_phase(&flip),
+        .climb_rate = hover.climb_rate, .collective = 2 * thrust(fmaxf(flown.base, 0)), .authority = maneuver,
         // The barometer's raw reading above the ground the hold learned with the motors off, not the hold's height (which integrates the accelerometer the tumble saturates).
         .baro = hover.baro_grounded ? baro_altitude - hover.baro_ground : NAN, .baro_new = t->have_baro, .baro_latency = BARO_LATENCY_US / 1e6f,
         .ceiling = command.hover.ceiling, .hold_tau = command.hover.baro_tau,
     };
     bool before = recover_active(&recovery);
-    recover_tick(&recovery, &recover_defaults, &input, &state.attitude, &state.controller, &hover.integral, &t->recovered);
+    recover_tick(&recovery, &recover_defaults, &input, t->pose.q, &state.controller, &hover.integral, &t->recovered);
     if (t->recovered.cancel_flip) {
         flip_cancel(&flip);
         t->flipped = (FlipOutput){0};
@@ -701,7 +683,6 @@ static void tip_or_recover(Tick *t) {
         hover.height = t->recovered.height;
         hover.climb_rate = t->recovered.climb_rate;
     }
-    t->pose = relative_attitude(&state);
 }
 
 // The hover's setpoint for the attitude controller (setpoint's collective, tilt and yaw rate), its fly-away failsafe and its landing's disarm. Returns whether it flies on the tag (tracking), when the controller takes its measured velocity and leaves the damping to it.
@@ -737,8 +718,7 @@ static bool hover_setpoint(Tick *t, Command *setpoint) {
     bool have_gps = gains.gps_tau > 0 && t->have_fix;
     // The fly-away failsafe may ignore the stick, brake harder or land (guard.c).
     int mode = guard_hover(&guard, &command.guard, &hover, &gains, hover_mode, t->now, t->dt);
-    // The failsafe ends a flip that is still climbing; one past that holds until it is done, its estimators running on (its outputs are not flown meanwhile).
-    if (guard.failsafe != FAILSAFE_OFF) flip_abort(&flip, &hover.integral);
+    // A burst or a recovery holds until it is done, the hold's estimators running on (its outputs are not flown meanwhile).
     if (flip_active(&flip) || recover_active(&recovery)) mode = HOVER_HOLD;
     hover_update(&hover, &gains, mode, tag, t->now, t->dt, t->pose.roll, t->pose.pitch, heading_rate, t->vertical, flying, &drag,
                  have_gps ? &t->gps : NULL, t->have_baro ? &t->baro : NULL, &out);
@@ -797,15 +777,14 @@ static void sum_trim(const Tick *t, float base) {
     }
 }
 
-// An armed tick's actuators. The attitude controller always runs; its setpoint comes from, in rising priority, the laptop (manual) or the hover, the test pattern's steps on top, the flip's climb and arrest collective, and the recovery's leveling. The actuators' owner is then the flip's spin and righting or the recovery's righting while either flies the motors and servos itself (flip.h, recover.h; the controller's outputs unused, and it takes over at the hand-back), otherwise the controller. Through the flip, a recovery and their graces each motor's throttle is then slewed and capped (flip_limit); the pattern's servo and motor steps go on last.
+// An armed tick's actuators. The attitude controller always runs; its setpoint comes from, in rising priority, the laptop (manual) or the hover, the test pattern's steps on top, the burst's arrest collective, and the recovery's leveling. The actuators' owner is then the burst's turn or the recovery's righting while either flies the motors and servos itself (flip.h, recover.h; the controller's outputs unused, and it takes over at the hand-back), otherwise the controller. Through the burst, a recovery and their graces each motor's throttle is then slewed and capped (flip_limit); the pattern's servo and motor steps go on last.
 static void fly(Tick *t) {
     command.roll = t->pose.roll;
     command.pitch = t->pose.pitch;
     command.gx = state.gyro[0]; command.gy = state.gyro[1]; command.gz = state.gyro[2];
-    if (command.quaternion > 0) memcpy(command.attitude, t->pose.q, sizeof(command.attitude));
+    memcpy(command.attitude, t->pose.q, sizeof(command.attitude));
     command.dt = t->dt;
     Command setpoint = command;
-    if (hover_mode != HOVER_HOLD) flip_abort(&flip, &hover.integral);
     bool hovering = hover_mode && hover.bias > 0.5f;
     // The pitch speed moment compensation needs a measured speed: the hover's while it flies on the tag; flight_math's own dead reckoning from g tan(pitch) reads a held trim pitch as speed.
     bool tracking = hovering && hover_setpoint(t, &setpoint);
@@ -817,7 +796,7 @@ static void fly(Tick *t) {
         setpoint.target_roll = setpoint.target_pitch = 0;
         setpoint.base = collective_throttle(t->recovered.motors.collective);
     }
-    // With recover_enable and the quaternion setting, the barometer's backstop over the ceiling (recover.h RECOVER_CEILING_MARGIN) caps whatever collective is flown: the hold, the flip's climb and arrest, leveling.
+    // With recover_enable, the barometer's backstop over the ceiling (recover.h RECOVER_CEILING_MARGIN) caps whatever collective is flown: the hold, the burst's arrest, leveling.
     if (command.recover_enable >= 1 && isfinite(t->recovered.cap)) setpoint.base = fminf(setpoint.base, collective_throttle(t->recovered.cap));
     memcpy(setpoint.indi_share, indi_share, sizeof(setpoint.indi_share));
     memcpy(setpoint.unmodeled, indi.unmodeled[INDI_CONTROLLER], sizeof(setpoint.unmodeled));
@@ -1240,16 +1219,16 @@ const char *flight_runtime_flip(void) {
     int64_t now = esp_timer_get_time();
     Attitude pose = relative_attitude(&state);
     FlipCheck check = {
-        .enabled = command.flip_enable >= 1, .armed = state.enabled, .done = flip.done,
+        .enabled = command.flip_angle > 0, .armed = state.enabled, .done = flip.done,
         .holding = hover_mode == HOVER_HOLD && hover.engaged, .camera = command.hover_camera != 0, .gps = command.hover.gps_tau > 0,
         .aligned = hover.aligned, .located = hover.gps_us && now - hover.gps_us <= FLIP_FIX_US,
         .landing = link_landing, .failsafe = guard.failsafe != FAILSAFE_OFF, .pattern = excite.active,
         .airborne = state.controller.airborne, .height = hover.height, .climb_rate = hover.climb_rate, .speed = hypotf(hover.gps_fix[0], hover.gps_fix[1]),
         .roll = pose.roll, .pitch = pose.pitch - command.pitch_trim, .rate = {state.gyro[0], state.gyro[1], state.gyro[2]},
-        .min_height = command.flip_height, .battery = battery_v, .whole_quaternion = command.quaternion > 0 && command.flip_enable < 2,
+        .min_height = command.flip_height, .battery = battery_v,
     };
     const char *error = recover_gyro_only(&recovery) ? "Recovering" : flip_refusal(&check);
-    if (!error) flip_begin(&flip, &command, &state.controller, hover.integral, hover.force, state.attitude.roll, state.attitude.pitch, hover.climb_rate, hover.height);
+    if (!error) flip_begin(&flip, &state.controller, hover.integral, pose.q, hover.force, hover.climb_rate, hover.height, command.flip_angle, command.hover.ceiling);
     UNLOCK();
     return error;
 }
@@ -1259,8 +1238,7 @@ const char *flight_runtime_level(void) {
     LOCK();
     const char *error = !state.enabled ? "Not armed" : state.controller.airborne <= 0 || hover.landed ? "On the ground" : NULL;
     if (!error) {
-        // A flip still climbing just ends (its height integral given back); one past that the recovery takes over at its next tick.
-        flip_abort(&flip, &hover.integral);
+        // A burst ends as the recovery takes over at its next tick.
         recover_abort(&recovery);
     }
     UNLOCK();

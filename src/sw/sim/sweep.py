@@ -2,7 +2,6 @@
 The host flight simulation: run() flies the drone's C attitude estimator and controller (via sw.sim.flight), and with hover its camera-hover loop (via sw.sim.hover), against a lean 6-DOF rigid-body plant with actuator delay, lag, servo backlash/slew, IMU noise, drag and landing-leg ground contact; uv run -m sw.sim.sweep flies NOMINAL once with the flown gains. Free flight starts at hover in the air; a plant with "liftoff" starts on the ground at the dashboard's T collective instead, level or resting at "ground_pitch" degrees on its "feet" (contact points relative to the CoM, default FEET).
 """
 
-import ctypes
 import math
 import random
 from collections import deque
@@ -203,7 +202,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     worst, peak_height, late, trace = 0.0, 0.0, [], []
     # The estimator starts from the true gravity direction, like the drone after its stationary calibration.
     specific = apply(matrix, [0.0, 0.0, 1.0], transpose=True)
-    estimator = Attitude(accel=specific, quaternion=settings.get("quaternion", 0) > 0)
+    estimator = Attitude(accel=specific)
     gyro_filter = [0.0, 0.0, 0.0]
     accel_filter = list(specific)
     # The servo electronics ignore a command until it differs from the last accepted one by more than the deadband.
@@ -310,14 +309,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         if plant.get("gyro_counts"):
             # The gyro read in whole counts (plant["gyro_counts"] per degree/s: 131 at ±250 deg/s, 16.4 at ±2000), as the log records it and the estimates took it before 2026-11-12.
             gyro_filter = [math.radians(round(math.degrees(g) * plant["gyro_counts"]) / plant["gyro_counts"]) for g in gyro_filter]
-        attitude = estimator.update(accel_filter, gyro_filter, DT, powered=True, powered_tau=settings.get("attitude_tau", 50.0))
-        # The drone flies relative to its level reference: an error in it offsets the attitude both loops see. With the quaternion setting the estimate's quaternion is turned by it, as flight_rt.c relative_attitude does with pose_zero.
-        body = None
-        if estimator.quaternion:
-            body = body_quaternion(estimator.q, *level_error)
-            attitude = euler(body)
-        else:
-            attitude = (attitude[0] - level_error[0], attitude[1] - level_error[1])
+        estimator.update(accel_filter, gyro_filter, DT, powered=True, powered_tau=settings.get("attitude_tau", 50.0))
+        # The drone flies relative to its level reference: an error in it offsets the attitude both loops see, the estimate's quaternion turned by it as flight_rt.c relative_attitude does with pose_zero.
+        body = body_quaternion(estimator.q, *level_error)
+        attitude = euler(body)
         # The body-to-world matrix until the physics substeps move the body.
         matrix = rotation(*angles)
         visible = None

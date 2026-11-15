@@ -4,7 +4,7 @@
 
 // Where Command's runtime-only fields that the host sets by name sit, in floats from its start.
 const size_t flight_command_indi = offsetof(Command, indi_share) / sizeof(float);
-const size_t flight_command_quaternion = offsetof(Command, quaternion) / sizeof(float);
+const size_t flight_command_attitude = offsetof(Command, attitude) / sizeof(float);
 const size_t flight_command_size = sizeof(Command) / sizeof(float);
 
 void flight_control_many(float *states, size_t state_stride, const float *commands, size_t command_stride, const float *table, size_t count, size_t lanes) {

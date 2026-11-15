@@ -7,7 +7,7 @@ Each run takes off in the GPS hold as flip_firmware does (its FLIGHT settings, r
   tumble   a tumble like 2026-11-12 02:27:15 UTC's after the flip's hand-back: 90-180 degrees over, pitching at 400-600 deg/s either way, rolling and yawing at a few hundred (normal, 200 and 150 deg/s), sinking at up to 2 m/s
   landing  a link-loss landing (at least 1 m/s down) begins, and at a drawn height of 0.5-2.5 m the drone is put 60-150 degrees over: recovery above 1 m (recover.h RECOVER_LAND_HEIGHT), the tip cut below; after a recovery the hold flies LINK_HOLD_S, then the landing starts again
   abort    recover_enable 0: the drone is put 20-60 degrees over turning at up to 100 deg/s and level-and-hold is asked for at once
-  flip     the flip as flip_firmware flies it (from 25 s), with recovery on
+  flip     the burst as flip_firmware flies it (FLIGHT's flip_angle, from 25 s), with recovery on
 The attitude estimate is put into the drawn attitude with it (about a degree of error), as the gyro would have carried it there; the hover's height and climb rate are not, as they are not on the drone either. The actuators keep the state they had. --off flies the same with recover_enable 0 (today's tip cut).
 
 Recovered: never cut, never touched the ground after the event, upright within 10 degrees and turning under 1 rad/s at the end (AFTER, 6 s, past the event) and above 0.5 m (landing: or landed by the hold). It prints the share recovered, cut (and why), touched, the height lost from the event to the lowest point in 4 s, and the time from the event to the hand-back to the hold. --tune searches the gains (SPACE) by CMA-ES on tip, tilt and tumble at both heights.
@@ -38,7 +38,7 @@ AFTER = 6.0
 TUNED = ("tip", "tilt", "tumble")
 # --tune's search: RecoverParams fields with their ranges (log scale where low > 0 and the third item is True; angles in radians). Not idle, each motor's least thrust: it is the flip's floor (flip.h FLIP_FLOOR), as the slew and cap are the flip's.
 SPACE = [("kp", 1.0, 20.0, True), ("brake", 5.0, 150.0, True), ("max_rate", 4.0, 30.0, True), ("k_roll", 2.0, 60.0, True), ("k_pitch", 2.0, 80.0, True), ("kd_yaw", 0.5, 20.0, True),
-         ("roll_over", 90 * DEG, 175 * DEG, False), ("servo_max", 20 * DEG, 60 * DEG, False), ("kv", 0.5, 8.0, True), ("floor", 0.02, 1.0, True),
+         ("servo_max", 20 * DEG, 60 * DEG, False), ("kv", 0.5, 8.0, True), ("floor", 0.02, 1.0, True),
          ("right_angle", 10 * DEG, 60 * DEG, False), ("right_rate", 0.5, 6.0, True)]
 
 

@@ -336,7 +336,7 @@ static void set_setting(int index, float value) {
 
 static void randomize_settings(void) {
     static const struct { int index; float values[5]; int count; } choices[] = {
-        {SETTING_hover_camera, {0, 1}, 2}, {SETTING_hover_gps_tau, {0, 0.5f}, 2}, {SETTING_hover_baro_tau, {0, 1}, 2}, {SETTING_flip_enable, {0, 1, 2, 3, 4}, 5},
+        {SETTING_hover_camera, {0, 1}, 2}, {SETTING_hover_gps_tau, {0, 0.5f}, 2}, {SETTING_hover_baro_tau, {0, 1}, 2}, {SETTING_flip_angle, {0, 30, 60, 90, 45}, 5},
         {SETTING_recover_enable, {0, 1}, 2}, {SETTING_auto_trim, {0, 0.5f}, 2}, {SETTING_pitch_damping_tau, {0, 0.03f}, 2}, {SETTING_tip_limit, {45, 80}, 2},
         {SETTING_thrust_voltage, {0, 16}, 2}, {SETTING_hover_drag, {0, 1}, 2}, {SETTING_integrate_throttle, {580, 350}, 2}, {SETTING_roll_target_rate, {0, 360}, 2},
         {SETTING_hover_climb, {0.3f, 3}, 2}, {SETTING_yaw_i, {0, 2}, 2}, {SETTING_pitch_speed, {0, 2}, 2}, {SETTING_failsafe_speed, {0, 2}, 2},
@@ -581,8 +581,6 @@ int main(int argc, char **argv) {
     ticks = strtol(argv[2], NULL, 10);
     trace = argc > 3 ? fopen(argv[3], "w") : NULL;
     settings_load();
-    // The quaternion attitude, the one the drone flies (the Euler path goes).
-    set_setting(SETTING_quaternion, 1);
     flight_runtime_outputs();
     randomize_settings();
     flight_runtime_start();

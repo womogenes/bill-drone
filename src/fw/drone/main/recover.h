@@ -5,10 +5,10 @@
 #include "flight_math.h"
 #include "flip.h"
 
-// Tumble recovery and the pilot's level-and-hold (recover.c, fw/FLIP.md): instead of the tip cut stopping the motors in the air, right the thrust axis on the gyro alone, level under the attitude controller while the collective stops the vertical speed, then hand back to the hover's hold. A drone far from upright is out of the attitude controller's reach: its attitude estimate is Euler angles, which break down near 90 degrees of pitch (2026-11-12 02:27:15 UTC: roll jumped from 67 to 163 degrees at 93 degrees of pitch after the flip's hand-back, and the controller drove the pitch to -1100 deg/s on it).
-// The righting's gains: as recover.py and flip.c's righting, the rate toward up is at most max_rate, sqrt(2 brake angle) and kp angle; k_roll and k_pitch (1/s) turn rate errors into angular accelerations, kd_yaw damps yaw; past roll_over from up with the error mostly in pitch it rolls the long way round; servo_max bounds the common tilt (radians). The collective holds the height along up (kv per s against the vertical speed) times floor when inverted to all of it upright, and each motor keeps at least idle of the weight, the flip's FLIP_FLOOR: a motor commanded to throttle 1 mid-spin on 2026-11-12 took 0.1 s or more to come back (an ESC may stop at 1001 us). flight_rt.c slews and caps the throttles as the flip's (flip_limit) while a recovery and its grace run. Righting ends within right_angle of upright and turning under right_rate (rad/s) on roll and pitch; it fails after right_time (s). Leveling ends once within level_angle, under level_rate and under ARREST_SPEED of vertical speed for SETTLE_S, or after level_time (s).
+// Tumble recovery and the pilot's level-and-hold (recover.c, fw/FLIP.md): instead of the tip cut stopping the motors in the air, right the thrust axis with its own gains and the motors flown directly (flip_allocate), the attitude estimate on the gyro alone, then level under the attitude controller while the collective stops the vertical speed, then hand back to the hover's hold. Righting needs more than the attitude controller's gains and its thrust: a drone far over has its pitch authority only from tilted thrust.
+// The righting's gains: the one attitude law (attitude_rates) toward upright at the drone's own heading, the rate toward up at most max_rate, sqrt(2 brake angle) and kp angle; k_roll and k_pitch (1/s) turn rate errors into angular accelerations, kd_yaw damps yaw; servo_max bounds the common tilt (radians). The collective holds the height along up (kv per s against the vertical speed) times floor when inverted to all of it upright, and each motor keeps at least idle of the weight, the flip's FLIP_FLOOR: a motor commanded to throttle 1 mid-spin on 2026-11-12 took 0.1 s or more to come back (an ESC may stop at 1001 us). flight_rt.c slews and caps the throttles as the flip's (flip_limit) while a recovery and its grace run. Righting ends within right_angle of upright and turning under right_rate (rad/s) on roll and pitch; it fails after right_time (s). Leveling ends once within level_angle, under level_rate and under ARREST_SPEED of vertical speed for SETTLE_S, or after level_time (s).
 typedef struct {
-    float kp, brake, max_rate, k_roll, k_pitch, kd_yaw, roll_over, servo_max;
+    float kp, brake, max_rate, k_roll, k_pitch, kd_yaw, servo_max;
     float kv, floor, idle;
     float right_angle, right_rate, right_time;
     float level_angle, level_rate, level_time;
@@ -29,8 +29,6 @@ enum { RECOVER_NONE, RECOVER_TILT, RECOVER_FLIP, RECOVER_SATURATED, RECOVER_ABOR
 
 typedef struct {
     int stage, cause, recoveries;
-    // The attitude (w, x, y, z; body to level, the heading free) the righting flies on: taken from the attitude estimate each ordinary tick, from the gyro alone while a flip or this runs.
-    float q[4];
     // How long this recovery has run and righted (s), the thrust the motors have by now (N), the vertical speed it flies on (m/s; from the hold's climb rate at the start, then the specific force along q's up while measured, otherwise the barometer's rate or none), how long it has stayed settled (s), the time since it ended (s; negative before one), and whether the pilot asked for level-and-hold.
     float time, righting, thrust, vertical, settled, since;
     bool abort;
@@ -51,13 +49,9 @@ typedef struct {
     bool enabled, tipped, allowed;
     const float *gyro, *accel;
     float dt, tip_limit;
-    // The flip (flip.h): running, its phase (flip_phase) and whether the attitude estimate is on the gyro alone for it (flip_gyro_only).
+    // The burst (flip.h): running, its phase (flip_phase: it keeps the nose level, so past BURST_LOST_PITCH of nose up or down while it turns it is lost, and the recovery takes over then) and whether the attitude estimate is on the gyro alone for it (flip_gyro_only).
     bool flip_active, flip_gyro_only;
     int flip_phase;
-    // The quaternion attitude (settings.def quaternion): q is then the attitude estimate's own every tick, nothing is written back to the estimate, and the righting is the one attitude law (attitude_error, attitude_rates) toward upright at the drone's own heading, without the roll-over (roll_over unused).
-    bool quaternion;
-    // A staged burst (flip_enable 2 or 3: a roll short of the whole flip) is running: it keeps the nose level, so past BURST_LOST_PITCH of nose up or down in its spin or righting it is lost, and the recovery takes over then.
-    bool flip_burst;
     // The hold's climb rate (m/s), the collective being flown (N) and the airframe's authority (flip.h; weight in N).
     float climb_rate, collective;
     FlipAuthority authority;
@@ -86,8 +80,8 @@ void recover_abort(RecoverRun *run);
 bool recover_active(const RecoverRun *run);
 // The attitude estimate on the gyro alone: while it runs and RECOVER_GRACE after.
 bool recover_gyro_only(const RecoverRun *run);
-// One control tick, where the tip cut has always been tested (after the attitude estimate and the flip's tick): tracks q, starts a recovery on a trigger it is allowed, runs one, and says when the tip cut applies instead. While it runs and through its grace the attitude estimate takes q's roll and pitch every tick; at the hand-back to leveling the controller gets back its integrators and dead-reckoned velocity, and at its end the hover gets back its height integral.
-void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *in, Attitude *attitude, Controller *controller, float *height_integral, RecoverOutput *out);
+// One control tick, where the tip cut has always been tested (after the attitude estimate and the burst's tick), on the body attitude q (w, x, y, z): starts a recovery on a trigger it is allowed, runs one, and says when the tip cut applies instead. At the hand-back to leveling the controller gets back its integrators and dead-reckoned velocity, and at its end the hover gets back its height integral.
+void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *in, const float *q, Controller *controller, float *height_integral, RecoverOutput *out);
 // After a recovery ended, the estimate stays on the gyro this long (s): the accelerometer still reads the arrest's thrust.
 #define RECOVER_GRACE 1.0f
 // Recoveries per arming before the tip cut applies again: one that keeps tipping back over is not recovering.

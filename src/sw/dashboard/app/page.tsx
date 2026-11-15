@@ -783,7 +783,7 @@ export default function Page() {
           ? `Controller: hears drone ${link.controller.rx}/s${dbm(link.controller.rssi)} (min${dbm(link.controller.rssi_min)}, noise ${link.controller.noise_floor} dBm), ${link.controller.gaps} missed; sends ${link.controller.tx_ok} ok, ${link.controller.tx_fail} failed, ${link.controller.refused} refused, ${link.controller.rejected} dropped; ch ${link.controller.channel}, ${link.controller.rate_name}, ${link.controller.power} dBm`
           : 'Controller: no link report (older firmware)',
         link.drone
-          ? `Drone: hears controller ${link.drone.rx}/s${dbm(link.drone.rssi)} (min${dbm(link.drone.rssi_min)}, noise ${link.drone.noise_floor} dBm), ${link.drone.gaps} missed, ${link.drone.rejected} stale, longest silence ${link.drone.silence_ms} ms; sends ${link.drone.tx_ok} ok, ${link.drone.tx_fail} failed, ${link.drone.refused} refused, slowest ${link.drone.latency_ms} ms; ch ${link.drone.channel}${link.drone.hopping ? ' (searching)' : ''}, ${link.drone.rate_name}, ${link.drone.power} dBm`
+          ? `Drone: hears controller ${link.drone.rx}/s${dbm(link.drone.rssi)} (min${dbm(link.drone.rssi_min)}, noise ${link.drone.noise_floor} dBm), ${link.drone.gaps} missed, ${link.drone.rejected} stale, longest silence ${link.drone.silence_ms} ms; sends ${link.drone.tx_ok} ok, ${link.drone.tx_fail} failed, ${link.drone.refused} refused, slowest ${link.drone.latency_ms} ms; ch ${link.drone.channel}, ${link.drone.rate_name}, ${link.drone.power} dBm`
           : 'Drone: no link report (older firmware)',
       ].join('\n');
   // Drawn whether or not the drone is connected, so the controller can be checked on its own.

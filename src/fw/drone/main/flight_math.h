@@ -8,10 +8,9 @@
 #include "hover.h"
 
 // Angles/rates are radians. Shared by the drone and the host simulation (sw/sim/flight.py).
-// q: with the quaternion setting the attitude itself (w, x, y, z; body to level, its heading the gyro's own), of which roll and pitch are then read (quaternion_euler); synced is 0 while the Euler estimate ran last, and q then starts from its roll and pitch.
-typedef struct { float roll, pitch, q[4], synced; } Attitude;
-// quaternion: carry the attitude as one quaternion (settings.def quaternion; 0 the Euler angles, as before).
-typedef struct { float ax, ay, az, gx, gy, gz, dt, gravity_tau, quaternion; } Motion;
+// q: the attitude (w, x, y, z; body to level, its heading the gyro's own), of which roll and pitch are read (quaternion_euler).
+typedef struct { float roll, pitch, q[4]; } Attitude;
+typedef struct { float ax, ay, az, gx, gy, gz, dt, gravity_tau; } Motion;
 // comp_dir/comp_ref: each servo's last commanded direction (+1, -1, or 0 before it moved) and its extreme since. airborne counts seconds since collective first reached integrate_throttle (0 before); setpoint_* is the ramped roll/pitch target (with trim); velocity is the dead-reckoned (rightward, forward) velocity in m/s from g * tan(tilt).
 // upright: 1 from arming at a tilted rest until the drone first comes level; meanwhile the servos also tilt back by most of the pitch from level, so the thrust points up, easing off as the nose comes up (flight_math.c).
 // yaw_i: the yaw-rate integrator (rad/s²), trimming out steady twist such as the motors' reaction torque at unequal throttles.
@@ -61,14 +60,14 @@ typedef struct {
     float tip_limit;
     // How fast the attitude estimate pulls toward the accelerometer with the motors spinning (s; settings.def attitude_tau). Runtime-only, last.
     float attitude_tau;
-    // The roll flip (flip.h): whether the laptop may start one (1) or a staged burst (2 and 3, flip_turn), 0 none, and the least height it starts from (m). Runtime-only, last.
-    float flip_enable, flip_height;
+    // The burst (flip.h): the angle it rolls to and back (radians, 0 = the flip request refused) and the least height it starts from (m). Runtime-only, last.
+    float flip_angle, flip_height;
     // Tumble recovery in place of the tip cut in flight (recover.h; settings.def recover_enable). Runtime-only, last.
     float recover_enable;
     // Incremental nonlinear dynamic inversion (indi.h): the settings indi (roll and yaw) and indi_pitch, and per axis (roll, pitch, yaw) the share now taken (indi_share, the settings faded in by flight_rt.c; 0 = off, the controller as before) of the unmodeled angular acceleration INDI found on this controller's model (unmodeled, rad/s²), which flight_control takes off what it asks. Runtime-only, last.
     float indi, indi_pitch, indi_share[3], unmodeled[3];
-    // The quaternion attitude (settings.def quaternion, 0 = off: the Euler errors, as before): the controller's roll and pitch errors are the tilt-prioritized error (attitude_error) of attitude (w, x, y, z; body to level, as roll and pitch are taken, from pose_zero) against the setpoint's roll and pitch at its own heading. Runtime-only, last.
-    float quaternion, attitude[4];
+    // The attitude (w, x, y, z; body to level, from pose_zero, as roll and pitch are taken): the controller's roll and pitch errors are the tilt-prioritized error (attitude_error) against the setpoint's roll and pitch at its own heading. Runtime-only, last.
+    float attitude[4];
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.
@@ -76,6 +75,8 @@ extern const float flight_thrust[][2];
 extern const size_t flight_thrust_count;
 
 void flight_attitude(Attitude *state, const Motion *motion);
+// The attitude at rest from the accelerometer (g, body axes), the heading zero.
+void flight_attitude_start(Attitude *state, const float *accel);
 void flight_reset(Controller *state, const Command *command);
 // Throttle to thrust (reverse 0) or thrust to throttle on the rising curve (reverse 1), on rows of (throttle, N).
 float flight_interpolate(float value, const float *table, size_t count, int reverse);
@@ -89,6 +90,8 @@ void quaternion_from_euler(float *q, float roll, float pitch);
 void quaternion_rotate(float *q, const float *gyro, float dt);
 void quaternion_up(const float *q, float *up);
 void quaternion_euler(const float *q, float *roll, float *pitch);
+// a ⊗ b into out (which may be either).
+void quaternion_multiply(const float *a, const float *b, float *out);
 // The heading: q's turn about the level frame's up once the tilt is taken out (the twist of a swing-twist split, radians), defined everywhere but upside down; and the attitude at a heading with roll and pitch as quaternion_from_euler takes them.
 float quaternion_heading(const float *q);
 void quaternion_target(float *q, float heading, float roll, float pitch);

@@ -18,6 +18,8 @@ if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime fo
 library = ctypes.CDLL(str(LIBRARY))
 library.flight_attitude.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 library.flight_attitude.restype = None
+library.flight_attitude_start.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+library.flight_attitude_start.restype = None
 library.flight_control.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
 library.flight_control.restype = None
 library.flight_control_many.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
@@ -117,17 +119,23 @@ DAMPING_TAU = PITCH_SPEED + 1 + HOVER_GAINS + 2
 ROLL_TARGET_RATE = DAMPING_TAU + 1
 # INDI's share per axis (roll, pitch, yaw; 0 = off), then the unmodeled acceleration on the controller's model (rad/s²), which the harness sets each tick as flight_rt.c does (indi.h).
 INDI = ctypes.c_size_t.in_dll(library, "flight_command_indi").value
-# The quaternion attitude (settings quaternion, 0 = off; flight_math.c), then the attitude quaternion (w, x, y, z; body to level) the controller's error takes, which the harness sets each tick as flight_rt.c does (Controller.update q).
-QUATERNION = ctypes.c_size_t.in_dll(library, "flight_command_quaternion").value
+# The attitude quaternion (w, x, y, z; body to level) the controller's error takes, which the harness sets each tick as flight_rt.c does (Controller.update q).
+ATTITUDE = ctypes.c_size_t.in_dll(library, "flight_command_attitude").value
 COMMAND_SIZE = ctypes.c_size_t.in_dll(library, "flight_command_size").value
 
 
 def body_quaternion(q, roll, pitch):
-    """flight_rt.c relative_attitude with the quaternion setting: the estimate's quaternion turned by a level reference's roll and pitch (radians), q ⊗ zero⁻¹."""
+    """flight_rt.c relative_attitude: the estimate's quaternion turned by a level reference's roll and pitch (radians), q ⊗ zero⁻¹."""
     cr, sr, cp, sp = math.cos(roll / 2), math.sin(roll / 2), math.cos(pitch / 2), math.sin(pitch / 2)
     z = (cr * cp, sr * cp, cr * sp, -sr * sp)
     return (q[0] * z[0] + q[1] * z[1] + q[2] * z[2] + q[3] * z[3], -q[0] * z[1] + q[1] * z[0] - q[2] * z[3] + q[3] * z[2],
             -q[0] * z[2] + q[1] * z[3] + q[2] * z[0] - q[3] * z[1], -q[0] * z[3] - q[1] * z[2] + q[2] * z[1] + q[3] * z[0])
+
+
+def from_euler(roll, pitch):
+    """flight_math.c quaternion_from_euler: roll and pitch (radians; about forward, then left) as a quaternion (w, x, y, z), the heading zero."""
+    cr, sr, cp, sp = math.cos(roll / 2), math.sin(roll / 2), math.cos(pitch / 2), math.sin(pitch / 2)
+    return (cr * cp, sr * cp, cr * sp, -sr * sp)
 
 
 def euler(q):
@@ -136,18 +144,19 @@ def euler(q):
 
 
 class Attitude:
-    # flight_math.h Attitude: roll, pitch, the quaternion q (w, x, y, z) and whether it is synced to them.
-    def __init__(self, accel=(0.0, 0.0, 1.0), quaternion=False):
-        self.state = array("f", [math.atan2(accel[1], accel[2]), math.atan2(-accel[0], math.sqrt(accel[1] ** 2 + accel[2] ** 2))] + [0.0] * 5)
-        self.quaternion = quaternion
+    # flight_math.h Attitude: roll, pitch and the quaternion q (w, x, y, z) they are read from, started at rest from the accelerometer (flight_attitude_start).
+    def __init__(self, accel=(0.0, 0.0, 1.0)):
+        self.state = array("f", [0.0] * 6)
+        specific = array("f", accel)
+        library.flight_attitude_start(self.state.buffer_info()[0], specific.buffer_info()[0])
 
     @property
     def q(self):
         return tuple(self.state[2:6])
 
     def update(self, accel, gyro, dt, powered, gyro_only=False, powered_tau=POWERED_GRAVITY_TAU):
-        # gyro_only: the gyro alone (through a flip or a recovery and their grace), an infinite time constant. quaternion: settings.def quaternion (the estimate as one quaternion).
-        motion = array("f", list(accel) + list(gyro) + [dt, math.inf if gyro_only else powered_tau if powered else GRAVITY_TAU, 1.0 if self.quaternion else 0.0])
+        # gyro_only: the gyro alone (through a burst or a recovery and their grace), an infinite time constant.
+        motion = array("f", list(accel) + list(gyro) + [dt, math.inf if gyro_only else powered_tau if powered else GRAVITY_TAU])
         library.flight_attitude(self.state.buffer_info()[0], motion.buffer_info()[0])
         return self.state[0], self.state[1]
 
@@ -185,13 +194,11 @@ class Controller:
             self.command[MODEL_OFFSET + MODEL_KEYS.index(key)] = settings[key]
         self.command[DAMPING_TAU] = settings.get("pitch_damping_tau", 0.0)
         self.command[ROLL_TARGET_RATE] = math.radians(settings.get("roll_target_rate", 0.0))
-        self.command[QUATERNION] = settings.get("quaternion", 0.0)
 
-    def update(self, attitude, gyro, dt, q=None):
-        """attitude: roll and pitch (radians); q: with the quaternion setting the attitude quaternion they are read from (w, x, y, z; body to level)."""
+    def update(self, attitude, gyro, dt, q):
+        """attitude: roll and pitch (radians); q: the attitude quaternion they are read from (w, x, y, z; body to level)."""
         struct.pack_into("<6f", self.command, 0, *attitude, *gyro, dt)
-        if q is not None:
-            self.command[QUATERNION + 1:QUATERNION + 5] = array("f", q)
+        self.command[ATTITUDE:ATTITUDE + 4] = array("f", q)
         library.flight_control(self.state.buffer_info()[0], self.command.buffer_info()[0], THRUST_BUFFER.buffer_info()[0], len(THRUST_BUFFER) // 2)
         return int(self.state[2]), int(self.state[3]), self.state[4], self.state[5]
 
@@ -217,7 +224,7 @@ library.indi_update.argtypes = [ctypes.POINTER(Indi), ctypes.c_float * 3, IndiMo
 
 class Incremental:
     """
-    INDI as flight_rt.c runs it (incremental, fly): settings' indi (roll and yaw) and indi_pitch are the shares of the correction taken (0 = off); each tick update() before the controller (and the flip and the recovery, which take unmodeled[INDI_FLIP] and unmodeled[INDI_CONTROLLER] on their authorities), apply() to the controller's command, and sent() with the actuators as sent.
+    INDI as flight_rt.c runs it (incremental, fly): settings' indi (roll and yaw) and indi_pitch are the shares of the correction taken (0 = off); each tick update() before the controller (and the burst and the recovery, which take unmodeled[INDI_FLIP] on their one authority, flip.h FLIP_*_AUTHORITY), apply() to the controller's command, and sent() with the actuators as sent.
     """
 
     def __init__(self, settings, model=MODEL):
@@ -228,20 +235,17 @@ class Incremental:
         self.controller = (m["arm"] / m["roll_inertia"], m["pivot_height"] / m["pitch_inertia"], m["com_x"] / m["pitch_inertia"], m["arm"] / m["yaw_inertia"], m["reaction_torque_ratio"] / m["yaw_inertia"])
         self.state = Indi()
         self.fade = 0.0
-        self.owned = False
 
     def update(self, gyro, holding, height, base, owned=False, flip=(0.0, 0.0, 0.0), dt=0.01):
-        """gyro (rad/s); whether the hold flies (engaged in a hover mode and not landed), its height above where it engaged (m), last tick's collective throttle, whether the flip or a recovery flies the motors, and the flip's authority (roll, pitch, yaw)."""
+        """gyro (rad/s); whether the hold flies (engaged in a hover mode and not landed), its height above where it engaged (m), last tick's collective throttle, whether the burst or a recovery flies the motors, and their authority (roll, pitch, yaw)."""
         flying = self.on and (owned or (holding and height >= INDI_HEIGHT and base >= self.integrate))
-        self.owned = owned
         self.fade = min(max(self.fade + (dt if flying else -dt) / INDI_FADE_S, 0.0), 1.0)
         models = (IndiModel * INDI_MODELS)(IndiModel(*self.controller), IndiModel(flip[0], flip[1], 0.0, flip[2], 0.0))
         library.indi_update(ctypes.byref(self.state), (ctypes.c_float * 3)(*gyro), models, dt)
 
     def share(self):
-        """The share taken per axis now (roll, pitch, yaw): the settings faded in, pitch taking roll's while the flip or a recovery flies the motors (flight_rt.c incremental)."""
-        roll, pitch, yaw = self.shares
-        return [self.fade * roll, self.fade * (roll if self.owned else pitch), self.fade * yaw]
+        """The share taken per axis now (roll, pitch, yaw): the settings faded in (flight_rt.c incremental)."""
+        return [self.fade * share for share in self.shares]
 
     def unmodeled(self, which=INDI_CONTROLLER):
         return list(self.state.unmodeled[which])

@@ -1,9 +1,9 @@
 """
-The robust flip check (sw/sim/tune_flip.py --check --bands: 5 rotor_momentum bands over 0-0.05, every other untested term drawn as flip_firmware.uncertain, from the 5 m hold) on the 2026-11-14 ESCs: uv run -m sw.sim.flip_esc CASE [--kind flip|burst60|burst90] [--n 256] [--workers 90] [--out results.json]
+The robust burst check (sw/sim/tune_flip.py --check --bands: 5 rotor_momentum bands over 0-0.05, every other untested term drawn as flip_firmware.uncertain, from the 5 m hold) on the 2026-11-14 ESCs: uv run -m sw.sim.flip_esc CASE [--kind burst30|burst60|burst90] [--n 256] [--workers 90] [--out results.json]
 
 The plant's motors are the thrust stand's (STAND: one motor with its 10-inch prop on the Nuofany 40A calibrated to 1000-2000 us, sw/recordings/stand/2026-11-14T18-07-54, a fresh 4S sagging from 16.3 to 15.3 V; per motor, against the drone's throttle 0-1200) with no ceiling (the table's top is measured now), both motors alike within 3% (the stand found the two pairs within about 2%), while the firmware flies on its own table (flight_math.c) at the drone's thrust scales 1.3 and hover_mass 1.02, as set on 2026-11-14 (SETTINGS, the GPS hold 5 m up as tune_flip.HIGH). Today's 8-10% hover split, left high (2026-11-15T00-19-08 to 00-28-51 UTC), is a CoM offset to the left (COM_LEFT, (L - R) / (L + R) = offset / arm); on this plant the sim's hold needs 641/586 against the flights' 674/607 to 725/647 on a sagging pack. roll_bias is today's 12.87 scaled with the offset (the auto-trim's).
 
-Cases: before (the 2026-11-13 robust retune's own check: the firmware's table times the fit's trim, the left motor drawn at 0.8-1 of the right's, the 2026-11-12 settings; it prints exactly FLIP.md's table), now (as the drone is), rebalanced (the CoM centered), battery15 (the battery 15 mm right: BATTERY of the mass moves 15 mm), now_left (now with the old weak-left draw on top), now_cal and table_only (the firmware's scales calibrated to each plant at hover, as the robust tuning had them; table_only also centered), and any case with _s12 (thrust scales 1.2 and hover_mass 1.05: what the stand and today's hovers give at hover thrust). For the proposed firmware table, run the same cases in a tree with flight_math.c's table replaced (sw/sim/models/NOTES.md "The new ESCs").
+Cases: now (as the drone is), rebalanced (the CoM centered), battery15 (the battery 15 mm right: BATTERY of the mass moves 15 mm), now_left (now with the old weak-left draw on top), now_cal and table_only (the firmware's scales calibrated to each plant at hover, as the robust tuning had them; table_only also centered), and any case with _s12 (thrust scales 1.2 and hover_mass 1.05: what the stand and today's hovers give at hover thrust). For the proposed firmware table, run the same cases in a tree with flight_math.c's table replaced (sw/sim/models/NOTES.md "The new ESCs").
 """
 
 import argparse
@@ -30,7 +30,8 @@ CASES = {"now": COM_LEFT, "rebalanced": 0.0, "battery15": COM_LEFT - 0.015 * BAT
 # The drone's settings on 2026-11-14 (this recording's equal GET /settings at 18:00 PST).
 SETTINGS = "2026-11-15T00-51-18"
 ROLL_BIAS = 12.871582
-KINDS = {"flip": 1, "burst60": 2, "burst90": 3, "burst30": 4}
+# The bursts by name (flip_angle, degrees).
+KINDS = {"burst30": 30.0, "burst60": 60.0, "burst90": 90.0}
 
 
 def options_for(case, k, seed, band, airframe=FF.AIRFRAME):
@@ -53,10 +54,7 @@ def options_for(case, k, seed, band, airframe=FF.AIRFRAME):
 def jobs(case, kind, n, seed, band, batch=4, params=None, extra=None, airframe=FF.AIRFRAME):
     scaled = case.endswith("_s12")
     case = case.removesuffix("_s12")
-    if case == "before":
-        flown = recording_settings(recording(T.SETTINGS)) | FF.FLIGHT | T.HIGH | T.FAST_CLIMB | {"flip_enable": KINDS[kind]} | (extra or {})
-        return T.jobs(params or {}, n, seed, flown, band=band)
-    flown = recording_settings(recording(SETTINGS)) | FF.FLIGHT | T.HIGH | T.FAST_CLIMB | {"flip_enable": KINDS[kind], "roll_bias": ROLL_BIAS * max(CASES[case], 0) / COM_LEFT} | (extra or {})
+    flown = recording_settings(recording(SETTINGS)) | FF.FLIGHT | T.HIGH | T.FAST_CLIMB | {"flip_angle": KINDS[kind], "roll_bias": ROLL_BIAS * max(CASES[case], 0) / COM_LEFT} | (extra or {})
     out = []
     for k, start in enumerate(range(0, n, batch)):
         options = options_for(case, k, seed, band, airframe) | ({"thrust_scale": 1.2, "hover_mass": 1.05} if scaled else {})
@@ -78,7 +76,7 @@ def stats(rows):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("case")
-    parser.add_argument("--kind", choices=list(KINDS), default="flip")
+    parser.add_argument("--kind", choices=list(KINDS), default="burst60")
     parser.add_argument("--n", type=int, default=256)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=95000)
