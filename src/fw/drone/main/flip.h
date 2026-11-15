@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "flight_math.h"
 
@@ -22,6 +23,8 @@ typedef struct {
     float spin_lift;
     // The spin's pitch and yaw rate gains (1/s; before 2026-11-13 k_spin and 0.3 k_spin), and the rotors' gyroscopic pitch fed forward in the spin and the righting (gyro_ff, rad/s² per rad/s of roll per √N of thrust difference: the rotors' momentum per √N over the pitch inertia, FlipRighting gyro_ff).
     float spin_pitch, spin_yaw, gyro_ff;
+    // The rotors' spin momentum's yaw fed forward in the spin and the righting (FlipRighting yaw_ff). 2026-11-15: yaw_ff 1.6 (rotor_momentum 0.018 over the yaw inertia; APC's prop geometry gives about 0.014, the flight fits 0.006-0.03, and 1.6 did best on the worst of the bands below 0.03) with spin_yaw and kd_yaw four times the robust retune's (sw/sim/models/NOTES.md "Yaw in the flip").
+    float yaw_ff;
 } FlipParams;
 
 extern const FlipParams flip_defaults;
@@ -37,6 +40,8 @@ typedef struct {
     float time, turned, thrust, vertical, arrested;
     // How far it rolls (radians): 2 pi for the flip; 60 or 90 degrees for the staged tests (flip_enable 2 and 3, flip_turn): a short burst of the spin and the righting's brake at once, back the short way, so the drone peaks near 45-60 or 80-90 degrees with its thrust still mostly holding it up, and the motor split, the rotors' momentum, the floor and the brake are tested with margin. The spin aims at spin_rate times the square root of its share of a whole turn (the rate it can brake from in that angle) and ends with handoff's share of it left (handoff / 2 pi of the turn).
     float turn;
+    // √T_right - √T_left as the motors have it by now (flip_allocate, for yaw_ff).
+    float spread;
 } Flip;
 
 // The airframe's authority as the firmware's model has it: angular acceleration (rad/s²) per newton of differential thrust (roll), per newton of collective per radian of common tilt (pitch), per newton per radian of differential tilt (yaw); and the weight (N).
@@ -53,13 +58,14 @@ typedef struct {
 // The righting the flip's last stage and the tumble recovery (recover.c) both fly, and the motors while either owns them: the rate toward up is at most max_rate, sqrt(2 brake angle) and kp angle; k_roll and k_pitch (1/s) turn rate errors into angular accelerations, kd_yaw damps yaw; past roll_over from up with the error mostly in pitch it rolls the long way round; servo_max bounds the common tilt (radians); each motor makes at least floor and at most ceiling of the weight.
 // gyro_ff: the pitch the rotors' spin momentum gives a rolling drone with one rotor faster than the other (-ω × H: ω_roll H (√T_right - √T_left) over the pitch inertia), fed forward from the thrusts asked for, rad/s² per rad/s per √N; 0 (recover.c) leaves it out.
 typedef struct {
-    float kp, brake, max_rate, k_roll, k_pitch, kd_yaw, roll_over, servo_max, floor, ceiling, gyro_ff;
+// yaw_ff: the yaw the rotors' spin momentum gives the body as their speeds part (-dH_z/dt) and as the pitch rate turns their tilted difference (ω_pitch H_x), fed forward from the thrusts asked for through the motors' lag, rad/s² per √N/s: the rotors' momentum per √N over the yaw inertia; 0 leaves it out.
+    float kp, brake, max_rate, k_roll, k_pitch, kd_yaw, roll_over, servo_max, floor, ceiling, gyro_ff, yaw_ff;
 } FlipRighting;
 
 // Wanted angular accelerations (rad/s²) into thrusts and tilts: roll by differential thrust, pitch by common tilt, yaw by differential tilt, the collective (N) as asked where the motors' floor and ceiling leave room. thrust: what the motors have by now (N), followed here with their lag.
-void flip_allocate(const FlipRighting *r, const FlipAuthority *a, float roll, float pitch, float yaw, float collective, float *thrust, float dt, FlipOutput *out);
+void flip_allocate(const FlipRighting *r, const FlipAuthority *a, float roll, float pitch, float yaw, float collective, float pitch_rate, float *thrust, float *spread, float dt, FlipOutput *out);
 // Turn the thrust axis toward up about the axis between them, no faster than it can brake from, at this collective (N); far over with the error mostly in pitch, roll the long way round. up: the level frame's up in body axes (flip_up); gyro: body rates (rad/s).
-void flip_righting(const FlipRighting *r, const FlipAuthority *a, const float *up, const float *gyro, float collective, float *thrust, float dt, FlipOutput *out);
+void flip_righting(const FlipRighting *r, const FlipAuthority *a, const float *up, const float *gyro, float collective, float *thrust, float *spread, float dt, FlipOutput *out);
 // The attitude as the flip and the recovery carry it on the gyro: q (w, x, y, z; body to level) from flight_attitude's roll and pitch, the heading zero; turned by the body rates over dt; up in body axes; and back to roll and pitch as flight_attitude keeps them, pitch within ±90 degrees, so a drone within 90 degrees of upright has both under 90 and nothing ambiguous reaches the attitude controller.
 void flip_attitude(float *q, float roll, float pitch);
 void flip_rotate(float *q, const float *gyro, float dt);

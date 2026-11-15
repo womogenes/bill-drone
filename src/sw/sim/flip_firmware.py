@@ -58,11 +58,11 @@ RECOVER_LIMIT = True
 
 
 class Params(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_float) for name in ("climb_thrust", "climb_time", "spin_rate", "k_spin", "spin_thrust", "handoff", "kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "flip_thrust", "right_angle", "servo_max", "roll_over", "kv", "arrest_time", "timeout", "floor", "ceiling", "handoff_rate", "slew", "throttle_cap", "spin_lift", "spin_pitch", "spin_yaw", "gyro_ff")]
+    _fields_ = [(name, ctypes.c_float) for name in ("climb_thrust", "climb_time", "spin_rate", "k_spin", "spin_thrust", "handoff", "kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "flip_thrust", "right_angle", "servo_max", "roll_over", "kv", "arrest_time", "timeout", "floor", "ceiling", "handoff_rate", "slew", "throttle_cap", "spin_lift", "spin_pitch", "spin_yaw", "gyro_ff", "yaw_ff")]
 
 
 class Flip(ctypes.Structure):
-    _fields_ = [("stage", ctypes.c_int), ("q", ctypes.c_float * 4)] + [(name, ctypes.c_float) for name in ("time", "turned", "thrust", "vertical", "arrested", "turn")]
+    _fields_ = [("stage", ctypes.c_int), ("q", ctypes.c_float * 4)] + [(name, ctypes.c_float) for name in ("time", "turned", "thrust", "vertical", "arrested", "turn", "spread")]
 
 
 class Authority(ctypes.Structure):
