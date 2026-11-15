@@ -201,7 +201,7 @@ class Sensors:
 
 def uncertain(seed, n):
     """
-    One draw of every plant and sensor term the flip leans on that no real data pins down (models/NOTES.md "The first flip, replayed"), spanning what the flip's replay, the alternatives that fit it and physics allow rather than a spread about the fit: airframe overrides shared by a batch, per-run Sim scales, and per-run gyro scale factors.
+    One draw of every plant and sensor term the flip leans on that no real data pins down (models/NOTES.md "The first flip, replayed" (on william/archive-2026-11-15-indi)), spanning what the flip's replay, the alternatives that fit it and physics allow rather than a spread about the fit: airframe overrides shared by a batch, per-run Sim scales, and per-run gyro scale factors.
     """
     rng = np.random.default_rng(seed + 31)
     u = lambda lo, hi: float(math.exp(rng.uniform(math.log(lo), math.log(hi))))
