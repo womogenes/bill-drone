@@ -41,6 +41,8 @@ constexpr unsigned maxAgeUs = 150000;
 constexpr int windowW = 2048, windowH = 1536, outW = 320, outH = 240;
 // Binned rows read per row kept: 2 reads every other binned row (vertical increment 0x71 in place of binning's 0x31), 384 of the 768 for the 240 output rows, which halves the frame at the same line time and so the same DMA pace; the field of view and calibration stay.
 constexpr int rowSkip = 2;
+// Tag mode's XCLK; the sensor's PLL (clocks.h) keeps SYSCLK at sysclkMhz and PCLK at 10 MHz for any XCLK.
+constexpr uint32_t tagXclkHz = 20000000;
 constexpr int hts = 2300, sysclkMhz = 40, vts = windowH / 2 / rowSkip + 15;
 constexpr unsigned framePeriodUs = unsigned(vts) * hts / sysclkMhz;
 // Readout time per output row.
@@ -53,7 +55,7 @@ constexpr float raiseExposureGain = 56, lowerExposureGain = 24;
 // FPV (fpv.h): the sensor's own JPEG at automatic exposure, no tag tracking. Measured on 2026-10-30 (OV3660, 20 MHz XCLK): at 20 MHz XCLK 480x320 comes off the sensor every 31.2 ms, VGA and QVGA every 36 ms. The JPEG quality (fpvQualityRange, lower is finer) holds each frame near fpvTargetBytes, four datagrams, whatever the light: that bounds the video's airtime on a channel the drone's radio may share (it took the drone's status stream from 20.0 to 19.3 messages/s on its channel), and a frame loses one datagram less often. Over a 2-minute soak the dashboard received 32.0 fps with no frame lost, gaps p99 55 ms, max 211 ms. It switches back to tracking fpvLingerMs after the last keepalive, so a Wi-Fi dropout resumes without restarting the camera twice.
 constexpr framesize_t fpvFrameSize = FRAMESIZE_HVGA;
 // 20 MHz XCLK, 480x320 every 31.2 ms. 24 MHz gave a frame every 26.0 ms (38.4 fps over UDP, 2026-10-30) but corrupted most JPEGs, with bands shifted and brightness jumping part way down the frame, unnoticed until the pictures were looked at; at 20 MHz none were in 60 consecutive frames.
-constexpr int fpvXclkHz = 20000000;
+constexpr uint32_t fpvXclkHz = 20000000;
 // 12 KB from 2026-10-31, for footage clean enough for vision work; the 5 KB before suited Wi-Fi on the drone's channel and the ESP32 receiver's USB link, neither in use now. Over the radio the receiver's budget caps it too.
 constexpr size_t fpvTargetBytes = 12000;
 // Over the radio the video must fit the receiver, whose budget comes with the drone's K V request: the ESP32 receiver's (fw/fpv_rx) USB bridge, about 98 KB/s at 1 Mbaud, or the monitor-mode adapter's air (sw/fpv_monitor.py); fpvRadioBytesPerSecond until one says. The sensor's frame is lengthened until the average frame fits, so every frame goes out evenly spaced (the ESP32 receiver drops whole frames if a burst outruns it), and their size aims at the budget's share. fpvFramePeriodS is the sensor's own 480x320 JPEG frame at fpvXclkHz. Each goes out as erasure-coded shards (fpv.h sendShards): with one copy a fifth of the frames lost a chunk at the ESP32 receiver (2026-10-30).

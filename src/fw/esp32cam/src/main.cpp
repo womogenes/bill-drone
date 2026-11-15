@@ -13,6 +13,7 @@
 #include "flow.h"
 #include "ota.h"
 #include "relay.h"
+#include "clocks.h"
 #include "update.h"
 #include "air_update.h"
 
@@ -146,12 +147,14 @@ void flowLoop(void *) {
     }
 }
 
-// Starts the camera: the driver, then mirror and flip, and on the OV3660 the PLL and window of config.h. The driver's raw-QVGA clock (20 MHz SYSCLK, 11 fps) becomes its small-frame one, 40 MHz SYSCLK with the same 10 MHz PCLK; a faster line rate panicked within minutes. FPV takes the driver's JPEG mode as it comes.
+// Starts the camera: the driver, then mirror and flip, the clocks (clocks.h), and on the OV3660 the window of config.h. The driver's raw-QVGA clock (20 MHz SYSCLK, 11 fps) becomes its small-frame one, 40 MHz SYSCLK with the same 10 MHz PCLK; a faster line rate panicked within minutes. FPV takes the driver's JPEG mode as it comes, its PLL kept whatever the XCLK.
 bool startCamera(bool jpeg) {
     cameraConfig.pixel_format = jpeg ? PIXFORMAT_JPEG : PIXFORMAT_GRAYSCALE;
     fpv::large = jpeg && fpv::radioWanted() && fpv::radioBudget >= config::fpvLargeBudget;
     cameraConfig.frame_size = !jpeg ? FRAMESIZE_QVGA : fpv::large ? config::fpvLargeFrameSize : config::fpvFrameSize;
-    cameraConfig.xclk_freq_hz = jpeg ? config::fpvXclkHz : 20000000;
+    // XCLK, the sensor's PLL and the pad drives come from clocks.h (the drone's K C may override them until restart).
+    const clocks::Plan clock = clocks::plan(jpeg);
+    cameraConfig.xclk_freq_hz = int(clock.integerHz);
     cameraConfig.jpeg_quality = fpvQuality;
     startError = esp_camera_init(&cameraConfig);
     if (startError != ESP_OK)
@@ -159,9 +162,9 @@ bool startCamera(bool jpeg) {
     sensor_t *sensor = esp_camera_sensor_get();
     const bool configured =
         sensor->set_hmirror(sensor, 0) == 0 && sensor->set_vflip(sensor, 1) == 0 &&
+        clocks::apply(clock, jpeg, sensor, cameraConfig.pin_xclk) &&
         (jpeg || sensor->id.PID != OV3660_PID ||
-         (sensor->set_pll(sensor, 0, 8, 1, 0, 0, 0, 1, 8) == 0 &&
-          sensor->set_res_raw(sensor, (2048 - config::windowW) / 2, (1536 - config::windowH) / 2,
+         (sensor->set_res_raw(sensor, (2048 - config::windowW) / 2, (1536 - config::windowH) / 2,
                               (2048 + config::windowW) / 2 + 31, (1536 + config::windowH) / 2 + 11, 8, 2, config::hts,
                               config::vts, config::outW, config::outH, true, true) == 0 &&
           (config::rowSkip == 1 || sensor->set_reg(sensor, 0x3815, 0xff, 0x71) == 0)));
@@ -169,6 +172,7 @@ bool startCamera(bool jpeg) {
         esp_camera_deinit();
         return false;
     }
+    clocks::readBack(jpeg, sensor, cameraConfig.pin_xclk);
     // The driver's task must empty a 12-line DMA block every 0.7 ms or lose the frame. It is created at the same priority as the Wi-Fi task on core 0, so Wi-Fi traffic (the preview, /status, records) cost frames; above it, its short copies only delay Wi-Fi.
     if (TaskHandle_t driver = xTaskGetHandle("cam_task")) {
         driverPriority = uxTaskPriorityGet(driver);
@@ -302,7 +306,7 @@ void setup() {
     camera.pin_href = 23;
     camera.pin_pclk = 22;
 #endif
-    camera.xclk_freq_hz = 20000000;
+    camera.xclk_freq_hz = int(config::tagXclkHz);
     camera.ledc_timer = LEDC_TIMER_0;
     camera.ledc_channel = LEDC_CHANNEL_0;
     // Tracking takes raw Y8 (startCamera): no JPEG decode on the detector and no compression artefacts on tag edges.
@@ -404,6 +408,14 @@ void loop() {
     }
     // A camera that failed to start (in either mode) is tried again every second.
     const bool retry = !cameraReady && millis() - lastStartMs >= 1000;
+    // K C (update.h) restarts the camera in its mode for new clocks.
+    if (clocks::restartWanted && cameraReady && !cameraStopRequested) {
+        clocks::restartWanted = false;
+        restartCamera();
+        fpv::nativeLines = 0;
+        fpv::lastCaptureUs = 0;
+        return;
+    }
     if (!cameraStopRequested && (retry || (cameraReady && fpv::wanted() != fpvActive))) {
         fpvActive = fpv::wanted();
         esp_camera_deinit();
