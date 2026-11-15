@@ -34,12 +34,19 @@ typedef struct {
 } FlipParams;
 
 extern const FlipParams flip_defaults;
+// The flip's own authority (FlipAuthority, angular acceleration per newton of tilted or differential thrust), from the airframe with the pivots raised 20 mm (sw/sim/models/airframe_2026-11-12_raised.json at geometry_2026-11-12_raised.json), not from the settings' model, which the attitude controller keeps and which predates the raise (pivot_height 0.02 m, pitch_inertia 0.0023: 8.7 per N per radian of pitch, 16.1 of yaw): roll, the arm over the roll inertia (0.172 / 0.01275); pitch, the tilt's effective lever above the CoM (the pivot 39.1 mm above it less the slipstream's 2 mm, 37.2 mm) over the pitch inertia (0.00525); yaw, the 30% of the tilted thrust the slipstream leaves at the arm over the yaw inertia (0.302 x 0.172 / 0.01115). The Euler flip's gains are tuned against these.
+#define FLIP_ROLL_AUTHORITY 13.5f
+#define FLIP_PITCH_AUTHORITY 7.08f
+#define FLIP_YAW_AUTHORITY 4.66f
+// With the quaternion setting, the flip's and the recovery's righting's (flight_rt.c) pitch and yaw authority as the 2026-11-15 bursts measured them (sw/sim/models/airframe_2026-11-15_bursts.json, sw/sim/models/NOTES.md "The bursts' plant"): the tilt's pitch 16.8, 2.4 times FLIP_PITCH_AUTHORITY and 1.9 times the settings' model's 8.7, which the recovery flew; the tilted thrust's yaw 11.3, the slipstream leaving 74% of it at the arm rather than the hover fit's 30%. Allocating against half the pitch authority there was, the 07:03 UTC burst60 asked twice the tilt it meant (25-30 degrees back while the motors were low), and when the roll's brake brought the right motor to the cap the nose went over.
+#define FLIP_MEASURED_PITCH_AUTHORITY 16.8f
+#define FLIP_MEASURED_YAW_AUTHORITY 11.34f
 // The least thrust each motor keeps while the flip or a recovery (recover.c) owns the motors, of the weight: recover_defaults' idle, and the floor below which sw/sim/tune_flip.py does not search flip_defaults' own (0.2645 since the robust retune).
 #define FLIP_FLOOR 0.2f
 // The height the quaternion flip never takes the drone over (m; the user's fixed cap: only the user changes it), whatever hover_ceiling says, and the margin it keeps under it.
 #define FLIP_CEILING 5.0f
 #define FLIP_ROOM_MARGIN 0.3f
-// The most room the quaternion flip's climb takes above where it starts (m), whatever the ceiling leaves: from a 3 m hold under the 5 m ceiling the 2026-11-15 07:03 UTC burst60 climbed to 4.85 m before it turned, and fell from about 4 m when it failed. With FLIP_ROOM_MARGIN it rises about half a meter.
+// The most room the quaternion flip's climb takes above where it starts (m), whatever the ceiling leaves: from a 3 m hold under the 5 m ceiling the 2026-11-15 07:03 UTC burst60 climbed to 4.85 m before it turned, and fell from about 4 m when it failed. With FLIP_ROOM_MARGIN it rises about half a meter. The quaternion bursts no longer climb at all (flip_step).
 #define FLIP_CLIMB_ROOM 0.8f
 
 enum { FLIP_IDLE, FLIP_CLIMB, FLIP_SPIN, FLIP_RIGHT, FLIP_ARREST };

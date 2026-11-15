@@ -566,7 +566,8 @@ def main():
         start[key] = start[EQUAL[key]]
     if tied:
         print("held: " + ", ".join(f"{key} {start[key]:g}" for key in tied), flush=True)
-    frozen = [key for key in args.freeze.split(",") if key] + tied + equal + ["right_thrust_gain"] + ([] if ground else ["pitch_ground", "ground_scale"])
+    # The bursts' terms (sw/sim/burst_replay.py) are held at the start's: the hovers' small swings cannot see the tilt's authority (models/NOTES.md "The bursts' plant"), and the identification has no climb along the shafts.
+    frozen = [key for key in args.freeze.split(",") if key] + tied + equal + ["right_thrust_gain", "tilt_authority", "climb_inflow"] + ([] if ground else ["pitch_ground", "ground_scale"])
     free = [key for key in A.KEYS if key not in frozen]
     base = {key: start[key] for key in A.KEYS}
     prior = {}

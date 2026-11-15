@@ -38,6 +38,8 @@ PARAMS = {
     "link_k": (0.01, 50.0, 2.0), "link_c": (0.0, 0.5, 0.03), "servo_inertia": (0.0, 0.005, 0.0004), "servo_compliance": (0.0, 2.0, 0.0),
     "left_play": (0.0, 3.0, 0.6), "right_play": (0.0, 3.0, 0.6), "left_band": (-0.3, 0.3, 0.015), "right_band": (-0.3, 0.3, 0.015), "band_k": (-0.05, 0.05, 0.0), "right_gain": (0.6, 1.4, 1.0),
     "prop_torque": (-0.05, 0.05, -0.015), "prop_momentum": (-0.05, 0.05, 0.003), "rotor_momentum": (0.0, 0.1, 0.0),
+    # The bursts' terms (2026-11-15, sw/sim/burst_replay.py): the tilt's pitch authority over the geometry's (resolve's tilt_arm times it) and the thrust lost per newton per m/s of climb along the shafts (axial inflow, as inflow_damping has it for the roll).
+    "tilt_authority": (0.2, 5.0, 1.0), "climb_inflow": (0.0, 0.3, 0.0),
     "inflow_damping": (-2.0, 5.0, 0.2), "edgewise_damping": (-2.0, 5.0, 0.05),
     "wash": (-1.0, 1.5, 0.0), "wash_z": (-0.2, 0.3, 0.02), "pitch_wake": (-1.5, 1.5, 0.0), "wake_tau": (0.01, 2.0, 0.15), "pitch_ground": (-1, 3, 0.0), "ground_scale": (0.01, 2.0, 0.1),
     "roll_pendulum": (-0.2, 0.2, 0.0), "pitch_pendulum": (-0.2, 0.2, 0.0), "drag_z_x": (-0.5, 0.5, 0.017), "drag_z_y": (-0.5, 0.5, 0.06), "speed_moment2": (-0.05, 0.05, 0.0), "tilt_speed": (-0.3, 0.3, 0.0), "tilt_push_speed": (0.0, 0.2, 0.0),
@@ -47,7 +49,7 @@ PARAMS = {
 }
 KEYS = list(PARAMS)
 # Terms a parameter set may leave out (they then stay off).
-OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below")
+OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below", "climb_inflow")
 # The running time (s) of a motor that has long been spinning.
 RUNNING = 10.0
 
@@ -161,7 +163,7 @@ def resolve(p, geometry=GEOMETRY):
     dz = geometry["pivot_z"] - cz
     return {
         "Ixx": geometry["roll_inertia"], "Iyy": geometry["pitch_inertia"], "Izz": geometry["yaw_inertia"], "arm": geometry["arm"], "cx": p["com_x"] + geometry.get("com_x_shift", 0.0), "cy": geometry["com"][1],
-        "tilt_arm": dz - p["wash"] * (p["wash_z"] - cz), "hr": geometry["rotor_z"] - cz, "hx": p["drag_z_x"] - cz, "hy": p["drag_z_y"] - cz, "mass": geometry["mass"],
+        "tilt_arm": (dz - p["wash"] * (p["wash_z"] - cz)) * p.get("tilt_authority", 1.0), "hr": geometry["rotor_z"] - cz, "hx": p["drag_z_x"] - cz, "hy": p["drag_z_y"] - cz, "mass": geometry["mass"],
         "J": geometry["assembly_inertia"] + geometry["assembly_mass"] * geometry["assembly_com"] * dz + p["servo_inertia"],
     }
 
@@ -202,10 +204,10 @@ def table_for(p, thrusts, trim):
 
 
 class State:
-    """Every lane's state: body rates, roll and pitch, horizontal velocity, then each side's motor thrust, horn angle and speed, and assembly tilt and speed, the lagged tilted thrust (N, summed over the sides) for pitch_wake, and each motor's running time since its throttle last turned positive (s, for motor_start; starts as long running)."""
+    """Every lane's state: body rates, roll and pitch, horizontal velocity, then each side's motor thrust, horn angle and speed, and assembly tilt and speed, the lagged tilted thrust (N, summed over the sides) for pitch_wake, the climb speed along the shafts (m/s, for climb_inflow; set by the full-attitude sim, zero in the identification), and each motor's running time since its throttle last turned positive (s, for motor_start; starts as long running)."""
 
     def __init__(self, n):
-        for name, width in (("rate", 3), ("att", 2), ("vel", 2), ("motor", 2), ("horn", 2), ("hvel", 2), ("tilt", 2), ("tvel", 2), ("wake", 1)):
+        for name, width in (("rate", 3), ("att", 2), ("vel", 2), ("motor", 2), ("horn", 2), ("hvel", 2), ("tilt", 2), ("tvel", 2), ("wake", 1), ("axial", 1)):
             setattr(self, name, np.zeros((n, width)))
         self.spin = np.full((n, 2), RUNNING)
 
@@ -255,7 +257,9 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
         lagged = np.where((target < state.motor) & (commanded <= p.get("coast_below", PARAMS["coast_below"][2])), np.maximum(target, coasted), lagged)
     state.motor = lagged
     goal = delayed(commands, k, (p["servo_delay"], p["right_servo_delay"]))
-    left, right = state.motor[:, 0], state.motor[:, 1]
+    # The rotors climbing along their shafts lose climb_inflow of their thrust per m/s (axial inflow; 0 in models without it), within 0.5-1.5 of it: the thrust every torque and force below sees, while the rotors' speed (their momentum) stays the motors'.
+    inflow = np.clip(1 - p.get("climb_inflow", 0.0) * state.axial[:, 0], 0.5, 1.5)
+    left, right = state.motor[:, 0] * inflow, state.motor[:, 1] * inflow
     tilt = state.tilt * gain * DEG
     cl, cr, sl, sr = np.cos(tilt[:, 0]), np.cos(tilt[:, 1]), np.sin(tilt[:, 0]), np.sin(tilt[:, 1])
     rate, att, vel = state.rate, state.att, state.vel

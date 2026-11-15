@@ -20,7 +20,7 @@ typedef struct {
     double link_k, link_c, left_play, right_play, left_band, right_band, band_k, right_gain;
     double prop_torque, prop_momentum, inflow_damping, edgewise_damping, wash, pitch_wake, wake_tau;
     double roll_pendulum, pitch_pendulum, roll_from_yaw, yaw_from_roll;
-    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance, rotor_momentum, motor_tau_down, motor_idle, motor_floor, motor_coast, motor_ceiling, coast_below;
+    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance, rotor_momentum, motor_tau_down, motor_idle, motor_floor, motor_coast, motor_ceiling, coast_below, climb_inflow;
     double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, J;
     double level, mean_left, mean_right;
     double mass, throttle_max, servo_limit, ground_k, ground_c, friction, air_drag, tilt_share;
@@ -171,7 +171,9 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
             tl[s] = st_tilt[s] * gain[s] * DEG;
             c[s] = cos(tl[s]), sn[s] = sin(tl[s]);
         }
-        double left = st_motor[0], right = st_motor[1], total = left + right, a = p->arm, cy = p->cy;
+        // The rotors climbing along their shafts lose climb_inflow of their thrust per m/s (airframe.py step): the thrust every torque and force sees; the rotors' speed stays the motors'.
+        double inflow = clip(1 - p->climb_inflow * rotated[2], 0.5, 1.5);
+        double left = st_motor[0] * inflow, right = st_motor[1] * inflow, total = left + right, a = p->arm, cy = p->cy;
         double root[2] = {sqrt(fmax(st_motor[0], 0.0)), sqrt(fmax(st_motor[1], 0.0))};
         // The rotors' spin angular momentum along their tilted shafts (airframe.py step): -ω × H and -dH/dt.
         double hx = p->rotor_momentum * (root[1] * sn[1] - root[0] * sn[0]), hz = p->rotor_momentum * (root[1] * c[1] - root[0] * c[0]);

@@ -737,7 +737,9 @@ static void tip_or_recover(Tick *t) {
         .flip_active = flip_active(&flip), .flip_gyro_only = flip_gyro_only(&flip), .flip_phase = flip_phase(&flip), .quaternion = command.quaternion > 0,
         .flip_burst = flip_active(&flip) && flip.flip.turn < flip_turn(1),
         .climb_rate = hover.climb_rate, .collective = 2 * thrust(fmaxf(flown.base, 0)),
-        .authority = {command.model.arm / command.model.roll_inertia, command.model.pivot_height / command.model.pitch_inertia, command.model.arm / command.model.yaw_inertia, command.hover.mass * GRAVITY, {indi_share[0], indi_share[1], indi_share[2]},
+        // With the quaternion setting the righting's authority in pitch and yaw is the flip's as the 2026-11-15 bursts measured it (flip.h), not the settings' model's: the tilt pitches 1.9 times and yaws 0.7 times what that predicts.
+        .authority = {command.model.arm / command.model.roll_inertia, command.quaternion > 0 ? FLIP_MEASURED_PITCH_AUTHORITY : command.model.pivot_height / command.model.pitch_inertia,
+                      command.quaternion > 0 ? FLIP_MEASURED_YAW_AUTHORITY : command.model.arm / command.model.yaw_inertia, command.hover.mass * GRAVITY, {indi_share[0], indi_share[1], indi_share[2]},
                       {indi.unmodeled[INDI_CONTROLLER][0], indi.unmodeled[INDI_CONTROLLER][1], indi.unmodeled[INDI_CONTROLLER][2]}},
     };
     bool before = recover_active(&recovery);

@@ -33,7 +33,7 @@ ROLL_BIAS = 12.871582
 KINDS = {"flip": 1, "burst60": 2, "burst90": 3, "burst30": 4}
 
 
-def options_for(case, k, seed, band):
+def options_for(case, k, seed, band, airframe=FF.AIRFRAME):
     """The plant and firmware terms of one batch: rotor_momentum across the band and the right motor's gain spread as tune_flip.jobs does."""
     golden = (math.sqrt(5) - 1) / 2
     low, high = T.MOMENTUM_BANDS[band]
@@ -42,7 +42,7 @@ def options_for(case, k, seed, band):
     right = 1 / (1 - (1 - T.LEFT_LOW) * u) if case == "now_left" else 0.97 + 0.06 * u
     # The trim's mean thrusts are the hover split the CoM offset asks for, in newtons (level 1: the stand's table is in newtons).
     split = [WEIGHT * (ARM + offset) / (2 * ARM), WEIGHT * (ARM - offset) / (2 * ARM)]
-    geometry = FF.R.A.geometry_of(FF.R.A.model(FF.AIRFRAME))
+    geometry = FF.R.A.geometry_of(FF.R.A.model(airframe))
     options = {"set": {"rotor_momentum": low + (high - low) * spread, "right_thrust_gain": right, "thrust_level": 1.0, "hover_thrust": split, "motor_ceiling": 0.0},
                "table": STAND, "geometry": {"com": [geometry["com"][0], offset, geometry["com"][2]]}, "thrust_scale": 1.3, "hover_mass": 1.02}
     if case in ("now_cal", "table_only"):
@@ -50,7 +50,7 @@ def options_for(case, k, seed, band):
     return options
 
 
-def jobs(case, kind, n, seed, band, batch=4, params=None, extra=None):
+def jobs(case, kind, n, seed, band, batch=4, params=None, extra=None, airframe=FF.AIRFRAME):
     scaled = case.endswith("_s12")
     case = case.removesuffix("_s12")
     if case == "before":
@@ -59,8 +59,10 @@ def jobs(case, kind, n, seed, band, batch=4, params=None, extra=None):
     flown = recording_settings(recording(SETTINGS)) | FF.FLIGHT | T.HIGH | T.FAST_CLIMB | {"flip_enable": KINDS[kind], "roll_bias": ROLL_BIAS * max(CASES[case], 0) / COM_LEFT} | (extra or {})
     out = []
     for k, start in enumerate(range(0, n, batch)):
-        options = options_for(case, k, seed, band) | ({"thrust_scale": 1.2, "hover_mass": 1.05} if scaled else {})
-        out.append((flown, T.BANDS[k % len(T.BANDS)], seed + start, batch, 17.0, math.radians(2000), 2.0, 7.0, True, FF.AIRFRAME, "flip", params or {}, options))
+        options = options_for(case, k, seed, band, airframe) | ({"thrust_scale": 1.2, "hover_mass": 1.05} if scaled else {})
+        # The bands' tilt offset drawn as tune_flip does, none on an airframe without the bands (models/airframe_2026-11-15_bursts.json).
+        banded = any(FF.R.A.model(airframe).get(key, 0.0) for key in ("left_band", "right_band"))
+        out.append((flown, T.BANDS[k % len(T.BANDS)] if banded else 0.0, seed + start, batch, 17.0, math.radians(2000), 2.0, 7.0, True, airframe, "flip", params or {}, options))
     return out
 
 
@@ -82,12 +84,13 @@ def main():
     parser.add_argument("--seed", type=int, default=95000)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--set", default="", help="settings on top, name=value,... (e.g. mix_ceiling=1100)")
+    parser.add_argument("--airframe", default=FF.AIRFRAME, help="the plant's airframe in sw/sim/models (airframe_2026-11-15_bursts.json: the 2026-11-15 bursts' plant, the bands off)")
     parser.add_argument("--params", default="{}", help="flip parameters over flip_defaults, as JSON (e.g. '{\"yaw_ff\": 2.7}')")
     args = parser.parse_args()
     out = {}
     with Pool(args.workers) as pool:
         for band, (low, high) in enumerate(T.MOMENTUM_BANDS):
-            rows = [r for batch in pool.map(FF.fly, jobs(args.case, args.kind, args.n, args.seed, band, params=json.loads(args.params), extra=parse_settings(args.set)), chunksize=1) for r in batch]
+            rows = [r for batch in pool.map(FF.fly, jobs(args.case, args.kind, args.n, args.seed, band, params=json.loads(args.params), extra=parse_settings(args.set), airframe=args.airframe), chunksize=1) for r in batch]
             s = out[f"{low:.2f}-{high:.2f}"] = stats(rows)
             print(f"{args.case} {args.kind} rotor_momentum {low:.2f}-{high:.2f}: clean {s['clean'] * 100:.1f}%, touched {s['touched'] * 100:.1f}%, height lost 90th {s['lost_90']:.2f} m (worst {s['lost_worst']:.2f}); peak rates roll/pitch/yaw median {s['rates_median']} (90th {s['rates_90']}) deg/s; "
                   f"tilt after the hand-back {s['after_tilt_median']:.0f} deg (90th {s['after_tilt_90']:.0f}); climbed {s['climbed_median']:.2f} m; handed back {s['handed_median']:.2f} s (90th {s['handed_90']:.2f}); past 90 deg 90th {s['past90_90']:.2f} s", flush=True)

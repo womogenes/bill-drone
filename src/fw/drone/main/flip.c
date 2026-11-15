@@ -19,10 +19,6 @@
 #define FLIP_CLIMB_RATE 0.3f
 #define FLIP_SPEED 1.0f
 #define FLIP_MIN_V 14.8f
-// The flip's own authority (FlipAuthority), from the airframe with the pivots raised 20 mm (sw/sim/models/airframe_2026-11-12_raised.json at geometry_2026-11-12_raised.json), not from the settings' model, which the attitude controller keeps and which predates the raise (pivot_height 0.02 m, pitch_inertia 0.0023: 8.7 per N per radian of pitch, 16.1 of yaw): roll, the arm over the roll inertia (0.172 / 0.01275); pitch, the tilt's effective lever above the CoM (the pivot 39.1 mm above it less the slipstream's 2 mm, 37.2 mm) over the pitch inertia (0.00525); yaw, the 30% of the tilted thrust the slipstream leaves at the arm over the yaw inertia (0.302 x 0.172 / 0.01115). The flip's gains are tuned against these.
-#define FLIP_ROLL_AUTHORITY 13.5f
-#define FLIP_PITCH_AUTHORITY 7.08f
-#define FLIP_YAW_AUTHORITY 4.66f
 
 const FlipParams flip_defaults = {
     .climb_thrust = 1.8954f, .climb_time = 0.35f, .spin_rate = 11.9178f, .k_spin = 11.9756f, .spin_thrust = 0.8693f, .handoff = 1.9648f,
@@ -205,6 +201,8 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
         if (flip->arrested >= ARREST_HOLD || flip->time > p->arrest_time) flip->stage = FLIP_IDLE;
         return;
     }
+    // A quaternion burst (a turn short of the whole flip) starts its turn at once, without the climb: it holds its height through the turn (track), and the climb's full-power punch just before it is a thrust swing the servos' tilt cannot follow (the 2026-11-15 07:03 UTC burst60 climbed from 3 to 4.85 m and broke at the roll's brake).
+    if (flip->stage == FLIP_CLIMB && flip->quaternion > 0 && flip->turn < TWO_PI) flip->stage = FLIP_SPIN;
     if (flip->stage == FLIP_CLIMB) {
         out->collective_set = true;
         out->collective = p->climb_thrust * a->weight;
@@ -277,7 +275,8 @@ void flip_reset(FlipRun *run) {
 }
 
 void flip_begin(FlipRun *run, const Command *command, const Controller *controller, float height_integral, float collective, float roll, float pitch, float climb_rate, float height) {
-    run->authority = (FlipAuthority){.roll = FLIP_ROLL_AUTHORITY, .pitch = FLIP_PITCH_AUTHORITY, .yaw = FLIP_YAW_AUTHORITY, .weight = command->hover.mass * GRAVITY};
+    bool measured = command->quaternion > 0;
+    run->authority = (FlipAuthority){.roll = FLIP_ROLL_AUTHORITY, .pitch = measured ? FLIP_MEASURED_PITCH_AUTHORITY : FLIP_PITCH_AUTHORITY, .yaw = measured ? FLIP_MEASURED_YAW_AUTHORITY : FLIP_YAW_AUTHORITY, .weight = command->hover.mass * GRAVITY};
     run->done = true;
     run->since = -1;
     run->saved = *controller;

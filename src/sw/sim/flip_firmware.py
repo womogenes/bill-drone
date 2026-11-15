@@ -13,6 +13,7 @@ import ctypes
 import math
 import os
 import random
+import re
 import subprocess
 from multiprocessing import Pool
 from pathlib import Path
@@ -29,6 +30,8 @@ from sw.sim.outdoor import GPS
 from sw.sim.sweep import BARO
 
 MAIN = Path(__file__).resolve().parents[2] / "fw/drone/main"
+# flip.h's FLIP_MEASURED_*_AUTHORITY, which with the quaternion setting the recovery's righting takes in pitch and yaw (flight_rt.c).
+MEASURED_AUTHORITY = {axis: float(re.search(rf"#define FLIP_MEASURED_{axis.upper()}_AUTHORITY ([0-9.]+)f", (MAIN / "flip.h").read_text()).group(1)) for axis in ("pitch", "yaw")}
 SOURCES = [MAIN / "flip.c", MAIN / "recover.c", MAIN / "flight_math.c"]
 HEADERS = [MAIN / "flip.h", MAIN / "recover.h", MAIN / "flight_math.h", MAIN / "hover.h", MAIN / "guard.h"]
 LIBRARY = Path(__file__).with_name("libflip.so")
@@ -135,7 +138,9 @@ RECOVER_DEFAULTS = RecoverParams.in_dll(library, "recover_defaults")
 # Command fields flight.Controller's configure leaves alone: the base throttle and attitude targets (radians), the thrust scales, and the hover gains' mass (flip_begin's weight).
 BASE, ROLL, PITCH, YAW = (6 + flight.TUNING_LAYOUT.index(key) for key in ("base_throttle", "roll", "pitch", "yaw_rate"))
 SCALES = [6 + flight.TUNING_LAYOUT.index(key) for key in ("left_thrust_scale", "right_thrust_scale")]
-HOVER_MASS = flight.PITCH_SPEED + 1 + GAIN_KEYS.index("mass")
+# Command.hover (hover.h HoverGains) and its mass.
+HOVER_GAINS = flight.PITCH_SPEED + 1
+HOVER_MASS = HOVER_GAINS + GAIN_KEYS.index("mass")
 
 
 def wrap(angle):
@@ -276,15 +281,20 @@ def fly(job):
     recover_params = RecoverParams.from_buffer_copy(RECOVER_DEFAULTS)
     for key, value in options.get("recover", {}).items():
         setattr(recover_params, key, value)
-    model = flight.MODEL
-    authority = Authority(model["arm"] / model["roll_inertia"], model["pivot_height"] / model["pitch_inertia"], model["arm"] / model["yaw_inertia"], sim.mass * R.G)
+    # The recovery's authority as flight_rt.c gives it: from the drone's own model settings (command.model: the flight's settings over flight.MODEL's defaults), with the quaternion setting pitch and yaw as the bursts measured them (flip.h).
+    model = flight.MODEL | {key: flown[key] for key in flight.MODEL_TUNING_KEYS if key in flown}
+    authority = Authority(model["arm"] / model["roll_inertia"], MEASURED_AUTHORITY["pitch"] if quaternion else model["pivot_height"] / model["pitch_inertia"], MEASURED_AUTHORITY["yaw"] if quaternion else model["arm"] / model["yaw_inertia"], sim.mass * R.G)
     event = options["event"](np.random.default_rng(seed + 57), n) if "event" in options else None
     limit_recovery = options.get("recover_limit", RECOVER_LIMIT)
+    hover_gains = Hover(flown).gains
     lanes = []
     for i in range(n):
         controller = flight.Controller()
         controller.configure(flown)
         controller.command[flight.YAW_I] = flown.get("yaw_i", 0.0)
+        # The hold's gains as flight_rt.c's Command carries them (flip.c reads hover.ceiling for the quaternion flip's room; before 2026-11-15 the sim left them zero, so its quaternion bursts never climbed), then the plant's mass.
+        for index, key in enumerate(GAIN_KEYS):
+            controller.command[HOVER_GAINS + index] = getattr(hover_gains, key)
         controller.command[HOVER_MASS] = sim.mass
         for k, thrust_scale in zip(SCALES, (scales[i], scales[i])):
             controller.command[k] = thrust_scale
