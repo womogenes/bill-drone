@@ -1,4 +1,4 @@
-// TAG3 pose and flow packets from the ESP32-CAM over UART (fw/esp32cam/README.md). The camera raises SYNC as it queues each packet and sends it at 2 Mbaud; the rising edge's time minus the packet's age is the capture time on this clock, whatever the UART and task latency. The byte stream is searched for the magic and checked by CRC, so the camera's boot messages on the same wire (at 115200) are skipped.
+// TAG3 pose and flow packets from the ESP32-CAM over UART (fw/esp32cam/README.md). The camera stamps each packet's age and writes it at once to an idle UART at 2 Mbaud; the falling edge of its first start bit on RX, caught by a one-shot interrupt, minus the packet's age is the capture time on this clock, whatever the UART and task latency (camera_link.h camera_sync). Until 2026-11-14 a SYNC pulse on GPIO13 did this; since about 5:41 PM that day GPIO13 is shorted to TX (GPIO27) on the flight controller, so it is a plain input now and the camera never drives its end. The byte stream is searched for the magic and checked by CRC, so the camera's boot messages on the same wire (at 115200) are skipped.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +26,7 @@
 #define TX 27
 // The TX pad's IO_MUX register, saved and restored around camera_diagnose.
 #define TX_MUX IO_MUX_GPIO27_REG
+// Shorted to TX on the flight controller since 2026-11-14 (above): only ever an input with no pull, read by camera_diagnose.
 #define SYNC 13
 #define BAUD 2000000
 // The camera's EN (reset) and IO0 (boot mode, also the image sensor's XCLK) through about 1 kohm each: open drain, released (high impedance) except while camera_reset pulls them low, so the drone can never drive them high or fight the camera's own pull-ups and clock. IO0 is wired to GPIO 4 (2026-10-31); EN to GPIO 26 (2026-11-01: of the free pins only a pulse on 26 restarted the camera).
@@ -48,7 +49,7 @@ static bool have_pose;
 static CameraFlow latest_flow;
 static bool have_flow;
 static CameraStats stats = {.frame_us = -1};
-// The camera's link diagnostics (fw/esp32cam/src/packet.h altRotation on frames without a trusted tag): bytes its UART0 received, falling edges its pulse counter saw on its RX pin (GPIO44), SYNC pulses it emitted for a self-test, and its test receiver's bytes and 0x55 bytes; with the arrival time of the last report, -1 before the first.
+// The camera's link diagnostics (fw/esp32cam/src/packet.h altRotation on frames without a trusted tag): bytes its UART0 received, falling edges its pulse counter saw on its RX pin (GPIO44), packets it had to queue behind other bytes (so their start bit came after the stamp, and their dating is late), and its test receiver's bytes and 0x55 bytes; with the arrival time of the last report, -1 before the first.
 static uint32_t camera_link_report[5];
 static int64_t camera_link_report_us = -1;
 // The update request waiting for the camera's answer (camera_update), and that answer.
@@ -61,12 +62,23 @@ static SemaphoreHandle_t update_turn;
 static void (*relay_received)(const uint8_t *src, int8_t rssi, int8_t noise_floor, const uint8_t *packet, size_t length);
 static void (*relay_sent)(bool delivered);
 
-// The edge time is the low 32 bits of esp_timer, compared by unsigned difference. This ISR runs from flash, so during a flash write (only while disarmed) the edge is stamped late and the age reads low.
-static void sync_edge(void *arg) {
+// A packet's first start bit: the first falling edge on RX after start_arm. It disarms itself, so the 2 Mbaud bytes that follow cost no interrupts. The edge time is the low 32 bits of esp_timer, compared by unsigned difference. This ISR runs from flash, so during a flash write (only while disarmed) the edge is stamped late and the age reads low.
+static volatile bool start_armed;
+
+static void start_edge(void *arg) {
+    gpio_intr_disable(RX);
     portENTER_CRITICAL_ISR(&lock);
     edge_us = (uint32_t)esp_timer_get_time();
     edges++;
     portEXIT_CRITICAL_ISR(&lock);
+    start_armed = false;
+}
+
+// Catches the next falling edge on RX: any edge latched while disarmed is cleared first, so it cannot fire at once with an old time.
+static void start_arm(void) {
+    REG_WRITE(GPIO_STATUS1_W1TC_REG, BIT(RX - 32));
+    start_armed = true;
+    gpio_intr_enable(RX);
 }
 
 // The newest dated frame's centre-row readout (camera_newest), -1 before the first.
@@ -140,6 +152,7 @@ static void receive_task(void *arg) {
             portEXIT_CRITICAL(&lock);
         }
         size_t buffered = 0;
+        bool completed = false;
         uart_get_buffered_data_len(PORT, &buffered);
         while (buffered) {
             int n = uart_read_bytes(PORT, bytes, buffered < sizeof(bytes) ? buffered : sizeof(bytes), 0);
@@ -168,6 +181,7 @@ static void receive_task(void *arg) {
                 }
                 portEXIT_CRITICAL(&lock);
                 if (wanted) xSemaphoreGive(answered);
+                completed = true;
             }
             // Relay frames too, when the radio uses them; their bytes are taken back out of the TAG3 parser's skipped count, so it still counts only noise and boot text.
             uint32_t relay_bytes = 0;
@@ -175,6 +189,7 @@ static void receive_task(void *arg) {
             size_t relay_length = relay_received ? n : 0, total;
             while ((total = relay_parse(&relays, &relay_data, &relay_length))) {
                 relay_bytes += total;
+                completed = true;
                 const uint8_t *frame = relays.bytes;
                 size_t payload = total - RELAY_HEADER - 2;
                 if (frame[4] == 'R' && payload > 8) relay_received(frame + RELAY_HEADER, (int8_t)frame[RELAY_HEADER + 6], (int8_t)frame[RELAY_HEADER + 7], frame + RELAY_HEADER + 8, payload - 8);
@@ -192,11 +207,19 @@ static void receive_task(void *arg) {
                 uint32_t edge_count = edges, edge_time = edge_us;
                 portEXIT_CRITICAL(&lock);
                 if (!complete) break;
+                completed = true;
                 int64_t now = esp_timer_get_time();
                 uint32_t since_edge_us;
                 bool synced = camera_sync((uint32_t)now, edge_count, edge_time, &used_edges, &since_edge_us);
                 accept(&packet, synced, since_edge_us, now);
             }
+        }
+        // Re-armed after each complete frame of any kind (packet, update reply, relay frame), so the edge caught is the next frame's first; or, after noise used the edge up, once it is older than any packet could use and no frame is part way in.
+        if (!start_armed) {
+            portENTER_CRITICAL(&lock);
+            uint32_t since = (uint32_t)esp_timer_get_time() - edge_us;
+            portEXIT_CRITICAL(&lock);
+            if (completed || (since > CAMERA_SYNC_WINDOW_US && !parser.have && !replies.have && !relays.have)) start_arm();
         }
     }
 }
@@ -229,9 +252,8 @@ void camera_start(void) {
     ESP_ERROR_CHECK(pcnt_unit_start(rx_counter));
     // GPIO34 has no internal pull-up; with the camera unpowered the line floats and the parser skips the noise.
     ESP_ERROR_CHECK(uart_set_pin(PORT, TX, RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    // The pull-down holds SYNC low while the camera is off or booting.
-    gpio_config_t sync = {.pin_bit_mask = 1ULL << SYNC, .mode = GPIO_MODE_INPUT,
-                          .pull_down_en = GPIO_PULLDOWN_ENABLE, .intr_type = GPIO_INTR_POSEDGE};
+    // SYNC shares TX's node (above): an input with no pull and no interrupt, so it neither drives nor loads the line.
+    gpio_config_t sync = {.pin_bit_mask = 1ULL << SYNC, .mode = GPIO_MODE_INPUT};
     ESP_ERROR_CHECK(gpio_config(&sync));
     gpio_set_level(CAMERA_EN, 1);
     gpio_set_level(CAMERA_IO0, 1);
@@ -239,7 +261,9 @@ void camera_start(void) {
     ESP_ERROR_CHECK(gpio_config(&lines));
     if (xTaskCreatePinnedToCore(receive_task, "camera", 3072, NULL, 4, NULL, 0) != pdPASS) abort();
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
-    ESP_ERROR_CHECK(gpio_isr_handler_add(SYNC, sync_edge, NULL));
+    ESP_ERROR_CHECK(gpio_set_intr_type(RX, GPIO_INTR_NEGEDGE));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(RX, start_edge, NULL));
+    start_arm();
 }
 
 bool camera_candidates(CameraPose *pose, uint32_t max_age_us) {
@@ -392,15 +416,15 @@ void camera_restart_holding_io0(uint32_t hold_ms) {
     gpio_set_level(CAMERA_IO0, 1);
 }
 
-// Line levels and edges for camera_diagnose: samples GPIO13 (SYNC), 27 (TX) and 34 (RX) for ms, in 1 ms bursts between ticks so core 0's other tasks keep running, and counts SYNC's rising edges (the interrupt) and RX's falling edges (the pulse counter) meanwhile.
+// Line levels and edges for camera_diagnose: samples GPIO13 (SYNC, shorted to TX), 27 (TX) and 34 (RX) for ms, in 1 ms bursts between ticks so core 0's other tasks keep running, and counts the packet start edges caught (start_edge) and RX's falling edges (the pulse counter) meanwhile.
 typedef struct {
-    uint32_t samples, sync_high, tx_high, rx_high, sync_is_tx, sync_edges, rx_edges;
+    uint32_t samples, sync_high, tx_high, rx_high, sync_is_tx, start_edges, rx_edges;
 } LineSample;
 
 static void sample_lines(uint32_t ms, LineSample *out) {
     memset(out, 0, sizeof(*out));
     portENTER_CRITICAL(&lock);
-    uint32_t sync_before = edges;
+    uint32_t start_before = edges;
     portEXIT_CRITICAL(&lock);
     int rx_before = 0, rx_after = 0;
     pcnt_unit_get_count(rx_counter, &rx_before);
@@ -419,7 +443,7 @@ static void sample_lines(uint32_t ms, LineSample *out) {
         vTaskDelay(1);
     }
     portENTER_CRITICAL(&lock);
-    out->sync_edges = edges - sync_before;
+    out->start_edges = edges - start_before;
     portEXIT_CRITICAL(&lock);
     pcnt_unit_get_count(rx_counter, &rx_after);
     out->rx_edges = (uint32_t)(rx_after - rx_before);
@@ -431,8 +455,8 @@ static int percent(uint32_t part, uint32_t whole) {
 }
 
 static size_t describe_lines(char *text, size_t size, const char *label, const LineSample *line) {
-    int n = snprintf(text, size, "%s: tx %d%% sync %d%% rx %d%% sync=tx %d%% sync_edges %lu rx_edges %lu\n", label, percent(line->tx_high, line->samples), percent(line->sync_high, line->samples),
-                     percent(line->rx_high, line->samples), percent(line->sync_is_tx, line->samples), (unsigned long)line->sync_edges, (unsigned long)line->rx_edges);
+    int n = snprintf(text, size, "%s: tx %d%% sync %d%% rx %d%% sync=tx %d%% start_edges %lu rx_edges %lu\n", label, percent(line->tx_high, line->samples), percent(line->sync_high, line->samples),
+                     percent(line->rx_high, line->samples), percent(line->sync_is_tx, line->samples), (unsigned long)line->start_edges, (unsigned long)line->rx_edges);
     return n < 0 ? 0 : (size_t)n < size ? (size_t)n : size;
 }
 
@@ -445,7 +469,7 @@ static size_t describe_camera(char *text, size_t size, const char *label) {
     uint32_t packets = stats.packets;
     portEXIT_CRITICAL(&lock);
     int n = at < 0 ? snprintf(text, size, "%s: camera none\n", label)
-                   : snprintf(text, size, "%s: camera rx_bytes %lu rx_edges %lu sync_test %lu test 0x55 %lu/%lu (%ld ms old); packets %lu\n", label, (unsigned long)report[0], (unsigned long)report[1],
+                   : snprintf(text, size, "%s: camera rx_bytes %lu rx_edges %lu late %lu test 0x55 %lu/%lu (%ld ms old); packets %lu\n", label, (unsigned long)report[0], (unsigned long)report[1],
                               (unsigned long)report[2], (unsigned long)report[4], (unsigned long)report[3], (long)((esp_timer_get_time() - at) / 1000), (unsigned long)packets);
     return n < 0 ? 0 : (size_t)n < size ? (size_t)n : size;
 }
@@ -491,9 +515,6 @@ size_t camera_diagnose(uint16_t pulses, uint16_t bytes, uint32_t baud, uint8_t f
     gpio_set_direction(TX, GPIO_MODE_INPUT_OUTPUT);
     vTaskDelay(pdMS_TO_TICKS(300));
     used += describe_camera(text + used, size - used, "before pulses");
-    portENTER_CRITICAL(&lock);
-    uint32_t sync_before = edges;
-    portEXIT_CRITICAL(&lock);
     uint32_t read_low = 0, read_high = 0;
     for (uint32_t i = 0; i < pulses; i++) {
         gpio_set_level(TX, 0);
@@ -505,10 +526,7 @@ size_t camera_diagnose(uint16_t pulses, uint16_t bytes, uint32_t baud, uint8_t f
         read_high += gpio_get_level(TX);
         esp_rom_delay_us(25);
     }
-    portENTER_CRITICAL(&lock);
-    uint32_t sync_during = edges - sync_before;
-    portEXIT_CRITICAL(&lock);
-    int n = snprintf(text + used, size - used, "pulses %u: read back low %lu high %lu, sync_edges during %lu\n", pulses, (unsigned long)read_low, (unsigned long)read_high, (unsigned long)sync_during);
+    int n = snprintf(text + used, size - used, "pulses %u: read back low %lu high %lu\n", pulses, (unsigned long)read_low, (unsigned long)read_high);
     used += n < 0 ? 0 : (size_t)n < size - used ? (size_t)n : size - used;
     REG_WRITE(GPIO_FUNC0_OUT_SEL_CFG_REG + 4 * TX, out_sel);
     REG_WRITE(TX_MUX, mux);
@@ -517,16 +535,12 @@ size_t camera_diagnose(uint16_t pulses, uint16_t bytes, uint32_t baud, uint8_t f
     // The camera reports once a frame; wait for a few reports after the pulses.
     vTaskDelay(pdMS_TO_TICKS(300));
     used += describe_camera(text + used, size - used, "after pulses");
-    // A UART burst through the restored UART, at baud (0 the link's own) and, with flags bit 0, with the TX pad open drain and pulled up (so a line it shares with the camera's open-drain SYNC is never fought), bit 1 SYNC pulled up instead of down: 0x55 has five falling edges per byte (start bit and four 1-to-0 data transitions).
+    // A UART burst through the restored UART, at baud (0 the link's own) and, with flags bit 0, with the TX pad open drain and pulled up: 0x55 has five falling edges per byte (start bit and four 1-to-0 data transitions).
     uint32_t pad = REG_READ(GPIO_PIN27_REG);
     if (baud) uart_set_baudrate(PORT, baud);
     if (flags & 1) {
         REG_SET_BIT(GPIO_PIN27_REG, GPIO_PIN27_PAD_DRIVER);
         gpio_pullup_en(TX);
-    }
-    if (flags & 2) {
-        gpio_pulldown_dis(SYNC);
-        gpio_pullup_en(SYNC);
     }
     vTaskDelay(pdMS_TO_TICKS(50));
     if (flags) {
@@ -534,9 +548,6 @@ size_t camera_diagnose(uint16_t pulses, uint16_t bytes, uint32_t baud, uint8_t f
         used += describe_lines(text + used, size - used, "test pads idle 500ms", &line);
     }
     used += describe_camera(text + used, size - used, "before uart");
-    portENTER_CRITICAL(&lock);
-    sync_before = edges;
-    portEXIT_CRITICAL(&lock);
     static uint8_t pattern[256];
     memset(pattern, 0x55, sizeof(pattern));
     for (uint16_t left = bytes; left;) {
@@ -545,24 +556,16 @@ size_t camera_diagnose(uint16_t pulses, uint16_t bytes, uint32_t baud, uint8_t f
         left -= chunk;
     }
     uart_wait_tx_done(PORT, pdMS_TO_TICKS(2000));
-    portENTER_CRITICAL(&lock);
-    sync_during = edges - sync_before;
-    portEXIT_CRITICAL(&lock);
     vTaskDelay(pdMS_TO_TICKS(300));
-    n = snprintf(text + used, size - used, "uart bytes 0x55 x%u at %lu baud flags %u (%u falling edges), sync_edges during %lu\n", bytes, (unsigned long)(baud ? baud : BAUD), flags, bytes * 5,
-                 (unsigned long)sync_during);
+    n = snprintf(text + used, size - used, "uart bytes 0x55 x%u at %lu baud flags %u (%u falling edges)\n", bytes, (unsigned long)(baud ? baud : BAUD), flags, bytes * 5);
     used += n < 0 ? 0 : (size_t)n < size - used ? (size_t)n : size - used;
     used += describe_camera(text + used, size - used, "after uart");
     sample_lines(500, &line);
     used += describe_lines(text + used, size - used, "after uart 500ms", &line);
-    // Back to the link's own baud, pads and SYNC pull-down.
+    // Back to the link's own baud and pads.
     uart_set_baudrate(PORT, BAUD);
     REG_WRITE(GPIO_PIN27_REG, pad);
     REG_WRITE(TX_MUX, mux);
-    if (flags & 2) {
-        gpio_pullup_dis(SYNC);
-        gpio_pulldown_en(SYNC);
-    }
     xSemaphoreGive(update_turn);
     return used;
 }

@@ -25,11 +25,8 @@ extern uint32_t rawFailed, rawRetries, framesSkipped, sendLongestUs, sendTotalUs
 extern float measuredPeriodUs;
 }
 extern char logRing[2048];
-extern volatile uint32_t linkReceived, syncTestPulses, testBytes, testPattern;
-extern volatile uint8_t syncMode;
+extern volatile uint32_t linkReceived, linkLate, testBytes, testPattern, startDelaySumUs, startDelayCount, startDelayMaxUs;
 uint32_t rxEdges();
-void syncTest(uint32_t count);
-void setSyncMode(uint8_t mode, uint32_t seconds);
 void setTestBaud(uint32_t baud);
 extern size_t logHead;
 extern esp_err_t startError;
@@ -38,7 +35,7 @@ namespace blackbox {
 const char *control(uint16_t every, uint8_t mode, char *text, size_t size);
 }
 
-// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. S reports the Wi-Fi network, address and camera state; N the camera's MAC and name; V asks for FPV over raw 802.11 (fpv.h) for another few seconds, optionally with the receiver's byte budget; P for tag mode's preview over it (web.h), tracking on; L reads the log 50 characters at a time; A starts the access point (ota.h) until the camera restarts; I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts; J restarts joined to the update network for one boot (ota.h), for a Wi-Fi update; R sets the drone's radio relay mode (relay.h), restarting into a changed one; D controls the black box on the microSD (sd.h); F reports FPV's sending (frames skipped, failed sends, send time) and G the sensor's readout for the rolling shutter; Q overrides FPV's PHY rate, shard gap and parity for tests; C overrides the image sensor's clocks and drives (clocks.h) until restart; Y reports the link diagnostics (main.cpp rxEdges), after emitting SYNC pulses when asked. The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
+// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. S reports the Wi-Fi network, address and camera state; N the camera's MAC and name; V asks for FPV over raw 802.11 (fpv.h) for another few seconds, optionally with the receiver's byte budget; P for tag mode's preview over it (web.h), tracking on; L reads the log 50 characters at a time; A starts the access point (ota.h) until the camera restarts; I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts; J restarts joined to the update network for one boot (ota.h), for a Wi-Fi update; R sets the drone's radio relay mode (relay.h), restarting into a changed one; D controls the black box on the microSD (sd.h); F reports FPV's sending (frames skipped, failed sends, send time) and G the sensor's readout for the rolling shutter; Q overrides FPV's PHY rate, shard gap and parity for tests; C overrides the image sensor's clocks and drives (clocks.h) until restart; Y reports the link diagnostics (main.cpp rxEdges, publish). The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
 namespace update {
 // Requests answered, and ones that failed their checksum or length, for K S.
 uint32_t goodRequests = 0, badRequests = 0;
@@ -158,21 +155,14 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
         return error ? esp_err_to_name(error) : nullptr;
     }
     if (op == 'Y') {
-        // Link diagnostics, all optional: a u16 count of SYNC pulses to emit (syncTest, at most 20000); a SYNC mode (main.cpp syncMode) and u16 seconds to keep it (at most 600), then the mode reverts to 0; a u32 baud for the test receiver on the RX pin (setTestBaud). The mode is set before the pulses. Answers bytes received on the link, falling edges on its RX pin, SYNC test pulses so far, requests answered and refused, the RX and SYNC pins' levels now, the SYNC mode, and the test receiver's bytes and 0x55 bytes.
-        const uint32_t pulses = length >= 2 ? body[0] | body[1] << 8 : 0;
-        if (pulses > 20000)
-            return "At most 20000 pulses";
-        if (length >= 5) {
-            const uint32_t seconds = body[3] | body[4] << 8;
-            if (body[2] > 2 || seconds > 600)
-                return "Mode 0-2 for at most 600 s";
-            setSyncMode(body[2], seconds);
-        }
-        if (length >= 9)
-            setTestBaud(body[5] | body[6] << 8 | body[7] << 16 | uint32_t(body[8]) << 24);
-        syncTest(pulses);
-        snprintf(text, size, "rx%u e%u s%u g%u b%u l%d%d m%d t%u/%u", unsigned(linkReceived), unsigned(rxEdges()), unsigned(syncTestPulses), unsigned(goodRequests), unsigned(badRequests),
-                 gpio_get_level(gpio_num_t(config::linkRxPin)), gpio_get_level(gpio_num_t(config::syncPin)), int(syncMode), unsigned(testPattern), unsigned(testBytes));
+        // Link diagnostics: an optional u32 baud for the test receiver on the RX pin (setTestBaud). Answers bytes received on the link, falling edges on its RX pin, packets queued late, the stamp-to-written time of the others (mean/max us; the max is reset), requests answered and refused, the RX and old SYNC pins' levels now, and the test receiver's 0x55 bytes and bytes.
+        if (length >= 4)
+            setTestBaud(body[0] | body[1] << 8 | body[2] << 16 | uint32_t(body[3]) << 24);
+        const uint32_t count = startDelayCount;
+        snprintf(text, size, "rx%u e%u late%u d%u/%u g%u b%u l%d%d t%u/%u", unsigned(linkReceived), unsigned(rxEdges()), unsigned(linkLate), unsigned(count ? startDelaySumUs / count : 0),
+                 unsigned(startDelayMaxUs), unsigned(goodRequests), unsigned(badRequests), gpio_get_level(gpio_num_t(config::linkRxPin)), gpio_get_level(gpio_num_t(config::syncPin)),
+                 unsigned(testPattern), unsigned(testBytes));
+        startDelayMaxUs = 0;
         return nullptr;
     }
     if (op == 'A') {

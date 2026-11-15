@@ -9,7 +9,7 @@
 typedef struct {
     // The camera's frame number; use each pose once.
     uint32_t sequence;
-    // Readout of the tag's centre row on this drone's esp_timer clock: the SYNC edge minus the camera's age.
+    // Readout of the tag's centre row on this drone's esp_timer clock: the packet's start edge minus the camera's age.
     int64_t capture_us;
     // 1: unambiguous; 2: the tilt was ambiguous and the camera chose the solution nearest its previous pose; 0: the tilt is ambiguous and undecided.
     uint16_t valid;
@@ -20,11 +20,11 @@ typedef struct {
 } CameraPose;
 
 typedef struct {
-    // packets: packets with the magic and a matching CRC; frames: those that were new and dated, with or without a tag; poses: accepted poses. corrupt: full-length candidates whose CRC failed; repeats: a sequence seen last time; stale: older than the limit on arrival; unsynced: no unused SYNC edge in the 10 ms before the packet completed, so its capture time is unknown and it is discarded.
+    // packets: packets with the magic and a matching CRC; frames: those that were new and dated, with or without a tag; poses: accepted poses. corrupt: full-length candidates whose CRC failed; repeats: a sequence seen last time; stale: older than the limit on arrival; unsynced: no unused start edge between 10 ms and its time on the wire before the packet completed (camera_sync), so its capture time is unknown and it is discarded.
     uint32_t packets, frames, poses, flows, corrupt, repeats, stale, unsynced;
     // skipped_bytes: bytes that could not start a packet (the camera's boot messages, noise); overflows: the receive buffer overflowed and was flushed; line_errors: framing, parity or break errors (115200-baud boot messages).
     uint32_t skipped_bytes, overflows, line_errors;
-    // SYNC rising edges, one per packet the camera queues; rx_edges: falling edges on the RX pin, counted in hardware, so a silent wire can be told from a receiver fault.
+    // sync_edges: packet start edges caught on RX (camera.c start_edge; until 2026-11-14 SYNC rising edges on GPIO13), about one per frame the camera sends plus its update replies; rx_edges: falling edges on the RX pin, counted in hardware, so a silent wire can be told from a receiver fault.
     uint32_t sync_edges, rx_edges;
     // Arrival of the last well-formed frame on the esp_timer clock, -1 before the first.
     int64_t frame_us;
@@ -34,7 +34,7 @@ typedef struct {
     uint8_t valid, trusted;
 } CameraStats;
 
-// UART2 at 2 Mbaud, 8N1: RX on GPIO34 from the camera's TX (GPIO1), TX on GPIO27 to its RX (GPIO3, camera firmware updates); SYNC from the camera's GPIO13 on GPIO13 with a pull-down; a receiver task on core 0 at priority 4, below the control task on core 1. Call from a core-0 task (app_main) so the UART and GPIO interrupts are on core 0 too.
+// UART2 at 2 Mbaud, 8N1: RX on GPIO34 from the camera's TX (S3 GPIO43), each packet dated by its first start bit there; TX on GPIO27 to its RX (S3 GPIO44: requests, camera firmware updates); GPIO13 (the old SYNC, shorted to TX since 2026-11-14) a plain input; a receiver task on core 0 at priority 4, below the control task on core 1. Call from a core-0 task (app_main) so the UART and GPIO interrupts are on core 0 too.
 void camera_start(void);
 // Copies the newest frame's pose if the camera trusted that frame's tag corners, whether or not it decided the tilt, and the pose is at most max_age_us old now.
 bool camera_candidates(CameraPose *pose, uint32_t max_age_us);
@@ -70,7 +70,7 @@ void camera_hold(bool off);
 bool camera_probe_pin(int gpio, uint32_t ms);
 // Holds IO0 low while the camera restarts itself (no EN wire), for hold_ms.
 void camera_restart_holding_io0(uint32_t hold_ms);
-// Link diagnostics (the drone's H request, disarmed only): samples the levels of TX (GPIO27), SYNC (13) and RX (34) and counts SYNC's rising and RX's falling edges with the UART idle; takes GPIO27 from the UART to drive it 1 and 0 and release it with each pull, reading it back each time; emits pulses falling edges at about 10 kHz on it; restores the UART's pad exactly and sends bytes of 0x55 through it at baud (0: the link's 2 Mbaud), with flags bit 0 the TX pad open drain and pulled up, bit 1 SYNC pulled up instead of down, putting all of it back after; and gives the camera's own link report (bytes and GPIO44 falling edges it received, its test receiver's bytes) before and after each. Writes the readings as text lines; returns their length.
+// Link diagnostics (the drone's H request, disarmed only): samples the levels of TX (GPIO27), SYNC (13) and RX (34) and counts packet start edges and RX's falling edges with the UART idle; takes GPIO27 from the UART to drive it 1 and 0 and release it with each pull, reading it back each time; emits pulses falling edges at about 10 kHz on it; restores the UART's pad exactly and sends bytes of 0x55 through it at baud (0: the link's 2 Mbaud), with flags bit 0 the TX pad open drain and pulled up, putting all of it back after; and gives the camera's own link report (bytes and GPIO44 falling edges it received, packets it queued late, its test receiver's bytes) before and after each. Writes the readings as text lines; returns their length.
 size_t camera_diagnose(uint16_t pulses, uint16_t bytes, uint32_t baud, uint8_t flags, char *text, size_t size);
 
 #endif

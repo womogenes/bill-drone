@@ -46,15 +46,15 @@ uint32_t lastCrumbs[3];
 // The drone link on UART0 (config::linkTxPin and linkRxPin). The receive side carries firmware updates from the drone (update.h); its buffer holds a whole sector's request. The transmit buffer holds a few packets; publish() never queues behind an unsent one.
 constexpr uart_port_t linkPort = UART_NUM_0;
 constexpr int linkTxBytes = 1024, linkRxBytes = 6144;
-portMUX_TYPE syncLock = portMUX_INITIALIZER_UNLOCKED;
 volatile uint32_t linkSent = 0, linkDropped = 0, linkReceived = 0;
 
 void noPrint(char) {}
 
-// Link diagnostics (2026-11-14, the drone's requests not answered): a pulse counter shares the link's RX pin through the GPIO matrix and counts its falling edges, so a silent wire can be told from a receiver fault; each wrap at rxEdgeLimit is counted by its interrupt. syncTestPulses counts the SYNC pulses emitted by syncTest for the drone's SYNC counter to compare. Both, with linkReceived, go to the drone in TAG3 packets without a trusted tag (packet.h altRotation) and answer update op Y.
+// Link diagnostics (2026-11-14, the drone's requests not answered): a pulse counter shares the link's RX pin through the GPIO matrix and counts its falling edges, so a silent wire can be told from a receiver fault; each wrap at rxEdgeLimit is counted by its interrupt. linkLate counts packets written behind other bytes (relay mode), whose start bit came after their stamp, and startDelayUs the stamp-to-written time of the others (the start bit begins within it). They, with linkReceived, go to the drone in TAG3 packets without a trusted tag (packet.h altRotation) and answer update op Y.
 constexpr pcnt_unit_t rxEdgeUnit = PCNT_UNIT_0;
 constexpr int16_t rxEdgeLimit = 30000;
-volatile uint32_t rxEdgeWraps = 0, syncTestPulses = 0;
+volatile uint32_t rxEdgeWraps = 0, linkLate = 0;
+volatile uint32_t startDelaySumUs = 0, startDelayCount = 0, startDelayMaxUs = 0;
 
 void IRAM_ATTR rxEdgeWrap(void *) {
     rxEdgeWraps = rxEdgeWraps + 1;
@@ -91,49 +91,6 @@ void countRxEdges() {
     pcnt_counter_pause(rxEdgeUnit);
     pcnt_counter_clear(rxEdgeUnit);
     pcnt_counter_resume(rxEdgeUnit);
-}
-
-// How the SYNC pin drives its line, for testing the line the drone's TX turned out to share (2026-11-14): 0 push-pull, high for each pulse (the normal); 1 released (input with pull-up, no pulses), so only the drone drives the line; 2 open drain, low for each pulse and released otherwise, idle high through the pull-ups, so the drone's TX can share it. A test mode reverts to 0 at syncModeUntilMs.
-volatile uint8_t syncMode = 0;
-volatile uint32_t syncModeUntilMs = 0;
-
-inline void syncPulseStart() {
-    if (syncMode == 0)
-        REG_WRITE(GPIO_OUT_W1TS_REG, 1u << config::syncPin);
-    else if (syncMode == 2)
-        REG_WRITE(GPIO_ENABLE_W1TS_REG, 1u << config::syncPin);
-}
-
-inline void syncPulseEnd() {
-    if (syncMode == 0)
-        REG_WRITE(GPIO_OUT_W1TC_REG, 1u << config::syncPin);
-    else if (syncMode == 2)
-        REG_WRITE(GPIO_ENABLE_W1TC_REG, 1u << config::syncPin);
-}
-
-void setSyncMode(uint8_t mode, uint32_t seconds) {
-    const gpio_num_t pin = gpio_num_t(config::syncPin);
-    REG_WRITE(GPIO_OUT_W1TC_REG, 1u << config::syncPin);
-    if (mode == 0) {
-        gpio_set_pull_mode(pin, GPIO_FLOATING);
-        REG_WRITE(GPIO_ENABLE_W1TS_REG, 1u << config::syncPin);
-    } else {
-        REG_WRITE(GPIO_ENABLE_W1TC_REG, 1u << config::syncPin);
-        gpio_set_pull_mode(pin, GPIO_PULLUP_ONLY);
-    }
-    syncModeUntilMs = millis() + seconds * 1000;
-    syncMode = mode;
-}
-
-// Emits count SYNC pulses of 25 us, 25 us apart (20 kHz), in the current mode, for the drone's SYNC edge counter; a frame's own pulse may merge with one of them.
-void syncTest(uint32_t count) {
-    for (uint32_t i = 0; i < count; ++i) {
-        syncPulseStart();
-        esp_rom_delay_us(25);
-        syncPulseEnd();
-        esp_rom_delay_us(25);
-    }
-    syncTestPulses = syncTestPulses + count;
 }
 
 // A second receiver on the link's RX pin at a test baud (UART1 through the GPIO matrix, receive only), so the drone's bytes can be tried at rates below the link's 2 Mbaud while UART0 keeps sending at 2 Mbaud; counts bytes and those that are 0x55 (the drone's H burst).
@@ -196,6 +153,9 @@ void startLink() {
     ESP_ERROR_CHECK(uart_driver_install(linkPort, linkRxBytes, linkTxBytes, 0, nullptr, 0));
     ESP_ERROR_CHECK(uart_param_config(linkPort, &link));
     ESP_ERROR_CHECK(uart_set_pin(linkPort, config::linkTxPin, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    // The old SYNC pin is never driven: on the drone its line is shorted to the drone's TX (2026-11-14), so driving it fought the drone's requests.
+    if (!config::sdDat3IsSync)
+        pinMode(config::syncPin, INPUT);
     // The counter's setup selects the pad's GPIO function; the UART's pin setup again afterwards gives the pad back to UART0 (its IO_MUX function where the driver uses it), while the counter keeps the pad's input through the matrix.
     countRxEdges();
     ESP_ERROR_CHECK(uart_set_pin(linkPort, config::linkTxPin, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
@@ -235,8 +195,6 @@ void serviceTask(void *) {
             relay::receive(received, n);
         }
         readTestUart();
-        if (syncMode && int32_t(millis() - syncModeUntilMs) >= 0)
-            setSyncMode(0, 0);
         update::poll();
         air::poll();
         relay::poll();
@@ -470,43 +428,51 @@ void setup() {
     xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
 }
 
-// Each frame's packet goes out on UART0 at 2 Mbaud, 164 bytes in 0.8 ms, from the driver's transmit buffer, so the detector never waits for the wire. The sync line rises at the moment the packet's age is measured, just before it is queued: the drone dates the capture as that edge minus ageUs, whatever its own UART latency. A packet is dropped, with no pulse, if the previous one has not left the buffer (which at this rate means the link is broken).
-void publish(PosePacket &packet) {
+// Each frame's packet goes out on UART0 at 2 Mbaud, 164 bytes in 0.8 ms. The drone dates it by the falling edge of its first start bit (fw/drone/main/camera.c), so the packet's age is stamped just before it is written to an idle UART: the driver's transmit interrupt (on this core) fills the FIFO at once and the start bit follows the stamp by the time it takes to write (startDelayUs, a few tens of microseconds). The UART is waited for up to linkIdleWaitUs (an update reply is 0.3 ms); if it is still busy the packet is dropped, or in relay mode, where the drone's radio packets share the wire, written behind them and counted late (dated up to the buffer's 5 ms late). Until 2026-11-14 a SYNC pulse on syncPin dated it; the drone's end of that line is now shorted to its TX, so syncPin is never driven (startLink).
+constexpr uint32_t linkIdleWaitUs = 1000;
+
+bool linkIdle() {
     size_t room = 0;
     uart_get_tx_buffer_free_size(linkPort, &room);
-    // In relay mode the drone's packets share the buffer, so room for this one is enough: at most the buffer's 1 KB (5 ms) goes out ahead of it, inside the drone's 10 ms SYNC window.
-    const bool clear = room >= (relay::active ? sizeof(packet) : size_t(linkTxBytes));
-    portENTER_CRITICAL(&syncLock);
-    const uint32_t now = uint32_t(esp_timer_get_time());
-    if (clear)
-        syncPulseStart();
-    portEXIT_CRITICAL(&syncLock);
-    packet.ageUs = now - packet.captureUs;
-    if (packet.ageUs > config::maxAgeUs)
+    return room >= size_t(linkTxBytes) && uart_wait_tx_done(linkPort, 0) == ESP_OK;
+}
+
+void publish(PosePacket &packet) {
+    const uint32_t waited = uint32_t(esp_timer_get_time());
+    bool idle;
+    while (!(idle = linkIdle()) && uint32_t(esp_timer_get_time()) - waited < linkIdleWaitUs) {
+    }
+    if (!idle && !relay::active) {
+        ++linkDropped;
+        return;
+    }
+    if (!packet.trusted || uint32_t(esp_timer_get_time()) - packet.captureUs > config::maxAgeUs) {
         packet.valid = packet.trusted = 0;
-    if (!packet.trusted) {
-        packet.valid = 0;
         memset(packet.position, 0, sizeof(packet.position));
         memset(packet.rotation, 0, sizeof(packet.rotation));
         memset(packet.tagPosition, 0, sizeof(packet.tagPosition));
         memset(packet.altPosition, 0, sizeof(packet.altPosition));
         memset(packet.altRotation, 0, sizeof(packet.altRotation));
         // The link diagnostics, where a frame without a trusted tag has no alternative pose (packet.h).
-        const uint32_t report[5] = {linkReceived, rxEdges(), syncTestPulses, testBytes, testPattern};
+        const uint32_t report[5] = {linkReceived, rxEdges(), linkLate, testBytes, testPattern};
         memcpy(packet.altRotation, report, sizeof(report));
     }
+    const uint32_t now = uint32_t(esp_timer_get_time());
+    packet.ageUs = now - packet.captureUs;
     packet.checksum = crc16(reinterpret_cast<const uint8_t *>(&packet), offsetof(PosePacket, checksum));
-    if (!clear) {
-        ++linkDropped;
-        return;
-    }
 #ifndef DEBUG_CONSOLE
     uart_write_bytes(linkPort, &packet, sizeof(packet));
 #endif
+    const uint32_t delay = uint32_t(esp_timer_get_time()) - now;
     ++linkSent;
-    while (uint32_t(esp_timer_get_time()) - now < config::syncPulseUs) {
+    if (!idle) {
+        ++linkLate;
+        return;
     }
-    syncPulseEnd();
+    startDelaySumUs = startDelaySumUs + delay;
+    startDelayCount = startDelayCount + 1;
+    if (delay > startDelayMaxUs)
+        startDelayMaxUs = delay;
 }
 
 // Restarts the camera in the mode wanted (fpvActive).

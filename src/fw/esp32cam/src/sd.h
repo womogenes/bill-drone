@@ -70,10 +70,14 @@ esp_err_t mountCard() {
 }
 
 void mount() {
-    pinMode(config::syncPin, OUTPUT);
-    digitalWrite(config::syncPin, config::sdDat3IsSync);
+    // On the ESP32-CAM the sync line is the card's DAT3, held high while the card is first addressed; on the S3 board the sync pin is never driven (main.cpp startLink).
+    if (config::sdDat3IsSync) {
+        pinMode(config::syncPin, OUTPUT);
+        digitalWrite(config::syncPin, HIGH);
+    }
     const esp_err_t result = mountCard();
-    digitalWrite(config::syncPin, LOW);
+    if (config::sdDat3IsSync)
+        digitalWrite(config::syncPin, LOW);
     if (result != ESP_OK) {
         // No answer at all is no card; anything else is a card that would not initialize or mount.
         cardState = result == ESP_ERR_TIMEOUT ? cardNone : cardFailed;
