@@ -173,8 +173,9 @@ static void rollout(const Mpc *m, const MpcConfig *c, const FlipAuthority *a, co
     }
 }
 
-// Cholesky solve of the n by n system (row stride NU) in place: false if it is not positive definite.
+// Cholesky solve of the n by n system (row stride NU) in place: false if it is not positive definite. One division a column (the ESP32 divides in software).
 static bool cholesky_solve(float *h, float *x, int n) {
+    float inverse[NU];
     for (int i = 0; i < n; i++) {
         for (int j = 0; j <= i; j++) {
             float s = h[i * NU + j];
@@ -182,22 +183,28 @@ static bool cholesky_solve(float *h, float *x, int n) {
             if (i == j) {
                 if (s <= 1e-9f) return false;
                 h[i * NU + i] = sqrtf(s);
+                inverse[i] = 1 / h[i * NU + i];
             } else {
-                h[i * NU + j] = s / h[j * NU + j];
+                h[i * NU + j] = s * inverse[j];
             }
         }
     }
     for (int i = 0; i < n; i++) {
         float s = x[i];
         for (int k = 0; k < i; k++) s -= h[i * NU + k] * x[k];
-        x[i] = s / h[i * NU + i];
+        x[i] = s * inverse[i];
     }
     for (int i = n - 1; i >= 0; i--) {
         float s = x[i];
         for (int k = i + 1; k < n; k++) s -= h[k * NU + i] * x[k];
-        x[i] = s / h[i * NU + i];
+        x[i] = s * inverse[i];
     }
     return true;
+}
+
+// clampf without the calls (fminf and fmaxf are library calls on the ESP32), for the solver's inner loop.
+static inline float bound(float value, float low, float high) {
+    return value < low ? low : value > high ? high : value;
 }
 
 // min ½ zᵀHz + gᵀz over low ≤ z ≤ high (H unit-diagonal after scaling): accelerated projected gradient from z (the warm start, inside the box), then the active set it ends on solved exactly, kept if it is feasible and its bounds' multipliers have the right sign.
@@ -218,8 +225,9 @@ static void solve(const float h[NU][NU], const float *g, const float *low, const
         for (int i = 0; i < NU; i++) {
             float grad = g[i];
             for (int j = 0; j < NU; j++) grad += h[i][j] * y[j];
-            z[i] = clampf(y[i] - step * grad, low[i], high[i]);
-            moved = fmaxf(moved, fabsf(z[i] - last[i]));
+            z[i] = bound(y[i] - step * grad, low[i], high[i]);
+            float change = fabsf(z[i] - last[i]);
+            if (change > moved) moved = change;
         }
         float next = (1 + sqrtf(1 + 4 * t * t)) / 2, momentum = (t - 1) / next;
         for (int i = 0; i < NU; i++) y[i] = z[i] + momentum * (z[i] - last[i]);

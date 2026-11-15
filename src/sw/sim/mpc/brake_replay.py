@@ -130,6 +130,9 @@ def main():
     gp, mp = np.degrees(np.cumsum(greedy_pitch[inside]) * DT), np.degrees(np.cumsum(mpc_pitch[inside]) * DT)
     gr, mr = np.degrees(np.cumsum(greedy_roll[inside]) * DT), np.degrees(np.cumsum(mpc_roll[inside]) * DT)
     print(f"pitch rate change {args.start:.2f}-{args.end:.2f} s from the allocation (deg/s): greedy {gp[-1]:.0f} (most nose-up {gp.min():.0f}), MPC {mp[-1]:.0f} (most nose-up {mp.min():.0f}); roll rate change: greedy {gr[-1]:.0f}, MPC {mr[-1]:.0f}; flown gyro pitch {gyro[inside][0, 1]:.0f} to {gyro[inside][-1, 1]:.0f}")
+    # The swing at the brake (from the nose-down peak to the end), and what holding thrust back cost: the thrust along the shafts given up over the window, as a speed (m/s, over the hover mass).
+    impulse = (thrust[inside].sum() - mpc_thrust[inside].sum()) * DT / s["hover_mass"]
+    print(f"the brake's nose-up swing (peak to {args.end:.2f} s): greedy {gp[-1] - gp.max():.0f} deg/s, MPC {mp[-1] - mp.max():.0f}; thrust given up by the MPC over the window {impulse:.2f} m/s of speed along the shafts")
     if args.plot:
         import matplotlib
         matplotlib.use("Agg")
