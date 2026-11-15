@@ -248,7 +248,7 @@ def main():
     parser.add_argument("--level-sd", type=float, default=0.0, help="degrees: each run's level-reference error drawn from a normal of this spread in roll and pitch (2026-11-09 flights: about 1.3)")
     parser.add_argument("--gps-outage", type=lambda text: tuple(float(v) for v in text.split(",")), help="start,seconds: the GPS gives no solution for this long, from start s after settling (sweep.run plant[\"gps\"][\"outage\"])")
     parser.add_argument("--gyro-bias", type=float, default=0.0, help="the gyro's in-flight bias (degrees/s, one standard deviation per axis, drawn per run) on top of the boot calibration's; --set attitude_bias=1 has the attitude estimate take the Kalman filter's estimate of it (needs --ekf or hover_ekf)")
-    parser.add_argument("--ekf", action="store_true", help="run the Kalman filter (fw/drone/main/ekf.c) beside the hover in every run and print its errors against the truth")
+    parser.add_argument("--ekf", action="store_true", help="print the Kalman filter's errors against the truth, from a rest of EKF_REST before liftoff")
     parser.add_argument("--flyaway", type=float, default=FLYAWAY, help="m from takeoff that counts as flown off")
     parser.add_argument("--speed-draw", type=lambda text: tuple(float(v) for v in text.split(",")), default=(0.5, 3.0), help="range the forward speed moment is drawn in, times the airframe's (log-uniform; default 0.5,3 from before any flight measured it; models fitted to the outdoor flights warrant narrower)")
     parser.add_argument("--tilt-offset", type=float, default=0.0, help="degrees the servos' physical tilt sits forward of their commands (sweep.py tilt_offset; the 2026-11-11 rubber bands about -2.5)")

@@ -114,8 +114,6 @@ TUNE(indi, indi, 1, 0, 1, 0)
 TUNE(indi_pitch, indi_pitch, 1, 0, 1, 0)
 // The quaternion attitude (flight_math.c, flip.c, recover.c): 1 carries the attitude as one quaternion (the gyro turning it, the accelerometer pulling its up as the Euler estimate's blend does, gated as before), the attitude controller's roll and pitch errors are the tilt-prioritized error onto the setpoint at the drone's own heading, the bursts (flip_enable 2 and 3) track one reference rotation with the same law in place of the spin and the righting, never over the lower of hover_ceiling and 5 m, the whole flip (flip_enable 1) is refused, and the flip and the recovery fly the estimate itself, with no Euler hand-back and no roll-over (sw/sim/models/NOTES.md "Quaternion attitude"); 0, the default, flies the Euler angles as before.
 TUNE(quaternion, quaternion, 1, 0, 1, 0)
-// Blind touchdown by the Kalman filter (hover.c EKF_STILL_S, hover.h land_ekf): 1 = in a landing without the tag on the barometer, the filter's climb rate stopping abruptly from a descent and staying stopped lifts the veto the hold's own barometer-led climb rate puts on a probe's touchdown while it reads a descent, which it does on the floor in the rotors' wash (2026-11-15 07:13 UTC: 2 s at hover thrust on grass); 0, the default, lands as before.
-TUNE(hover_land_ekf, hover.land_ekf, 1, 0, 1, 0)
 // BOOT(name, min, max, default): changed by the T request like TUNE, but read only at boot rather than copied into the controller's command. Where an include site does not name BOOT it is a TUNE without a member.
 #ifndef BOOT
 #define BOOT(name, min, max, value) TUNE(name, , 1, min, max, value)

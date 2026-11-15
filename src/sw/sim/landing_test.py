@@ -1,10 +1,10 @@
 """
 Hover landings for the touchdown detector (fw/drone/main/hover.c), in the simulator and replayed from recordings.
 uv run -m sw.sim.landing_test [--runs 200] [--source path/to/hover.c] [--defines "PROBE_RATE=1.0f ..."] flies randomized landings: each takes off on IDENTIFIED_ESC with the 2026-10-29 07:20 camera-hover settings, holds at a random tag height, then lands at a random land_rate (0.05-0.2 m/s) with the hover_mass setting off by up to ±20 % from what the plant needs, the plant's mass off by up to ±10 %, the pack at 16.7 V, 14.3 V or sagging from one to the other over the flight (through the firmware's voltage compensation against the airframe's fitted voltage power, which leaves up to 18 % more thrust per table newton on the low pack), a small level-reference error and accelerometer bias, and the camera's height drifting by up to ±0.3 m over the descent (the drone's attitude error at the tag's 2 m range). --no-camera lands without the tag (--baro with the barometer feeding the height), --gust adds rougher air. It reports any touchdown declared in the air, how long after the body first touched the floor the landing ended (by the detector, or by the tilt and shock cut), the contact speed and the tilt through the touchdown.
-uv run -m sw.sim.landing_test --replay sw/recordings/<flight>.bin [--contact s] replays a recorded landing through hover.c with the recorded estimates, specific force and attitude forced in each tick. Before the contact time given (or throughout without one) the drone is taken to be in the air: thrust the new code flies below the recorded one shows in the specific force as that difference, lagged by the motors, over the weight. After it the floor holds the drone and the recorded specific force stands. It prints when probes start and what they find, and when touchdown comes. The Kalman filter's estimate is handed to the hold each tick as the drone logged it (hover_land_ekf takes it; --set applies to the replay too).
+uv run -m sw.sim.landing_test --replay sw/recordings/<flight>.bin [--contact s] replays a recorded landing through hover.c with the recorded estimates, specific force and attitude forced in each tick. Before the contact time given (or throughout without one) the drone is taken to be in the air: thrust the new code flies below the recorded one shows in the specific force as that difference, lagged by the motors, over the weight. After it the floor holds the drone and the recorded specific force stands. It prints when probes start and what they find, and when touchdown comes. The Kalman filter's estimate is handed to the hold each tick as the drone logged it (the touchdown takes it; --set applies to the replay too).
 --source flies another copy of hover.c (its own hover.h beside it gives the state layout), so versions can be compared without touching the one other simulations use.
 --outdoor [RECORDING] flies drone 1 as it flew outdoors on 2026-11-09 instead (OUTDOOR's settings by default: no camera, the drag model, the GPS hold and the barometer): sw/sim/outdoor.py's plant on the current airframe (sweep.CURRENT_AIRFRAME, its uncertain terms drawn) with its GPS (the false descent at liftoff included) and the barometer (sweep.BARO, its near-floor offset drawn from -0.3 to +0.4 m), ground effect, 0-3 m/s of wind, a hold at 0.6-1.5 m and a landing at 0.2-0.75 m/s, hover_mass off by up to ±10 %, the same packs.
---tray (with --outdoor) lands it on the base it has had since 2026-11-07 instead of the sim's wide feet: the battery tray (sweep.TRAY_FEET, resting sweep.TRAY_REST degrees nose-down) on a softer floor (800 N/m and 8-25 N·s/m a contact point, friction 0.7-1.5, sloping up to 3 degrees each way), the gyro clipping at 2000 degrees/s (250 with the firmware before 2026-11-12) and the accelerometer at 2 g, and each run going on through a tip-over for 2 s after the motors stop. It then also reports the tip-overs (true tilt past 30 degrees within 1 s of contact), which way, the tilt it ends at and its speed over the ground at contact. --rates gives the landing rates to draw from (the 2026-11-09 flights had hover_land_rate 1), --floor another floor stiffness (N/m a contact point; the recorded touchdowns do not tell 800 from 20000) and --base FRONT REST a hypothetical base (its front edge FRONT mm ahead of the CoM and resting REST degrees nose-down; 27.5 and 4 as built). --fast lands with held L (HOVER_LAND_FAST) instead of L. --ekf runs the Kalman filter beside the hover from a 5 s rest and hands the hold its estimate each tick, as the drone does whatever hover_ekf says (needed for hover_land_ekf). --no-guard leaves out the guards (guard.c is built against the tree's hover.h), for a --source whose HoverState differs.
+--tray (with --outdoor) lands it on the base it has had since 2026-11-07 instead of the sim's wide feet: the battery tray (sweep.TRAY_FEET, resting sweep.TRAY_REST degrees nose-down) on a softer floor (800 N/m and 8-25 N·s/m a contact point, friction 0.7-1.5, sloping up to 3 degrees each way), the gyro clipping at 2000 degrees/s (250 with the firmware before 2026-11-12) and the accelerometer at 2 g, and each run going on through a tip-over for 2 s after the motors stop. It then also reports the tip-overs (true tilt past 30 degrees within 1 s of contact), which way, the tilt it ends at and its speed over the ground at contact. --rates gives the landing rates to draw from (the 2026-11-09 flights had hover_land_rate 1), --floor another floor stiffness (N/m a contact point; the recorded touchdowns do not tell 800 from 20000) and --base FRONT REST a hypothetical base (its front edge FRONT mm ahead of the CoM and resting REST degrees nose-down; 27.5 and 4 as built). --fast lands with held L (HOVER_LAND_FAST) instead of L. The Kalman filter runs beside the hover from a 5 s rest and hands the hold its estimate each tick, as the drone does. --no-guard leaves out the guards (guard.c is built against the tree's hover.h), for a --source whose HoverState differs.
 """
 
 import argparse
@@ -214,12 +214,8 @@ def fly(case, source=None, defines=()):
         expected = case["tag_height"] / case["land_rate"]
     if not case.get("guard", True):
         plant["guard"] = False
-    if case.get("ekf"):
-        # The Kalman filter beside the hover (--ekf), as flight_rt.c runs it on the drone.
-        plant["ekf"] = True
-    if case.get("ekf"):
-        # The Kalman filter has run since boot on the drone: a rest long enough for it to see the drone rest (as sw/sim/outdoor.py EKF_REST).
-        plant["armed_s"] = 5.0
+    # The Kalman filter runs beside the hover, as on the drone, where it has run since boot: a rest long enough for it to see the drone rest (as sw/sim/outdoor.py EKF_REST).
+    plant["armed_s"] = 5.0
     thrust_voltage = settings["thrust_voltage"]
     # sweep.run's seconds count from arming: the rest, the takeoff, the hold, twice the descent and 6 s.
     seconds = max(plant.get("armed_s", 0.0) - 0.5, 0.0) + 1.5 + case["land_at"] + 2 * expected + 6
@@ -457,7 +453,6 @@ def main():
     parser.add_argument("--base", type=float, nargs=2, metavar=("FRONT", "REST"), help="with --tray: a hypothetical base instead of the one built, its front edge FRONT mm ahead of the CoM (27.5 as built) and resting REST degrees nose-down (4 as built)")
     parser.add_argument("--fast", action="store_true", help="land with held L (HOVER_LAND_FAST) instead of L")
     parser.add_argument("--floor", type=float, help="with --tray: the floor's stiffness a contact point (N/m) in place of 800, its damping scaled to keep the damping ratio")
-    parser.add_argument("--ekf", action="store_true", help="run the Kalman filter (fw/drone/main/ekf.c) beside the hover and hand the hold its estimate each tick, as the drone does whatever hover_ekf says (--set hover_land_ekf=1 lands on it)")
     args = parser.parse_args()
     defines = args.defines.split()
     from sw.flight_log import parse_settings
@@ -479,8 +474,6 @@ def main():
             case["guard"] = False
         if args.fast:
             case["land_fast"] = True
-        if args.ekf:
-            case["ekf"] = True
         if args.rates:
             case["land_rate"] = random.Random(case["seed"] + 3).choice(args.rates)
     with ProcessPoolExecutor(args.workers) as pool:
