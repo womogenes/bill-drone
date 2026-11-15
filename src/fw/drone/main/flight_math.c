@@ -107,6 +107,22 @@ static void hold_servos(Controller *state, const Command *c) {
     state->right_angle = clampf(c->right_trim - model->right_servo_direction * upright, model->servo_min, model->servo_max);
 }
 
+// The forward thrusts (N; the two's sum, forward, and the right's over the left's, twist) within what each servo's stops allow at these vertical thrusts: pitch before yaw, so a servo at its stop gives up the twist first and the common tilt only past what no twist could give (Smeur et al.'s prioritized allocation, with roll and the collective already set by the motors). upright: the tilt back the upright takeoff adds (radians).
+static void fit_tilts(const Command *c, float upright, float left_vertical, float right_vertical, float *forward, float *twist) {
+    const Model *model = &c->model;
+    float vertical[2] = {left_vertical, right_vertical}, trim[2] = {c->left_trim, c->right_trim}, direction[2] = {model->left_servo_direction, model->right_servo_direction};
+    float low[2], high[2];
+    for (int side = 0; side < 2; side++) {
+        // The servo's stops as the tilt atan2(forward, vertical) has them (flight_control's angle = direction (tilt - upright) + trim), short of 80 degrees for the tangent.
+        float a = direction[side] * (model->servo_min - trim[side]) + upright, b = direction[side] * (model->servo_max - trim[side]) + upright;
+        low[side] = vertical[side] * tanf(clampf(fminf(a, b), -1.4f, 1.4f));
+        high[side] = vertical[side] * tanf(clampf(fmaxf(a, b), -1.4f, 1.4f));
+    }
+    float half = clampf(*forward, low[0] + low[1], high[0] + high[1]) / 2;
+    *forward = 2 * half;
+    *twist = 2 * clampf(*twist / 2, fmaxf(half - high[0], low[1] - half), fminf(half - low[0], high[1] - half));
+}
+
 void flight_restore(Controller *state, const Controller *saved) {
     state->roll_i = saved->roll_i;
     state->pitch_i = saved->pitch_i;
@@ -184,6 +200,12 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     state->damped_gy += (c->gy - state->damped_gy) * smooth;
     float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * state->damped_gy + speed_torque);
     float yaw_torque = model->yaw_inertia * (c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias + state->yaw_i);
+    if (c->indi > 0) {
+        // INDI (indi.h): its share of what the model leaves out is taken off; the integrators trim whatever it leaves.
+        roll_torque -= model->roll_inertia * c->indi * c->unmodeled[0];
+        pitch_torque -= model->pitch_inertia * c->indi * c->unmodeled[1];
+        yaw_torque -= model->yaw_inertia * c->indi * c->unmodeled[2];
+    }
 
     // The motors' vertical thrusts: the collective plus and less the roll differential, each kept from going negative. With mix_ceiling (0 = off, as before, when the reverse lookup and the runtime's clamp drop whatever is past the table's top) neither motor is asked for more than the table gives at that throttle (at its thrust scale): the collective gives way before the roll differential, which is cut only by what no collective could give, and the roll integrator does not wind further into a cut at either end. The collective is never raised to keep the differential (no air mode): near the ground that would lift a drone the hover is setting down.
     float lift = force, differential = roll_torque / model->arm;
@@ -201,8 +223,10 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     if (windup && fabsf(cut) > 1e-3f && cut * (state->roll_i - roll_i) > 0) state->roll_i = roll_i;
     float forward = (pitch_torque - model->com_x * force) / model->pivot_height;
     yaw_torque -= model->reaction_torque_ratio * (right_vertical - left_vertical);
-    float left_horizontal = (forward - yaw_torque / model->arm) / 2;
-    float right_horizontal = (forward + yaw_torque / model->arm) / 2;
+    float twist = yaw_torque / model->arm;
+    if (c->indi > 0) fit_tilts(c, upright, left_vertical, right_vertical, &forward, &twist);
+    float left_horizontal = (forward - twist) / 2;
+    float right_horizontal = (forward + twist) / 2;
 
     float left_angle = model->left_servo_direction * (atan2f(left_horizontal, left_vertical) - upright) + c->left_trim;
     float right_angle = model->right_servo_direction * (atan2f(right_horizontal, right_vertical) - upright) + c->right_trim;

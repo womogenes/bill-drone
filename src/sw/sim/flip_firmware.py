@@ -66,7 +66,8 @@ class Flip(ctypes.Structure):
 
 
 class Authority(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_float) for name in ("roll", "pitch", "yaw", "weight")]
+    _fields_ = [(name, ctypes.c_float) for name in ("roll", "pitch", "yaw", "weight", "indi")] + [("unmodeled", ctypes.c_float * 3)]
+
 
 
 class Output(ctypes.Structure):
@@ -291,7 +292,7 @@ def fly(job):
         recovery = RecoverRun()
         library.recover_reset(ctypes.byref(recovery))
         hover = Hover(flown)
-        lanes.append({"controller": controller, "estimate": flight.Attitude(accel=obs["accel"][i] / R.G), "hover": hover, "guard": Guard(flown), "run": run, "sensors": Sensors(seed * 1000 + i),
+        lanes.append({"indi": flight.Incremental(flown), "controller": controller, "estimate": flight.Attitude(accel=obs["accel"][i] / R.G), "hover": hover, "guard": Guard(flown), "run": run, "sensors": Sensors(seed * 1000 + i),
                       "integral": ctypes.cast(ctypes.addressof(hover.state) + HoverState.integral.offset, FLOATS), "commanded": (0, 0), "dead": False, "tipped": False, "lifted": None,
                       "started": None, "refusals": [], "asked": None, "touched": False, "lowest": np.inf, "start_height": None, "start_place": None, "back": None, "phase": 0, "target": None,
                       "recovery": recovery, "mode": HOLD, "relanding": None, "cut": 0, "event": None, "stages": [], "recovered_at": None, "event_lowest": np.inf, "event_touched": False})
@@ -359,6 +360,12 @@ def fly(job):
             estimate.update(accel, gyro, R.DT, spinning, banked=library.flip_gyro_only(ctypes.byref(run)) or library.recover_gyro_only(ctypes.byref(recovery)), powered_tau=flown.get("attitude_tau", 50.0))
             enabled = k >= armed
             if enabled:
+                # flight_rt.c incremental: INDI's fade and its unmodeled acceleration on each model, before the flip, the recovery and the controller.
+                owned = library.flip_active(ctypes.byref(run)) or library.recover_active(ctypes.byref(recovery))
+                a = run.authority
+                lane["indi"].update(gyro, controller.state[10], hover.state.landed, controller.command[BASE], owned, (a.roll, a.pitch, a.yaw), R.DT)
+                run.authority.indi = lane["indi"].fade
+                run.authority.unmodeled[:] = lane["indi"].unmodeled(flight.INDI_FLIP)
                 library.flip_tick(ctypes.byref(run), (ctypes.c_float * 3)(*gyro), (ctypes.c_float * 3)(*accel), R.DT, estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(out))
             else:
                 out = Output()
@@ -372,7 +379,8 @@ def fly(job):
                 given = RecoverInput(enabled=recovering, tipped=not library.flip_tip_exempt(ctypes.byref(run)) and max(abs(roll), abs(pitch)) > tip_limit,
                                      allowed=controller.state[10] >= RECOVER_AIRBORNE_S and not s.landed and not s.probing and not (s.engaged and s.lifted < 0) and not (landing and s.height < RECOVER_LAND_HEIGHT) and recovery.recoveries < RECOVER_MAX,
                                      gyro=gyro_c, accel=accel_c, dt=R.DT, tip_limit=tip_limit, flip_active=library.flip_active(ctypes.byref(run)), flip_gyro_only=library.flip_gyro_only(ctypes.byref(run)),
-                                     flip_phase=library.flip_phase(ctypes.byref(run)), climb_rate=s.climb_rate, collective=2 * flight.thrust(max(controller.command[BASE], 0.0)), authority=authority)
+                                     flip_phase=library.flip_phase(ctypes.byref(run)), climb_rate=s.climb_rate, collective=2 * flight.thrust(max(controller.command[BASE], 0.0)),
+                                     authority=Authority(authority.roll, authority.pitch, authority.yaw, authority.weight, lane["indi"].fade, (ctypes.c_float * 3)(*lane["indi"].unmodeled())))
                 before = library.recover_active(ctypes.byref(recovery))
                 library.recover_tick(ctypes.byref(recovery), ctypes.byref(recover_params), ctypes.byref(given), estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(recovered))
                 if recovered.cancel_flip:
@@ -429,6 +437,7 @@ def fly(job):
                 targets = (0.0, 0.0)
                 base = min(1200.0, flight.throttle(recovered.motors.collective / 2 / math.cos(trim)))
             controller.command[BASE], controller.command[ROLL], controller.command[PITCH], controller.command[YAW] = base, targets[0], targets[1], flown.get("yaw_rate", 0.0)
+            lane["indi"].apply(controller)
             left, right, left_angle, right_angle = controller.update((roll, pitch), gyro, R.DT)
             # As flight_rt.c: the attitude controller's throttles rounded, or the flip's or the righting's own while one owns the motors, then flip_limit's slew and cap.
             throttles = (ctypes.c_float * 2)(round(min(max(left, 0.0), 1200.0)), round(min(max(right, 0.0), 1200.0)))
@@ -442,6 +451,7 @@ def fly(job):
             # An ESC that stops its motor under its deadband (options["deadband"]), so it restarts from standstill (motor_start).
             throttle[i] = [t if t >= deadband[i] else 0 for t in (left, right)]
             tilt[i] = (directions[0] * (left_angle - trims[0]), directions[1] * (right_angle - trims[1]))
+            lane["indi"].sent(tilt[i], [flight.thrust(t) * scales[i] if t > 0 else 0.0 for t in (left, right)])
             lane["phase"] = max(lane["phase"], library.flip_phase(ctypes.byref(run)))
             # The flip as the log has it (flip_replay.py and the plots compare it with the real one): from 0.2 s before it to 2 s after its start, the gyro (deg/s), throttles, servo angles (degrees), phase and height.
             if TRACE and lane["started"] is not None and now - lane["started"] <= 2.0:

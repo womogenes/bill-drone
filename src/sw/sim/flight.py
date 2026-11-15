@@ -13,7 +13,7 @@ SOURCE = Path(__file__).resolve().parents[2] / "fw/drone/main/flight_math.c"
 MANY = Path(__file__).with_name("flight_many.c")
 LIBRARY = Path(__file__).with_name("flight_math.so")
 # flight_math.h embeds hover.h HoverGains in Command, so a change to either moves the fields after it.
-if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime for path in (SOURCE, SOURCE.with_suffix(".h"), SOURCE.with_name("hover.h"), MANY)):
+if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime for path in (SOURCE, SOURCE.with_suffix(".h"), SOURCE.with_name("hover.h"), SOURCE.with_name("indi.c"), SOURCE.with_name("indi.h"), MANY)):
     subprocess.run(["cc", "-O2", "-fPIC", "-shared", "-I", str(SOURCE.parent), str(MANY), "-o", str(LIBRARY), "-lm"], check=True)
 library = ctypes.CDLL(str(LIBRARY))
 library.flight_attitude.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -117,6 +117,8 @@ DAMPING_TAU = PITCH_SPEED + 1 + HOVER_GAINS + 2
 ROLL_TARGET_RATE = DAMPING_TAU + 1
 # The mixer's ceiling throttle (0 = off; flight_math.c mix_ceiling), read from the library rather than counted.
 MIX_CEILING = ctypes.c_size_t.in_dll(library, "flight_command_mix_ceiling").value
+# INDI's fade (0 = off), then the unmodeled acceleration on the controller's model (rad/s²; roll, pitch, yaw), which the harness sets each tick as flight_rt.c does (indi.h).
+INDI = ctypes.c_size_t.in_dll(library, "flight_command_indi").value
 
 
 class Attitude:
@@ -169,3 +171,55 @@ class Controller:
         struct.pack_into("<6f", self.command, 0, *attitude, *gyro, dt)
         library.flight_control(self.state.buffer_info()[0], self.command.buffer_info()[0], THRUST_BUFFER.buffer_info()[0], len(THRUST_BUFFER) // 2)
         return int(self.state[2]), int(self.state[3]), self.state[4], self.state[5]
+
+
+# indi.h's models and Indi (INDI_SERVO_DELAY 4); flight_rt.c's INDI_START_S and INDI_FADE_S.
+INDI_CONTROLLER, INDI_FLIP, INDI_MODELS = 0, 1, 2
+INDI_START_S, INDI_FADE_S = 0.5, 0.5
+
+
+class IndiModel(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_float) for name in ("roll", "pitch", "lift_pitch", "yaw", "reaction")]
+
+
+class Indi(ctypes.Structure):
+    _fields_ = [("sent_tilt", ctypes.c_float * 2 * 4), ("sent_thrust", ctypes.c_float * 2), ("next", ctypes.c_int), ("tilt", ctypes.c_float * 2), ("tilt_rate", ctypes.c_float * 2), ("thrust", ctypes.c_float * 2),
+                ("filter", ctypes.c_float * 2 * (3 + 3 * INDI_MODELS)), ("gyro", ctypes.c_float * 3), ("model", ctypes.c_float * 3 * INDI_MODELS), ("sent", ctypes.c_bool), ("started", ctypes.c_bool),
+                ("unmodeled", ctypes.c_float * 3 * INDI_MODELS)]
+
+
+library.indi_sent.argtypes = [ctypes.POINTER(Indi), ctypes.c_float * 2, ctypes.c_float * 2]
+library.indi_update.argtypes = [ctypes.POINTER(Indi), ctypes.c_float * 3, IndiModel * INDI_MODELS, ctypes.c_float]
+
+
+class Incremental:
+    """
+    INDI as flight_rt.c runs it (incremental, fly): settings' indi is the share of the correction taken (0 = off); each tick update() before the controller (and the flip and the recovery, which take unmodeled[INDI_FLIP] and unmodeled[INDI_CONTROLLER] on their authorities), apply() to the controller's command, and sent() with the actuators as sent.
+    """
+
+    def __init__(self, settings, model=MODEL):
+        self.share = settings.get("indi", 0.0)
+        self.on = self.share > 0
+        self.integrate = settings.get("integrate_throttle", 0.0)
+        m = model | {key: settings[key] for key in MODEL_TUNING_KEYS if key in settings}
+        self.controller = (m["arm"] / m["roll_inertia"], m["pivot_height"] / m["pitch_inertia"], m["com_x"] / m["pitch_inertia"], m["arm"] / m["yaw_inertia"], m["reaction_torque_ratio"] / m["yaw_inertia"])
+        self.state = Indi()
+        self.fade = 0.0
+
+    def update(self, gyro, airborne, landed, base, owned=False, flip=(0.0, 0.0, 0.0), dt=0.01):
+        """gyro (rad/s); the controller's airborne count (s), whether the hover has landed, last tick's collective throttle, whether the flip or a recovery flies the motors, and the flip's authority (roll, pitch, yaw)."""
+        flying = self.on and not landed and airborne > INDI_START_S and (owned or base >= self.integrate)
+        self.fade = min(max(self.fade + (dt if flying else -dt) * self.share / INDI_FADE_S, 0.0), self.share)
+        models = (IndiModel * INDI_MODELS)(IndiModel(*self.controller), IndiModel(flip[0], flip[1], 0.0, flip[2], 0.0))
+        library.indi_update(ctypes.byref(self.state), (ctypes.c_float * 3)(*gyro), models, dt)
+
+    def unmodeled(self, which=INDI_CONTROLLER):
+        return list(self.state.unmodeled[which])
+
+    def apply(self, controller):
+        controller.command[INDI] = self.fade
+        controller.command[INDI + 1:INDI + 4] = array("f", self.unmodeled())
+
+    def sent(self, tilt, thrust):
+        """Each assembly's physical forward tilt (radians) and each motor's thrust (N) as sent."""
+        library.indi_sent(ctypes.byref(self.state), (ctypes.c_float * 2)(*tilt), (ctypes.c_float * 2)(*thrust))

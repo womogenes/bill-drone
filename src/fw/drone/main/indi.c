@@ -1,0 +1,111 @@
+#include "indi.h"
+
+#include <math.h>
+#include <string.h>
+
+#include "flight_math.h"
+
+// The servos (sw/sim/models/airframe_2026-11-12_raised.json, both sides' mean): the horn's second-order loop (rad/s, damping ratio) and its speed limit (rad/s, 285 deg/s), stepped SERVO_STEPS times a tick.
+#define SERVO_WN 37.5f
+#define SERVO_ZETA 0.87f
+#define SERVO_SLEW 4.97f
+#define SERVO_STEPS 4
+// Swinging a motor assembly turns the body the other way (rad/s² of body pitch per rad/s² of the assembly's tilt): its inertia about the tilt axis over the body's pitch inertia (sw/sim/airframe.py resolve J, 4.78e-4 kg m², over Iyy 5.25e-3, airframe_2026-11-12_raised). In the first instant of a servo move this is several times the tilted thrust's own pitch, and left out, INDI takes it as unmodeled and swings the servos harder against it.
+#define ASSEMBLY_RATIO 0.091f
+// The motors' lag (s; the same fit's motor_tau). Their 11 ms dead time is the tick between sending and the next update.
+#define MOTOR_TAU 0.066f
+// The low-pass both the measured and the modeled acceleration go through (Hz; second-order Butterworth): the gyro's difference at 100 Hz is noise above it, and the motor assemblies ring on their links at about 11 Hz (link_k over J), which the servo estimate leaves out; at 15 Hz the sim's hovers shook at that ring (sw/sim/models/NOTES.md "INDI").
+#define FILTER_HZ 8.0f
+
+// The most unmodeled acceleration taken (rad/s²; roll, pitch, yaw): a CoM 10 mm off is about 40 in pitch on the controller's model.
+static const float LIMIT[3] = {40, 60, 15};
+
+void indi_reset(Indi *indi) {
+    memset(indi, 0, sizeof(*indi));
+}
+
+void indi_sent(Indi *indi, const float *tilt, const float *thrust) {
+    if (!indi->sent) {
+        indi->sent = true;
+        // The first tick: as if this had always been sent.
+        for (int k = 0; k < INDI_SERVO_DELAY; k++) memcpy(indi->sent_tilt[k], tilt, sizeof(indi->sent_tilt[k]));
+        memcpy(indi->tilt, tilt, sizeof(indi->tilt));
+        memcpy(indi->thrust, thrust, sizeof(indi->thrust));
+    }
+    memcpy(indi->sent_tilt[indi->next], tilt, sizeof(indi->sent_tilt[0]));
+    indi->next = (indi->next + 1) % INDI_SERVO_DELAY;
+    memcpy(indi->sent_thrust, thrust, sizeof(indi->sent_thrust));
+}
+
+// A second-order Butterworth low-pass at FILTER_HZ for this tick length: b0 (b1 is twice it, b2 equal), a1, a2.
+typedef struct {
+    float b0, a1, a2;
+} LowPass;
+
+static LowPass low_pass_for(float dt) {
+    float k = tanf(3.14159265f * FILTER_HZ * dt), norm = 1 / (1 + 1.41421356f * k + k * k);
+    return (LowPass){k * k * norm, 2 * (k * k - 1) * norm, (1 - 1.41421356f * k + k * k) * norm};
+}
+
+// One step of it (transposed direct form II); a starting filter is settled at its input.
+static float low_pass(const LowPass *f, float *s, float x, bool start) {
+    float b0 = f->b0, a1 = f->a1, a2 = f->a2;
+    if (start) {
+        s[0] = x * (1 - b0);
+        s[1] = x * (b0 - a2);
+    }
+    float y = b0 * x + s[0];
+    s[0] = 2 * b0 * x - a1 * y + s[1];
+    s[1] = b0 * x - a2 * y;
+    return y;
+}
+
+void indi_update(Indi *indi, const float *gyro, const IndiModel *models, float dt) {
+    // Nothing sent yet (disarmed): nothing to compare.
+    if (!indi->sent) {
+        memset(indi->unmodeled, 0, sizeof(indi->unmodeled));
+        return;
+    }
+    bool start = !indi->started;
+    indi->started = true;
+    // The actuators by now: the servos from what was sent INDI_SERVO_DELAY ticks ago, the motors from last tick's.
+    const float *goal = indi->sent_tilt[indi->next];
+    float h = dt / SERVO_STEPS, keep = expf(-dt / MOTOR_TAU);
+    float swing = 0;
+    for (int side = 0; side < 2; side++) {
+        float before = indi->tilt_rate[side];
+        for (int step = 0; step < SERVO_STEPS; step++) {
+            float push = SERVO_WN * SERVO_WN * (goal[side] - indi->tilt[side]) - 2 * SERVO_ZETA * SERVO_WN * indi->tilt_rate[side];
+            indi->tilt_rate[side] = clampf(indi->tilt_rate[side] + push * h, -SERVO_SLEW, SERVO_SLEW);
+            indi->tilt[side] += indi->tilt_rate[side] * h;
+        }
+        swing += (indi->tilt_rate[side] - before) / dt;
+        indi->thrust[side] = indi->sent_thrust[side] + (indi->thrust[side] - indi->sent_thrust[side]) * keep;
+    }
+    float vertical[2], forward[2];
+    for (int side = 0; side < 2; side++) {
+        vertical[side] = indi->thrust[side] * cosf(indi->tilt[side]);
+        forward[side] = indi->thrust[side] * sinf(indi->tilt[side]);
+    }
+    // The measured angular acceleration: the filtered gyro's change over the tick. The gyro is the tick's mean rate, so its change is the acceleration half a tick before each reading's middle, a tick before now: it is set against the models' estimate from the last tick.
+    LowPass filter = low_pass_for(dt);
+    float rate[3];
+    for (int axis = 0; axis < 3; axis++) {
+        float filtered = low_pass(&filter, indi->filter[axis], gyro[axis], start);
+        rate[axis] = start ? 0 : (filtered - indi->gyro[axis]) / dt;
+        indi->gyro[axis] = filtered;
+    }
+    for (int m = 0; m < INDI_MODELS; m++) {
+        const IndiModel *model = &models[m];
+        float accel[3] = {
+            model->roll * (vertical[0] - vertical[1]),
+            model->pitch * (forward[0] + forward[1]) + model->lift_pitch * (vertical[0] + vertical[1]) - ASSEMBLY_RATIO * swing,
+            model->yaw * (forward[1] - forward[0]) + model->reaction * (vertical[1] - vertical[0]),
+        };
+        for (int axis = 0; axis < 3; axis++) {
+            float before = indi->model[m][axis];
+            indi->model[m][axis] = low_pass(&filter, indi->filter[3 + 3 * m + axis], accel[axis], start);
+            indi->unmodeled[m][axis] = start ? 0 : clampf(rate[axis] - before, -LIMIT[axis], LIMIT[axis]);
+        }
+    }
+}

@@ -10,7 +10,7 @@ from collections import deque
 from fw.controller.log_format import pattern_refusal
 from sw.sim.airframe import Airframe, model
 from sw.sim.disturbance import Disturbances
-from sw.sim.flight import MODEL, PITCH_SPEED, TUNING_LAYOUT, YAW_I, Attitude, Controller, throttle, thrust
+from sw.sim.flight import MODEL, PITCH_SPEED, TUNING_LAYOUT, YAW_I, Attitude, Controller, Incremental, throttle, thrust
 
 MASS = 0.940  # kg, the final assembly with the printed deck and IMU bracket (Bill's estimate, 2026-10-24)
 DT = 0.01
@@ -176,6 +176,8 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     tilt_offset, tilt_gain = math.radians(plant.get("tilt_offset", 0.0)), plant.get("tilt_gain", 1.0)
     # Each servo's zero is its trim: the controller adds the trim to reach the physical angle.
     servo_zero = [math.radians(settings["left_trim"]), math.radians(settings["right_trim"])]
+    # INDI (settings indi; flight_rt.c incremental) on the gyro and the actuators as sent.
+    incremental = Incremental(settings)
     lifted = None
     inertia = [MODEL["roll_inertia"] * plant["roll_inertia"], MODEL["pitch_inertia"] * plant["pitch_inertia"], MODEL["yaw_inertia"] * plant["yaw_inertia"]]
     height = MODEL["pivot_height"] * plant["height"]
@@ -495,8 +497,15 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 lift = math.cos(controller.state[11]) * math.cos(controller.state[12] - trim)
                 base = min(1200, throttle(thrust(base) * min(1 / max(lift, 1 / BANK_THRUST_MAX), BANK_THRUST_MAX)))
             controller.command[6 + TUNING_LAYOUT.index("base_throttle")] = base
+        if incremental.on:
+            incremental.update(gyro_filter, controller.state[10], bool(hover and outer.state.landed), controller.command[6 + TUNING_LAYOUT.index("base_throttle")], dt=DT)
+            incremental.apply(controller)
         left, right, left_angle, right_angle = controller.update(attitude, gyro_filter, DT)
         commanded = (left, right, left_angle, right_angle)
+        if incremental.on:
+            sent = [min(max(round(t), 0), 1200) for t in (left, right)]
+            incremental.sent([MODEL["left_servo_direction"] * (left_angle - servo_zero[0]), MODEL["right_servo_direction"] * (right_angle - servo_zero[1])],
+                             [thrust(t) * settings.get(key, 1.0) if t > 0 else 0.0 for t, key in zip(sent, ("left_thrust_scale", "right_thrust_scale"))])
         motor_queue.append((left, right))
         servo_queue.append(((left_angle - servo_zero[0]) * MODEL["left_servo_direction"] * tilt_gain + tilt_offset, (right_angle - servo_zero[1]) * MODEL["right_servo_direction"] * tilt_gain + tilt_offset))
         target_throttle = motor_queue.popleft()

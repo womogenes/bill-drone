@@ -22,6 +22,7 @@
 #include "guard.h"
 #include "flip.h"
 #include "hover.h"
+#include "indi.h"
 #include "recover.h"
 
 // Samples kept while the radio catches up: 5 s at 100 Hz (2 s until 2026-11-14). 500 records take 56 KB; with 200 the drone had 129 KB of internal RAM left at its lowest (radio.c I reply), so this leaves about 95 KB.
@@ -266,6 +267,11 @@ static Guard guard;
 static FlipRun flip;
 // Tumble recovery and the pilot's level-and-hold (recover.h). held: since a recovery or a level-and-hold began, the hover holds whatever mode the laptop streams, until the laptop asks for another mode than held_from, the one it streamed then (the pilot's L, or manual); the laptop's tilt is dropped only while the recovery and its grace run, so the pilot steers the hold again after it.
 static RecoverRun recovery;
+// INDI (indi.h; settings.def indi) and the share of its correction taken now: from INDI_START_S after the controller's airborne count began it fades in to the setting over INDI_FADE_S, and out as fast while the collective is under integrate_throttle with neither the flip nor a recovery flying the motors, or the hover has landed: the ground holds the drone against what INDI would take as unmodeled, and asking ever more against it is an integrator winding up.
+#define INDI_START_S 0.5f
+#define INDI_FADE_S 0.5f
+static Indi indi;
+static float indi_fade;
 static bool held;
 static int held_from;
 static Command flown;
@@ -615,6 +621,27 @@ static void take_imu(const float *body, uint64_t now) {
     gyro_history.next = (gyro_history.next + 1) % GYRO_HISTORY;
 }
 
+// INDI's tick (indi.h), before the flip, the recovery and the controller, which take its unmodeled acceleration on their own models: the controller's (Model, which the recovery's authority shares) and the flip's. Off and reset while disarmed.
+static void incremental(float dt) {
+    if (!state.enabled) {
+        indi_reset(&indi);
+        indi_fade = 0;
+        return;
+    }
+    bool owned = flip_active(&flip) || recover_active(&recovery);
+    bool flying = command.indi > 0 && !hover.landed && state.controller.airborne > INDI_START_S && (owned || flown.base >= command.integrate_throttle);
+    indi_fade = clampf(indi_fade + (flying ? dt : -dt) * command.indi / INDI_FADE_S, 0, command.indi);
+    const Model *m = &command.model;
+    const FlipAuthority *a = &flip.authority;
+    IndiModel models[INDI_MODELS] = {
+        [INDI_CONTROLLER] = {m->arm / m->roll_inertia, m->pivot_height / m->pitch_inertia, m->com_x / m->pitch_inertia, m->arm / m->yaw_inertia, m->reaction_torque_ratio / m->yaw_inertia},
+        [INDI_FLIP] = {a->roll, a->pitch, 0, a->yaw, 0},
+    };
+    indi_update(&indi, state.gyro, models, dt);
+    flip.authority.indi = indi_fade;
+    memcpy(flip.authority.unmodeled, indi.unmodeled[INDI_FLIP], sizeof(flip.authority.unmodeled));
+}
+
 // The attitude estimate and the flip's own (it flies on the gyro, and at its hand-back the estimate takes its attitude), then the Kalman filter, which takes every tick, GPS solution and barometer reading, flying or not, and hands the hold its estimate. Returns when the timed part of the tick (the log's control_us) began.
 static uint64_t estimate(Tick *t, bool first) {
     if (first) {
@@ -629,6 +656,7 @@ static uint64_t estimate(Tick *t, bool first) {
                      state.gyro[0] - bias[0], state.gyro[1] - bias[1], state.gyro[2] - bias[2], t->dt,
                      banked || flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? command.attitude_tau : config.gravity_tau};
     flight_attitude(&state.attitude, &motion);
+    incremental(t->dt);
     if (state.enabled) flip_tick(&flip, state.gyro, state.accel, t->dt, &state.attitude, &state.controller, &hover.integral, &t->flipped);
     state.online = true;
     state.sample_us = t->now;
@@ -660,7 +688,8 @@ static void tip_or_recover(Tick *t) {
         .gyro = state.gyro, .accel = state.accel, .dt = t->dt, .tip_limit = command.tip_limit,
         .flip_active = flip_active(&flip), .flip_gyro_only = flip_gyro_only(&flip), .flip_phase = flip_phase(&flip),
         .climb_rate = hover.climb_rate, .collective = 2 * thrust(fmaxf(flown.base, 0)),
-        .authority = {command.model.arm / command.model.roll_inertia, command.model.pivot_height / command.model.pitch_inertia, command.model.arm / command.model.yaw_inertia, command.hover.mass * GRAVITY},
+        .authority = {command.model.arm / command.model.roll_inertia, command.model.pivot_height / command.model.pitch_inertia, command.model.arm / command.model.yaw_inertia, command.hover.mass * GRAVITY, indi_fade,
+                      {indi.unmodeled[INDI_CONTROLLER][0], indi.unmodeled[INDI_CONTROLLER][1], indi.unmodeled[INDI_CONTROLLER][2]}},
     };
     bool before = recover_active(&recovery);
     recover_tick(&recovery, &recover_defaults, &input, &state.attitude, &state.controller, &hover.integral, &t->recovered);
@@ -797,6 +826,8 @@ static void fly(Tick *t) {
         setpoint.target_roll = setpoint.target_pitch = 0;
         setpoint.base = collective_throttle(t->recovered.motors.collective);
     }
+    setpoint.indi = indi_fade;
+    memcpy(setpoint.unmodeled, indi.unmodeled[INDI_CONTROLLER], sizeof(setpoint.unmodeled));
     flown = setpoint;
     // Propeller thrust at a fixed throttle goes with the square of battery voltage, so the table's newtons are scaled to the measured voltage: a sagging pack gets more throttle for the same force.
     if (command.thrust_voltage > 0 && battery_v > 0) {
@@ -824,6 +855,14 @@ static void fly(Tick *t) {
         for (int side = 0; side < 2; side++)
             if (state.throttle[side]) state.throttle[side] = lroundf(clampf(state.throttle[side] + add[6 + side], 1, THROTTLE_MAX));
     }
+    // What INDI's actuator estimate follows: each assembly's physical forward tilt and each motor's thrust as sent.
+    float tilt[2], force[2], scale[2] = {setpoint.left_thrust_scale, setpoint.right_thrust_scale}, trims[2] = {command.left_trim, command.right_trim};
+    float direction[2] = {command.model.left_servo_direction, command.model.right_servo_direction};
+    for (int side = 0; side < 2; side++) {
+        tilt[side] = direction[side] * (state.servo[side] / DEG - trims[side]);
+        force[side] = state.throttle[side] > 0 ? thrust(state.throttle[side]) * scale[side] : 0;
+    }
+    indi_sent(&indi, tilt, force);
     for (int side = 0; side < 2; side++) {
         write_servo(side);
         pulse(side * 2 + 1, esc_us(state.throttle[side]));

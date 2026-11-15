@@ -71,6 +71,8 @@ typedef struct {
     float mix_ceiling;
     // Whether the attitude estimate takes the Kalman filter's gyro bias (ekf.c ekf_attitude_bias; settings.def attitude_bias, 0 = off). Runtime-only, last.
     float attitude_bias;
+    // Incremental nonlinear dynamic inversion (indi.h; settings.def indi): the share of the unmodeled angular acceleration it found on this controller's model (unmodeled, rad/s²; roll, pitch, yaw) that flight_control takes off what it asks, the setting faded in (0 = off, the controller as before). Runtime-only, last.
+    float indi, unmodeled[3];
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.
