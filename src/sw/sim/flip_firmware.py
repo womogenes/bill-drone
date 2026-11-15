@@ -58,11 +58,12 @@ RECOVER_LIMIT = True
 
 
 class Params(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_float) for name in ("climb_thrust", "climb_time", "spin_rate", "k_spin", "spin_thrust", "handoff", "kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "flip_thrust", "right_angle", "servo_max", "roll_over", "kv", "arrest_time", "timeout", "floor", "ceiling", "handoff_rate", "slew", "throttle_cap", "spin_lift", "spin_pitch", "spin_yaw", "gyro_ff", "yaw_ff")]
+    _fields_ = [(name, ctypes.c_float) for name in ("climb_thrust", "climb_time", "spin_rate", "k_spin", "spin_thrust", "handoff", "kp", "brake", "max_rate", "k_roll", "k_pitch", "kd_yaw", "flip_thrust", "right_angle", "servo_max", "roll_over", "kv", "arrest_time", "timeout", "floor", "ceiling", "handoff_rate", "slew", "throttle_cap", "spin_lift", "spin_pitch", "spin_yaw", "gyro_ff", "yaw_ff",
+                                                       "ref_accel", "track_kp", "track_heading", "track_roll", "track_pitch", "track_yaw", "ref_lead", "track_slack", "ref_rate")]
 
 
 class Flip(ctypes.Structure):
-    _fields_ = [("stage", ctypes.c_int), ("q", ctypes.c_float * 4)] + [(name, ctypes.c_float) for name in ("time", "turned", "thrust", "vertical", "arrested", "turn", "spread")]
+    _fields_ = [("stage", ctypes.c_int), ("q", ctypes.c_float * 4)] + [(name, ctypes.c_float) for name in ("time", "turned", "thrust", "vertical", "arrested", "turn", "spread", "quaternion", "heading", "elapsed", "room", "risen", "rolled")]
 
 
 class Authority(ctypes.Structure):
@@ -76,7 +77,7 @@ class Output(ctypes.Structure):
 
 class Check(ctypes.Structure):
     _fields_ = ([(name, ctypes.c_bool) for name in ("enabled", "armed", "done", "holding", "camera", "gps", "aligned", "located", "ekf", "landing", "failsafe", "pattern")]
-                + [(name, ctypes.c_float) for name in ("airborne", "height", "climb_rate", "speed", "roll", "pitch")] + [("rate", ctypes.c_float * 3), ("min_height", ctypes.c_float), ("battery", ctypes.c_float)])
+                + [(name, ctypes.c_float) for name in ("airborne", "height", "climb_rate", "speed", "roll", "pitch")] + [("rate", ctypes.c_float * 3), ("min_height", ctypes.c_float), ("battery", ctypes.c_float), ("whole_quaternion", ctypes.c_bool)])
 
 
 class Run(ctypes.Structure):
@@ -94,7 +95,7 @@ class RecoverRun(ctypes.Structure):
 
 class RecoverInput(ctypes.Structure):
     _fields_ = ([(name, ctypes.c_bool) for name in ("enabled", "tipped", "allowed")] + [("gyro", ctypes.POINTER(ctypes.c_float)), ("accel", ctypes.POINTER(ctypes.c_float))] + [(name, ctypes.c_float) for name in ("dt", "tip_limit")]
-                + [("flip_active", ctypes.c_bool), ("flip_gyro_only", ctypes.c_bool), ("flip_phase", ctypes.c_int), ("climb_rate", ctypes.c_float), ("collective", ctypes.c_float), ("authority", Authority)])
+                + [("flip_active", ctypes.c_bool), ("flip_gyro_only", ctypes.c_bool), ("flip_phase", ctypes.c_int), ("quaternion", ctypes.c_bool), ("climb_rate", ctypes.c_float), ("collective", ctypes.c_float), ("authority", Authority)])
 
 
 class RecoverOutput(ctypes.Structure):
@@ -110,7 +111,7 @@ FLOATS = ctypes.POINTER(ctypes.c_float)
 library.flip_refusal.argtypes = [ctypes.POINTER(Check)]
 library.flip_refusal.restype = ctypes.c_char_p
 library.flip_reset.argtypes = [ctypes.POINTER(Run)]
-library.flip_begin.argtypes = [ctypes.POINTER(Run), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float]
+library.flip_begin.argtypes = [ctypes.POINTER(Run), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float]
 library.flip_abort.argtypes = [ctypes.POINTER(Run), FLOATS]
 library.flip_abort.restype = ctypes.c_bool
 for name in ("flip_active", "flip_gyro_only", "flip_tip_exempt"):
@@ -270,6 +271,8 @@ def fly(job):
     directions = (flight.MODEL["left_servo_direction"], flight.MODEL["right_servo_direction"])
     tip_limit = math.radians(flown.get("tip_limit", 45.0))
     recovering = flown.get("recover_enable", 0) >= 1
+    # The quaternion attitude (settings quaternion): the estimate, the controller's error, the flip and the recovery on one quaternion.
+    quaternion = flown.get("quaternion", 0) > 0
     recover_params = RecoverParams.from_buffer_copy(RECOVER_DEFAULTS)
     for key, value in options.get("recover", {}).items():
         setattr(recover_params, key, value)
@@ -292,7 +295,7 @@ def fly(job):
         recovery = RecoverRun()
         library.recover_reset(ctypes.byref(recovery))
         hover = Hover(flown)
-        lanes.append({"indi": flight.Incremental(flown), "controller": controller, "estimate": flight.Attitude(accel=obs["accel"][i] / R.G), "hover": hover, "guard": Guard(flown), "run": run, "sensors": Sensors(seed * 1000 + i),
+        lanes.append({"indi": flight.Incremental(flown), "controller": controller, "estimate": flight.Attitude(accel=obs["accel"][i] / R.G, quaternion=quaternion), "hover": hover, "guard": Guard(flown), "run": run, "sensors": Sensors(seed * 1000 + i),
                       "integral": ctypes.cast(ctypes.addressof(hover.state) + HoverState.integral.offset, FLOATS), "commanded": (0, 0), "dead": False, "tipped": False, "lifted": None,
                       "started": None, "refusals": [], "asked": None, "touched": False, "lowest": np.inf, "start_height": None, "start_place": None, "back": None, "phase": 0, "target": None,
                       "recovery": recovery, "mode": HOLD, "relanding": None, "cut": 0, "event": None, "stages": [], "recovered_at": None, "event_lowest": np.inf, "event_touched": False})
@@ -325,14 +328,15 @@ def fly(job):
                 check = Check(enabled=flown["flip_enable"] >= 1, armed=True, done=run.done, holding=bool(s.engaged), camera=flown.get("hover_camera", 1) != 0, gps=flown.get("hover_gps_tau", 0) > 0,
                               aligned=bool(s.aligned), located=bool(s.gps_us) and now_us - s.gps_us <= 500000, ekf=flown.get("hover_ekf", 0) > 0, landing=lane["mode"] > HOLD, failsafe=lane["guard"].state.failsafe != 0,
                               pattern=False, airborne=controller.state[10], height=s.height, climb_rate=s.climb_rate, speed=math.hypot(s.gps_fix[0], s.gps_fix[1]), roll=pose[0], pitch=pose[1] - trim,
-                              rate=(ctypes.c_float * 3)(*lane["gyro"]), min_height=flown["flip_height"], battery=BATTERY)
+                              rate=(ctypes.c_float * 3)(*lane["gyro"]), min_height=flown["flip_height"], battery=BATTERY,
+                              whole_quaternion=quaternion and flown["flip_enable"] < 2 and not options.get("whole_quaternion"))
                 refusal = "Recovering" if library.recover_gyro_only(ctypes.byref(recovery)) else library.flip_refusal(ctypes.byref(check))
                 if isinstance(refusal, bytes):
                     refusal = refusal.decode()
                 if refusal:
                     lane["refusals"].append(refusal)
                 else:
-                    library.flip_begin(ctypes.byref(run), controller.command.buffer_info()[0], controller.state.buffer_info()[0], s.integral, s.force, estimate.state[0], estimate.state[1], s.climb_rate)
+                    library.flip_begin(ctypes.byref(run), controller.command.buffer_info()[0], controller.state.buffer_info()[0], s.integral, s.force, estimate.state[0], estimate.state[1], s.climb_rate, s.height)
                     # flip_begin takes the turn from the command's flip_enable, which flight.Controller's command does not carry (runtime-only): set it as flip_begin would.
                     run.flip.turn = library.flip_turn(flown["flip_enable"])
                     lane["started"], lane["start_height"], lane["start_place"], lane["target"] = now, height, sim.pos[i, :2].copy(), s.target
@@ -350,6 +354,8 @@ def fly(job):
                 q = event["quat"][i]
                 estimate.state[0] = math.atan2(2 * (q[0] * q[1] + q[2] * q[3]), 1 - 2 * (q[1] ** 2 + q[2] ** 2)) + rng.normal(0, 0.017)
                 estimate.state[1] = math.asin(max(-1.0, min(1.0, 2 * (q[0] * q[2] - q[3] * q[1])))) + rng.normal(0, 0.017)
+                # The quaternion estimate starts over from these.
+                estimate.state[6] = 0.0
                 if event["abort"][i]:
                     library.flip_abort(ctypes.byref(run), lane["integral"])
                     library.recover_abort(ctypes.byref(recovery))
@@ -379,7 +385,7 @@ def fly(job):
                 given = RecoverInput(enabled=recovering, tipped=not library.flip_tip_exempt(ctypes.byref(run)) and max(abs(roll), abs(pitch)) > tip_limit,
                                      allowed=controller.state[10] >= RECOVER_AIRBORNE_S and not s.landed and not s.probing and not (s.engaged and s.lifted < 0) and not (landing and s.height < RECOVER_LAND_HEIGHT) and recovery.recoveries < RECOVER_MAX,
                                      gyro=gyro_c, accel=accel_c, dt=R.DT, tip_limit=tip_limit, flip_active=library.flip_active(ctypes.byref(run)), flip_gyro_only=library.flip_gyro_only(ctypes.byref(run)),
-                                     flip_phase=library.flip_phase(ctypes.byref(run)), climb_rate=s.climb_rate, collective=2 * flight.thrust(max(controller.command[BASE], 0.0)),
+                                     flip_phase=library.flip_phase(ctypes.byref(run)), quaternion=quaternion, climb_rate=s.climb_rate, collective=2 * flight.thrust(max(controller.command[BASE], 0.0)),
                                      authority=Authority(authority.roll, authority.pitch, authority.yaw, authority.weight, (ctypes.c_float * 3)(*lane["indi"].share()), (ctypes.c_float * 3)(*lane["indi"].unmodeled())))
                 before = library.recover_active(ctypes.byref(recovery))
                 library.recover_tick(ctypes.byref(recovery), ctypes.byref(recover_params), ctypes.byref(given), estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(recovered))
@@ -438,7 +444,7 @@ def fly(job):
                 base = min(1200.0, flight.throttle(recovered.motors.collective / 2 / math.cos(trim)))
             controller.command[BASE], controller.command[ROLL], controller.command[PITCH], controller.command[YAW] = base, targets[0], targets[1], flown.get("yaw_rate", 0.0)
             lane["indi"].apply(controller)
-            left, right, left_angle, right_angle = controller.update((roll, pitch), gyro, R.DT)
+            left, right, left_angle, right_angle = controller.update((roll, pitch), gyro, R.DT, q=estimate.q if quaternion else None)
             # As flight_rt.c: the attitude controller's throttles rounded, or the flip's or the righting's own while one owns the motors, then flip_limit's slew and cap.
             throttles = (ctypes.c_float * 2)(round(min(max(left, 0.0), 1200.0)), round(min(max(right, 0.0), 1200.0)))
             if out.owned or recovered.owned:

@@ -61,16 +61,18 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
     if (run->since >= 0) run->since += dt;
     bool ordinary = !recover_active(run) && !in->flip_gyro_only && !grace(run);
     if (ordinary) {
-        flip_attitude(run->q, attitude->roll, attitude->pitch);
+        if (!in->quaternion) quaternion_from_euler(run->q, attitude->roll, attitude->pitch);
         run->saved = *controller;
         run->height_integral = *height_integral;
-    } else {
-        flip_rotate(run->q, w, dt);
+    } else if (!in->quaternion) {
+        quaternion_rotate(run->q, w, dt);
     }
+    if (in->quaternion)
+        for (int i = 0; i < 4; i++) run->q[i] = attitude->q[i];
     float *q = run->q;
     // Up in body axes, and the tilt from it.
     float up[3];
-    flip_up(q, up);
+    quaternion_up(q, up);
     float tilt = acosf(clampf(up[2], -1, 1));
     bool saturated = fabsf(w[0]) > SATURATED || fabsf(w[1]) > SATURATED || fabsf(w[2]) > SATURATED;
     // After the flip's hand-back (its arrest and grace, when the tip cut is off for it), a thrust axis past tip_limit is the flip failing, as on 2026-11-12 02:27:15 UTC.
@@ -84,7 +86,7 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
         else if (in->tipped) out->cut = RECOVER_TIP_REASON;
         if (!recover_active(run)) {
             // Through the grace after a recovery the estimate stays q's, as while it runs.
-            if (grace(run)) flip_euler(q, &attitude->roll, &attitude->pitch);
+            if (grace(run) && !in->quaternion) quaternion_euler(q, &attitude->roll, &attitude->pitch);
             return;
         }
     }
@@ -101,7 +103,7 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
         flight_restore(controller, &run->saved);
     }
     // The attitude estimate flies q while this runs: Euler angles from it stay sane at any attitude, and the leveling hands the attitude controller roll and pitch within 90 degrees: it runs only within right_angle (58 degrees) or tip_limit (at most 80) of upright, and beyond both it is righting again.
-    flip_euler(q, &attitude->roll, &attitude->pitch);
+    if (!in->quaternion) quaternion_euler(q, &attitude->roll, &attitude->pitch);
     if (run->stage == RECOVER_RIGHT) {
         run->righting += dt;
         if (run->righting > p->right_time) {
@@ -112,7 +114,17 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
         // The flip's righting (flip.h flip_righting) at the recovery's gains, each motor at idle of the weight or more (the flip's floor), no ceiling but flip_limit's throttle cap, and no gyroscopic or yaw feedforward (tuned for the flip only).
         FlipRighting r = {p->kp, p->brake, p->max_rate, p->k_roll, p->k_pitch, p->kd_yaw, p->roll_over, p->servo_max, p->idle, INFINITY, 0, 0};
         float collective = arrest(p, a, run->vertical, up[2]) * (p->floor + (1 - p->floor) * clampf(up[2], 0, 1));
-        flip_righting(&r, a, up, w, collective, &run->thrust, NULL, dt, &out->motors);
+        if (in->quaternion) {
+            // The one attitude law toward upright at the drone's own heading: the tilt error is flip_righting's angle about its axis, the rates and gains its own, always the short way. No roll-over: in sw/sim/recover_firmware.py (64 events a scenario from 3 m) without it the quaternion righting recovered tip 93.8%, tilt 79.7%, tumble 42.2% against 93.8%, 76.6% and 40.6% with it, the Euler path's 92.2%, 76.6% and 39.1%.
+            float target[4], error[3], none[3] = {0, 0, 0}, wanted[3];
+            quaternion_target(target, quaternion_heading(q), 0, 0);
+            attitude_error(q, target, error, NULL);
+            AttitudeGains g = {p->kp, p->brake, p->max_rate, 0, {p->k_roll, p->k_pitch, p->kd_yaw}};
+            attitude_rates(&g, error, none, NULL, w, wanted);
+            flip_allocate(&r, a, wanted[0], wanted[1], wanted[2], collective, w[1], &run->thrust, NULL, dt, &out->motors);
+        } else {
+            flip_righting(&r, a, up, w, collective, &run->thrust, NULL, dt, &out->motors);
+        }
         out->owned = true;
         return;
     }

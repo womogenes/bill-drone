@@ -25,11 +25,20 @@ typedef struct {
     float spin_pitch, spin_yaw, gyro_ff;
     // The rotors' spin momentum's yaw fed forward in the spin and the righting (FlipRighting yaw_ff). 2026-11-15: yaw_ff 1.6 (rotor_momentum 0.018 over the yaw inertia; APC's prop geometry gives about 0.014, the flight fits 0.006-0.03, and 1.6 did best on the worst of the bands below 0.03) with spin_yaw and kd_yaw four times the robust retune's (sw/sim/models/NOTES.md "Yaw in the flip").
     float yaw_ff;
+    // The quaternion flip (settings.def quaternion; flip.c track), from sw/sim tuning on the 2026-11-14 ESCs' plant and the 2026-11-15 burst's reproducing plant (sw/sim/models/NOTES.md "Quaternion attitude"): the reference rotation's mean angular acceleration (rad/s²), and the one attitude law's gains tracking it: track_kp (1/s) the tilt error into rate (bounded by brake and max_rate as the righting's), track_heading (1/s) the heading's, and track_roll, track_pitch and track_yaw (1/s) the rate errors into angular accelerations.
+    float ref_accel, track_kp, track_heading, track_roll, track_pitch, track_yaw;
+    // How far ahead the reference's acceleration is fed forward (s): the motors' and the servos' lag; and the tilt error (rad) at which the reference stops to wait for the drone (flip.c track).
+    float ref_lead, track_slack;
+    // The reference's top roll rate for a whole turn (rad/s; a shorter turn's is this times the square root of its share, as spin_rate's).
+    float ref_rate;
 } FlipParams;
 
 extern const FlipParams flip_defaults;
 // The least thrust each motor keeps while the flip or a recovery (recover.c) owns the motors, of the weight: recover_defaults' idle, and the floor below which sw/sim/tune_flip.py does not search flip_defaults' own (0.2645 since the robust retune).
 #define FLIP_FLOOR 0.2f
+// The height the quaternion flip never takes the drone over (m; the user's fixed cap: only the user changes it), whatever hover_ceiling says, and the margin it keeps under it.
+#define FLIP_CEILING 5.0f
+#define FLIP_ROOM_MARGIN 0.3f
 
 enum { FLIP_IDLE, FLIP_CLIMB, FLIP_SPIN, FLIP_RIGHT, FLIP_ARREST };
 
@@ -42,6 +51,12 @@ typedef struct {
     float turn;
     // √T_right - √T_left as the motors have it by now (flip_allocate, for yaw_ff).
     float spread;
+    // The quaternion flip (1; the command's quaternion when it began): q is then the attitude estimate's own each tick (flip_tick), and from the climb's end one reference rotation about the forward axis at the heading the climb ended on is tracked (flip.c track) in place of the spin's and the righting's laws; elapsed counts from that end (s).
+    float quaternion, heading, elapsed;
+    // The quaternion flip's height cap: the room (m) from the hold's height at the start to the lower of hover_ceiling and FLIP_CEILING, and the height risen since (m, from its own vertical speed). The climb ends early, and the reference's collective is held to what keeps the thrust from lifting, once the height risen plus what the vertical speed still carries it (v² / 2g) reaches the room less FLIP_ROOM_MARGIN.
+    float room, risen;
+    // The quaternion flip's roll on the gyro since the reference began (radians); turned is its furthest.
+    float rolled;
 } Flip;
 
 // The airframe's authority as the firmware's model has it: angular acceleration (rad/s²) per newton of differential thrust (roll), per newton of collective per radian of common tilt (pitch), per newton per radian of differential tilt (yaw); and the weight (N).
@@ -65,13 +80,8 @@ typedef struct {
 
 // Wanted angular accelerations (rad/s²) into thrusts and tilts: roll by differential thrust, pitch by common tilt, yaw by differential tilt, the collective (N) as asked where the motors' floor and ceiling leave room. thrust: what the motors have by now (N), followed here with their lag.
 void flip_allocate(const FlipRighting *r, const FlipAuthority *a, float roll, float pitch, float yaw, float collective, float pitch_rate, float *thrust, float *spread, float dt, FlipOutput *out);
-// Turn the thrust axis toward up about the axis between them, no faster than it can brake from, at this collective (N); far over with the error mostly in pitch, roll the long way round. up: the level frame's up in body axes (flip_up); gyro: body rates (rad/s).
+// Turn the thrust axis toward up about the axis between them, no faster than it can brake from, at this collective (N); far over with the error mostly in pitch, roll the long way round. up: the level frame's up in body axes (quaternion_up); gyro: body rates (rad/s).
 void flip_righting(const FlipRighting *r, const FlipAuthority *a, const float *up, const float *gyro, float collective, float *thrust, float *spread, float dt, FlipOutput *out);
-// The attitude as the flip and the recovery carry it on the gyro: q (w, x, y, z; body to level) from flight_attitude's roll and pitch, the heading zero; turned by the body rates over dt; up in body axes; and back to roll and pitch as flight_attitude keeps them, pitch within ±90 degrees, so a drone within 90 degrees of upright has both under 90 and nothing ambiguous reaches the attitude controller.
-void flip_attitude(float *q, float roll, float pitch);
-void flip_rotate(float *q, const float *gyro, float dt);
-void flip_up(const float *q, float *up);
-void flip_euler(const float *q, float *roll, float *pitch);
 
 // roll and pitch: the attitude estimate when the flip starts (radians); vertical: the climb rate then (m/s).
 void flip_start(Flip *flip, float hover_thrust, float roll, float pitch, float vertical);
@@ -92,6 +102,8 @@ typedef struct {
     float airborne, height, climb_rate, speed, roll, pitch, rate[3];
     // flip_height, and the smoothed battery voltage (0 before the first reading).
     float min_height, battery;
+    // The whole flip asked for (flip_enable 1) with the quaternion setting on: refused, as the quaternion flip flies only the bursts (sw/sim/models/NOTES.md "Quaternion attitude": under the 5 m cap it has no room to climb first, and it reached the ground from 4.5 m in every simulated run).
+    bool whole_quaternion;
 } FlipCheck;
 
 // The roll a flip_enable setting asks for (radians): 1 the whole flip, 2 a 60-degree burst and back, 3 a 90-degree one; flip_begin takes it from the command.
@@ -114,8 +126,8 @@ typedef struct {
 
 // A new arming: no flip yet.
 void flip_reset(FlipRun *run);
-// Starts the flip from the attitude estimate (radians, as flight_attitude keeps it), the controller as it is, the hover's height integral (hover.h HoverState integral), collective (N) and climb rate (m/s), with the authority of command's model and hover mass.
-void flip_begin(FlipRun *run, const Command *command, const Controller *controller, float height_integral, float collective, float roll, float pitch, float climb_rate);
+// Starts the flip from the attitude estimate (radians, as flight_attitude keeps it), the controller as it is, the hover's height integral (hover.h HoverState integral), collective (N), climb rate (m/s) and height (m, the hold's; the quaternion flip's cap), with the authority of command's model and hover mass.
+void flip_begin(FlipRun *run, const Command *command, const Controller *controller, float height_integral, float collective, float roll, float pitch, float climb_rate, float height);
 // The motors stopped: the flip ends at once.
 void flip_cancel(FlipRun *run);
 // A guard while it only climbs (a link loss, a landing, the fly-away failsafe): the flip ends there, the hover's height integral given back, and the attitude controller, which flew the climb, carries on. False, changing nothing, once the spin has begun.
@@ -127,7 +139,7 @@ bool flip_gyro_only(const FlipRun *run);
 bool flip_tip_exempt(const FlipRun *run);
 // For the flight record and status (flight_rt.c, log_format.py FLIP_PHASES): 0 none, 1 climbing, 2 spinning or righting (the flip owns the motors), 3 arresting.
 int flip_phase(const FlipRun *run);
-// One control tick, right after the attitude estimate: the flip's step; while the estimate is on the gyro alone (flip_gyro_only: the climb to FLIP_GRACE after the hand-back) it takes the roll and pitch of the flip's own quaternion every tick, at the hand-back the controller takes its integrators and dead-reckoned velocity from before the flip; at its end the hover's height integral is given back too, so neither carries what the flip wound into them.
+// One control tick, right after the attitude estimate: the flip's step. With the quaternion flip the estimate is the flip's attitude and nothing is handed back to it but the integrators; otherwise, while the estimate is on the gyro alone (flip_gyro_only: the climb to FLIP_GRACE after the hand-back) it takes the roll and pitch of the flip's own quaternion every tick, at the hand-back the controller takes its integrators and dead-reckoned velocity from before the flip; at its end the hover's height integral is given back too, so neither carries what the flip wound into them.
 void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, Attitude *attitude, Controller *controller, float *height_integral, FlipOutput *out);
 // Every control tick, on the throttles about to be sent (flight_rt.c, after the attitude controller and flip_actuators): from the flip's start until FLIP_GRACE after its hand-back, and while recovering holds (flight_rt.c: a recovery and its grace, recover_gyro_only), each moves at most params->slew a second from the last tick's and stays under params->throttle_cap, so neither motor jumps between idle and full throttle (the ESCs' current and voltage spikes; sw/sim/recover_firmware.py: unlimited, the recovery's tuned righting stepped a throttle by up to 1000 in one tick); a stopped motor (0) stays stopped. Otherwise it only follows them.
 void flip_limit(FlipRun *run, bool recovering, float *throttle, float dt);

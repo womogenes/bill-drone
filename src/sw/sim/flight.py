@@ -119,15 +119,37 @@ ROLL_TARGET_RATE = DAMPING_TAU + 1
 MIX_CEILING = ctypes.c_size_t.in_dll(library, "flight_command_mix_ceiling").value
 # INDI's share per axis (roll, pitch, yaw; 0 = off), then the unmodeled acceleration on the controller's model (rad/s²), which the harness sets each tick as flight_rt.c does (indi.h).
 INDI = ctypes.c_size_t.in_dll(library, "flight_command_indi").value
+# The quaternion attitude (settings quaternion, 0 = off; flight_math.c), then the attitude quaternion (w, x, y, z; body to level) the controller's error takes, which the harness sets each tick as flight_rt.c does (Controller.update q).
+QUATERNION = ctypes.c_size_t.in_dll(library, "flight_command_quaternion").value
+COMMAND_SIZE = ctypes.c_size_t.in_dll(library, "flight_command_size").value
+
+
+def body_quaternion(q, roll, pitch):
+    """flight_rt.c relative_attitude with the quaternion setting: the estimate's quaternion turned by a level reference's roll and pitch (radians), q ⊗ zero⁻¹."""
+    cr, sr, cp, sp = math.cos(roll / 2), math.sin(roll / 2), math.cos(pitch / 2), math.sin(pitch / 2)
+    z = (cr * cp, sr * cp, cr * sp, -sr * sp)
+    return (q[0] * z[0] + q[1] * z[1] + q[2] * z[2] + q[3] * z[3], -q[0] * z[1] + q[1] * z[0] - q[2] * z[3] + q[3] * z[2],
+            -q[0] * z[2] + q[1] * z[3] + q[2] * z[0] - q[3] * z[1], -q[0] * z[3] - q[1] * z[2] + q[2] * z[1] + q[3] * z[0])
+
+
+def euler(q):
+    """flight_math.c quaternion_euler: roll and pitch (radians) of a quaternion (w, x, y, z)."""
+    return (math.atan2(2 * (q[0] * q[1] + q[2] * q[3]), 1 - 2 * (q[1] ** 2 + q[2] ** 2)), math.asin(max(-1.0, min(1.0, 2 * (q[0] * q[2] - q[3] * q[1])))))
 
 
 class Attitude:
-    def __init__(self, accel=(0.0, 0.0, 1.0)):
-        self.state = array("f", [math.atan2(accel[1], accel[2]), math.atan2(-accel[0], math.sqrt(accel[1] ** 2 + accel[2] ** 2))])
+    # flight_math.h Attitude: roll, pitch, the quaternion q (w, x, y, z) and whether it is synced to them.
+    def __init__(self, accel=(0.0, 0.0, 1.0), quaternion=False):
+        self.state = array("f", [math.atan2(accel[1], accel[2]), math.atan2(-accel[0], math.sqrt(accel[1] ** 2 + accel[2] ** 2))] + [0.0] * 5)
+        self.quaternion = quaternion
+
+    @property
+    def q(self):
+        return tuple(self.state[2:6])
 
     def update(self, accel, gyro, dt, powered, banked=False, powered_tau=POWERED_GRAVITY_TAU):
-        # banked: the gyro alone (flight_rt.c bank_tilt), an infinite time constant.
-        motion = array("f", list(accel) + list(gyro) + [dt, math.inf if banked else powered_tau if powered else GRAVITY_TAU])
+        # banked: the gyro alone (flight_rt.c bank_tilt), an infinite time constant. quaternion: settings.def quaternion (the estimate as one quaternion).
+        motion = array("f", list(accel) + list(gyro) + [dt, math.inf if banked else powered_tau if powered else GRAVITY_TAU, 1.0 if self.quaternion else 0.0])
         library.flight_attitude(self.state.buffer_info()[0], motion.buffer_info()[0])
         return self.state[0], self.state[1]
 
@@ -137,8 +159,8 @@ class Controller:
         # Two integrals, the four actuator outputs, each servo's compensation direction and extreme, the takeoff setpoint state, the upright-takeoff flag, the yaw integrator and the damping's filtered pitch rate.
         self.state = array("f", [0.0] * 18)
         # Motion (6 floats), tuning (TUNING_LAYOUT), then model parameters.
-        # Runtime-only Command fields after the model (thrust_voltage at THRUST_VOLTAGE, yaw_i at YAW_I, hover, the radio settings and the guards' GuardGains) start at zero, off unless the caller sets them; 96 floats is more than they take.
-        self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS] + [0.0] * 96)
+        # Runtime-only Command fields after the model (thrust_voltage at THRUST_VOLTAGE, yaw_i at YAW_I, hover, the radio settings and the guards' GuardGains) start at zero, off unless the caller sets them, up to the whole Command (COMMAND_SIZE).
+        self.command = array("f", [0.0] * MODEL_OFFSET + [model[key] for key in MODEL_KEYS] + [0.0] * (COMMAND_SIZE - MODEL_OFFSET - len(MODEL_KEYS)))
         for key in THRUST_SCALE_KEYS:
             self.command[6 + TUNING_LAYOUT.index(key)] = 1.0
 
@@ -166,9 +188,13 @@ class Controller:
         self.command[DAMPING_TAU] = settings.get("pitch_damping_tau", 0.0)
         self.command[ROLL_TARGET_RATE] = math.radians(settings.get("roll_target_rate", 0.0))
         self.command[MIX_CEILING] = settings.get("mix_ceiling", 0.0)
+        self.command[QUATERNION] = settings.get("quaternion", 0.0)
 
-    def update(self, attitude, gyro, dt):
+    def update(self, attitude, gyro, dt, q=None):
+        """attitude: roll and pitch (radians); q: with the quaternion setting the attitude quaternion they are read from (w, x, y, z; body to level)."""
         struct.pack_into("<6f", self.command, 0, *attitude, *gyro, dt)
+        if q is not None:
+            self.command[QUATERNION + 1:QUATERNION + 5] = array("f", q)
         library.flight_control(self.state.buffer_info()[0], self.command.buffer_info()[0], THRUST_BUFFER.buffer_info()[0], len(THRUST_BUFFER) // 2)
         return int(self.state[2]), int(self.state[3]), self.state[4], self.state[5]
 

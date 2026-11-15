@@ -117,6 +117,8 @@ TUNE(attitude_bias, attitude_bias, 1, 0, 1, 0)
 TUNE(indi, indi, 1, 0, 1, 0)
 // INDI's share in pitch alone (as indi is in roll and yaw; 0 off). On 2026-11-15 indi 0.25 and 0.5 on all axes doubled the hover's 2.6-3 Hz pitch shake (pitch rate 7.8 deg/s RMS in 2-4 Hz without, 13.9 and 15.3 with), the mode pitch_damping over 6 drives, while roll steadied (roll 1.2 -> 0.7 degrees RMS at 0.5).
 TUNE(indi_pitch, indi_pitch, 1, 0, 1, 0)
+// The quaternion attitude (flight_math.c, flip.c, recover.c): 1 carries the attitude as one quaternion (the gyro turning it, the accelerometer pulling its up as the Euler estimate's blend does, gated as before), the attitude controller's roll and pitch errors are the tilt-prioritized error onto the setpoint at the drone's own heading, the bursts (flip_enable 2 and 3) track one reference rotation with the same law in place of the spin and the righting, never over the lower of hover_ceiling and 5 m, the whole flip (flip_enable 1) is refused, and the flip and the recovery fly the estimate itself, with no Euler hand-back and no roll-over (sw/sim/models/NOTES.md "Quaternion attitude"); 0, the default, flies the Euler angles as before.
+TUNE(quaternion, quaternion, 1, 0, 1, 0)
 // BOOT(name, min, max, default): changed by the T request like TUNE, but read only at boot rather than copied into the controller's command. Where an include site does not name BOOT it is a TUNE without a member.
 #ifndef BOOT
 #define BOOT(name, min, max, value) TUNE(name, , 1, min, max, value)
