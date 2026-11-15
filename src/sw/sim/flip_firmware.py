@@ -31,6 +31,7 @@ from sw.sim.sweep import BARO
 
 MAIN = Path(__file__).resolve().parents[2] / "fw/drone/main"
 # flip.h's FLIP_MEASURED_*_AUTHORITY, which with the quaternion setting the recovery's righting takes in pitch and yaw (flight_rt.c).
+BARO_READINGS = int(re.search(r"#define RECOVER_BARO_READINGS (\d+)", (MAIN / "recover.h").read_text()).group(1))
 MEASURED_AUTHORITY = {axis: float(re.search(rf"#define FLIP_MEASURED_{axis.upper()}_AUTHORITY ([0-9.]+)f", (MAIN / "flip.h").read_text()).group(1)) for axis in ("pitch", "yaw")}
 SOURCES = [MAIN / "flip.c", MAIN / "recover.c", MAIN / "flight_math.c"]
 HEADERS = [MAIN / "flip.h", MAIN / "recover.h", MAIN / "flight_math.h", MAIN / "hover.h", MAIN / "guard.h"]
@@ -56,6 +57,8 @@ RECOVER_LAND_HEIGHT = 1.0
 LINK_HOLD_S = 2.0
 # The plant by default: drone 1 on the raised pivots (models/NOTES.md "Raised pivots"), with the flip's untested terms drawn (--randomize flip).
 AIRFRAME = "airframe_2026-11-12_raised.json"
+# flight_rt.c's BARO_MAX_AGE_US: the newest barometer reading stands for this long (s).
+BARO_MAX_AGE = 0.1
 # flight_rt.c slews and caps the recovery's throttles as the flip's (flip_limit while recover_gyro_only); options["recover_limit"] False flies them unlimited, as before.
 RECOVER_LIMIT = True
 
@@ -93,16 +96,18 @@ class RecoverParams(ctypes.Structure):
 
 class RecoverRun(ctypes.Structure):
     _fields_ = ([(name, ctypes.c_int) for name in ("stage", "cause", "recoveries")] + [("q", ctypes.c_float * 4)] + [(name, ctypes.c_float) for name in ("time", "righting", "thrust", "vertical", "settled", "since")]
-                + [("abort", ctypes.c_bool), ("saved", ctypes.c_float * 18), ("height_integral", ctypes.c_float)])
+                + [("abort", ctypes.c_bool), ("saved", ctypes.c_float * 18), ("height_integral", ctypes.c_float), ("measured", ctypes.c_bool), ("clipped", ctypes.c_float), ("clock", ctypes.c_float)]
+                + [("baro_height", ctypes.c_float * BARO_READINGS), ("baro_at", ctypes.c_float * BARO_READINGS), ("baro_next", ctypes.c_int), ("baro_count", ctypes.c_int), ("baro_rate", ctypes.c_float), ("baro_fit", ctypes.c_float)])
 
 
 class RecoverInput(ctypes.Structure):
     _fields_ = ([(name, ctypes.c_bool) for name in ("enabled", "tipped", "allowed")] + [("gyro", ctypes.POINTER(ctypes.c_float)), ("accel", ctypes.POINTER(ctypes.c_float))] + [(name, ctypes.c_float) for name in ("dt", "tip_limit")]
-                + [("flip_active", ctypes.c_bool), ("flip_gyro_only", ctypes.c_bool), ("flip_phase", ctypes.c_int), ("quaternion", ctypes.c_bool), ("flip_burst", ctypes.c_bool), ("climb_rate", ctypes.c_float), ("collective", ctypes.c_float), ("authority", Authority)])
+                + [("flip_active", ctypes.c_bool), ("flip_gyro_only", ctypes.c_bool), ("flip_phase", ctypes.c_int), ("quaternion", ctypes.c_bool), ("flip_burst", ctypes.c_bool), ("climb_rate", ctypes.c_float), ("collective", ctypes.c_float), ("authority", Authority)]
+                + [("baro", ctypes.c_float), ("baro_new", ctypes.c_bool)] + [(name, ctypes.c_float) for name in ("baro_latency", "ceiling", "hold_tau")])
 
 
 class RecoverOutput(ctypes.Structure):
-    _fields_ = [("cut", ctypes.c_int), ("cancel_flip", ctypes.c_bool), ("owned", ctypes.c_bool), ("level", ctypes.c_bool), ("motors", Output)]
+    _fields_ = [("cut", ctypes.c_int), ("cancel_flip", ctypes.c_bool), ("owned", ctypes.c_bool), ("level", ctypes.c_bool), ("motors", Output), ("cap", ctypes.c_float), ("reseed", ctypes.c_bool), ("height", ctypes.c_float), ("climb_rate", ctypes.c_float)]
 
 
 if not LIBRARY.exists() or LIBRARY.stat().st_mtime < max(path.stat().st_mtime for path in SOURCES + HEADERS):
@@ -386,6 +391,12 @@ def fly(job):
             else:
                 out = Output()
             roll, pitch = wrap(estimate.state[0]), wrap(estimate.state[1])
+            # The GPS and the barometer, read before the tip cut as flight_rt.c's estimate() reads them; the newest barometer reading stands for BARO_MAX_AGE (flight_rt.c baro_altitude).
+            gps, baro = lane["sensors"].step(now, sim.pos[i], sim.vel[i], lane["lifted"], BELLY)
+            if baro:
+                lane["baro_last"] = (now, baro[1])
+            last = lane.get("baro_last")
+            fresh = last is not None and now - last[0] <= BARO_MAX_AGE
             recovered = RecoverOutput()
             if enabled:
                 # flight_rt.c's tip cut, or the recovery in its place (recover.h).
@@ -396,7 +407,8 @@ def fly(job):
                                      allowed=controller.state[10] >= RECOVER_AIRBORNE_S and not s.landed and not s.probing and not (s.engaged and s.lifted < 0) and not (landing and s.height < RECOVER_LAND_HEIGHT) and recovery.recoveries < RECOVER_MAX,
                                      gyro=gyro_c, accel=accel_c, dt=R.DT, tip_limit=tip_limit, flip_active=library.flip_active(ctypes.byref(run)), flip_gyro_only=library.flip_gyro_only(ctypes.byref(run)),
                                      flip_phase=library.flip_phase(ctypes.byref(run)), quaternion=quaternion, flip_burst=library.flip_active(ctypes.byref(run)) and run.flip.turn < 2 * math.pi - 1e-3, climb_rate=s.climb_rate, collective=2 * flight.thrust(max(controller.command[BASE], 0.0)),
-                                     authority=Authority(authority.roll, authority.pitch, authority.yaw, authority.weight, (ctypes.c_float * 3)(*lane["indi"].share()), (ctypes.c_float * 3)(*lane["indi"].unmodeled())))
+                                     authority=Authority(authority.roll, authority.pitch, authority.yaw, authority.weight, (ctypes.c_float * 3)(*lane["indi"].share()), (ctypes.c_float * 3)(*lane["indi"].unmodeled())),
+                                     baro=last[1] - s.baro_ground if fresh and s.baro_grounded else math.nan, baro_new=baro is not None, baro_latency=BARO_LATENCY, ceiling=hover_gains.ceiling, hold_tau=hover_gains.baro_tau)
                 before = library.recover_active(ctypes.byref(recovery))
                 library.recover_tick(ctypes.byref(recovery), ctypes.byref(recover_params), ctypes.byref(given), estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(recovered))
                 if recovered.cancel_flip:
@@ -413,9 +425,11 @@ def fly(job):
                     lane["dead"] = lane["tipped"] = True
                     lane["cut"] = recovered.cut
                     continue
+                # flight_rt.c: a recovery that flew on the barometer hands the hold the barometer's height and climb rate.
+                if recovered.reseed:
+                    s.height, s.climb_rate = recovered.height, recovered.climb_rate
                 roll, pitch = wrap(estimate.state[0]), wrap(estimate.state[1])
             vertical = -accel[0] * math.sin(estimate.state[1]) + math.cos(estimate.state[1]) * (accel[1] * math.sin(estimate.state[0]) + accel[2] * math.cos(estimate.state[0]))
-            gps, baro = lane["sensors"].step(now, sim.pos[i], sim.vel[i], lane["lifted"], BELLY)
             if not enabled:
                 hover.rest(vertical, False, R.DT, baro)
                 throttle[i] = (0, 0)
@@ -452,6 +466,9 @@ def fly(job):
             if recovered.level:
                 targets = (0.0, 0.0)
                 base = min(1200.0, flight.throttle(recovered.motors.collective / 2 / math.cos(trim)))
+            # flight_rt.c: with recover_enable the barometer's backstop over the ceiling (recover.c gives it with the quaternion setting) caps whatever collective is flown.
+            if recovering and math.isfinite(recovered.cap):
+                base = min(base, flight.throttle(recovered.cap / 2 / math.cos(trim)))
             controller.command[BASE], controller.command[ROLL], controller.command[PITCH], controller.command[YAW] = base, targets[0], targets[1], flown.get("yaw_rate", 0.0)
             lane["indi"].apply(controller)
             left, right, left_angle, right_angle = controller.update((roll, pitch), gyro, R.DT, q=estimate.q if quaternion else None)

@@ -741,6 +741,9 @@ static void tip_or_recover(Tick *t) {
         .authority = {command.model.arm / command.model.roll_inertia, command.quaternion > 0 ? FLIP_MEASURED_PITCH_AUTHORITY : command.model.pivot_height / command.model.pitch_inertia,
                       command.quaternion > 0 ? FLIP_MEASURED_YAW_AUTHORITY : command.model.arm / command.model.yaw_inertia, command.hover.mass * GRAVITY, {indi_share[0], indi_share[1], indi_share[2]},
                       {indi.unmodeled[INDI_CONTROLLER][0], indi.unmodeled[INDI_CONTROLLER][1], indi.unmodeled[INDI_CONTROLLER][2]}},
+        // The barometer's raw reading above the ground the hold learned with the motors off, not the hold's height (which integrates the accelerometer the tumble saturates).
+        .baro = hover.baro_grounded ? baro_altitude - hover.baro_ground : NAN, .baro_new = t->have_baro, .baro_latency = BARO_LATENCY_US / 1e6f,
+        .ceiling = command.hover.ceiling, .hold_tau = command.hover.baro_tau,
     };
     bool before = recover_active(&recovery);
     recover_tick(&recovery, &recover_defaults, &input, &state.attitude, &state.controller, &hover.integral, &t->recovered);
@@ -756,6 +759,11 @@ static void tip_or_recover(Tick *t) {
         if (excite.count && !guard.stopped) guard.stopped = PATTERN_RECOVERY;
     }
     if (t->recovered.cut) stop_locked(t->recovered.cut);
+    // A recovery that flew on the barometer hands the hold the barometer's height and climb rate, not its own from the saturated accelerometer.
+    if (t->recovered.reseed) {
+        hover.height = t->recovered.height;
+        hover.climb_rate = t->recovered.climb_rate;
+    }
     t->pose = relative_attitude(&state);
 }
 
@@ -880,6 +888,8 @@ static void fly(Tick *t) {
         setpoint.target_roll = setpoint.target_pitch = 0;
         setpoint.base = collective_throttle(t->recovered.motors.collective);
     }
+    // With recover_enable and the quaternion setting, the barometer's backstop over the ceiling (recover.h RECOVER_CEILING_MARGIN) caps whatever collective is flown: the hold, the flip's climb and arrest, leveling.
+    if (command.recover_enable >= 1 && isfinite(t->recovered.cap)) setpoint.base = fminf(setpoint.base, collective_throttle(t->recovered.cap));
     memcpy(setpoint.indi_share, indi_share, sizeof(setpoint.indi_share));
     memcpy(setpoint.unmodeled, indi.unmodeled[INDI_CONTROLLER], sizeof(setpoint.unmodeled));
     flown = setpoint;

@@ -24,16 +24,26 @@ enum { RECOVER_NONE, RECOVER_TILT, RECOVER_FLIP, RECOVER_SATURATED, RECOVER_ABOR
 #define RECOVER_TIP_REASON 4
 #define RECOVER_FAILED_REASON 10
 
+// The barometer's readings the recovery keeps for its rate: more than half a second of them (recover.c BARO_RATE_S) at up to 100 readings a second (baro.c measures about every 20 ms).
+#define RECOVER_BARO_READINGS 64
+
 typedef struct {
     int stage, cause, recoveries;
     // The attitude (w, x, y, z; body to level, the heading free) the righting flies on: taken from the attitude estimate each ordinary tick, from the gyro alone while a flip or this runs.
     float q[4];
-    // How long this recovery has run and righted (s), the thrust the motors have by now (N), the vertical speed (m/s; from the hold's climb rate at the start, then the specific force along q's up), how long it has stayed settled (s), the time since it ended (s; negative before one), and whether the pilot asked for level-and-hold.
+    // How long this recovery has run and righted (s), the thrust the motors have by now (N), the vertical speed it flies on (m/s; from the hold's climb rate at the start, then the specific force along q's up while measured, otherwise the barometer's rate or none), how long it has stayed settled (s), the time since it ended (s; negative before one), and whether the pilot asked for level-and-hold.
     float time, righting, thrust, vertical, settled, since;
     bool abort;
     // The attitude controller and the hover's height integral as the last ordinary tick left them (neither in a flip nor recovering), given back at the hand-back and the end, so neither carries what the tumble wound into them.
     Controller saved;
     float height_integral;
+    // Whether vertical is still the accelerometer's integral (recover.c measured), how long since the accelerometer or the gyro last read at their full scale (s; INFINITY never this arming), and this run's clock (s).
+    bool measured;
+    float clipped, clock;
+    // The barometer's newest readings (RECOVER_BARO_READINGS of them, each its height above the hold's ground in m and its arrival on clock), and from those within BARO_RATE_S of the newest the line fitted through them: its rate (m/s, NaN until readings cover the window) and its height now (m).
+    float baro_height[RECOVER_BARO_READINGS], baro_at[RECOVER_BARO_READINGS];
+    int baro_next, baro_count;
+    float baro_rate, baro_fit;
 } RecoverRun;
 
 // One tick's inputs. enabled: the setting recover_enable. tipped: past tip_limit outside the flip's exemption, as the tip cut has always tested it. allowed: airborne, not landing near the ground or touched down, and fewer than RECOVER_MAX recoveries this arming (flight_rt.c), so a tumble may be recovered rather than cut. Rates in rad/s, the specific force in g (body forward, left, up), angles in radians.
@@ -51,6 +61,10 @@ typedef struct {
     // The hold's climb rate (m/s), the collective being flown (N) and the airframe's authority (flip.h; weight in N).
     float climb_rate, collective;
     FlipAuthority authority;
+    // The barometer: its newest reading's height above the ground the hold learned with the motors off (m; raw, not the hold's fused height; NaN without a fresh reading or a ground), whether that reading is new this tick, and how old its pressure is when it arrives (s; flight_rt.c BARO_LATENCY_US). The hold's ceiling (hover_ceiling, m) and its barometer time constant (hover_baro_tau, s; 0 off).
+    float baro;
+    bool baro_new;
+    float baro_latency, ceiling, hold_tau;
 } RecoverInput;
 
 typedef struct {
@@ -58,6 +72,11 @@ typedef struct {
     int cut;
     bool cancel_flip, owned, level;
     FlipOutput motors;
+    // The most collective (N) the barometer allows: INFINITY unless its raw reading is more than RECOVER_CEILING_MARGIN over the ceiling (recover.c ceiling_cap). With recover_enable flight_rt.c caps every collective it flies with it, the hold's included; the recovery's own already are.
+    float cap;
+    // reseed: a recovery whose vertical speed was no longer the accelerometer's ended, and the hold, whose height and climb rate integrate the same accelerometer, takes height (m) and climb_rate (m/s) from the barometer's line instead.
+    bool reseed;
+    float height, climb_rate;
 } RecoverOutput;
 
 // A new arming: nothing recovered yet.
@@ -75,5 +94,7 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
 #define RECOVER_MAX 3
 // No recovery until the attitude controller has been airborne this long (s): a takeoff that tips over still has its feet on the ground, where driving the motors would only roll it along the floor.
 #define RECOVER_AIRBORNE_S 1.0f
+// The user's rule for drone 1's height (2026-11-15): it holds at hover_ceiling (5 m at most) and may stray this far above it (m) briefly; past that, by the barometer's raw reading, no collective may climb (recover.c ceiling_cap).
+#define RECOVER_CEILING_MARGIN 1.0f
 // A landing recovers only above this height by the hold's estimate (m): below it the drone is at or near the ground, and the barometer may read 0.9 m high at contact (hover.c LAND_FINAL_HEIGHT's note).
 #define RECOVER_LAND_HEIGHT 1.0f
