@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "driver/i2c.h"
 #include "driver/ledc.h"
@@ -296,9 +297,11 @@ static struct {
     // How far the hold-point channels have moved the hold point (m; toward the tag, left).
     float hold[2];
 } excite;
-static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
-#define LOCK() portENTER_CRITICAL(&lock)
-#define UNLOCK() portEXIT_CRITICAL(&lock)
+// The control task's state, shared with the radio's requests on core 0, behind one mutex rather than a critical section: the tick (the IMU's sample, the Kalman filter, the hover, the controller and the log record; 2-3.5 ms armed by the records' control_us on 2026-11-14) and each request still run one at a time exactly as before, but interrupts stay on, on core 1 through the tick and on core 0 while a request waits for it (a critical section kept core 1's interrupts off for the whole tick and core 0's while a request spun on the lock, which the camera's 2 Mbaud UART and the radio share). Taken only from tasks, never from an interrupt or inside another critical section; created by flight_runtime_outputs, before the radio starts.
+static StaticSemaphore_t lock_buffer;
+static SemaphoreHandle_t lock;
+#define LOCK() xSemaphoreTake(lock, portMAX_DELAY)
+#define UNLOCK() xSemaphoreGive(lock)
 
 static bool spinning(void) { return state.throttle[0] || state.throttle[1]; }
 
@@ -1367,6 +1370,7 @@ void flight_runtime_set_voltage(uint16_t millivolts) {
 }
 
 void flight_runtime_outputs(void) {
+    lock = xSemaphoreCreateMutexStatic(&lock_buffer);
     float values[SETTINGS];
     settings_copy(values);
     state.offsets[0] = values[SETTING_servo_offset_left];

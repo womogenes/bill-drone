@@ -595,8 +595,8 @@ int main(int argc, char **argv) {
     ticks = strtol(argv[2], NULL, 10);
     trace = argc > 3 ? fopen(argv[3], "w") : NULL;
     settings_load();
-    randomize_settings();
     flight_runtime_outputs();
+    randomize_settings();
     flight_runtime_start();
     check_unlocked("start");
     flight_runtime_set_voltage(16000);

@@ -67,7 +67,7 @@ typedef struct {
 #define RECORD_SIZE 112
 #define META (SETTINGS_JSON_SIZE + 1024)
 
-// Outputs at zero throttle and servos at their offsets; before the radio, so a stop always has outputs to stop.
+// Outputs at zero throttle and servos at their offsets, and the control task's lock; before the radio, so a stop always has outputs to stop. First of all flight_runtime_* calls.
 void flight_runtime_outputs(void);
 // The IMU and the control task on core 1.
 void flight_runtime_start(void);
