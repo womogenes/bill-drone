@@ -3,6 +3,7 @@
 #include <math.h>
 
 #define TWO_PI 6.28318531f
+#define HALF_PI 1.57079633f
 // How fast the flip's idea of the motors' thrust follows what it asks (s; the motors' lag).
 #define FLIP_MOTOR_TAU 0.1f
 #define GRAVITY 9.81f
@@ -29,45 +30,12 @@ const FlipParams flip_defaults = {
     .flip_thrust = 1.7828f, .right_angle = 0.5831f, .servo_max = 0.5092f, .roll_over = 2.8798f, .kv = 15.0f, .arrest_time = 2.0f, .timeout = 1.9751f,
     .floor = 0.2645f, .ceiling = 1.2286f, .handoff_rate = 3.0f, .slew = 10000.0f, .throttle_cap = 1100.0f, .spin_lift = 0.6312f,
     .spin_pitch = 8.217f, .spin_yaw = 9.34f, .gyro_ff = 8.8625f, .yaw_ff = 1.6f,
+    .ref_accel = 26.47f, .track_kp = 6.525f, .track_heading = 0.384f, .track_roll = 13.16f, .track_pitch = 2.904f, .track_yaw = 2.984f, .ref_lead = 0.0701f, .track_slack = 1.212f, .ref_rate = 11.42f,
 };
-
-void flip_attitude(float *q, float roll, float pitch) {
-    // flight_attitude's roll and pitch (about forward, then left; positive right side down and nose down) as a quaternion, the heading zero.
-    float cr = cosf(roll / 2), sr = sinf(roll / 2), cp = cosf(pitch / 2), sp = sinf(pitch / 2);
-    q[0] = cr * cp;
-    q[1] = sr * cp;
-    q[2] = cr * sp;
-    q[3] = -sr * sp;
-}
-
-void flip_up(const float *q, float *up) {
-    // The level frame's z row.
-    up[0] = 2 * (q[1] * q[3] - q[0] * q[2]);
-    up[1] = 2 * (q[2] * q[3] + q[0] * q[1]);
-    up[2] = 1 - 2 * (q[1] * q[1] + q[2] * q[2]);
-}
-
-void flip_euler(const float *q, float *roll, float *pitch) {
-    *roll = atan2f(2 * (q[0] * q[1] + q[2] * q[3]), 1 - 2 * (q[1] * q[1] + q[2] * q[2]));
-    *pitch = asinf(clampf(2 * (q[0] * q[2] - q[3] * q[1]), -1, 1));
-}
 
 void flip_start(Flip *flip, float hover_thrust, float roll, float pitch, float vertical) {
     *flip = (Flip){.stage = FLIP_CLIMB, .thrust = hover_thrust, .vertical = vertical, .turn = TWO_PI, .spread = NAN};
-    flip_attitude(flip->q, roll, pitch);
-}
-
-// The body rates turn the attitude: q += q (0, w) dt / 2, normalized.
-void flip_rotate(float *q, const float *w, float dt) {
-    float h = dt / 2;
-    float dw = -q[1] * w[0] - q[2] * w[1] - q[3] * w[2], dx = q[0] * w[0] + q[2] * w[2] - q[3] * w[1];
-    float dy = q[0] * w[1] + q[3] * w[0] - q[1] * w[2], dz = q[0] * w[2] + q[1] * w[1] - q[2] * w[0];
-    q[0] += dw * h;
-    q[1] += dx * h;
-    q[2] += dy * h;
-    q[3] += dz * h;
-    float n = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-    for (int i = 0; i < 4; i++) q[i] /= n;
+    quaternion_from_euler(flip->q, roll, pitch);
 }
 
 // Each motor between floor and ceiling of the weight: the difference within what that allows, then the collective as asked where the difference leaves room. Each motor's thrust (N) into left and right.
@@ -137,15 +105,100 @@ static float arrest(const FlipParams *p, const FlipAuthority *a, float vertical)
     return clampf(a->weight * (1 - p->kv * vertical / GRAVITY), ARREST_FLOOR * a->weight, 2.2f * a->weight);
 }
 
+// The quaternion flip at its height cap (Flip room): the height risen and what the vertical speed still carries it, braking at what ARREST_FLOOR of the weight leaves of gravity, reach the room less the margin.
+static bool capped(const Flip *flip) {
+    float rising = fmaxf(flip->vertical, 0);
+    return flip->risen + rising * rising / (2 * (1 - ARREST_FLOOR) * GRAVITY) >= flip->room - FLIP_ROOM_MARGIN;
+}
+
+// The quaternion flip's reference roll t into it (radians), its rate and its acceleration: up to speed with the acceleration a half sine averaging accel (so it starts and ends at zero, which the motors' lag can follow), coasting, and braking the same way to a stop at turn (a shorter turn, up to the speed it can brake from in it); a burst (back) then comes back to zero the same way. True once it has stopped at its end.
+static bool profile(float turn, float speed, float accel, bool back, float t, float *angle, float *rate, float *acc) {
+    float top = fminf(speed, sqrtf(accel * turn)), ramp = top / accel, coast = (turn - top * ramp) / top, leg = 2 * ramp + coast;
+    float sign = 1, start = 0;
+    if (back && t >= leg) {
+        t -= leg;
+        sign = -1;
+        start = turn;
+    }
+    if (t >= leg) {
+        *angle = back ? 0 : turn;
+        *rate = *acc = 0;
+        return true;
+    }
+    // A ramp u into it: the half sine's acceleration, the speed it has given and the angle it has covered.
+    float u = t < ramp ? t : leg - t, x = HALF_PI * 2 * fminf(u, ramp) / ramp;
+    float a = HALF_PI * accel * sinf(x), v = top / 2 * (1 - cosf(x)), s = top / 2 * (fminf(u, ramp) - ramp * sinf(x) / (2 * HALF_PI));
+    if (t < ramp) {
+        *angle = s;
+        *rate = v;
+        *acc = a;
+    } else if (t < ramp + coast) {
+        *angle = top * ramp / 2 + top * (t - ramp);
+        *rate = top;
+        *acc = 0;
+    } else {
+        *angle = turn - s;
+        *rate = v;
+        *acc = -a;
+    }
+    *angle = start + sign * *angle;
+    *rate *= sign;
+    *acc *= sign;
+    return false;
+}
+
+// The quaternion flip from the climb's end: one reference rotation, the attitude at the climb's heading rolled by the profile's angle about its forward axis, out to the whole turn (the flip) or out and back (a burst), at ref_rate times the square root of the turn's share of a whole one; the one attitude law (attitude_error, attitude_rates) tracks it with the reference's rate and acceleration fed forward, through flip_allocate as the staged laws were. The flip's collective is the spin's (spin_thrust plus spin_lift times the reference's cosine) while the reference moves and flip_thrust once it has stopped, its vertical part at most the weight, a burst's what holds its height; then, within right_angle of upright and under handoff_rate, or at timeout, it hands back as the staged flip does. No roll-over, no separate spin, righting or Euler hand-back.
+static void track(Flip *flip, const FlipParams *p, const FlipAuthority *a, const FlipRighting *r, const float *up, const float *gyro, float dt, FlipOutput *out) {
+    float angle, rate, accel;
+    float speed = p->ref_rate * sqrtf(fminf(flip->turn / TWO_PI, 1)), ahead, unused;
+    bool done = profile(flip->turn, speed, p->ref_accel, flip->turn < TWO_PI, flip->elapsed, &angle, &rate, &accel);
+    // The acceleration is fed forward ref_lead ahead, for the motors' and the servos' lag.
+    profile(flip->turn, speed, p->ref_accel, flip->turn < TWO_PI, flip->elapsed + p->ref_lead, &ahead, &unused, &accel);
+    // The roll turned (on the gyro since the reference began) at its furthest, as the staged spin counts it.
+    flip->rolled += gyro[0] * dt;
+    flip->turned = fmaxf(flip->turned, flip->rolled);
+    float level[4], reference[4], error[3], axis[3] = {1, 0, 0};
+    quaternion_target(level, flip->heading, 0, 0);
+    quaternion_roll(reference, level, angle);
+    // The reference's forward axis in the drone's body axes, along which its rate and acceleration are fed forward.
+    attitude_error(flip->q, reference, error, axis);
+    // The reference waits for a drone that falls behind it (a reference governor): its time runs at 1 less the tilt error's share of track_slack, its rate and acceleration scaled with it, so an authority short of the model's slows the turn instead of leaving the drone short of it.
+    float pace = clampf(1 - hypotf(error[0], error[1]) / p->track_slack, 0, 1);
+    flip->elapsed += dt * pace;
+    rate *= pace;
+    accel *= pace * pace;
+    float rates[3] = {rate * axis[0], rate * axis[1], rate * axis[2]}, accels[3] = {accel * axis[0], accel * axis[1], accel * axis[2]}, wanted[3];
+    AttitudeGains g = {p->track_kp, p->brake, p->max_rate, p->track_heading, {p->track_roll, p->track_pitch, p->track_yaw}};
+    attitude_rates(&g, error, rates, accels, gyro, wanted);
+    // The thrust's vertical part is never more than the weight: a burst holds its height with exactly that (asking for no more than the weight in all sank it while banked), the flip has its schedule within it; and at the height cap, while still rising, at most ARREST_FLOOR of it, so the climb brakes under it.
+    float hold = a->weight / fmaxf(up[2], 0.5f);
+    float collective = flip->turn < TWO_PI ? hold : fminf(fmaxf(done ? p->flip_thrust : p->spin_thrust + p->spin_lift * cosf(angle), 0) * a->weight, hold);
+    if (capped(flip) && flip->vertical > 0) collective = fminf(collective, ARREST_FLOOR * a->weight / fmaxf(up[2], 0.5f));
+    flip_allocate(r, a, wanted[0], gyroscopic(r, a, wanted[0], wanted[1], collective, gyro[0]), wanted[2], collective, gyro[1], &flip->thrust, &flip->spread, dt, out);
+    flip->stage = done ? FLIP_RIGHT : FLIP_SPIN;
+    bool slow = fabsf(gyro[0]) < p->handoff_rate && fabsf(gyro[1]) < p->handoff_rate && fabsf(gyro[2]) < p->handoff_rate;
+    if ((done && up[2] > cosf(p->right_angle) && slow) || flip->time > p->timeout) {
+        flip->stage = FLIP_ARREST;
+        flip->time = 0;
+        out->owned = false;
+        out->handed_back = true;
+        quaternion_euler(flip->q, &out->roll, &out->pitch);
+        out->collective_set = true;
+        out->collective = arrest(p, a, flip->vertical);
+    }
+}
+
 void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const float *gyro, const float *accel, float dt, FlipOutput *out) {
     *out = (FlipOutput){0};
     if (flip->stage == FLIP_IDLE) return;
     flip->time += dt;
     float *q = flip->q;
-    flip_rotate(q, gyro, dt);
+    // The quaternion flip's q is the attitude estimate's, set by flip_tick.
+    if (!(flip->quaternion > 0)) quaternion_rotate(q, gyro, dt);
+    else flip->risen += flip->vertical * dt;
     // Up in body axes: the body's forward and left axes' height.
     float up[3];
-    flip_up(q, up);
+    quaternion_up(q, up);
     flip->vertical += ((up[0] * accel[0] + up[1] * accel[1] + up[2] * accel[2]) - 1) * GRAVITY * dt;
     if (flip->stage == FLIP_ARREST) {
         out->collective_set = true;
@@ -158,7 +211,7 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
         out->collective_set = true;
         out->collective = p->climb_thrust * a->weight;
         flip->thrust = out->collective;
-        if (flip->time >= p->climb_time) flip->stage = FLIP_SPIN;
+        if (flip->time >= p->climb_time || (flip->quaternion > 0 && capped(flip))) flip->stage = FLIP_SPIN;
         return;
     }
     out->owned = true;
@@ -167,6 +220,10 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
     r.yaw_ff *= 1 - a->indi;
     // A staged burst (a turn short of the whole flip) never turns its thrust far from up, so it asks for no more than the weight: the flip's spin and righting collectives took a 60-degree burst 7 m up.
     float burst = flip->turn < TWO_PI ? a->weight : INFINITY;
+    if (flip->quaternion > 0) {
+        track(flip, p, a, &r, up, gyro, dt, out);
+        return;
+    }
     if (flip->stage == FLIP_SPIN) {
         flip->turned += gyro[0] * dt;
         // Keep the roll axis level: the nose's height (up's forward component, positive nose up) driven to zero through whichever of pitch and yaw tilts it now.
@@ -184,7 +241,7 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
             flip->time = 0;
             out->owned = false;
             out->handed_back = true;
-            flip_euler(q, &out->roll, &out->pitch);
+            quaternion_euler(q, &out->roll, &out->pitch);
             out->collective_set = true;
             out->collective = arrest(p, a, flip->vertical);
         }
@@ -200,6 +257,7 @@ const char *flip_refusal(const FlipCheck *c) {
     if (!c->enabled) return "Flip is off (setting flip_enable)";
     if (!c->armed) return "Not armed";
     if (c->done) return "One flip per arming: land and arm again";
+    if (c->whole_quaternion) return "The whole flip is not flown with quaternion 1 (bursts only: flip_enable 2 or 3)";
     if (!c->holding || c->landing) return "Flip only from the hover hold";
     if (c->camera || !c->gps) return "Flip only from the GPS hold (hover_camera 0, hover_gps_tau on)";
     if (c->ekf) return "Flip only with the hold on its own estimates (hover_ekf 0)";
@@ -220,7 +278,7 @@ void flip_reset(FlipRun *run) {
     *run = (FlipRun){.since = -1, .params = &flip_defaults};
 }
 
-void flip_begin(FlipRun *run, const Command *command, const Controller *controller, float height_integral, float collective, float roll, float pitch, float climb_rate) {
+void flip_begin(FlipRun *run, const Command *command, const Controller *controller, float height_integral, float collective, float roll, float pitch, float climb_rate, float height) {
     run->authority = (FlipAuthority){.roll = FLIP_ROLL_AUTHORITY, .pitch = FLIP_PITCH_AUTHORITY, .yaw = FLIP_YAW_AUTHORITY, .weight = command->hover.mass * GRAVITY};
     run->done = true;
     run->since = -1;
@@ -228,6 +286,8 @@ void flip_begin(FlipRun *run, const Command *command, const Controller *controll
     run->height_integral = height_integral;
     flip_start(&run->flip, collective, roll, pitch, climb_rate);
     run->flip.turn = flip_turn(command->flip_enable);
+    run->flip.quaternion = command->quaternion > 0;
+    run->flip.room = fminf(command->hover.ceiling, FLIP_CEILING) - height;
 }
 
 void flip_cancel(FlipRun *run) {
@@ -266,17 +326,26 @@ int flip_phase(const FlipRun *run) {
 void flip_tick(FlipRun *run, const float *gyro, const float *accel, float dt, Attitude *attitude, Controller *controller, float *height_integral, FlipOutput *out) {
     if (run->since >= 0) run->since += dt;
     bool active = flip_active(run);
+    bool quaternion = run->flip.quaternion > 0;
+    if (quaternion && active) {
+        // The quaternion flip flies the attitude estimate itself (on the gyro alone from the climb), at the heading the climb ends on.
+        for (int i = 0; i < 4; i++) run->flip.q[i] = attitude->q[i];
+        if (run->flip.stage == FLIP_CLIMB) run->flip.heading = quaternion_heading(run->flip.q);
+    }
     flip_step(&run->flip, run->params, &run->authority, gyro, accel, dt, out);
     if (out->handed_back) {
-        attitude->roll = out->roll;
-        attitude->pitch = out->pitch;
+        if (!quaternion) {
+            attitude->roll = out->roll;
+            attitude->pitch = out->pitch;
+        }
         flight_restore(controller, &run->saved);
         run->since = 0;
     }
     if (active && !flip_active(run)) *height_integral = run->height_integral;
+    if (quaternion) return;
     // While the estimate is on the gyro alone it is the flip's own quaternion's, through the arrest and the grace too, where the attitude controller flies: Euler angles carried on the gyro jump at 90 degrees of pitch (02:27: roll 58 to 163), and from a quaternion they come back with pitch within ±90 degrees, unambiguous within 90 degrees of upright.
-    if (!active && grace(run)) flip_rotate(run->flip.q, gyro, dt);
-    if (flip_gyro_only(run)) flip_euler(run->flip.q, &attitude->roll, &attitude->pitch);
+    if (!active && grace(run)) quaternion_rotate(run->flip.q, gyro, dt);
+    if (flip_gyro_only(run)) quaternion_euler(run->flip.q, &attitude->roll, &attitude->pitch);
 }
 
 void flip_limit(FlipRun *run, bool recovering, float *throttle, float dt) {

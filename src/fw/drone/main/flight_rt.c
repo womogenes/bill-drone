@@ -436,9 +436,22 @@ static float frame(void) {
 }
 
 static Attitude relative_attitude(const State *value) {
+    if (command.quaternion > 0 && value->attitude.synced) {
+        // The quaternion attitude: the estimate's (the IMU's) turned by the mounting pose_zero measured, body = imu ⊗ zero⁻¹, its roll and pitch read from it.
+        float zero[4];
+        Attitude pose = {.synced = 1};
+        quaternion_from_euler(zero, value->pose_zero.roll, value->pose_zero.pitch);
+        const float *q = value->attitude.q;
+        pose.q[0] = q[0] * zero[0] + q[1] * zero[1] + q[2] * zero[2] + q[3] * zero[3];
+        pose.q[1] = -q[0] * zero[1] + q[1] * zero[0] - q[2] * zero[3] + q[3] * zero[2];
+        pose.q[2] = -q[0] * zero[2] + q[1] * zero[3] + q[2] * zero[0] - q[3] * zero[1];
+        pose.q[3] = -q[0] * zero[3] - q[1] * zero[2] + q[2] * zero[1] + q[3] * zero[0];
+        quaternion_euler(pose.q, &pose.roll, &pose.pitch);
+        return pose;
+    }
     float roll = value->attitude.roll - value->pose_zero.roll;
     float pitch = value->attitude.pitch - value->pose_zero.pitch;
-    return (Attitude){atan2f(sinf(roll), cosf(roll)), atan2f(sinf(pitch), cosf(pitch))};
+    return (Attitude){.roll = atan2f(sinf(roll), cosf(roll)), .pitch = atan2f(sinf(pitch), cosf(pitch))};
 }
 
 // Hover's rotor-drag inputs: the specific force turned from the IMU into the level reference's body axes (by pose_zero, the IMU's mounting on the frame), and the thrust vector's forward tilt the controller last commanded (each servo's physical tilt from its trim, weighted by its motor's thrust).
@@ -634,8 +647,8 @@ static void take_imu(const float *body, uint64_t now) {
         // A result the settings table cannot hold is dropped: the IMU stays uncalibrated, as calibrate() left it.
         if (settings_calibration_fits(bias, pose_zero)) {
             memcpy(state.bias, bias, sizeof(bias));
-            state.attitude = (Attitude){atan2f(state.gravity_sum[1], state.gravity_sum[2]),
-                                        atan2f(-state.gravity_sum[0], hypotf(state.gravity_sum[1], state.gravity_sum[2]))};
+            state.attitude = (Attitude){.roll = atan2f(state.gravity_sum[1], state.gravity_sum[2]),
+                                        .pitch = atan2f(-state.gravity_sum[0], hypotf(state.gravity_sum[1], state.gravity_sum[2]))};
             state.controller = (Controller){0};
             state.calibrated = true;
             state.calibration_ready = true;
@@ -676,6 +689,7 @@ static uint64_t estimate(Tick *t, bool first) {
     if (first) {
         state.attitude.roll = atan2f(state.accel[1], state.accel[2]);
         state.attitude.pitch = atan2f(-state.accel[0], hypotf(state.accel[1], state.accel[2]));
+        state.attitude.synced = 0;
     }
     // Banked past bank_tilt (last tick's setpoint, from pitch_trim), and through a flip or a recovery and their grace after, the accelerometer reads the thrust, not gravity: the gyro alone carries the attitude.
     bool banked = command.bank_tilt > 0 && spinning() && bank_angle(&state.controller) > command.bank_tilt;
@@ -683,7 +697,7 @@ static uint64_t estimate(Tick *t, bool first) {
     if (command.attitude_bias > 0) memcpy(bias, lent_bias, sizeof(bias));
     Motion motion = {state.accel[0], state.accel[1], state.accel[2],
                      state.gyro[0] - bias[0], state.gyro[1] - bias[1], state.gyro[2] - bias[2], t->dt,
-                     banked || flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? command.attitude_tau : config.gravity_tau};
+                     banked || flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? command.attitude_tau : config.gravity_tau, command.quaternion};
     flight_attitude(&state.attitude, &motion);
     incremental(t->dt);
     if (state.enabled) flip_tick(&flip, state.gyro, state.accel, t->dt, &state.attitude, &state.controller, &hover.integral, &t->flipped);
@@ -715,7 +729,7 @@ static void tip_or_recover(Tick *t) {
         .allowed = state.controller.airborne >= RECOVER_AIRBORNE_S && !hover.landed && !hover.probing && !(hover_mode && hover.engaged && hover.lifted < 0) &&
                    !(landing && hover.height < RECOVER_LAND_HEIGHT) && recovery.recoveries < RECOVER_MAX,
         .gyro = state.gyro, .accel = state.accel, .dt = t->dt, .tip_limit = command.tip_limit,
-        .flip_active = flip_active(&flip), .flip_gyro_only = flip_gyro_only(&flip), .flip_phase = flip_phase(&flip),
+        .flip_active = flip_active(&flip), .flip_gyro_only = flip_gyro_only(&flip), .flip_phase = flip_phase(&flip), .quaternion = command.quaternion > 0,
         .climb_rate = hover.climb_rate, .collective = 2 * thrust(fmaxf(flown.base, 0)),
         .authority = {command.model.arm / command.model.roll_inertia, command.model.pivot_height / command.model.pitch_inertia, command.model.arm / command.model.yaw_inertia, command.hover.mass * GRAVITY, indi_fade,
                       {indi.unmodeled[INDI_CONTROLLER][0], indi.unmodeled[INDI_CONTROLLER][1], indi.unmodeled[INDI_CONTROLLER][2]}},
@@ -837,6 +851,7 @@ static void fly(Tick *t) {
     command.roll = t->pose.roll;
     command.pitch = t->pose.pitch;
     command.gx = state.gyro[0]; command.gy = state.gyro[1]; command.gz = state.gyro[2];
+    if (command.quaternion > 0) memcpy(command.attitude, t->pose.q, sizeof(command.attitude));
     command.dt = t->dt;
     Command setpoint = command;
     if (hover_mode != HOVER_HOLD) flip_abort(&flip, &hover.integral);
@@ -1223,7 +1238,7 @@ void flight_runtime_apply_settings(void) {
     LOCK();
     settings_apply(&command, values);
     accel_correction(values);
-    state.pose_zero = (Attitude){values[SETTING_pose_zero_roll] / DEG, values[SETTING_pose_zero_pitch] / DEG};
+    state.pose_zero = (Attitude){.roll = values[SETTING_pose_zero_roll] / DEG, .pitch = values[SETTING_pose_zero_pitch] / DEG};
     UNLOCK();
 }
 
@@ -1322,10 +1337,10 @@ const char *flight_runtime_flip(void) {
         .landing = link_landing, .failsafe = guard.failsafe != FAILSAFE_OFF, .pattern = excite.active,
         .airborne = state.controller.airborne, .height = hover.height, .climb_rate = hover.climb_rate, .speed = hypotf(hover.gps_fix[0], hover.gps_fix[1]),
         .roll = pose.roll, .pitch = pose.pitch - command.pitch_trim, .rate = {state.gyro[0], state.gyro[1], state.gyro[2]},
-        .min_height = command.flip_height, .battery = battery_v,
+        .min_height = command.flip_height, .battery = battery_v, .whole_quaternion = command.quaternion > 0 && command.flip_enable < 2,
     };
     const char *error = recover_gyro_only(&recovery) ? "Recovering" : flip_refusal(&check);
-    if (!error) flip_begin(&flip, &command, &state.controller, hover.integral, hover.force, state.attitude.roll, state.attitude.pitch, hover.climb_rate);
+    if (!error) flip_begin(&flip, &command, &state.controller, hover.integral, hover.force, state.attitude.roll, state.attitude.pitch, hover.climb_rate, hover.height);
     UNLOCK();
     return error;
 }
@@ -1523,7 +1538,7 @@ void flight_runtime_start(void) {
     // A calibration is valid only in the sensor frame it was taken in. Arming and the status both read state.calibrated, so a rejected calibration blocks arming.
     float pose_zero[2];
     if (settings_calibration(frame(), state.bias, pose_zero)) {
-        state.pose_zero = (Attitude){pose_zero[0] / DEG, pose_zero[1] / DEG};
+        state.pose_zero = (Attitude){.roll = pose_zero[0] / DEG, .pitch = pose_zero[1] / DEG};
         state.calibrated = true;
     }
     // The fixed model; the settings store supplies every tunable value.

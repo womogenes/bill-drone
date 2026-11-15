@@ -44,6 +44,8 @@ typedef struct {
     // The flip (flip.h): running, its phase (flip_phase) and whether the attitude estimate is on the gyro alone for it (flip_gyro_only).
     bool flip_active, flip_gyro_only;
     int flip_phase;
+    // The quaternion attitude (settings.def quaternion): q is then the attitude estimate's own every tick, nothing is written back to the estimate, and the righting is the one attitude law (attitude_error, attitude_rates) toward upright at the drone's own heading, without the roll-over (roll_over unused).
+    bool quaternion;
     // The hold's climb rate (m/s), the collective being flown (N) and the airframe's authority (flip.h; weight in N).
     float climb_rate, collective;
     FlipAuthority authority;

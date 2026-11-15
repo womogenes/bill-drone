@@ -33,7 +33,137 @@ float flight_interpolate(float value, const float *table, size_t count, int reve
 
 #define HALF_TURN 3.14159265f
 
+void quaternion_from_euler(float *q, float roll, float pitch) {
+    // flight_attitude's roll and pitch (about forward, then left; positive right side down and nose down) as a quaternion, the heading zero.
+    float cr = cosf(roll / 2), sr = sinf(roll / 2), cp = cosf(pitch / 2), sp = sinf(pitch / 2);
+    q[0] = cr * cp;
+    q[1] = sr * cp;
+    q[2] = cr * sp;
+    q[3] = -sr * sp;
+}
+
+void quaternion_up(const float *q, float *up) {
+    // The level frame's z row.
+    up[0] = 2 * (q[1] * q[3] - q[0] * q[2]);
+    up[1] = 2 * (q[2] * q[3] + q[0] * q[1]);
+    up[2] = 1 - 2 * (q[1] * q[1] + q[2] * q[2]);
+}
+
+void quaternion_euler(const float *q, float *roll, float *pitch) {
+    *roll = atan2f(2 * (q[0] * q[1] + q[2] * q[3]), 1 - 2 * (q[1] * q[1] + q[2] * q[2]));
+    *pitch = asinf(clampf(2 * (q[0] * q[2] - q[3] * q[1]), -1, 1));
+}
+
+// The body rates turn the attitude: q += q (0, w) dt / 2, normalized.
+void quaternion_rotate(float *q, const float *w, float dt) {
+    float h = dt / 2;
+    float dw = -q[1] * w[0] - q[2] * w[1] - q[3] * w[2], dx = q[0] * w[0] + q[2] * w[2] - q[3] * w[1];
+    float dy = q[0] * w[1] + q[3] * w[0] - q[1] * w[2], dz = q[0] * w[2] + q[1] * w[1] - q[2] * w[0];
+    q[0] += dw * h;
+    q[1] += dx * h;
+    q[2] += dy * h;
+    q[3] += dz * h;
+    float n = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    for (int i = 0; i < 4; i++) q[i] /= n;
+}
+
+// a ⊗ b into out (which may be either).
+static void multiply(const float *a, const float *b, float *out) {
+    float w = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
+    float x = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
+    float y = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
+    float z = a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0];
+    out[0] = w;
+    out[1] = x;
+    out[2] = y;
+    out[3] = z;
+}
+
+float quaternion_heading(const float *q) {
+    // q = (cos h/2, 0, 0, sin h/2) ⊗ (a, b, c, 0): the turn about the level frame's up, then a tilt about a horizontal body axis.
+    return 2 * atan2f(q[3], q[0]);
+}
+
+void quaternion_target(float *q, float heading, float roll, float pitch) {
+    float tilt[4], turn[4] = {cosf(heading / 2), 0, 0, sinf(heading / 2)};
+    quaternion_from_euler(tilt, roll, pitch);
+    multiply(turn, tilt, q);
+}
+
+void quaternion_roll(float *q, const float *from, float angle) {
+    float turn[4] = {cosf(angle / 2), sinf(angle / 2), 0, 0};
+    multiply(from, turn, q);
+}
+
+void attitude_error(const float *q, const float *target, float *error, float *turn) {
+    // The rotation from q to target in q's body axes, q⁻¹ ⊗ target, the short way (w ≥ 0).
+    float inverse[4] = {q[0], -q[1], -q[2], -q[3]}, e[4];
+    multiply(inverse, target, e);
+    if (e[0] < 0)
+        for (int i = 0; i < 4; i++) e[i] = -e[i];
+    // Split as the tilt about a horizontal body axis (a, b, c, 0), then the turn about the thrust axis (w, 0, 0, z) / a: Brescianini and D'Andrea's q_e,red ⊗ q_e,yaw.
+    float a = hypotf(e[0], e[3]);
+    if (a > 1e-6f) {
+        float b = (e[0] * e[1] - e[2] * e[3]) / a, c = (e[0] * e[2] + e[1] * e[3]) / a, s = hypotf(b, c);
+        float angle = 2 * atan2f(s, a);
+        error[0] = s > 1e-9f ? angle * b / s : 2 * b;
+        error[1] = s > 1e-9f ? angle * c / s : 2 * c;
+        error[2] = 2 * atan2f(e[3], e[0]);
+    } else {
+        // Upside down from the target: the half turn about the horizontal axis (e[1], e[2]) itself, with no turn about the thrust axis.
+        float s = fmaxf(hypotf(e[1], e[2]), 1e-9f);
+        error[0] = HALF_TURN * e[1] / s;
+        error[1] = HALF_TURN * e[2] / s;
+        error[2] = 0;
+    }
+    if (turn) {
+        // v + 2 w (u × v) + 2 u × (u × v), u the vector part.
+        float u[3] = {e[1], e[2], e[3]}, v[3] = {turn[0], turn[1], turn[2]};
+        float t[3] = {u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+        float tt[3] = {u[1] * t[2] - u[2] * t[1], u[2] * t[0] - u[0] * t[2], u[0] * t[1] - u[1] * t[0]};
+        for (int i = 0; i < 3; i++) turn[i] = v[i] + 2 * e[0] * t[i] + 2 * tt[i];
+    }
+}
+
+void attitude_rates(const AttitudeGains *g, const float *error, const float *rate, const float *accel, const float *gyro, float *wanted) {
+    float angle = hypotf(error[0], error[1]);
+    float speed = angle > 1e-6f ? fminf(fminf(g->kp, sqrtf(2 * g->brake / angle)), g->max_rate / angle) : g->kp;
+    float want[3] = {speed * error[0], speed * error[1], g->kp_heading * error[2]};
+    for (int i = 0; i < 3; i++) wanted[i] = g->gain[i] * (rate[i] + want[i] - gyro[i]) + (accel ? accel[i] : 0);
+}
+
+// The attitude as one quaternion (Motion quaternion): q turned by the body rates, then, at the same weight as flight_attitude's Euler blend, the body turned about the axis between the up it has and the accelerometer's, toward the accelerometer's; that axis is horizontal, so the heading stays the gyro's. Roll and pitch are q's: no wrap at 90 degrees of pitch is needed.
+static void quaternion_attitude(Attitude *state, const Motion *m) {
+    float *q = state->q;
+    if (!state->synced) {
+        quaternion_from_euler(q, state->roll, state->pitch);
+        state->synced = 1;
+    }
+    float gyro[3] = {m->gx, m->gy, m->gz};
+    quaternion_rotate(q, gyro, m->dt);
+    float weight = 1.0f - expf(-m->dt / m->gravity_tau);
+    float norm = sqrtf(m->ax * m->ax + m->ay * m->ay + m->az * m->az);
+    if (weight > 0 && norm > 0) {
+        float up[3], a[3] = {m->ax / norm, m->ay / norm, m->az / norm};
+        quaternion_up(q, up);
+        // The body turn that takes the measured up onto the estimate's, a × up, by weight of the angle between them: q ⊗ that turn reads the measured up.
+        float c[3] = {a[1] * up[2] - a[2] * up[1], a[2] * up[0] - a[0] * up[2], a[0] * up[1] - a[1] * up[0]};
+        float s = sqrtf(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+        if (s > 1e-9f) {
+            float half = weight * atan2f(s, a[0] * up[0] + a[1] * up[1] + a[2] * up[2]) / 2, k = sinf(half) / s;
+            float turn[4] = {cosf(half), k * c[0], k * c[1], k * c[2]};
+            multiply(q, turn, q);
+        }
+    }
+    quaternion_euler(q, &state->roll, &state->pitch);
+}
+
 void flight_attitude(Attitude *state, const Motion *m) {
+    if (m->quaternion > 0) {
+        quaternion_attitude(state, m);
+        return;
+    }
+    state->synced = 0;
     float roll = state->roll;
     float pitch = state->pitch;
     float sr = sinf(roll), cr = cosf(roll);
@@ -177,6 +307,14 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     }
     float roll_error = state->setpoint_roll - c->roll;
     float pitch_error = state->setpoint_pitch - c->pitch;
+    if (c->quaternion > 0) {
+        // The quaternion attitude: the setpoint's roll and pitch as an attitude at the drone's own heading (yaw is flown as a rate), and the tilt-prioritized error onto it in body axes, which near level is the Euler errors above and stays one rotation at any tilt.
+        float target[4], error[3];
+        quaternion_target(target, quaternion_heading(c->attitude), state->setpoint_roll, state->setpoint_pitch);
+        attitude_error(c->attitude, target, error, NULL);
+        roll_error = error[0];
+        pitch_error = error[1];
+    }
     float roll_i = state->roll_i, pitch_i = state->pitch_i, yaw_i = state->yaw_i;
     // Below integrate_throttle the feet are still down: integrating an error the ground holds would only wind up.
     if (c->base < c->integrate_throttle) {

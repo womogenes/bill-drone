@@ -10,7 +10,7 @@ from collections import deque
 from fw.controller.log_format import pattern_refusal
 from sw.sim.airframe import Airframe, model
 from sw.sim.disturbance import Disturbances
-from sw.sim.flight import MODEL, PITCH_SPEED, TUNING_LAYOUT, YAW_I, Attitude, Controller, Incremental, throttle, thrust
+from sw.sim.flight import MODEL, PITCH_SPEED, TUNING_LAYOUT, YAW_I, Attitude, Controller, Incremental, body_quaternion, euler, throttle, thrust
 
 MASS = 0.940  # kg, the final assembly with the printed deck and IMU bracket (Bill's estimate, 2026-10-24)
 DT = 0.01
@@ -207,7 +207,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     worst, peak_height, late, trace = 0.0, 0.0, [], []
     # The estimator starts from the true gravity direction, like the drone after its stationary calibration.
     specific = apply(matrix, [0.0, 0.0, 1.0], transpose=True)
-    estimator = Attitude(accel=specific)
+    estimator = Attitude(accel=specific, quaternion=settings.get("quaternion", 0) > 0)
     gyro_filter = [0.0, 0.0, 0.0]
     accel_filter = list(specific)
     # The servo electronics ignore a command until it differs from the last accepted one by more than the deadband.
@@ -322,8 +322,13 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         banked = bank_tilt > 0 and spinning and max(abs(controller.state[11]), abs(controller.state[12] - trim)) > bank_tilt
         lending = settings.get("attitude_bias", 0) > 0
         attitude = estimator.update(accel_filter, [g - b for g, b in zip(gyro_filter, lent)] if lending else gyro_filter, DT, powered=True, banked=banked, powered_tau=settings.get("attitude_tau", 50.0))
-        # The drone flies relative to its level reference: an error in it offsets the attitude both loops see.
-        attitude = (attitude[0] - level_error[0], attitude[1] - level_error[1])
+        # The drone flies relative to its level reference: an error in it offsets the attitude both loops see. With the quaternion setting the estimate's quaternion is turned by it, as flight_rt.c relative_attitude does with pose_zero.
+        body = None
+        if estimator.quaternion:
+            body = body_quaternion(estimator.q, *level_error)
+            attitude = euler(body)
+        else:
+            attitude = (attitude[0] - level_error[0], attitude[1] - level_error[1])
         # The body-to-world matrix until the physics substeps move the body.
         matrix = rotation(*angles)
         visible = None
@@ -500,7 +505,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
         if incremental.on:
             incremental.update(gyro_filter, bool(hover and outer.state.engaged and not outer.state.landed), outer.state.height if hover else 0.0, controller.command[6 + TUNING_LAYOUT.index("base_throttle")], dt=DT)
             incremental.apply(controller)
-        left, right, left_angle, right_angle = controller.update(attitude, gyro_filter, DT)
+        left, right, left_angle, right_angle = controller.update(attitude, gyro_filter, DT, q=body)
         commanded = (left, right, left_angle, right_angle)
         if incremental.on:
             sent = [min(max(round(t), 0), 1200) for t in (left, right)]

@@ -354,6 +354,10 @@ static void randomize_settings(void) {
         // INDI (indi.c) on at random: built with -DTEST_INDI, since a setting the base build lacks would change the random stream it is compared on.
         {SETTING_indi, {0, 0.5f, 1}, 3},
 #endif
+#ifdef TEST_QUATERNION
+        // The quaternion attitude (flight_math.c, flip.c, recover.c) on at random, built with -DTEST_QUATERNION for the same reason.
+        {SETTING_quaternion, {0, 1}, 2},
+#endif
     };
     for (size_t i = 0; i < sizeof(choices) / sizeof(choices[0]); i++)
         if (chance(0.5)) set_setting(choices[i].index, choices[i].values[next() % choices[i].count]);

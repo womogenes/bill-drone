@@ -780,3 +780,41 @@ Hover (no flip), 32 runs of 20 s each (pitch rate RMS median, tilt RMS median, w
 On the burst's reproducing plant (pitch authority 1.8-2.6 times the hover fit's and the left servo 0.08-0.11 s late, from flip_firmware's reproduction of the 2026-11-15T05-29-38 burst) held throughout a hover, the controller tips over 18 of 32 without INDI and 20 of 32 at 0.5: that plant is the flip's regime, not the hover's (the drone hovers on these settings), and INDI at a share does not fix it.
 
 So 0.5 for the first flights: half the share at which it starts to fail. The integrators stay as they are and trim what INDI leaves.
+
+## Quaternion attitude
+
+2026-11-15 (PST), branch william/quaternion. Behind settings.def `quaternion` (default 0, flying exactly as before: `make flight-test BASE=6072e8f`, 16 seeds of 60000 ticks, identical digests). With 1 the attitude is one quaternion for the whole flight and one tilt-prioritized error law flies it:
+
+- **Estimate** (flight_math.c quaternion_attitude): the gyro turns q, and the accelerometer pulls q's up toward its own about the horizontal axis between them at the weight the Euler blend had (attitude_tau, bank_tilt, the flip's and the recovery's gyro-only spans and attitude_bias gate it as before), so the heading stays the gyro's. Roll and pitch are read from q; the pitch wrap at 90 degrees is gone. flight_rt.c turns it by pose_zero (body = imu ⊗ zero⁻¹) for the controller.
+- **Error** (attitude_error): Brescianini and D'Andrea's tilt-prioritized split of q⁻¹ ⊗ target into the tilt about a horizontal body axis (always the short way; a half turn about its own axis when exactly upside down) and the remaining turn about the thrust axis. The hover's and manual's setpoint becomes a target attitude at the drone's own heading (yaw stays a rate), and flight_control's roll and pitch errors are the tilt error's body components: near level the Euler errors, so the same gains, integrators and mixer apply unchanged.
+- **Flip** (flip.c track): from the climb's end one reference rotation (the climb-end attitude at its heading, rolled about forward) out to the whole turn, or out and back for a burst, with half-sine acceleration ramps at ref_accel up to ref_rate × √(share of a turn); the same error law in a rate loop (attitude_rates: tilt error × track_kp within the righting's brake and max_rate, heading × track_heading, rate gains track_roll/pitch/yaw) with the reference's rate and acceleration (ref_lead ahead) fed forward, into flip_allocate as before (INDI, gyroscopic feedforward, floor and ceiling unchanged). A reference governor slows the reference's clock as the tilt error grows (zero at track_slack), with its rate and acceleration scaled alike, so a plant short of the model's authority turns slower instead of being left short. The flip's estimate is the attitude estimate itself: no own quaternion, no Euler hand-back, no separate spin and righting laws, no roll-over.
+- **Height**: the quaternion flip never takes the drone over the lower of hover_ceiling and FLIP_CEILING (5 m, the user's fixed cap): the climb ends early and the collective is held to ARREST_FLOOR of the weight while still rising once the height risen plus what the vertical speed still carries (braking at 0.4 g) reaches the room less 0.3 m; and its thrust's vertical part is never more than the weight (a burst holds its height with exactly that).
+- **Recovery** (recover.c): flies the estimate itself, righting with the same law toward upright at its own heading, without the roll-over (below), and writes nothing back to the estimate.
+- **Whole flip refused** with quaternion 1 (flip_refusal): see below.
+
+The quaternion flip's parameters came from CMA-ES (20 generations of 12, 12 runs a group) on burst60 and burst90, the 2026-11-14 ESCs' plant ("now", the pack's sag and thrust_voltage) and the burst's reproducing plant (pitch authority 1.8-2.6x and the servos 0.08-0.11 / 0.03-0.07 s late from the burst's start to the hand-back), rotor_momentum bands 0.01-0.02 and 0.04-0.05, indi 0.5, the hold at hover_climb 4.5 and hover_ceiling 5 under the cap. Costed: a turn short of what clean counts, unclean, touched, height lost, the pitch rate, and height over 5 m.
+
+**Bursts** (flip_esc "now" with the sag, 32 a band, seed 95000, indi 0.5, the hold at 4.5 m; per rotor_momentum band 0-0.01 … 0.04-0.05), Euler (today's flip_defaults) against quaternion:
+
+| | Euler | quaternion |
+|---|---|---|
+| burst60, hover-fit: clean | 100% every band | 100% every band |
+| burst60, hover-fit: pitch rate median | 126-208 deg/s | 53-132 |
+| burst60, reproducing: clean | 96.9, 100, 100, 96.9, 93.5% | 100% every band |
+| burst60, reproducing: pitch rate median (90th) | 469-544 (637-708) | 162-234 (271-446) |
+| burst60, reproducing: handed back median | 1.70-1.97 s (the timeout) | 0.97-1.00 s |
+| burst90, hover-fit: clean, pitch median | 100%, 156-248 | 100%, 65-154 |
+| burst90, reproducing: clean | 96.9, 100, 100, 96.9, 90.3% | 100% every band |
+| burst90, reproducing: pitch rate median | 516-564 | 193-304 |
+| height lost, 90th (60 / 90) | 0-1.1 / 0-3.6 m (after a 2-2.5 m climb) | 0.5-0.6 / 2.0-2.5 m (no climb) |
+| highest point | 7.0-7.6 m (15-17 m after a failure) | 5.2-5.4 m: the hold's own takeoff overshoot (32 hovers without a flip reach 5.36 m) |
+
+The Euler bursts climb 2-2.5 m above the hold before turning (climb_thrust for climb_time), over the 5 m cap from any hold above 2.5 m. Roll and yaw rates are the same or lower (burst60 roll 208-260 deg/s median against 260-299).
+
+**The whole flip** does not work under the cap: from the 4.5 m hold with no room to climb, the quaternion flip reached the ground in every run (both plants, every band); the Euler flip was 71-100% clean only by climbing to 7.5-10 m first (17-27 m after its failures). So flip_refusal refuses flip_enable 1 with quaternion 1.
+
+**Hover** (32 hovers of 20 s, indi 0.5): hover-fit plant, Euler / quaternion: held 32/32 both, pitch rate RMS 5.7 / 5.6 deg/s, tilt RMS 2.4 / 2.4 degrees. On the reproducing plant held through the hover both tip over in 19 of 32 (the same as before: that plant needs lower outer pitch gains, which the representation does not change). sw.sim.outdoor (--gps --baro, settings 2026-11-15T00-51-18, airframe_2026-11-12_raised, 16 runs a wind, the uncertain terms drawn): 0/2/4/6 m/s held 16/16/14/3 Euler, 16/16/14/2 quaternion, median distances the same to 0.01 m below 6 m/s; at 6 m/s the failsafe lands 5 in both and 7 / 8 fly off.
+
+**Recovery** (recover_firmware, 64 events a scenario from 3 m, indi 0.5): tip 92.2% Euler / 93.8% quaternion, tilt 76.6 / 79.7%, tumble 39.1 / 42.2%, Level 92.2 / 89.1%. With the roll-over kept the quaternion righting gave 93.8 / 76.6 / 40.6%, so it was dropped.
+
+**Cost**: on the host the estimate and controller take 1.08 µs a tick against 0.52 (x86, -O2): about ten more libm calls a tick (sinf, cosf, atan2f, asinf). On the ESP32 that is an estimated 10-25 µs of a 10 ms tick; not measured on the drone.
