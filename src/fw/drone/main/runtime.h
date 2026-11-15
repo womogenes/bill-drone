@@ -103,8 +103,6 @@ const char *flight_runtime_calibrate(void);
 bool flight_runtime_take_calibration(float *bias, float *pose_zero, float *sensor_frame);
 const char *flight_runtime_zero_servo(int side, float *offset, char *error, size_t size);
 // Servo bench test, disarmed with zero throttle: start (amp in degrees, cycles), then read progress and per-side results as JSON.
-const char *flight_runtime_servo_test(float amp, int cycles);
-size_t flight_runtime_servo_result(char *text, size_t size);
 // After a stop, the self-trimmed roll and pitch biases once (flight_rt.c trim); false if there are none.
 bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias);
 // After a stop, the camera hold's carried-over trim once (flight_rt.c trim); false if there is none.

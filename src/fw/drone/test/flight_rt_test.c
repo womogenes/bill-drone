@@ -1,4 +1,4 @@
-// Host test of the control task: flight_rt.c and the modules it flies (flight_math, hover, ekf, guard, flip, recover, settings) on stubbed ESP-IDF (test/host), its IMU fed from a crude closed-loop plant, with every runtime request the radio makes fuzzed between ticks: arming, targets in every hover mode, link dropouts, stops, flips (flip_refusal forced open at random, so flips start from any state), level-and-hold, tumbles, IMU faults, test patterns, servo tests, calibration, ESC calibration, maintenance, settings changes. Each tick's outputs (the four PWM duties, the status message, the log state and every drained log record) and every request's answer go into a per-tick digest, so two builds of the firmware can be compared tick for tick: make flight-test BASE=<git ref>. Usage: flight_rt_test SEED TICKS [TRACE]; prints the final digest and coverage counts.
+// Host test of the control task: flight_rt.c and the modules it flies (flight_math, hover, ekf, guard, flip, recover, settings) on stubbed ESP-IDF (test/host), its IMU fed from a crude closed-loop plant, with every runtime request the radio makes fuzzed between ticks: arming, targets in every hover mode, link dropouts, stops, flips (flip_refusal forced open at random, so flips start from any state), level-and-hold, tumbles, IMU faults, test patterns, calibration, ESC calibration, maintenance, settings changes. Each tick's outputs (the four PWM duties, the status message, the log state and every drained log record) and every request's answer go into a per-tick digest, so two builds of the firmware can be compared tick for tick: make flight-test BASE=<git ref>. Usage: flight_rt_test SEED TICKS [TRACE]; prints the final digest and coverage counts.
 #include <math.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -449,12 +449,6 @@ static void requests(void) {
         laptop.throttle[0] = laptop.throttle[1] = chance(0.003) ? uniform(0, 300) : 0;
         if (chance(0.002)) randomize_settings();
         if (chance(0.002)) load_pattern();
-        if (chance(0.001)) {
-            char text[400];
-            feed_text("servo test", flight_runtime_servo_test((float)uniform(1, 10), 1 + (int)(next() % 2)));
-            size_t n = flight_runtime_servo_result(text, sizeof(text));
-            feed_text("servo result", n ? text : "");
-        }
         if (chance(0.0005)) {
             float offset;
             char error[100];

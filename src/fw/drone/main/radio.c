@@ -674,19 +674,6 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         if (length < 1) return "Malformed ESC calibration request";
         return flight_runtime_esc_calibration(body[0]);
     }
-    if (op == 'X') {
-        // Servo bench test: a float32 amplitude (degrees) and a byte of cycles starts it; one byte (any) reads the results.
-        if (length == 5) {
-            float amp;
-            memcpy(&amp, body, 4);
-            const char *failure = flight_runtime_servo_test(amp, body[4]);
-            if (failure) return failure;
-        } else if (length != 1) {
-            return "Expected float32 amplitude and a byte of cycles, or one byte to read";
-        }
-        *size = flight_runtime_servo_result(text, REPLY - 5);
-        return *size ? NULL : "Result does not fit the reply";
-    }
     if (op == 'P') {
         const char *failure = flight_runtime_pattern(body, length, text, REPLY - 5);
         if (failure) return failure;

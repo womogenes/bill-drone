@@ -197,17 +197,6 @@ static uint32_t stop_generation;
 // The newest laptop STOP since boot (each boot is a new radio session).
 static StopBarrier stop_barrier;
 static uint16_t voltage_mv;
-// Servo bench test (flight_runtime_servo_test): disarmed with zero throttle, each servo in turn steps +amp and back to 0, then -amp and back, holding each for TEST_STEP_US; after each step the peak gyro deviation from the level before it is taken over TEST_WINDOW_US. peak[side][axis] sums those peaks (pitch rate, yaw rate) over steps[side] steps.
-#define TEST_STEP_US 600000
-#define TEST_WINDOW_US 450000
-static struct {
-    bool active;
-    int index, count;
-    float amp;
-    uint64_t step_us;
-    float before[2], recent[2], top[2], peak[2][2];
-    int steps[2];
-} servo_test;
 // Smoothed battery volts, for thrust compensation; 0 until the first reading.
 static float battery_v;
 // The streamed hover mode (hover.h), the hover loop, and the command actually flown this tick (hover replaces base and targets), which the recording logs.
@@ -873,42 +862,6 @@ static void fly(Tick *t) {
     }
 }
 
-// The servo bench test's tick (flight_runtime_servo_test), disarmed with zero throttle only: the gyro's level just before a step, then its largest deviation in the window after; the next step once this one has been held TEST_STEP_US.
-static void servo_test_tick(uint64_t now) {
-    if (!quiet()) {
-        servo_test.active = false;
-        return;
-    }
-    for (int axis = 0; axis < 2; axis++) {
-        float rate = state.gyro[axis + 1];
-        if (now - servo_test.step_us < TEST_WINDOW_US) servo_test.top[axis] = fmaxf(servo_test.top[axis], fabsf(rate - servo_test.before[axis]));
-        else servo_test.recent[axis] += (rate - servo_test.recent[axis]) * 0.2f;
-    }
-    if (now - servo_test.step_us < TEST_STEP_US) return;
-    int side = servo_test.index / 4 % 2;
-    if (servo_test.index > 0) {
-        int last = (servo_test.index - 1) / 4 % 2;
-        for (int axis = 0; axis < 2; axis++) servo_test.peak[last][axis] += servo_test.top[axis];
-        servo_test.steps[last]++;
-    }
-    if (servo_test.index >= servo_test.count) {
-        servo_test.active = false;
-        state.servo[0] = state.servo[1] = 0;
-    } else {
-        static const float pattern[4] = {1, 0, -1, 0};
-        state.servo[side] = pattern[servo_test.index % 4] * servo_test.amp;
-        state.servo[1 - side] = 0;
-        for (int axis = 0; axis < 2; axis++) {
-            servo_test.before[axis] = servo_test.recent[axis];
-            servo_test.top[axis] = 0;
-        }
-        servo_test.step_us = now;
-        servo_test.index++;
-    }
-    write_servo(0);
-    write_servo(1);
-}
-
 static void runtime_task(void *arg) {
     TickType_t deadline = xTaskGetTickCount();
     TickType_t period = configTICK_RATE_HZ / SAMPLE_HZ;
@@ -984,7 +937,6 @@ static void runtime_task(void *arg) {
         t.vertical = -state.accel[0] * sinf(state.attitude.pitch) +
                      cosf(state.attitude.pitch) * (state.accel[1] * sinf(state.attitude.roll) + state.accel[2] * cosf(state.attitude.roll));
         if (state.enabled) fly(&t);
-        if (servo_test.active) servo_test_tick(t.now);
         if (!state.enabled || !hover_mode) {
             flown = command;
             hover_rest(&hover, t.vertical, spinning(), t.dt, t.have_baro ? &t.baro : NULL);
@@ -1069,8 +1021,7 @@ bool flight_runtime_targets(const float *targets) {
         if (!state.enabled && !maintenance) {
             for (int side = 0; side < 2; side++) {
                 if (!targets[4 + side]) state.servo_held[side] = false;
-                // A servo test owns the servos; streamed throttle aborts it (the control loop checks).
-                if (!state.servo_held[side] && !servo_test.active) state.servo[side] = targets[4 + side];
+                if (!state.servo_held[side]) state.servo[side] = targets[4 + side];
                 write_servo(side);
                 state.throttle[side] = state.latched ? 0 : lroundf(targets[6 + side]);
                 pulse(side * 2 + 1, esc_us(state.throttle[side]));
@@ -1347,22 +1298,6 @@ void flight_runtime_status(Status *status) {
     status->log_dropped = dropped;
 }
 
-// Starts the servo bench test: cycles × (left then right) × 4 steps of amp degrees. Refused unless disarmed with zero throttle.
-const char *flight_runtime_servo_test(float amp, int cycles) {
-    if (!(amp > 0 && amp <= 15) || cycles < 1 || cycles > 50) return "Expected amp 0-15 degrees and 1-50 cycles";
-    LOCK();
-    bool idle = running && quiet() && !maintenance;
-    if (idle) {
-        memset(&servo_test, 0, sizeof(servo_test));
-        servo_test.amp = amp;
-        servo_test.count = cycles * 8;
-        servo_test.step_us = esp_timer_get_time();
-        servo_test.active = true;
-    }
-    UNLOCK();
-    return idle ? NULL : "Disarm and zero throttle first";
-}
-
 // A test pattern (see excite): float32 after (s), uint8 repeat (0 = until disarmed), uint16 mask of the channels given, uint16 segment count, then per segment uint16 ticks (control samples) and an int16 value (hundredths of the channel's unit) for each channel in mask, all little-endian. A count of 0 clears it. Only while disarmed.
 const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *text, size_t size) {
     if (length < 9) return "Expected after, repeat, mask and count";
@@ -1406,19 +1341,6 @@ const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *tex
     if (!idle) return "Disarm and zero throttle first";
     int n = snprintf(text, size, "{\"segments\":%d,\"seconds\":%.2f,\"repeat\":%d,\"after\":%.2f}", count, seconds, repeat, after);
     return n > 0 && (size_t)n < size ? NULL : "Reply does not fit";
-}
-
-// The test's progress and, per side, the mean peak pitch and yaw rate deviation after a step (deg/s).
-size_t flight_runtime_servo_result(char *text, size_t size) {
-    LOCK();
-    typeof(servo_test) copy = servo_test;
-    UNLOCK();
-    float mean[2][2];
-    for (int side = 0; side < 2; side++)
-        for (int axis = 0; axis < 2; axis++) mean[side][axis] = copy.steps[side] ? copy.peak[side][axis] / copy.steps[side] * DEG : 0;
-    int n = snprintf(text, size, "{\"active\":%d,\"done\":%d,\"of\":%d,\"amp\":%.1f,\"left\":{\"steps\":%d,\"pitch_rate\":%.2f,\"yaw_rate\":%.2f},\"right\":{\"steps\":%d,\"pitch_rate\":%.2f,\"yaw_rate\":%.2f}}",
-                     copy.active, copy.index, copy.count, copy.amp, copy.steps[0], mean[0][0], mean[0][1], copy.steps[1], mean[1][0], mean[1][1]);
-    return n > 0 && (size_t)n < size ? (size_t)n : 0;
 }
 
 void flight_runtime_set_voltage(uint16_t millivolts) {
