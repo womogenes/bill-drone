@@ -990,7 +990,11 @@ bool flight_runtime_targets(const float *targets) {
         command.target_yaw = targets[3] / DEG;
         requested_mode = targets[8];
         if (held && requested_mode != held_from) held = false;
-        if (!link_landing && !held) hover_mode = requested_mode;
+        // Flying in the hold or a landing, a switch to manual with the collective under liftoff lands instead of stopping the motors in the air: on 2026-11-14 at 0.48 m the stream that came back after a controller restart carried mode 0 and zero collective (the dashboard had dropped to manual), and the drone fell and tumbled. Stopping on purpose is the stop request (Space), and manual flight is still taken with the collective raised; the landing ends as any does, or by asking for the hold again.
+        int mode = requested_mode;
+        bool flying = state.enabled && state.controller.airborne > 0 && !hover.landed && hover.bias > 0.5f;
+        if (flying && hover_mode != HOVER_OFF && mode == HOVER_OFF && command.base < command.integrate_throttle) mode = HOVER_LAND;
+        if (!link_landing && !held) hover_mode = mode;
         nudge[0] = targets[9];
         nudge[1] = targets[10];
         nudge[2] = targets[11];

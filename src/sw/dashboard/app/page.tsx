@@ -89,6 +89,8 @@ const NO_NUDGE: [number, number, number] = [0, 0, 0];
 const NUDGE_MAX = 1.5;
 // The tag counts as held while its last sighting is this recent (ms): then the arrows move the hold point on it, which stops at NUDGE_MAX; otherwise they fly the drone and wrap (nudgeHold).
 const TAG_HELD_MS = 300;
+// How long the drone must read disarmed before the dashboard drops back to manual (ms).
+const DISARMED_MS = 1000;
 // A steady rotor tilt beyond this (degrees, averaged over TILT_TAU_S seconds) means the CoM is well off center or moving: by about 15-20 degrees the drone has no pitch authority left.
 const TILT_WARNING = 10;
 const TILT_TAU_S = 1;
@@ -618,10 +620,11 @@ export default function Page() {
         };
   const mapState =
     (armed && hoverState) || cameraSample || hoverState || EMPTY_SAMPLE;
-  // A drone that disarms itself drops back to manual, so a later Enable never arms straight into hover.
+  // A drone that disarms itself drops back to manual, so a later Enable never arms straight into hover. Only once it has read disarmed for DISARMED_MS: on 2026-11-14 a controller restart mid-hover showed disarmed for a moment, the switch to manual (mode 0, zero collective) went out as the link came back, and the drone cut its motors at 0.48 m (the drone now lands on that instead, fw/drone/main/flight_rt.c).
   useEffect(() => {
-    if (armed === false && targets.current.mode !== MANUAL)
-      setTargets({ mode: MANUAL });
+    if (armed !== false || targets.current.mode === MANUAL) return;
+    const timer = setTimeout(() => setTargets({ mode: MANUAL }), DISARMED_MS);
+    return () => clearTimeout(timer);
   }, [armed, setTargets]);
   // Arming or disarming starts a new hop from the unnudged hold.
   useEffect(() => {
