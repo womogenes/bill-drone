@@ -3,8 +3,6 @@
 
 #include <math.h>
 
-#define GRAVITY 9.81f
-#define DEGREE (3.14159265f / 180)
 // The gyro's full scale is 2000 deg/s (runtime.h GYRO_FS_SEL); a tick's mean this close to it has clipped samples in it, and the attitude carried on the gyro is no longer the drone's.
 #define SATURATED (1900 * DEGREE)
 // Leveling counts as settled under this vertical speed (m/s) held for SETTLE_S (s).
@@ -17,7 +15,7 @@
 // The barometer's rate is the slope of a line through its readings over BARO_RATE_S (s). At its 0.09 m RMS in flight (ekf.c: 2026-11-09 under 10 degrees of tilt) and 50 readings a second the slope's noise is 0.09 / sqrt(25 × 0.5² / 12) = 0.12 m/s, well under ARREST_SPEED, so leveling can judge settling on it; it is the rate at the window's middle, BARO_RATE_S / 2 plus the reading's latency ago. The Kalman filter's vertical speed is no alternative: ekf.c integrates the same accelerometer and does not know when it clips.
 #define BARO_RATE_S 0.5f
 // The arrest's gain on that late rate: a first-order loop on the vertical speed with gain k (1/s) and a delay L crosses over at k rad/s and loses k L of phase there, so k L = π / 6 keeps 60 degrees of margin (kv's 7.2 /s on the barometer's 0.33 s would leave none).
-#define BARO_PHASE (3.14159265f / 6)
+#define BARO_PHASE (PI / 6)
 
 // The righting's gains from sw/sim/recover_firmware.py --tune --wide (CMA-ES, 60 generations of 20 on the tip, tilt and tumble events at 2 and 3 m, the plant's uncertain terms widened; sw/sim/models/recover_firmware_params.json). The flip's righting gains (flip.c), which they started from, used a fifth of this pitch gain and recovered 30% of the tip events. The tuned righting keeps the collective up even inverted (floor near 1): pitch authority comes from tilted thrust, and without it pitched-over drones could not turn in time. right_time and the leveling's were not tuned, and idle is the flip's floor (FLIP_FLOOR 0.2; the tuning's 0.144 made no difference in the sim).
 const RecoverParams recover_defaults = {
@@ -112,7 +110,7 @@ static void begin(RecoverRun *run, const RecoverInput *in, int cause, RecoverOut
 }
 
 // The nose's angle from level past which a running burst is lost (radians; RecoverInput flip_phase).
-#define BURST_LOST_PITCH (30 * 3.14159265f / 180)
+#define BURST_LOST_PITCH (30 * DEGREE)
 
 void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *in, const float *q, Controller *controller, float *height_integral, RecoverOutput *out) {
     *out = (RecoverOutput){0};

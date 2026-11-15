@@ -3,7 +3,6 @@
 
 #include "hover.h"
 
-#define GRAVITY 9.81f
 // A tag unseen this long is lost: the range, place and heading holds stop, horizontal velocity is dead-reckoned and damped, and height runs on the IMU alone.
 #define LOST_US 250000
 // How fast the camera corrects the velocity (s); sightings further apart than GAP_US restart it.
@@ -91,7 +90,7 @@
 #define LAND_TILT_HEIGHT 0.3f
 #endif
 #ifndef LAND_TILT
-#define LAND_TILT (25.0f * 3.14159265f / 180)
+#define LAND_TILT (25.0f * DEGREE)
 #endif
 // Landing blind (no tag in view, the barometer on): the height is then the barometer's, and it cannot find the floor. Against the floor each 2026-11-09 landing came down on (sw/sim/baro_floor.py) the floor itself had moved -0.48 to +0.64 m from the takeoff's (weather, wind pressure), and the last 0.3 s before contact read a median 0.27 m high on top, so the height read -0.51 to +0.89 m at contact. So blind, neither the tilt cut nor a probe goes by the height: the tilt cut waits for a probe's evidence of the floor (BLIND_FELT of PROBE_DEPTH lost to the air with the accelerometer under PROBE_SHARE of it), the "low" start is the camera's only, and the "due" start allows BLIND_HEIGHT more height. In sw/sim/landing_test.py a probe in the air (most started by a stalled descent) made the tilt cut live and the drone's 20-30 degree swings did the rest: blind landings cut in the air fell from 35 to 1 of 181 with --outdoor (the one at 38 degrees of pitch, losing control) and from 77 to 0 of 175 with --no-camera --baro; replayed on the 11 landings of that night, probes started in the air in 9 before and in none now.
 #ifndef BLIND_FELT
@@ -202,9 +201,9 @@
 #endif
 // The evidence's standard deviation (radians): the root of the products' summed squared scatter across its direction, but at least what GPS velocity changes HEADING_NOISE (m/s per axis) off would scatter them, over the sum's magnitude. Under HEADING_SURE, with the sum worth at least HEADING_BLOCKS products of its average size, the heading is pinned (taken outright the first time, then followed over HEADING_PULL, s) and the GPS steers the hold; over HEADING_LOST it lets go again. Counting the whole magnitudes as noise (the root of half their squares over the sum) pinned all ten 2026-11-09 flights within 2 degrees of the truth, but only at 21-42 s; the scatter alone with 4 products' worth, at 4-18 s, but in sw/sim/outdoor.py a liftoff kick's two or three large changes then outweighed everything after, and a drone drifting off at 1.8 m/s without the GPS waited 6 s. With the floor at 0.15 m/s the simulator's pins came later (median 5.5 s) and 28 of 96 still-air runs flew off before or around them; at 0.08, 2.6 s and 1 (the replays pin alike at either).
 #ifndef HEADING_SURE
-#define HEADING_SURE (10.0f * 3.14159265f / 180)
+#define HEADING_SURE (10.0f * DEGREE)
 #endif
-#define HEADING_LOST (25.0f * 3.14159265f / 180)
+#define HEADING_LOST (25.0f * DEGREE)
 #define HEADING_PULL 1.0f
 #ifndef HEADING_BLOCKS
 #define HEADING_BLOCKS 2.0f
@@ -233,12 +232,8 @@
 #define THRUST_DIRECTION_TAU 1.5f
 #endif
 #ifndef THRUST_BODY_MAX
-#define THRUST_BODY_MAX (35.0f * 3.14159265f / 180)
+#define THRUST_BODY_MAX (35.0f * DEGREE)
 #endif
-
-static float clamp(float value, float low, float high) {
-    return fmaxf(low, fminf(high, value));
-}
 
 static float wrap(float angle) {
     return atan2f(sinf(angle), cosf(angle));
@@ -317,13 +312,13 @@ static void take(HoverState *state, const HoverGains *g, const HoverPose *pose) 
             state->velocity[i] += correction[i];
             for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3 + i] += correction[i];
             // A velocity the tilt keeps getting wrong the same way is a push it does not know about: learn it (only once flying on the tag, so the takeoff's ground contact does not teach it).
-            if (state->tracking && !biased) state->push[i] = clamp(state->push[i] + correction[i] / PUSH_TAU, -MAX_PUSH, MAX_PUSH);
+            if (state->tracking && !biased) state->push[i] = clampf(state->push[i] + correction[i] / PUSH_TAU, -MAX_PUSH, MAX_PUSH);
         }
         // With the drag model it is the level acceleration's bias instead, in body axes as the drag model keeps it.
         if (state->tracking && biased) {
             float cy = cosf(state->yaw), sy = sinf(state->yaw);
-            state->drag_bias[0] = clamp(state->drag_bias[0] - (correction[0] * cy + correction[1] * sy) / PUSH_TAU, -MAX_BIAS, MAX_BIAS);
-            state->drag_bias[1] = clamp(state->drag_bias[1] - (-correction[0] * sy + correction[1] * cy) / PUSH_TAU, -MAX_BIAS, MAX_BIAS);
+            state->drag_bias[0] = clampf(state->drag_bias[0] - (correction[0] * cy + correction[1] * sy) / PUSH_TAU, -MAX_BIAS, MAX_BIAS);
+            state->drag_bias[1] = clampf(state->drag_bias[1] - (-correction[0] * sy + correction[1] * cy) / PUSH_TAU, -MAX_BIAS, MAX_BIAS);
         }
         state->velocity[2] = keep * state->velocity[2] + (1 - keep) * (state->position[2] - position[2]) / interval;
     } else {
@@ -385,7 +380,7 @@ static void learn_heading(HoverState *state, const HoverGps *fix, const float *t
         state->heading_inertial = state->heading_inertial * keep * keep + ax * ax + ay * ay;
         float across = 0.5f * (state->turn_weight - (state->turn_square[0] * cosf(2 * evidence) + state->turn_square[1] * sinf(2 * evidence)));
         across = fmaxf(across, HEADING_NOISE * HEADING_NOISE * state->heading_inertial);
-        state->heading_sigma = size > 0 ? fminf(sqrtf(fmaxf(across, 0)) / size, 3.14159265f) : 3.14159265f;
+        state->heading_sigma = size > 0 ? fminf(sqrtf(fmaxf(across, 0)) / size, PI) : PI;
         // As many products as the evidence is worth: a lone block or two scatter little by chance.
         bool enough = size * size >= HEADING_BLOCKS * state->turn_weight;
         if (!state->aligned && enough && state->heading_sigma < HEADING_SURE) {
@@ -426,17 +421,17 @@ static void take_gps(HoverState *state, const HoverGains *g, const HoverGps *fix
             for (int k = 0; k < HOVER_HISTORY; k++) state->history[k][3 + i] += error[i] * pull;
         }
         // The bias is in body axes, where the drag model keeps it (a steady level-reference or mounting error turns with the drone).
-        state->drag_bias[0] = clamp(state->drag_bias[0] - (error[0] * cy + error[1] * sy) * learn, -MAX_BIAS, MAX_BIAS);
-        state->drag_bias[1] = clamp(state->drag_bias[1] - (-error[0] * sy + error[1] * cy) * learn, -MAX_BIAS, MAX_BIAS);
+        state->drag_bias[0] = clampf(state->drag_bias[0] - (error[0] * cy + error[1] * sy) * learn, -MAX_BIAS, MAX_BIAS);
+        state->drag_bias[1] = clampf(state->drag_bias[1] - (-error[0] * sy + error[1] * cy) * learn, -MAX_BIAS, MAX_BIAS);
     }
     bool barometric = g->baro_tau > 0 && state->baro_used && state->baro_us && now_us - state->baro_us <= BARO_STALE_US;
     if (state->lifted >= TAKEOFF_GPS_S && !barometric) {
         float climb_error = fix->velocity[2] - state->climb_rate;
         state->climb_rate += climb_error * pull;
-        state->accel_bias = clamp(state->accel_bias - climb_error * learn, -MAX_BIAS, MAX_BIAS);
+        state->accel_bias = clampf(state->accel_bias - climb_error * learn, -MAX_BIAS, MAX_BIAS);
     }
     // Position: the first fix ties the GPS to the dead reckoning (its position and the dead reckoning's then, turned by the heading of each later fix, so a heading pinned later still measures from where the GPS was first taken: tying again at the pinning kept the drift flown before it, 2.6-3.4 m median in sw/sim/outdoor.py); later ones correct it (back-dated by the fix's age) and move the place, which is relative to the hold point, by the same amount.
-    float age = clamp((now_us - fix->capture_us) / 1e6f, 0, 0.5f);
+    float age = clampf((now_us - fix->capture_us) / 1e6f, 0, 0.5f);
     if (first) {
         state->origin[0] = fix->position[0];
         state->origin[1] = fix->position[1];
@@ -472,7 +467,7 @@ static void take_baro(HoverState *state, const HoverGains *g, const HoverBaro *b
     }
     state->baro_used = state->baro_wait <= 0;
     if (!state->baro_used) return;
-    float above = baro->altitude - state->baro_ground, age = clamp((now_us - baro->capture_us) / 1e6f, 0, 0.5f);
+    float above = baro->altitude - state->baro_ground, age = clampf((now_us - baro->capture_us) / 1e6f, 0, 0.5f);
     // Only a hover engaged in the air has its first reading here: on the floor the first comes while it waits.
     if (first) {
         state->height = above + state->climb_rate * age;
@@ -483,7 +478,7 @@ static void take_baro(HoverState *state, const HoverGains *g, const HoverBaro *b
     // A triple pole at -1 / tau.
     state->height += 3 * error * span / tau;
     state->climb_rate += 3 * error * span / (tau * tau);
-    state->accel_bias = clamp(state->accel_bias - error * span / (tau * tau * tau), -MAX_BIAS, MAX_BIAS);
+    state->accel_bias = clampf(state->accel_bias - error * span / (tau * tau * tau), -MAX_BIAS, MAX_BIAS);
 }
 
 // Heading calibration (gains gps_calibrate): while the GPS is on and fresh but the heading not yet pinned, hands-off in hold, the hold flies pulses of a known tilt so the accelerometer and the GPS both see a clean velocity change. The pulses are added to the hold's tilt, which brakes the speed they build (at most g tan(tilt) CALIBRATE_S, 0.43 m/s at 5 degrees): aiming the hold's damping at that speed as well doubled the tilt (11-13 degrees beyond the hold's at 5) and, never pinned, moved the simulated drone 1.1-1.3 m median over four cycles (sw/sim/outdoor.py, 2026-11-09). Without them the 2026-11-09 flights replayed pin it 2-13 s after engaging (the liftoff alone usually does it; a still hover can take 10 s and more, sw/sim/heading_replay.py), and until then the hold has no GPS.
@@ -531,7 +526,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->turn[0] = state->turn[1] = state->turn_weight = state->turn_square[0] = state->turn_square[1] = state->heading_inertial = 0;
         state->heading_count = 0;
         state->heading_block_us = 0;
-        state->heading_sigma = 3.14159265f;
+        state->heading_sigma = PI;
         state->aligned = false;
         state->calibrate_time = 0;
         state->searching = false;
@@ -541,11 +536,11 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->baro_wait = grounded ? BARO_SETTLE_S : 0;
         state->baro_used = false;
         // Continue from the thrust being flown, so taking over a manual flight does not step.
-        state->integral = force > 0.5f * weight ? clamp(force / g->mass - GRAVITY, -MAX_INTEGRAL, MAX_INTEGRAL) : 0;
+        state->integral = force > 0.5f * weight ? clampf(force / g->mass - GRAVITY, -MAX_INTEGRAL, MAX_INTEGRAL) : 0;
         state->force = force;
         // The carried-over trim is the push the last hold cancelled: start the push estimate from it (yaw is zero at engage, so body and yaw-turned axes agree), and the body trim from zero.
-        state->push[0] = clamp(-g->trim_start_x, -MAX_PUSH, MAX_PUSH);
-        state->push[1] = clamp(-g->trim_start_y, -MAX_PUSH, MAX_PUSH);
+        state->push[0] = clampf(-g->trim_start_x, -MAX_PUSH, MAX_PUSH);
+        state->push[1] = clampf(-g->trim_start_y, -MAX_PUSH, MAX_PUSH);
         // The touchdown reference until a hold has flown long enough to give its own: the thrust being flown (or the weight from mass) at the resting specific force.
         state->hold_force = force > 0.5f * weight ? force : weight;
         state->hold_g = state->recent_g = state->bias > 0.5f ? state->bias : 1;
@@ -614,7 +609,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         float reached = state->history[recorded(state, now_us - SERVO_DELAY_US)][5] + g->pitch_trim;
         float thrust = pitch - g->pitch_trim + g->thrust_direction * reached;
         state->direction += (state->flown_pitch - thrust - state->direction) * (1 - expf(-dt / THRUST_DIRECTION_TAU));
-        state->direction = clamp(state->direction, -THRUST_BODY_MAX, THRUST_BODY_MAX);
+        state->direction = clampf(state->direction, -THRUST_BODY_MAX, THRUST_BODY_MAX);
     }
 
     // Rotor drag: the body's horizontal specific force less the thrust vector's forward part (at the tilt the servos have reached) is -drag times the airspeed. It is noisy (vibration, the pitch loop's servo motion), so it pulls the estimate slowly, and the past with it, as the camera's correction does; a steady disagreement is the integrated acceleration's bias, which it learns (a critically damped second-order filter, settling over a few drag_tau). The camera, when it sees the tag, measures the velocity itself: then the disagreement is the drag model's own offset (servo zero, accelerometer bias, mounting) instead, which it teaches below.
@@ -641,8 +636,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         }
         if (!seeing && !located) {
             float learn = dt / (4 * tau * tau);
-            state->drag_bias[0] = clamp(state->drag_bias[0] - (error[0] * cy + error[1] * sy) * learn, -MAX_BIAS, MAX_BIAS);
-            state->drag_bias[1] = clamp(state->drag_bias[1] - (-error[0] * sy + error[1] * cy) * learn, -MAX_BIAS, MAX_BIAS);
+            state->drag_bias[0] = clampf(state->drag_bias[0] - (error[0] * cy + error[1] * sy) * learn, -MAX_BIAS, MAX_BIAS);
+            state->drag_bias[1] = clampf(state->drag_bias[1] - (-error[0] * sy + error[1] * cy) * learn, -MAX_BIAS, MAX_BIAS);
         }
     }
 
@@ -682,14 +677,14 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     if (located && state->dragging) {
         // What the drag model reads beyond the GPS's ground speed, in body axes, is the wind (with its own offset): learned as the camera teaches the offset, and allowed a wind's size.
         float forward = state->velocity[0] * cy + state->velocity[1] * sy, left = -state->velocity[0] * sy + state->velocity[1] * cy;
-        state->drag_offset[0] = clamp(state->drag_offset[0] + (state->drag_velocity[0] - forward) * dt / OFFSET_TAU, -MAX_WIND, MAX_WIND);
-        state->drag_offset[1] = clamp(state->drag_offset[1] + (state->drag_velocity[1] - left) * dt / OFFSET_TAU, -MAX_WIND, MAX_WIND);
+        state->drag_offset[0] = clampf(state->drag_offset[0] + (state->drag_velocity[0] - forward) * dt / OFFSET_TAU, -MAX_WIND, MAX_WIND);
+        state->drag_offset[1] = clampf(state->drag_offset[1] + (state->drag_velocity[1] - left) * dt / OFFSET_TAU, -MAX_WIND, MAX_WIND);
     }
     if (seeing && dragging && state->height >= AIRBORNE) {
         // The camera measures the velocity: whatever the drag model reads beyond it, in body axes, is its offset (servo zero, accelerometer bias, mounting).
         float forward = state->velocity[0] * cy + state->velocity[1] * sy, left = -state->velocity[0] * sy + state->velocity[1] * cy;
-        state->drag_offset[0] = clamp(state->drag_offset[0] + (measured[0] - forward) * dt / OFFSET_TAU, -MAX_OFFSET, MAX_OFFSET);
-        state->drag_offset[1] = clamp(state->drag_offset[1] + (measured[1] - left) * dt / OFFSET_TAU, -MAX_OFFSET, MAX_OFFSET);
+        state->drag_offset[0] = clampf(state->drag_offset[0] + (measured[0] - forward) * dt / OFFSET_TAU, -MAX_OFFSET, MAX_OFFSET);
+        state->drag_offset[1] = clampf(state->drag_offset[1] + (measured[1] - left) * dt / OFFSET_TAU, -MAX_OFFSET, MAX_OFFSET);
         state->place[0] = state->place[1] = 0;
     }
     // Speed from the servos: the thrust tilt the pitch loop holds against the forward speed's pitching moment. The rotor drag the drag model reads is a twentieth of what it assumes on this airframe (0.04/s measured), so without the tag the estimate barely saw the drone moving: on 2026-11-02 02:46 UTC it read under 0.2 m/s while the drone flew back about 3 m in 4.5 s, which this measure showed from liftoff.
@@ -746,16 +741,16 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         // Without the tag, W and S move the height goal the same way once airborne (2026-11-14: before the tag was flown on they did nothing), the search's climb to the ceiling included.
         bool aloft = state->tracking || state->dragging || state->height >= AIRBORNE;
         float goal = g->climb, up = aloft ? g->nudge_up : 0;
-        if (g->center) goal = seeing ? clamp(state->tag_height + up, MIN_HEIGHT, g->ceiling) : state->tracking ? fmaxf(g->climb, state->target) : clamp(g->ceiling + up, MIN_HEIGHT, g->ceiling);
+        if (g->center) goal = seeing ? clampf(state->tag_height + up, MIN_HEIGHT, g->ceiling) : state->tracking ? fmaxf(g->climb, state->target) : clampf(g->ceiling + up, MIN_HEIGHT, g->ceiling);
         else goal += up;
         // With the barometer the height is the true one above the ground, so the ceiling holds for every goal and the nudge: above it the hold descends.
         bool capped = g->baro_tau > 0;
         if (capped) goal = fminf(goal, g->ceiling);
-        state->target += clamp(goal - state->target, -g->climb_rate * dt, g->climb_rate * dt);
+        state->target += clampf(goal - state->target, -g->climb_rate * dt, g->climb_rate * dt);
         if (capped) state->target = fminf(state->target, g->ceiling);
         float rising = aloft ? state->nudge_rate[2] : 0;
         if (capped && state->target >= g->ceiling) rising = fminf(rising, 0);
-        command = clamp(g->kz * (state->target - state->height) + rising, -MAX_CLIMB, g->climb_rate);
+        command = clampf(g->kz * (state->target - state->height) + rising, -MAX_CLIMB, g->climb_rate);
     } else {
         float rate = -g->land_rate * (mode == HOVER_LAND_FAST ? LAND_FAST_FACTOR : 1);
         // Held L too touches down at the set rate where the height knows the floor, and only comes down faster above it (2026-11-12 01:55 UTC: held L met the ground at 1 m/s, 5 degrees nose-down, and went over backward).
@@ -763,7 +758,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         if (floored && LAND_DESCENT > 0) rate = -fminf(fastest, sqrtf(g->land_rate * g->land_rate + 2 * LAND_BRAKE * fmaxf(0, state->height - LAND_FINAL_HEIGHT)));
         if (waiting) {
             // Waiting, the height the hold was holding is held (kz), not only a zero climb rate.
-            command = clamp(g->kz * (state->target - state->height), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
+            command = clampf(g->kz * (state->target - state->height), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
         } else {
             command = fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
             state->target = state->height;
@@ -772,8 +767,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     state->command = command;
     // Landing: less the sink a probe that found air left (SINK_TAU).
     float error = command + (mode != HOVER_HOLD ? state->sink : 0) - state->climb_rate;
-    state->integral = clamp(state->integral + g->kiz * error * dt, -MAX_INTEGRAL, MAX_INTEGRAL);
-    float up = clamp(g->kdz * error + state->integral, -MAX_VERTICAL, MAX_VERTICAL);
+    state->integral = clampf(state->integral + g->kiz * error * dt, -MAX_INTEGRAL, MAX_INTEGRAL);
+    float up = clampf(g->kdz * error + state->integral, -MAX_VERTICAL, MAX_VERTICAL);
     float lean = fmaxf(0.5f, cosf(roll) * cosf(pitch));
     state->force = g->mass * (GRAVITY + up) / lean;
 
@@ -856,9 +851,9 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
                 state->probing = false;
                 state->probe_wait = PROBE_WAIT;
                 state->stall_time = state->impulse = 0;
-                state->sink = clamp(state->probe_velocity, -MAX_SINK, 0);
+                state->sink = clampf(state->probe_velocity, -MAX_SINK, 0);
                 state->force = fmaxf(state->force, state->probe_start / lean);
-                state->integral = clamp(fmaxf(state->integral, state->force * lean / g->mass - GRAVITY), -MAX_INTEGRAL, MAX_INTEGRAL);
+                state->integral = clampf(fmaxf(state->integral, state->force * lean / g->mass - GRAVITY), -MAX_INTEGRAL, MAX_INTEGRAL);
             }
         }
     }
@@ -866,7 +861,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
 
     *output = (HoverOutput){.force = state->force};
     // Until the tag is first seen, hold the heading the hover started with (the gyro's, which drifts only slowly): only the tag steers the heading, so a yaw kick at liftoff turned the camera away from it for good (2026-11-02 04:47 UTC: 58 degrees/s, 30 degrees counterclockwise, the tag never seen and the drone at its ceiling looking for it).
-    if (!state->found) output->yaw_rate = clamp(-g->kyaw * wrap(state->yaw - state->yaw_hold), -g->yaw_rate, g->yaw_rate);
+    if (!state->found) output->yaw_rate = clampf(-g->kyaw * wrap(state->yaw - state->yaw_hold), -g->yaw_rate, g->yaw_rate);
     float forward, left;
     if (!seeing) {
         // Tag lost after flying on it: keep damping the dead-reckoned velocity, with the trim learned on the tag. Before the tag is first flown on, the attitude controller's own damping holds the drone, unless the drag model keeps the velocity: then the hold flies on it from takeoff, and also returns to the place where the tag was last seen (or where it took off), as far as the dead reckoning knows it.
@@ -874,8 +869,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         if (!state->tracking && !dragging) {
             // Nothing to hold on yet (the tag not flown on, no drag model): the arrows lean the drone the nudge's way, hover_tilt at nudge_speed, so a drone that lost the tag at liftoff can be flown back to it (2026-11-14: a liftoff's nose-down kick took the tag out of view and the arrows did nothing); let go, the attitude controller levels it.
             float speed = fmaxf(g->nudge_speed, 0.1f);
-            output->pitch = clamp(g->tilt * state->nudge_rate[0] / speed, -g->tilt, g->tilt);
-            output->roll = clamp(-g->tilt * state->nudge_rate[1] / speed, -g->tilt, g->tilt);
+            output->pitch = clampf(g->tilt * state->nudge_rate[0] / speed, -g->tilt, g->tilt);
+            output->roll = clampf(-g->tilt * state->nudge_rate[1] / speed, -g->tilt, g->tilt);
             return;
         }
         // The arrows fly the drone: the nudge's speed (toward the drone's heading and to its left) is what the velocity damping aims at, so holding an arrow flies at it; with the drag model it also moves the hold point, so letting go stops where the hold point stopped (without it, on the tag's dead reckoning, where the drone stopped).
@@ -914,7 +909,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         if (dragging && g->stick_roll) left = -GRAVITY * tanf(g->stick_roll);
     } else {
         // The tag relative to the drone now: the sighting moved on by the drone's velocity over its age, then turned into the body's heading.
-        float lead = clamp((now_us - state->capture_us) / 1e6f, 0, 0.1f);
+        float lead = clampf((now_us - state->capture_us) / 1e6f, 0, 0.1f);
         float px = state->position[0] - state->velocity[0] * lead, py = state->position[1] - state->velocity[1] * lead;
         float range = fmaxf(hypotf(px, py), 0.1f);
         float bearing = atan2f(px * sy - py * cy, px * cy + py * sy);
@@ -935,7 +930,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
                 return;
             }
             // distance 0 keeps the range from takeoff.
-            rate = g->distance > 0 ? clamp(g->distance - state->setpoint, -g->approach * dt, g->approach * dt) / dt : 0;
+            rate = g->distance > 0 ? clampf(g->distance - state->setpoint, -g->approach * dt, g->approach * dt) / dt : 0;
             state->setpoint += rate * dt;
         }
         // Toward the tag: close the range error and damp the closing speed toward the target's rate. Across it (positive left): damp the sideways speed toward the target's rate, and pull weakly toward the place on the circle, so the drone neither drifts around the tag nor fights the range and heading loops for it. Moving left turns the line to the tag right (smaller around).
@@ -943,7 +938,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         float closing = state->velocity[0] * ux + state->velocity[1] * uy;
         float sideways = -state->velocity[0] * uy + state->velocity[1] * ux;
         // The nudged hold point: nearer the tag by nudge_forward, and nudge_left to the drone's left (seen from the drone, the tag then sits that far further round to the right).
-        float ease = state->reacquired_us ? clamp((now_us - state->reacquired_us) / (float)REACQUIRE_EASE_US, 0, 1) : 1;
+        float ease = state->reacquired_us ? clampf((now_us - state->reacquired_us) / (float)REACQUIRE_EASE_US, 0, 1) : 1;
         float hold = ease * g->kp * (range - (state->setpoint - g->nudge_forward)), place = ease * g->kside * range * wrap(around - (state->arc - g->nudge_left / range));
         // The velocity damping aims at the nudged hold point's own speed.
         float toward = hold - g->kd * (closing + rate - state->nudge_rate[0]), across = place - g->kd * (sideways - state->nudge_rate[1]);
@@ -962,32 +957,32 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         for (int i = 0; i < 2; i++) {
             // Nor while the hold point is being moved: the error then is the move, not a steady push.
             if (moving) continue;
-            if (fabsf(total[i]) < limit || step[i] * total[i] < 0) state->trim[i] = clamp(state->trim[i] + step[i], -g->trim_max, g->trim_max);
+            if (fabsf(total[i]) < limit || step[i] * total[i] < 0) state->trim[i] = clampf(state->trim[i] + step[i], -g->trim_max, g->trim_max);
         }
         forward += state->trim[0];
         left += state->trim[1];
         // Tag right of the bearing target: turn right, a negative yaw rate.
-        output->yaw_rate = clamp(-g->kyaw * wrap(bearing - state->bearing), -g->yaw_rate, g->yaw_rate);
+        output->yaw_rate = clampf(-g->kyaw * wrap(bearing - state->bearing), -g->yaw_rate, g->yaw_rate);
         state->tracking = true;
     }
     output->tracking = true;
-    state->carry[0] = clamp(state->trim[0] - (state->push[0] * cy + state->push[1] * sy), -g->trim_max, g->trim_max);
-    state->carry[1] = clamp(state->trim[1] - (-state->push[0] * sy + state->push[1] * cy), -g->trim_max, g->trim_max);
+    state->carry[0] = clampf(state->trim[0] - (state->push[0] * cy + state->push[1] * sy), -g->trim_max, g->trim_max);
+    state->carry[1] = clampf(state->trim[1] - (-state->push[0] * sy + state->push[1] * cy), -g->trim_max, g->trim_max);
     output->velocity[0] = state->velocity[0] * sy - state->velocity[1] * cy;
     output->velocity[1] = state->velocity[0] * cy + state->velocity[1] * sy;
     if (g->thrust_direction > 0)
-        output->pitch = clamp(clamp(atanf(forward / GRAVITY), -g->tilt, g->tilt) + state->direction, -THRUST_BODY_MAX, THRUST_BODY_MAX);
+        output->pitch = clampf(clampf(atanf(forward / GRAVITY), -g->tilt, g->tilt) + state->direction, -THRUST_BODY_MAX, THRUST_BODY_MAX);
     else
-        output->pitch = clamp(atanf(forward / GRAVITY) - g->thrust_tilt * state->thrust_tilt, -g->tilt, g->tilt);
+        output->pitch = clampf(atanf(forward / GRAVITY) - g->thrust_tilt * state->thrust_tilt, -g->tilt, g->tilt);
     // Keep the tag in view: leaning nose-down turns the camera down and moves the tag up the picture, so the pitch is limited to put the tag (as last seen, relative to level) no further than view from the picture's centre. On 2026-11-02 04:55 UTC a tag 9 degrees above level left the top of the camera's 18 degrees as the body pitched past 11 degrees, and the hold, blind, swung out of control.
     if (g->view > 0 && state->have_pose) {
         float elevation = atan2f(state->position[2], fmaxf(hypotf(state->position[0], state->position[1]), 0.1f));
         // The body flies at this pitch plus pitch_trim (the attitude controller adds it), and that is what turns the camera.
         // It only holds back a lean that would lose the tag, never asks for one: level stays allowed. On 2026-11-02 08:04 UTC the liftoff's nose-up caught the tag 19 degrees above level from the floor, the band lay wholly nose-up, the pitch was pinned at -10.75 degrees, and the drone drove backward blind on that stale sighting.
         float low = fminf(-g->view - elevation + g->cam_pitch - g->pitch_trim, 0), high = fmaxf(g->view - elevation + g->cam_pitch - g->pitch_trim, 0);
-        output->pitch = clamp(output->pitch, low, high);
+        output->pitch = clampf(output->pitch, low, high);
     }
-    output->roll = clamp(atanf(-left / GRAVITY), -g->tilt, g->tilt);
+    output->roll = clampf(atanf(-left / GRAVITY), -g->tilt, g->tilt);
 }
 
 void hover_estimate(HoverState *state, const HoverEstimate *estimate) {

@@ -2,17 +2,15 @@
 
 #include <math.h>
 
-#define TWO_PI 6.28318531f
-#define HALF_PI 1.57079633f
+#define TWO_PI (2 * PI)
+#define HALF_PI (PI / 2)
 // How fast the burst's idea of the motors' thrust follows what it asks (s; the motors' lag).
 #define FLIP_MOTOR_TAU 0.1f
-#define GRAVITY 9.81f
 // The arrest ends once the vertical speed has stayed under ARREST_DONE (m/s) for ARREST_HOLD (s). Its collective is at least ARREST_FLOOR of the weight: the attitude controller flies the arrest and needs thrust to do it (an arrest cut to 0.15 of the weight tipped over in the sim), and at most ARREST_MOST, under the 2.8 times the weight the motors give at the thrust table's top (2 × 11.2 N at the 1.3 thrust scale against 1.05 kg), so the attitude controller keeps a margin of differential thrust.
 #define ARREST_DONE 0.2f
 #define ARREST_HOLD 0.3f
 #define ARREST_FLOOR 0.6f
 #define ARREST_MOST 2.2f
-#define DEGREE (3.14159265f / 180)
 // The flip request (flip_refusal) wants the hold settled this long after liftoff (s), within FLIP_LEVEL of level and turning under FLIP_STILL on every axis, its climb rate under FLIP_CLIMB_RATE and the GPS's ground speed under FLIP_SPEED (m/s), and the pack at FLIP_MIN_V or more (3.7 V a cell under load on 4S: a sagging pack gives less of the thrust the turn's brake asks).
 #define FLIP_SETTLE_S 5.0f
 #define FLIP_LEVEL (10 * DEGREE)

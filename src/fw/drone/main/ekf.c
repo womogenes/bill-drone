@@ -3,8 +3,6 @@
 
 #include "ekf.h"
 
-#define GRAVITY 9.81f
-#define PI 3.14159265f
 
 // Where each state's error sits in the covariance.
 enum { TILT = 0, VELOCITY = 3, POSITION = 6, GYRO_BIAS = 9, ACCEL_BIAS = 12, BARO_OFFSET = 15, BARO_TRANSIENT = 16 };

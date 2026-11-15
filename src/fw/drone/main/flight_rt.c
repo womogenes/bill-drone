@@ -27,9 +27,8 @@
 
 // Samples kept while the radio catches up: 5 s at 100 Hz (2 s until 2026-11-14). 500 records take 56 KB; with 200 the drone had 129 KB of internal RAM left at its lowest (radio.c I reply), so this leaves about 95 KB.
 #define LOG_CAPACITY 500
-#define DEG (180.0f / 3.14159265358979323846f)
-// One g as the Kalman filter and the hover take it (m/s²).
-#define GRAVITY 9.81f
+// Degrees per radian.
+#define DEG (180 / PI)
 // MPU6050 on I2C: SDA, SCL and address.
 #define SDA 19
 #define SCL 22
@@ -911,8 +910,9 @@ static void runtime_task(void *arg) {
         previous = t.now;
         if (state.enabled) tip_or_recover(&t);
         // Measured specific force along vertical, in g: the accelerometer onto the IMU attitude's up axis.
-        t.vertical = -state.accel[0] * sinf(state.attitude.pitch) +
-                     cosf(state.attitude.pitch) * (state.accel[1] * sinf(state.attitude.roll) + state.accel[2] * cosf(state.attitude.roll));
+        float up[3];
+        quaternion_up(state.attitude.q, up);
+        t.vertical = up[0] * state.accel[0] + up[1] * state.accel[1] + up[2] * state.accel[2];
         if (state.enabled) fly(&t);
         if (!state.enabled || !hover_mode) {
             flown = command;
@@ -1385,7 +1385,7 @@ void flight_runtime_start(void) {
     // Accelerometer and gyro at runtime.h's full scales (ACCEL_COUNTS_PER_G, GYRO_COUNTS_PER_DEG_S), both mapped to body axes.
     for (int i = 0; i < 3; i++) {
         config.accel_scale[i] = sensor_to_body[i] / ACCEL_COUNTS_PER_G;
-        config.gyro_scale[i] = sensor_to_body[i] * 3.14159265358979323846 / (180 * GYRO_COUNTS_PER_DEG_S);
+        config.gyro_scale[i] = sensor_to_body[i] * DEGREE / GYRO_COUNTS_PER_DEG_S;
     }
     // Equivalent to retaining 0.99 of gyro integration every 10 ms; with the motors spinning, settings.def attitude_tau.
     config.gravity_tau = -0.01 / log(0.99);

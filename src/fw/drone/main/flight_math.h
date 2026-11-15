@@ -102,9 +102,5 @@ typedef struct {
     float kp, brake, max_rate, kp_heading, gain[3];
 } AttitudeGains;
 void attitude_rates(const AttitudeGains *g, const float *error, const float *rate, const float *accel, const float *gyro, float *wanted);
-// value within [low, high].
-static inline float clampf(float value, float low, float high) {
-    return fmaxf(low, fminf(high, value));
-}
 
 #endif

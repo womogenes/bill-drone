@@ -31,7 +31,6 @@ float flight_interpolate(float value, const float *table, size_t count, int reve
     return table[2 * (count - 1) + 1 - reverse];
 }
 
-#define HALF_TURN 3.14159265f
 
 void quaternion_from_euler(float *q, float roll, float pitch) {
     // flight_attitude's roll and pitch (about forward, then left; positive right side down and nose down) as a quaternion, the heading zero.
@@ -111,8 +110,8 @@ void attitude_error(const float *q, const float *target, float *error, float *tu
     } else {
         // Upside down from the target: the half turn about the horizontal axis (e[1], e[2]) itself, with no turn about the thrust axis.
         float s = fmaxf(hypotf(e[1], e[2]), 1e-9f);
-        error[0] = HALF_TURN * e[1] / s;
-        error[1] = HALF_TURN * e[2] / s;
+        error[0] = PI * e[1] / s;
+        error[1] = PI * e[2] / s;
         error[2] = 0;
     }
     if (turn) {
@@ -161,17 +160,17 @@ void flight_attitude_start(Attitude *state, const float *accel) {
 
 #define MIN_THRUST 0.3f
 // A servo command reverses direction only after moving this far back, so gyro noise cannot toggle the compensation.
-#define COMPENSATION_HYSTERESIS (0.3f * 3.14159265f / 180)
+#define COMPENSATION_HYSTERESIS (0.3f * DEGREE)
 // The integrators see at most this much error, so a large transient (a tilted takeoff, a gust) winds them up only slowly while a steady error of any size is still trimmed out.
-#define INTEGRATE_ERROR (8.0f * 3.14159265f / 180)
+#define INTEGRATE_ERROR (8.0f * DEGREE)
 // Seconds over which the pitch bias fades in once collective reaches integrate_throttle.
 #define PITCH_BIAS_RAMP 0.3f
 // A takeoff from a rest more than UPRIGHT_START from level tilts the servos back by UPRIGHT_GAIN times the pitch from level (at most UPRIGHT_MAX), scaled down to nothing as the righting rotation approaches UPRIGHT_RATE, until the drone first comes within UPRIGHT_DONE of level. Tuned in the simulator from 12-30° rests with sliding and gripping nose contacts (sw/sim/sweep.py ground_pitch, feet).
-#define UPRIGHT_START (2.0f * 3.14159265f / 180)
-#define UPRIGHT_DONE (2.0f * 3.14159265f / 180)
-#define UPRIGHT_MAX (35.0f * 3.14159265f / 180)
+#define UPRIGHT_START (2.0f * DEGREE)
+#define UPRIGHT_DONE (2.0f * DEGREE)
+#define UPRIGHT_MAX (35.0f * DEGREE)
 #define UPRIGHT_GAIN 0.7f
-#define UPRIGHT_RATE (30.0f * 3.14159265f / 180)
+#define UPRIGHT_RATE (30.0f * DEGREE)
 // The upright phase also ends this long after collective reaches integrate_throttle, so a drone that lifts off without rotating is still levelled by the normal loop (s).
 #define UPRIGHT_HOLD 0.4f
 

@@ -1,11 +1,20 @@
 #ifndef HOVER_H
 #define HOVER_H
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 
+// Shared by the control code (hover, guard, the Kalman filter, flight_math and what includes it): one g (m/s²), pi and a degree (radians), and a value within [low, high].
+#define GRAVITY 9.81f
+#define PI 3.14159265f
+#define DEGREE (PI / 180)
+static inline float clampf(float value, float low, float high) {
+    return fmaxf(low, fminf(high, value));
+}
+
 // Hover and landing: height from the IMU's vertical acceleration, corrected by the camera when it sees the tag (and without it by the barometer or GPS when they are on), which also holds the range and bearing to the tag. No ESP-IDF, so the host can replay recordings through it.
-// The camera's tag rotation is ambiguous and noisy at range (fw/esp32cam/README.md), so the hold flies on the tag centre in the camera frame: turned level by the IMU's roll and pitch, it gives range, bearing and height to the tag; the gyro's yaw separates the drone's own turning from its travel, and tilt dead-reckons the velocity between sightings. Only the rotations the camera settled outright steer, slowly, where on the circle about the tag the drone sits.
+// The camera's tag rotation is ambiguous and noisy at range (fw/esp32cam/README.md), so the hold flies on the tag centre in the camera frame: turned level by the IMU's roll and pitch, it gives range, bearing and height to the tag; the gyro's yaw separates the drone's own turning from its travel, and tilt dead-reckons the velocity between sightings.
 // Body conventions (flight_math.c): positive pitch (nose down) accelerates forward, positive roll (right side down) accelerates right, positive yaw rate turns left.
 
 enum { HOVER_OFF, HOVER_HOLD, HOVER_LAND, HOVER_LAND_FAST };

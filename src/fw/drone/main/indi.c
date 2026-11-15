@@ -43,7 +43,7 @@ typedef struct {
 } LowPass;
 
 static LowPass low_pass_for(float dt) {
-    float k = tanf(3.14159265f * FILTER_HZ * dt), norm = 1 / (1 + 1.41421356f * k + k * k);
+    float k = tanf(PI * FILTER_HZ * dt), norm = 1 / (1 + 1.41421356f * k + k * k);
     return (LowPass){k * k * norm, 2 * (k * k - 1) * norm, (1 - 1.41421356f * k + k * k) * norm};
 }
 
