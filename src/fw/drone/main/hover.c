@@ -101,6 +101,7 @@
 #ifndef LANDED_RAMP
 #define LANDED_RAMP 0.25f
 #endif
+// LANDED_ATTITUDE 2 holds the attitude the drone had when touchdown was declared instead (HoverState landed_attitude), so through the ramp the attitude controller pushes back against a tip either way from there, rather than only damping its rate as following the attitude does; it never asks for level, which levered the legless drone over.
 // Contact: a landing that hits harder than LAND_SHOCK (specific force along vertical, g), or tilts past LAND_TILT from level, stops the motors at once. With no legs the drone touches down on its body, and thrust above the first contact point levers it over (2026-10-28 05:01: 12 degrees nose-down at contact, 1.6 g and over its nose 0.15 s later). Hovering stays under 1.35 g; a tilt alone is no proof of contact (05:05 pitched to 15 degrees in the air at 0.7 m, and a cut there drops the drone), so LAND_TILT is only for a drone already going over.
 // The tilt cut applies only near the floor: under LAND_TILT_HEIGHT (m) by the height estimate, which reads 10-30 cm off there, or once a probe is feeling for it. On 2026-11-02 04:16 UTC a landing pressed at 0.9 m, mid-way through a 24-degree pitch swing, cut both motors 0.1 s later.
 #ifndef LAND_TILT_HEIGHT
@@ -126,6 +127,21 @@
 #endif
 #ifndef LAND_SHOCK
 #define LAND_SHOCK 1.45f
+#endif
+// LAND_SHOCK_CUT 0: a jolt past LAND_SHOCK declares touchdown and starts the LANDED_RAMP instead of stopping the motors at once; the tilt cut stays. On 2026-11-15 04:07 UTC (indoors, forward legs) an ordinary contact at 0.45 m/s down and 0.4 m/s backward read 1.94 g, the cut stopped the motors, and with nothing holding it the drone pivoted on the tray's rear edge to 60 degrees nose-up in 0.5 s; the props spinning down unpowered held it up at 0.4-0.7 g meanwhile (models/NOTES.md, the forward legs), so the cut took away the control and not the thrust. In sw/sim/landing_test.py (models/NOTES.md 2026-11-15) with LANDED_ATTITUDE 2 and LANDED_RAMP 0.5 the tip-overs fell on every base, indoors and out (outdoors on the forward legs 31% to 15%), but only because the props coast: if they stopped within the motors' lag (ESC braking) the cut tips less and this does nothing outdoors or hurts (legs behind the CoM 37% to 44%).
+#ifndef LAND_SHOCK_CUT
+#define LAND_SHOCK_CUT 1
+#endif
+// Near the floor a landing flies without the tag-in-view pitch limit (gains view): under LAND_VIEW_HEIGHT (m, by the height estimate, which reads 10-30 cm off there) or once a probe is feeling for the floor. Tag visibility does not matter at touchdown, the lean the hold needs does: on 2026-11-15 04:07 UTC the hold leaned 6 degrees nose-down against a steady backward push, the tag 0.5 m above the drone held the lean to level for the last 0.5 s, and it touched down moving backward at 0.42 m/s and tipped. 0 keeps the limit throughout. At 0.5 in sw/sim/landing_test.py --room (that hold on the raised airframe, its lean drawn from -6 to +6 degrees) the forward legs tipped 13% of landings instead of 29%.
+#ifndef LAND_VIEW_HEIGHT
+#define LAND_VIEW_HEIGHT 0.0f
+#endif
+// The final descent pauses (holding its height) while the horizontal hold brakes a speed over LAND_FINAL_SPEED (m/s), for at most LAND_FINAL_S (s) a landing, under LAND_TILT_HEIGHT where LAND_WAIT_SPEED's wait no longer applies. The pause is not landing time and no stall, so the probes and the "due" timeout wait for it. LAND_FINAL_SPEED 0 never pauses. Tried at 0.15 in sw/sim/landing_test.py it helped nowhere and hurt indoors (forward legs 29% to 34% tipped: it waited near the floor while the view limit let the backward drift grow).
+#ifndef LAND_FINAL_SPEED
+#define LAND_FINAL_SPEED 0.0f
+#endif
+#ifndef LAND_FINAL_S
+#define LAND_FINAL_S 1.5f
 #endif
 // The descent command ramps in over LAND_EASE (s), so pressing land does not step collective down.
 #define LAND_EASE 0.5f
@@ -608,12 +624,19 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->hold_g = state->recent_g = state->bias > 0.5f ? state->bias : 1;
         // Asked to land without enough thrust to be flying: it is already down.
         if (mode != HOVER_HOLD && force < 0.5f * weight) state->landed = true;
+        state->land_pause = 0;
+    }
+    // The attitude when touchdown is first declared (LANDED_ATTITUDE 2).
+    if (!state->landed) {
+        state->landed_attitude[0] = roll;
+        state->landed_attitude[1] = pitch;
     }
     if (state->landed) {
         state->dragging = false;
-        if (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT || vertical_g > LAND_SHOCK) state->force = 0;
+        if (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT || (LAND_SHOCK_CUT && vertical_g > LAND_SHOCK)) state->force = 0;
         state->force = fmaxf(0, state->force - state->hold_force / LANDED_RAMP * dt);
-        *output = (HoverOutput){.roll = LANDED_ATTITUDE ? roll : 0, .pitch = LANDED_ATTITUDE ? pitch : 0, .force = state->force};
+        *output = (HoverOutput){.roll = LANDED_ATTITUDE == 2 ? state->landed_attitude[0] : LANDED_ATTITUDE ? roll : 0,
+                                .pitch = LANDED_ATTITUDE == 2 ? state->landed_attitude[1] : LANDED_ATTITUDE ? pitch : 0, .force = state->force};
         return;
     }
     float before[4] = {state->place[0], state->place[1], state->track[0], state->track[1]};
@@ -839,6 +862,9 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
 
     // Climb-rate command: hold moves the target height toward its goal at climb_rate; landing descends at a set rate, once the hold has braked (LAND_WAIT_S). Only the horizontal hold brakes, so without it (neither the tag nor the drag model) there is nothing to wait for.
     bool waiting = mode != HOVER_HOLD && state->land_time == 0 && state->land_wait < LAND_WAIT_S && (state->tracking || state->dragging) && !state->probing && state->height >= LAND_TILT_HEIGHT && hypotf(state->velocity[0], state->velocity[1]) > LAND_WAIT_SPEED;
+    // The final descent's pause (LAND_FINAL_SPEED): under LAND_TILT_HEIGHT once descending, while the horizontal hold brakes.
+    bool pausing = LAND_FINAL_SPEED > 0 && mode != HOVER_HOLD && state->land_time > 0 && state->land_pause < LAND_FINAL_S && (state->tracking || state->dragging) && !state->probing && state->height < LAND_TILT_HEIGHT &&
+                   hypotf(state->velocity[0], state->velocity[1]) > LAND_FINAL_SPEED;
     // A landing's height knows the floor: the camera's, or the barometer's.
     bool floored = seeing || (g->baro_tau > 0 && state->baro_used && state->baro_us && now_us - state->baro_us <= BARO_STALE_US);
     float command;
@@ -863,8 +889,9 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         // Held L too touches down at the set rate where the height knows the floor, and only comes down faster above it (2026-11-12 01:55 UTC: held L met the ground at 1 m/s, 5 degrees nose-down, and went over backward).
         float fastest = fmaxf(LAND_DESCENT, -rate);
         if (floored && LAND_DESCENT > 0) rate = -fminf(fastest, sqrtf(g->land_rate * g->land_rate + 2 * LAND_BRAKE * fmaxf(0, state->height - LAND_FINAL_HEIGHT)));
-        if (waiting) {
+        if (waiting || pausing) {
             // Waiting, the height the hold was holding is held (kz), not only a zero climb rate.
+            if (pausing && state->land_pause == 0) state->target = state->height;
             command = clamp(g->kz * (state->target - state->height), -MAX_CLIMB, fminf(MAX_CLIMB, g->climb_rate));
         } else {
             command = fmaxf(rate, fminf(state->command, 0) + rate / LAND_EASE * dt);
@@ -885,8 +912,15 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     // A jolt is a touchdown only if it lasts two ticks: on 2026-11-08 01:54 UTC one reading of 1.5 g (a tick that fell back to a single raw IMU sample, rotor vibration and all, 7 ms off the 10 ms rhythm) cut the motors 0.8 m up, 0.37 s into a landing; the averaged readings in that flight never passed 1.38 g.
     bool jolted = vertical_g > LAND_SHOCK && state->shocked;
     state->shocked = vertical_g > LAND_SHOCK;
-    if (mode != HOVER_HOLD && ((floor_near && (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT)) || jolted)) {
+    bool tilted = floor_near && (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT);
+    if (mode != HOVER_HOLD && (tilted || jolted)) {
         state->landed = true;
+        // A jolt alone with LAND_SHOCK_CUT 0: touchdown, thrust ramping down from here as after a probe's.
+        if (!tilted && !LAND_SHOCK_CUT) {
+            *output = (HoverOutput){.roll = LANDED_ATTITUDE == 2 ? state->landed_attitude[0] : LANDED_ATTITUDE ? roll : 0,
+                                    .pitch = LANDED_ATTITUDE == 2 ? state->landed_attitude[1] : LANDED_ATTITUDE ? pitch : 0, .force = state->force};
+            return;
+        }
         state->force = 0;
         *output = (HoverOutput){.force = 0};
         return;
@@ -898,10 +932,15 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->hold_force += (state->force - state->hold_force) * pull;
             state->hold_g += (vertical_g - state->hold_g) * pull;
         }
-        state->land_time = state->stall_time = state->impulse = state->probe_wait = state->sink = state->land_wait = 0;
+        state->land_time = state->stall_time = state->impulse = state->probe_wait = state->sink = state->land_wait = state->land_pause = 0;
         state->probing = state->descended = false;
     } else if (waiting) {
         state->land_wait += dt;
+    } else if (pausing) {
+        // A descent that starts again after the pause must get under way before it can stall.
+        state->land_pause += dt;
+        state->stall_time = 0;
+        state->descended = false;
     } else {
         // The vertical speed the accelerometer gains this tick, against the hold's specific force.
         // The rate it touches down at (the descent command's final one).
@@ -1078,7 +1117,9 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
     else
         output->pitch = clamp(atanf(forward / GRAVITY) - g->thrust_tilt * state->thrust_tilt, -g->tilt, g->tilt);
     // Keep the tag in view: leaning nose-down turns the camera down and moves the tag up the picture, so the pitch is limited to put the tag (as last seen, relative to level) no further than view from the picture's centre. On 2026-11-02 04:55 UTC a tag 9 degrees above level left the top of the camera's 18 degrees as the body pitched past 11 degrees, and the hold, blind, swung out of control.
-    if (g->view > 0 && state->have_pose) {
+    // Not near the floor in a landing (LAND_VIEW_HEIGHT).
+    bool touching = LAND_VIEW_HEIGHT > 0 && mode != HOVER_HOLD && (state->height < LAND_VIEW_HEIGHT || state->probing);
+    if (g->view > 0 && state->have_pose && !touching) {
         float elevation = atan2f(state->position[2], fmaxf(hypotf(state->position[0], state->position[1]), 0.1f));
         // The body flies at this pitch plus pitch_trim (the attitude controller adds it), and that is what turns the camera.
         // It only holds back a lean that would lose the tag, never asks for one: level stays allowed. On 2026-11-02 08:04 UTC the liftoff's nose-up caught the tag 19 degrees above level from the floor, the band lay wholly nose-up, the pitch was pinned at -10.75 degrees, and the drone drove backward blind on that stale sighting.

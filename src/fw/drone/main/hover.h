@@ -196,6 +196,8 @@ typedef struct {
     bool searching;
     // The speed the GPS hold flies the hold point at (m/s; yaw-turned frame): the nudge's, changed at no more than nudge_accel (hover.c).
     float reference[2];
+    // Landing (hover.c): the attitude when touchdown was declared (radians; roll, pitch; LANDED_ATTITUDE 2), and how long the final descent has paused while the hold brakes (s; LAND_FINAL_SPEED).
+    float landed_attitude[2], land_pause;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

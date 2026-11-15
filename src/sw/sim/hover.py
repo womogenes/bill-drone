@@ -79,7 +79,8 @@ class State(ctypes.Structure):
         ("rest", ctypes.c_float * 2), ("lifted", ctypes.c_float), ("shocked", ctypes.c_bool),
         ("baro_ground", ctypes.c_float), ("baro_grounded", ctypes.c_bool), ("baro_us", ctypes.c_int64), ("baro_wait", ctypes.c_float), ("baro_used", ctypes.c_bool), ("settle", ctypes.c_float), ("land_wait", ctypes.c_float), ("flown_pitch", ctypes.c_float), ("direction", ctypes.c_float), ("descended", ctypes.c_bool),
         ("heading_sum", ctypes.c_float * 4), ("heading_count", ctypes.c_int), ("heading_start_us", ctypes.c_int64), ("heading_block_us", ctypes.c_int64), ("turn_square", ctypes.c_float * 2), ("heading_sigma", ctypes.c_float), ("aligned", ctypes.c_bool), ("calibrate_time", ctypes.c_float), ("anchor", ctypes.c_float * 2), ("heading_inertial", ctypes.c_float),
-        ("estimate", Estimate), ("estimated", ctypes.c_bool), ("flown", ctypes.c_bool), ("flown_tied", ctypes.c_bool), ("flown_position", ctypes.c_float * 2), ("flown_anchor", ctypes.c_float * 2), ("heading_steady", ctypes.c_float * 4), ("heading_steady_weight", ctypes.c_float), ("gps_fix", ctypes.c_float * 4), ("searching", ctypes.c_bool), ("reference", ctypes.c_float * 2)]
+        ("estimate", Estimate), ("estimated", ctypes.c_bool), ("flown", ctypes.c_bool), ("flown_tied", ctypes.c_bool), ("flown_position", ctypes.c_float * 2), ("flown_anchor", ctypes.c_float * 2), ("heading_steady", ctypes.c_float * 4), ("heading_steady_weight", ctypes.c_float), ("gps_fix", ctypes.c_float * 4), ("searching", ctypes.c_bool), ("reference", ctypes.c_float * 2),
+        ("landed_attitude", ctypes.c_float * 2), ("land_pause", ctypes.c_float)]
 
 
 class Output(ctypes.Structure):
