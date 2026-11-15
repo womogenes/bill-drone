@@ -269,9 +269,9 @@ static Guard guard;
 static FlipRun flip;
 // Tumble recovery and the pilot's level-and-hold (recover.h). held: since a recovery or a level-and-hold began, the hover holds whatever mode the laptop streams, until the laptop asks for another mode than held_from, the one it streamed then (the pilot's L, or manual); the laptop's tilt is dropped only while the recovery and its grace run, so the pilot steers the hold again after it.
 static RecoverRun recovery;
-// INDI (indi.h; settings.def indi) and the share of its correction taken now: from INDI_START_S after the controller's airborne count began it fades in to the setting over INDI_FADE_S, and out as fast while the collective is under integrate_throttle with neither the flip nor a recovery flying the motors, or the hover has landed: the ground holds the drone against what INDI would take as unmodeled, and asking ever more against it is an integrator winding up.
-#define INDI_START_S 0.5f
+// INDI (indi.h; settings.def indi) and the share of its correction taken now: it fades in to the setting over INDI_FADE_S once the hold (or the flip, or a recovery) flies at least INDI_HEIGHT above where it engaged, and out as fast below that, on landing or in manual flight: on the ground the feet hold the drone against what INDI takes as unmodeled, and asking ever more against it winds up like an integrator (the 2026-11-15 bench run, motors off at collective 817: the servos swung -34 to +20 degrees). The controller's airborne count is no liftoff, since it starts when the collective reaches integrate_throttle, nor is the hold's lifted, which runs out after TAKEOFF_WAIT_S on the floor.
 #define INDI_FADE_S 0.5f
+#define INDI_HEIGHT 0.3f
 static Indi indi;
 static float indi_fade;
 static bool held;
@@ -658,7 +658,7 @@ static void incremental(float dt) {
         return;
     }
     bool owned = flip_active(&flip) || recover_active(&recovery);
-    bool flying = command.indi > 0 && !hover.landed && state.controller.airborne > INDI_START_S && (owned || flown.base >= command.integrate_throttle);
+    bool flying = command.indi > 0 && (owned || (hover_mode && hover.engaged && !hover.landed && hover.height >= INDI_HEIGHT && flown.base >= command.integrate_throttle));
     indi_fade = clampf(indi_fade + (flying ? dt : -dt) * command.indi / INDI_FADE_S, 0, command.indi);
     const Model *m = &command.model;
     const FlipAuthority *a = &flip.authority;

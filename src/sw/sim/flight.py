@@ -173,9 +173,9 @@ class Controller:
         return int(self.state[2]), int(self.state[3]), self.state[4], self.state[5]
 
 
-# indi.h's models and Indi (INDI_SERVO_DELAY 4); flight_rt.c's INDI_START_S and INDI_FADE_S.
+# indi.h's models and Indi (INDI_SERVO_DELAY 4); flight_rt.c's INDI_FADE_S and INDI_HEIGHT.
 INDI_CONTROLLER, INDI_FLIP, INDI_MODELS = 0, 1, 2
-INDI_START_S, INDI_FADE_S = 0.5, 0.5
+INDI_FADE_S, INDI_HEIGHT = 0.5, 0.3
 
 
 class IndiModel(ctypes.Structure):
@@ -206,9 +206,9 @@ class Incremental:
         self.state = Indi()
         self.fade = 0.0
 
-    def update(self, gyro, airborne, landed, base, owned=False, flip=(0.0, 0.0, 0.0), dt=0.01):
-        """gyro (rad/s); the controller's airborne count (s), whether the hover has landed, last tick's collective throttle, whether the flip or a recovery flies the motors, and the flip's authority (roll, pitch, yaw)."""
-        flying = self.on and not landed and airborne > INDI_START_S and (owned or base >= self.integrate)
+    def update(self, gyro, holding, height, base, owned=False, flip=(0.0, 0.0, 0.0), dt=0.01):
+        """gyro (rad/s); whether the hold flies (engaged in a hover mode and not landed), its height above where it engaged (m), last tick's collective throttle, whether the flip or a recovery flies the motors, and the flip's authority (roll, pitch, yaw)."""
+        flying = self.on and (owned or (holding and height >= INDI_HEIGHT and base >= self.integrate))
         self.fade = min(max(self.fade + (dt if flying else -dt) * self.share / INDI_FADE_S, 0.0), self.share)
         models = (IndiModel * INDI_MODELS)(IndiModel(*self.controller), IndiModel(flip[0], flip[1], 0.0, flip[2], 0.0))
         library.indi_update(ctypes.byref(self.state), (ctypes.c_float * 3)(*gyro), models, dt)

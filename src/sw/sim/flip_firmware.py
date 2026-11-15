@@ -363,7 +363,7 @@ def fly(job):
                 # flight_rt.c incremental: INDI's fade and its unmodeled acceleration on each model, before the flip, the recovery and the controller.
                 owned = library.flip_active(ctypes.byref(run)) or library.recover_active(ctypes.byref(recovery))
                 a = run.authority
-                lane["indi"].update(gyro, controller.state[10], hover.state.landed, controller.command[BASE], owned, (a.roll, a.pitch, a.yaw), R.DT)
+                lane["indi"].update(gyro, bool(hover.state.engaged) and not hover.state.landed, hover.state.height, controller.command[BASE], owned, (a.roll, a.pitch, a.yaw), R.DT)
                 run.authority.indi = lane["indi"].fade
                 run.authority.unmodeled[:] = lane["indi"].unmodeled(flight.INDI_FLIP)
                 library.flip_tick(ctypes.byref(run), (ctypes.c_float * 3)(*gyro), (ctypes.c_float * 3)(*accel), R.DT, estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(out))

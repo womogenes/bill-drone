@@ -498,7 +498,7 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
                 base = min(1200, throttle(thrust(base) * min(1 / max(lift, 1 / BANK_THRUST_MAX), BANK_THRUST_MAX)))
             controller.command[6 + TUNING_LAYOUT.index("base_throttle")] = base
         if incremental.on:
-            incremental.update(gyro_filter, controller.state[10], bool(hover and outer.state.landed), controller.command[6 + TUNING_LAYOUT.index("base_throttle")], dt=DT)
+            incremental.update(gyro_filter, bool(hover and outer.state.engaged and not outer.state.landed), outer.state.height if hover else 0.0, controller.command[6 + TUNING_LAYOUT.index("base_throttle")], dt=DT)
             incremental.apply(controller)
         left, right, left_angle, right_angle = controller.update(attitude, gyro_filter, DT)
         commanded = (left, right, left_angle, right_angle)
