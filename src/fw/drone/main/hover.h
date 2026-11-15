@@ -64,6 +64,8 @@ typedef struct {
     float return_speed;
     // The most the GPS hold's hold-point speed changes in a second (m/s²; 0 = as the laptop's nudge changes it): let go at speed, the hold point moves on as far as the drone can stop in at this deceleration, and the hold brakes along it instead of asking for kd times the speed at once. In sw/sim/speed_limit.py (2026-11-12, the raised airframe, wind 0-3 m/s) that step saturated the lean cap at hover_tilt 15-20 and the braking rang (pitch 50 degrees peak to peak after stopping from 3 m/s at hover_tilt 20, the hold point overshot 2.5 m median); at 1.5 every lean cap stops from 3 and 5 m/s within 0.3 m of the hold point (90th percentile 0.8-0.95 m) and without ringing.
     float nudge_accel;
+    // Blind touchdown by the Kalman filter (hover.c EKF_STILL_S): 1 = in a landing without the tag on the barometer, the filter's climb rate stopping abruptly from a descent and staying stopped lifts the veto the hold's own climb rate puts on a probe's touchdown while it reads a descent, which on the floor it does in the rotors' wash (2026-11-15 07:13 UTC: 2 s at hover thrust on grass); 0 = as before.
+    float land_ekf;
 } HoverGains;
 
 // One camera sighting: the tag centre in the camera frame (m; right, down, forward), the wall's normal into it in the camera frame when the camera settled the tag's tilt (zero otherwise), and its capture time.
@@ -196,6 +198,8 @@ typedef struct {
     bool searching;
     // The speed the GPS hold flies the hold point at (m/s; yaw-turned frame): the nudge's, changed at no more than nudge_accel (hover.c).
     float reference[2];
+    // The Kalman filter's stop on landing (gains land_ekf, hover.c EKF_STILL_S): how long its climb rate has stayed within EKF_STILL of zero since it stopped there from a descent (s, 0 otherwise or while it is not sure of its height), and its lowest climb rate lately, recovering at EKF_RECOVER (m/s).
+    float filter_still, filter_low;
 } HoverState;
 
 // For the attitude controller: roll/pitch targets and yaw rate (radians), and collective thrust in newtons. While tracking is set hover damps the horizontal velocity itself, from the tag or, briefly lost, dead-reckoned since, and velocity is that estimate in body axes (m/s; right, forward).

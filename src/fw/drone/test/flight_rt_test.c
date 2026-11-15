@@ -358,6 +358,10 @@ static void randomize_settings(void) {
         // The quaternion attitude (flight_math.c, flip.c, recover.c) on at random, built with -DTEST_QUATERNION for the same reason.
         {SETTING_quaternion, {0, 1}, 2},
 #endif
+#ifdef TEST_LAND_EKF
+        // Blind touchdown by the Kalman filter (hover.c EKF_STILL_S) on at random, built with -DTEST_LAND_EKF for the same reason.
+        {SETTING_hover_land_ekf, {0, 1}, 2},
+#endif
     };
     for (size_t i = 0; i < sizeof(choices) / sizeof(choices[0]); i++)
         if (chance(0.5)) set_setting(choices[i].index, choices[i].values[next() % choices[i].count]);
