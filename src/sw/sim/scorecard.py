@@ -292,7 +292,7 @@ def plant_for(flight, name, overrides):
     level, mean = A.trim_for(hover, geometry)
     params |= {"thrust_level": float(level), "hover_thrust": [float(m) for m in mean]}
     on = bands is True
-    return {"airframe": params, "geometry": geometry, "disturbances": [], "rotor_drag": tuple(params.get("rotor_drag", (0.07, 0.2))), "tilt_offset": BAND_TILT if on else 0.0,
+    return {"airframe": params, "geometry": geometry, "observer": params.get("observer"), "disturbances": [], "rotor_drag": tuple(params.get("rotor_drag", (0.07, 0.2))), "tilt_offset": BAND_TILT if on else 0.0,
             "accel_bias": (BAND_ACCEL if on else 0.0, 0.0, 0.0), "table": flight.table}
 
 
@@ -358,9 +358,10 @@ def predict(flight, plant, index, warmup, horizon):
     """The plant's predictions [lane, step, channel] for steps 1..horizon ticks after each start index, its hidden state warmed up over the warmup ticks before it with the body pinned to the log."""
     n = len(index)
     steps = np.arange(-warmup + 1, horizon + 1)
-    throttle = local_throttle(flight, plant, index, steps)
+    # The commands a tick flies are the ones logged the tick before: the firmware reads the gyro, computes and sends the servos and motors, then records the tick (flight_rt.c fly, then capture), so the record at k holds what acts from t_k on, after the rates it was computed from (the step that ends at k flies k - 1's; until 2026-11-15 this used k's, a tick early, and the delays fitted that way are 10 ms longer than the closed loop's).
+    throttle = local_throttle(flight, plant, index, steps - 1)
     k = np.clip(index[:, None] + steps[None], 0, len(flight.time) - 1)
-    tilt = flight.tilt[k]
+    tilt = flight.tilt[np.clip(k - 1, 0, None)]
     sim = make_sim(plant, n, flight.rest)
     p = sim.p
     gain = np.tile([1.0, p["right_thrust_gain"]], (n, 1))
@@ -371,6 +372,9 @@ def predict(flight, plant, index, warmup, horizon):
     sim.throttles[:] = throttle[:, :1]
     sim.bind()
     out = np.full((n, horizon, len(CHANNELS)), np.nan)
+    # The disturbance state (plant["observer"]: {"correlation": s, "sd": rad/s², "noise": rad/s²}, or the older fixed-gain {"filter": s, "correlation": s}): a torque the plant does not explain, wandering as a first-order (Ornstein-Uhlenbeck) process with that correlation time, estimated over the warm-up from the log alone (each tick's measured angular acceleration less the plant's from the same pinned state, exponentially averaged over filter s; ticks where the gyro clipped, on the ground or touching it are skipped) and carried into the prediction decaying as exp(-t / correlation).
+    observer = plant.get("observer")
+    estimate, variance = np.zeros((n, 3)), np.zeros((n, 3))
     for j, step in enumerate(steps):
         if step <= 1:
             # Pinned to the log's state before this tick's commands (the warm-up, and the start itself).
@@ -381,7 +385,25 @@ def predict(flight, plant, index, warmup, horizon):
             sim.pos[:, 2] = np.where(np.isnan(flight.height[before]), sim.pos[:, 2], flight.height[before] + flight.rest_z)
             if step == 1:
                 z0 = sim.pos[:, 2].copy()
+        if observer:
+            sim.torque_bias[:] = estimate * math.exp(-(step - 1) * A.DT / observer["correlation"]) if step >= 1 else 0.0
         sim.step(throttle[:, j], tilt[:, j])
+        if observer and step <= 0:
+            measured = (flight.gyro[k[:, j]] - flight.gyro[before]) / A.DT
+            usable = ~(flight.clipped[k[:, j]] | flight.clipped[before]) & flight.airborne[k[:, j]] & flight.airborne[before] & (sim.contact_now == 0)
+            residual = measured - (sim.omega - flight.gyro[before]) / A.DT
+            if "sd" in observer:
+                # A Kalman filter on the process: the estimate starts at its mean (zero) with its whole variance sd² when the drone is not flying, and each flying tick's residual is a measurement of it with the noise's variance (noise², per axis: the gyro's vibration differenced).
+                keep = math.exp(-A.DT / observer["correlation"])
+                prior = np.asarray(observer["sd"], float) ** 2
+                variance = np.where(usable[:, None], keep ** 2 * variance + prior * (1 - keep ** 2), prior)
+                estimate = np.where(usable[:, None], keep * estimate, 0.0)
+                gain = variance / (variance + np.asarray(observer["noise"], float) ** 2)
+                estimate = np.where(usable[:, None], estimate + gain * (residual - estimate), estimate)
+                variance = np.where(usable[:, None], (1 - gain) * variance, variance)
+            else:
+                gain = A.DT / observer["filter"]
+                estimate = np.where(usable[:, None], estimate + gain * (residual - estimate), estimate)
         if step >= 1:
             up = R.rotation(sim.quat)[:, 2, :]
             roll, pitch = np.arctan2(up[:, 1], up[:, 2]), np.arctan2(-up[:, 0], np.hypot(up[:, 1], up[:, 2]))
@@ -672,6 +694,7 @@ def main():
     parser.add_argument("--plot-dir", default=".")
     parser.add_argument("--figures", help="after scoring, a figure per flight (every plant a column), index.html and contact_sheet.png in this directory")
     parser.add_argument("--inventory", action="store_true", help="classify every recording into models/scorecard/inventory.json instead of scoring")
+    parser.add_argument("--observer", help="the disturbance state's filter and correlation times (s), FILTER,CORRELATION, over every plant's own (scorecard.predict); 0 turns it off")
     parser.add_argument("--history", action="store_true", help="score the flights before the pivots were raised (their configurations' geometry; --plant era is each one's model of its time) instead")
     args = parser.parse_args()
     listing = flight_list(args.list)
@@ -687,6 +710,9 @@ def main():
     if args.kinds:
         chosen = [e for e in chosen if e["kind"] in args.kinds.split(",")]
     overrides = parse_settings(args.set) if args.set else {}
+    if args.observer:
+        values = [float(v) for v in args.observer.split(",")]
+        overrides["observer"] = {"filter": values[0], "correlation": values[1]} if values[0] > 0 else None
     if args.plot is not None:
         everything = {e["name"]: e for e in entries(listing) + entries(listing, True)}
         tasks = []

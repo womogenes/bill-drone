@@ -14,7 +14,7 @@ from sw.sim import rigid as R
 TOLERANCE = 1e-9
 FREE = 20
 STATE = ("pos", "vel", "quat", "omega", "accel", "contact", "contact_now", "touched", "throttles", "commands")
-ACTUATORS = ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel", "spin")
+ACTUATORS = ("rate", "att", "vel", "motor", "horn", "hvel", "tilt", "tvel", "spin", "recovered")
 # The airframe the plant uses (default rigid.load_plant's).
 AIRFRAME = None
 

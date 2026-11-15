@@ -96,7 +96,7 @@ def rerun(task):
     for key, other in (("servo_delay", "right_servo_delay"), ("servo_wn", "right_servo_wn")):
         if key in overrides and other not in overrides:
             params[other] = overrides[key]
-    FF.plant_of = lambda airframe: {"airframe": params, "geometry": A.geometry_of(params), "disturbances": [], "rotor_drag": (0.07, 0.2)}
+    FF.plant_of = lambda airframe: {"airframe": params, "geometry": A.geometry_of(params), "disturbances": [], "rotor_drag": tuple(params.get("rotor_drag", (0.07, 0.2)))}
     FF.R.Sim = Tracing
     # The GPS hold in place of the camera's, the flight's own climb; no flip; the pack's sag is not simulated.
     settings = flown | {"hover_camera": 0, "hover_center": 0, "flip_enable": 0, "thrust_voltage": 0.0}
