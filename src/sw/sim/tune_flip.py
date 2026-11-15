@@ -30,6 +30,8 @@ SPACE = [
     ("flip_thrust", 0.8, 2.2, False), ("right_angle", 0.2, 0.6, False), ("servo_max", 0.1, 0.9, False), ("kv", 2.0, 15.0, True), ("ceiling", 0.6, 1.4, False), ("handoff_rate", 1.0, 3.0, True),
     # The levers against the rotors' momentum (2026-11-13): the spin's pitch and yaw rate gains apart from its roll gain, the gyroscopic pitch fed forward (0 to 16: the physics gives rotor_momentum over the pitch inertia, 3.4 at 0.018 and 9.5 at 0.05), the motors' floor raised (a smaller speed difference between the rotors), and a later timeout.
     ("spin_pitch", 2.0, 25.0, True), ("spin_yaw", 0.2, 12.0, True), ("gyro_ff", 0.0, 16.0, False), ("floor", 0.2, 0.6, False), ("timeout", 1.5, 3.0, False),
+    # The rotors' yaw fed forward (2026-11-15; rotor_momentum over the yaw inertia: 1.8 at 0.02, 4.5 at 0.05; past the value the drone has it adds yaw instead).
+    ("yaw_ff", 0.0, 6.0, False),
 ]
 FIXED = {"slew": SLEW, "throttle_cap": THROTTLE_CAP}
 CLIMB_ROOM, HANDBACK = 0.8, 1.3

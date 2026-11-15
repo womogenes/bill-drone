@@ -746,3 +746,25 @@ The flip from now: peak roll 577-641 deg/s median, pitch 234-277 below 0.03 and 
 The bursts stay robust: as the drone is now, the 60-degree burst is 100% clean with none on the ground in every band (roll 218-234 deg/s median, 90th to 281; pitch 174-187, 90th 225-266; yaw 59-207, 90th 123-289), the 90-degree burst 100% (roll 267-290, 90th to 346; pitch 193-240, 90th to 308; past 90 degrees 90th 0.02-0.27 s; one run lost 4 m in the top band); with the CoM centered, scale 1.2 or the stand's table in the firmware 99.2-100% clean, at most 0.8% on the ground in a band.
 
 Not modelled: the pack's sag through the flip (the plant is the stand as measured, sag included; the firmware's voltage compensation is off in the sim, so it neither helps nor misleads), the rotors in their own wake, the stand's single motor standing for both.
+
+## Yaw in the flip (2026-11-15)
+
+Where it comes from: the yaw peaks in the bursts are the rotors' spin momentum changing hands. When the righting reverses the split (one motor from about 590 to 350, the other from 540 to 720 within 0.1 s), H_z = rotor_momentum (√T_right - √T_left) swings by about 2 √N, and the body takes -dH_z/dt in yaw: at 0.04 about 0.08 N·m·s over the yaw inertia 0.01115, 7 rad/s, where the sim's bursts peak at 280-310 deg/s. The differential tilt gives at most about 14 rad/s² (4.66 per N per rad times 10 N times 0.3 rad), 80 deg/s in that 0.1 s, so no yaw gain alone takes it back; it only shortens it.
+
+The options, by flip_esc.py (seed 95000; 256 flips and 128 of each burst a band; "now" the CoM 15.5 mm left, "centered" rebalanced; clean % by rotor_momentum band 0-0.05, yaw 90th deg/s in the top band; D1 burst60, D2 burst90, E the flip):
+
+| change | D1 yaw 90th top band now / centered | D2 yaw 90th top now / centered | E clean now | E clean centered |
+| --- | --- | --- | --- | --- |
+| none | 289 / 324 | 360 / 363 | 100/100/98/91/79 | 100/100/99/94/90 |
+| yaw_ff 2.0 (rotor_momentum 0.022 over the yaw inertia) | 265 / 261 | 323 / 308 | 100/100/99/94/75 | 100/100/100/96/92 |
+| yaw_ff 3.6 / 5.0 | 266 / 251, 273 / 276 | 349 / 344, 368 / 375, D2 96-98% clean | 75, 69 top band | 87, 83 |
+| spin_yaw and kd_yaw 4x (9.34, 2.128) | 261 / 328 | 317 / 318 | 100/100/98/94/85 | 100/100/100/96/92 |
+| the same 8x | 277 / 329 | 329 / 334 | 84 top | 91 top |
+| kd_yaw 2x or 4x alone | 288 / 319 | 360 | 79-80 top | 91 top |
+| differential tilt bound 0.5 rad (servo travel allows it) | 289 / 324 (unchanged) | 360 | 100/100/99/87/60 | 87 top |
+| spin collective floor 0.4-0.8 of the weight | unchanged (bursts cap it at the weight) | unchanged | 79-80 top, height lost unchanged | 90 top |
+| bursts' collective 1.2 of the weight | 262 / 296 | 325 / 343 | unchanged | unchanged |
+| **yaw_ff 2.0 and the gains 4x (now flip_defaults)** | **235 / 241** | **316 / 289** | **100/100/99/95/82** | **100/100/100/96/91** |
+| the same, bursts' collective 1.2 | 229 / 213 | 257 / 257 | as above | as above |
+
+With the defaults now, D1's yaw 90th is under its 250 pass line in every band at either CoM (now 134/136/163/200/235, median 76-169) and the low bands lose nothing (a feedforward above the drone's rotor_momentum adds yaw there: yaw_ff 3.6 put band 0-0.01 at 156 against 123). The bursts stay 100% clean but for D2's top band with the CoM left (99%, 1 of 128 on the ground); their height lost is unchanged (90th under 0.03 m, 0.29 centered); tilt at the hand-back 90th up to 42° in D1's top band against 32°. In the flip the top band's worst hand-backs got worse with the CoM left (tilt 90th 136° against 97°) while fewer touch the ground (18% against 20%). Raising the bursts' collective halves what remains but climbs 1 m more, so it was left out.

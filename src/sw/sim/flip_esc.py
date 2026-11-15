@@ -50,17 +50,17 @@ def options_for(case, k, seed, band):
     return options
 
 
-def jobs(case, kind, n, seed, band, batch=4):
+def jobs(case, kind, n, seed, band, batch=4, params=None):
     scaled = case.endswith("_s12")
     case = case.removesuffix("_s12")
     if case == "before":
         flown = recording_settings(recording(T.SETTINGS)) | FF.FLIGHT | T.HIGH | T.FAST_CLIMB | {"flip_enable": KINDS[kind]}
-        return T.jobs({}, n, seed, flown, band=band)
+        return T.jobs(params or {}, n, seed, flown, band=band)
     flown = recording_settings(recording(SETTINGS)) | FF.FLIGHT | T.HIGH | T.FAST_CLIMB | {"flip_enable": KINDS[kind], "roll_bias": ROLL_BIAS * max(CASES[case], 0) / COM_LEFT}
     out = []
     for k, start in enumerate(range(0, n, batch)):
         options = options_for(case, k, seed, band) | ({"thrust_scale": 1.2, "hover_mass": 1.05} if scaled else {})
-        out.append((flown, T.BANDS[k % len(T.BANDS)], seed + start, batch, 17.0, math.radians(2000), 2.0, 7.0, True, FF.AIRFRAME, "flip", {}, options))
+        out.append((flown, T.BANDS[k % len(T.BANDS)], seed + start, batch, 17.0, math.radians(2000), 2.0, 7.0, True, FF.AIRFRAME, "flip", params or {}, options))
     return out
 
 
@@ -68,9 +68,9 @@ def stats(rows):
     started = [r for r in rows if r["started"] is not None]
     a = lambda key: np.array([r[key] for r in started], float)
     rates, lost, after = np.array([r["rates"] for r in started]), a("lost"), a("after_tilt")
-    return {"n": len(rows), "started": len(started), "clean": float(np.mean(a("clean"))), "touched": float(np.mean(a("touched"))), "lost_90": float(np.percentile(lost, 90)), "lost_worst": float(lost.max()),
+    return {"n": len(rows), "started": len(started), "clean": float(np.mean(a("clean"))), "touched": float(np.mean(a("touched"))), "lost_median": float(np.median(lost)), "lost_90": float(np.percentile(lost, 90)), "lost_worst": float(lost.max()),
             "rates_median": np.median(rates, 0).round(0).tolist(), "rates_90": np.percentile(rates, 90, axis=0).round(0).tolist(), "after_tilt_median": float(np.median(after)), "after_tilt_90": float(np.percentile(after, 90)),
-            "climbed_median": float(np.median(a("climbed"))), "handed_median": float(np.median(a("handed"))), "handed_90": float(np.percentile(a("handed"), 90)), "past90_90": float(np.percentile(a("past90"), 90)), "full_max": float(a("full").max())}
+            "climbed_median": float(np.median(a("climbed"))), "handed_median": float(np.median(a("handed"))), "handed_90": float(np.percentile(a("handed"), 90)), "past90_90": float(np.percentile(a("past90"), 90)), "full_max": float(a("full").max()), "travel_median": float(np.median(a("travel"))), "travel_90": float(np.percentile(a("travel"), 90))}
 
 
 def main():
@@ -81,11 +81,12 @@ def main():
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=95000)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--params", default="{}", help="flip parameters over flip_defaults, as JSON (e.g. '{\"yaw_ff\": 2.7}')")
     args = parser.parse_args()
     out = {}
     with Pool(args.workers) as pool:
         for band, (low, high) in enumerate(T.MOMENTUM_BANDS):
-            rows = [r for batch in pool.map(FF.fly, jobs(args.case, args.kind, args.n, args.seed, band), chunksize=1) for r in batch]
+            rows = [r for batch in pool.map(FF.fly, jobs(args.case, args.kind, args.n, args.seed, band, params=json.loads(args.params)), chunksize=1) for r in batch]
             s = out[f"{low:.2f}-{high:.2f}"] = stats(rows)
             print(f"{args.case} {args.kind} rotor_momentum {low:.2f}-{high:.2f}: clean {s['clean'] * 100:.1f}%, touched {s['touched'] * 100:.1f}%, height lost 90th {s['lost_90']:.2f} m (worst {s['lost_worst']:.2f}); peak rates roll/pitch/yaw median {s['rates_median']} (90th {s['rates_90']}) deg/s; "
                   f"tilt after the hand-back {s['after_tilt_median']:.0f} deg (90th {s['after_tilt_90']:.0f}); climbed {s['climbed_median']:.2f} m; handed back {s['handed_median']:.2f} s (90th {s['handed_90']:.2f}); past 90 deg 90th {s['past90_90']:.2f} s", flush=True)
