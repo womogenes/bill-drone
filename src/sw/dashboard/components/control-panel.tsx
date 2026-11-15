@@ -637,6 +637,7 @@ export const ControlPanel = memo(function ControlPanel({
   const enabledRef = useRef(settings.enabled);
   enabledRef.current = settings.enabled;
   useEffect(() => {
+    // LB+RB is the stop, which the page watches itself (page.tsx), connected or not; here it only holds the other inputs off while pressed.
     if (!available || open) return;
     const zero = { roll: 0, pitch: 0, yaw_rate: 0 };
     let sent = { ...zero };
@@ -672,7 +673,6 @@ export const ControlPanel = memo(function ControlPanel({
       const before = was;
       was = now;
       if (now.stop) {
-        if (!before.stop) onStop();
         // Stopping zeroes the dashboard's targets.
         sent = { ...zero };
         landSince = 0;
@@ -736,7 +736,7 @@ export const ControlPanel = memo(function ControlPanel({
 
     const timer = setInterval(tick, GAMEPAD_TICK_MS);
     return () => clearInterval(timer);
-  }, [available, open, onChange, setMode, onNudge, onStop, onHover]);
+  }, [available, open, onChange, setMode, onNudge, onHover]);
 
   const shownMode = droneMode ?? mode;
   return (

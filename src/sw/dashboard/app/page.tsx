@@ -26,7 +26,7 @@ import {
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 
-import { GamepadView } from '@/components/gamepad';
+import { BUTTONS, GamepadView, readPad } from '@/components/gamepad';
 import { ControlPanel } from '@/components/control-panel';
 import { HoverPanel } from '@/components/hover-panel';
 import { Status } from '@/components/status';
@@ -91,6 +91,10 @@ const NUDGE_MAX = 1.5;
 const TAG_HELD_MS = 300;
 // How long the drone must read disarmed before the dashboard drops back to manual (ms).
 const DISARMED_MS = 1000;
+// A stop pressed while the connection to the laptop service is down is sent when it reconnects within this long (ms): on 2026-11-14 a stop during a dashboard reconnect was dropped, since requests only go out on an open socket.
+const STOP_RESEND_MS = 10000;
+// How often the gamepad's stop is polled (ms), as the control panel polls the rest.
+const STOP_POLL_MS = 50;
 // A steady rotor tilt beyond this (degrees, averaged over TILT_TAU_S seconds) means the CoM is well off center or moving: by about 15-20 degrees the drone has no pitch authority left.
 const TILT_WARNING = 10;
 const TILT_TAU_S = 1;
@@ -313,6 +317,8 @@ export default function Page() {
   const [fps, setFps] = useState<number | null>(null);
   const packetCount = useRef(0);
   const socket = useRef<EspConnection | null>(null);
+  // When the last stop was asked for (performance.now()), so one dropped while disconnected is sent on reconnecting (STOP_RESEND_MS).
+  const pendingStop = useRef(-Infinity);
   const targets = useRef<Targets>(ZERO_TARGETS);
   const [mode, setModeState] = useState(MANUAL);
   const [nudge, setNudgeState] = useState(NO_NUDGE);
@@ -374,7 +380,11 @@ export default function Page() {
       `ws://${SERVICE}/${view ? 'view' : 'ws'}`,
       targets.current,
       () => {
-        if (socket.current === ws) setStatus(view ? 'viewing' : 'connected');
+        if (socket.current !== ws) return;
+        setStatus(view ? 'viewing' : 'connected');
+        // A stop asked for while the link to the laptop service was down (the request is dropped then) goes out as soon as it is back.
+        if (!view && performance.now() - pendingStop.current < STOP_RESEND_MS)
+          ws.send({ type: 'stop' });
       },
       (message) => {
         if (socket.current !== ws) return;
@@ -542,11 +552,25 @@ export default function Page() {
   }, [request]);
 
   const stopMotors = useCallback(() => {
+    pendingStop.current = performance.now();
     setArming(false);
     setTargets(ZERO_TARGETS);
     setStopEpoch((previous) => previous + 1);
     request({ type: 'stop' });
   }, [request, setTargets]);
+
+  // The gamepad's stop (LB+RB) is watched here, not in the control panel, so it works while the panel is gone (reconnecting, no reading) or its gains dialog is open; a stop while disconnected goes out on reconnecting (STOP_RESEND_MS).
+  useEffect(() => {
+    let was = false;
+    const timer = setInterval(() => {
+      const pad = readPad();
+      const pressed = (index: number) => (pad?.buttons[index] ?? 0) > 0.5;
+      const now = pressed(BUTTONS.leftBumper) && pressed(BUTTONS.rightBumper);
+      if (now && !was) stopMotors();
+      was = now;
+    }, STOP_POLL_MS);
+    return () => clearInterval(timer);
+  }, [stopMotors]);
 
   // Setpoints become streamed targets, Enable an arm request, and everything else a tuning request.
   const sendControl = useCallback(
