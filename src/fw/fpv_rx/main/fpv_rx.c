@@ -28,6 +28,7 @@
 #define LED GPIO_NUM_2 // the board's blue LED
 #define BEACON "FPVR"
 #define BUFFER (32 * 1024)
+#define UART_TX_BUFFER 8192
 #endif
 
 // The camera sends broadcast action frames with this BSSID.
@@ -44,6 +45,20 @@ static volatile bool send_ok;
 static uint16_t admitted;
 // Where frames go missing, sent to the laptop every second as FPVT and eight u32 (since boot): frames heard (their first shard), frames declined for want of buffer room for all their data shards, frames admitted but short of shards when the next began (the air), shards the buffer refused, the longest a USB write took in the last second (us; long means the laptop is not reading) and the bytes written, then the shards the heard frames had (data and parity) and the distinct ones of them heard, whose shortfall is the air's loss.
 static volatile uint32_t frames_heard, frames_declined, frames_short, shards_refused, usb_longest_us, usb_bytes, shards_sent, shards_heard;
+// With several receivers on the laptop (FPVK, a first, a count and a modulus) each owns the shards whose index modulo the modulus falls in [first, first + count) and passes only its share of each frame's data shards (count / modulus of them) from those, so their USB links add up instead of all carrying the same first shards. Any data distinct shards rebuild a frame, and a frame's shards are about half parity, so each receiver's class holds about twice its share: it can lose half of them in the air. Beyond its share it passes others' shards only while its USB has nothing waiting (FILL_BYTES), which covers a receiver that missed its own when there is room and costs nothing when there is not. Alone (0, 1, 1, the default) every shard is its own and its share is all the data shards, as before.
+static volatile uint8_t slot_first = 0, slot_count = 1, slot_modulus = 1;
+#define FILL_BYTES (3 + 20 + CHUNK)
+
+// Bytes waiting for the USB: in the buffer and, on the ESP32, in the UART driver's own transmit buffer, which the forward task fills at once.
+static int backlog(void) {
+    int waiting = BUFFER - (int)xRingbufferGetCurFreeSize(chunks);
+#if !CONFIG_IDF_TARGET_ESP32S3
+    size_t free = 0;
+    uart_get_tx_buffer_free_size(UART_NUM_0, &free);
+    waiting += UART_TX_BUFFER - (int)free;
+#endif
+    return waiting;
+}
 
 static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     const wifi_promiscuous_pkt_t *packet = buffer;
@@ -57,18 +72,19 @@ static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
     const uint16_t number = chunk[4] | chunk[5] << 8;
     static uint16_t seen_frame;
     static uint64_t seen, heard_bits;
-    static int passed, data_wanted;
+    static int passed, data_wanted, own_passed, share;
     static bool started;
     if (!started || number != seen_frame) {
         if (started && admitted == seen_frame && passed < data_wanted) ++frames_short;
         started = true;
         seen_frame = number;
         seen = heard_bits = 0;
-        passed = 0;
+        passed = own_passed = 0;
+        share = (chunk[8] * slot_count + slot_modulus - 1) / slot_modulus;
         shards_sent += chunk[7];
         data_wanted = chunk[8];
         ++frames_heard;
-        admitted = xRingbufferGetCurFreeSize(chunks) >= chunk[8] * (3 + 20 + CHUNK) ? number : number - 1;
+        admitted = xRingbufferGetCurFreeSize(chunks) >= share * (3 + 20 + CHUNK) ? number : number - 1;
         if (admitted != number) ++frames_declined;
     }
     const uint64_t bit = 1ull << (chunk[6] & 63);
@@ -77,8 +93,11 @@ static void received(void *buffer, wifi_promiscuous_pkt_type_t type) {
         ++shards_heard;
     }
     if (number != admitted || (seen & bit) || passed >= chunk[8]) return;
+    const bool own = (uint8_t)(chunk[6] % slot_modulus - slot_first) < slot_count && own_passed < share;
+    if (!own && backlog() >= FILL_BYTES) return;
     seen |= bit;
     ++passed;
+    own_passed += own;
     // The Wi-Fi task is the only writer, so one static buffer serves.
     static uint8_t out[3 + 20 + CHUNK];
     out[0] = length & 0xff;
@@ -100,7 +119,8 @@ static int read_in(uint8_t *data, size_t size) {
 #if CONFIG_IDF_TARGET_ESP32S3
     return usb_serial_jtag_read_bytes(data, size, portMAX_DELAY);
 #else
-    return uart_read_bytes(UART_NUM_0, data, size, portMAX_DELAY);
+    // A short wait, not forever: uart_read_bytes waits for all size bytes, so with portMAX_DELAY the commands (FPVF and its camera, FPVE) were taken only once 512 bytes had come, which the laptop's occasional FPVF never made: the ESP32 receiver passed every camera's frames (found 2026-11-14).
+    return uart_read_bytes(UART_NUM_0, data, size, pdMS_TO_TICKS(10));
 #endif
 }
 
@@ -175,7 +195,7 @@ static void to_camera(const uint8_t *data, int length) {
     xRingbufferSend(chunks, "FPVX", 4, 0);
 }
 
-// The laptop's commands, looked for anywhere in what arrives: FPVF and a camera's MAC (only its frames pass from then on), FPVC and a channel (held while updates flow), FPVE, a length (u16) and a message for the camera.
+// The laptop's commands, looked for anywhere in what arrives: FPVF and a camera's MAC (only its frames pass from then on), FPVC and a channel (held while updates flow), FPVE, a length (u16) and a message for the camera, FPVK and this receiver's shards (first, count, modulus; acknowledged with FPVA, so the laptop knows this firmware took them).
 static void commands(void *unused) {
     static uint8_t got[512];
     int have = 0;
@@ -202,6 +222,17 @@ static void commands(void *unused) {
                     esp_wifi_set_channel(got[4], WIFI_SECOND_CHAN_NONE);
                 }
                 used = 5;
+            } else if (kind == 'K') {
+                if (have < 7) break;
+                if (got[6] >= 1 && got[5] >= 1 && got[4] + got[5] <= got[6]) {
+                    slot_first = got[4];
+                    slot_count = got[5];
+                    slot_modulus = got[6];
+                    // Acknowledged as FPVA, not FPVK: a port left echoing (a terminal's defaults) sent an FPVK echo back, which was echoed again, thousands a second (2026-11-14).
+                    uint8_t ack[7] = {'F', 'P', 'V', 'A', got[4], got[5], got[6]};
+                    xRingbufferSend(chunks, ack, 7, 0);
+                }
+                used = 7;
             } else if (kind == 'E') {
                 if (have < 6) break;
                 const int length = got[4] | got[5] << 8;
@@ -226,7 +257,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb));
 #else
     uart_config_t uart = {.baud_rate = BAUD, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT};
-    ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 1024, 8192, 0, NULL, 0));
+    ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 1024, UART_TX_BUFFER, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart));
     ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0, 1, 3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 #endif
