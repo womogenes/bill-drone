@@ -23,7 +23,7 @@ typedef struct {
     float spin_lift;
     // The spin's pitch and yaw rate gains (1/s; before 2026-11-13 k_spin and 0.3 k_spin), and the rotors' gyroscopic pitch fed forward in the spin and the righting (gyro_ff, rad/s² per rad/s of roll per √N of thrust difference: the rotors' momentum per √N over the pitch inertia, FlipRighting gyro_ff).
     float spin_pitch, spin_yaw, gyro_ff;
-    // The rotors' spin momentum's yaw fed forward in the spin and the righting (FlipRighting yaw_ff). 2026-11-15: yaw_ff 2.0 (rotor_momentum 0.022 over the yaw inertia; the props' estimate is 0.017-0.022) with spin_yaw and kd_yaw four times the robust retune's (sw/sim/models/NOTES.md "Yaw in the flip").
+    // The rotors' spin momentum's yaw fed forward in the spin and the righting (FlipRighting yaw_ff). 2026-11-15: yaw_ff 1.6 (rotor_momentum 0.018 over the yaw inertia; APC's prop geometry gives about 0.014, the flight fits 0.006-0.03, and 1.6 did best on the worst of the bands below 0.03) with spin_yaw and kd_yaw four times the robust retune's (sw/sim/models/NOTES.md "Yaw in the flip").
     float yaw_ff;
 } FlipParams;
 
