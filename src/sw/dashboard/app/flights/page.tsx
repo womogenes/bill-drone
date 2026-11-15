@@ -2,7 +2,8 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { FlightReportView } from '@/components/flight-report';
+import { paletteStyle, usePalette } from '@/components/replay/palette';
+import { Replay } from '@/components/replay/replay';
 import {
   Select,
   SelectContent,
@@ -15,13 +16,14 @@ import type { RecordingEntry } from '@/lib/flight-report';
 import { clock, startTime } from '@/lib/format';
 import { useFlightReport } from '@/hooks/use-flight-report';
 
-// Past flights from the recordings on this laptop. It never opens the drone link, so it can sit in its own tab beside the flying dashboard, which the bridge serves to one client only.
+// Past flights from the recordings on this laptop, replayed. It never opens the drone link, so it can sit in its own tab beside the flying dashboard, which the bridge serves to one client only.
 function Flights() {
   const chosen = useSearchParams().get('name');
   const [entries, setEntries] = useState<RecordingEntry[] | null>(null);
   const [listError, setListError] = useState('');
-  const name = chosen ?? entries?.[0]?.name ?? null;
-  const { report, error } = useFlightReport(name);
+  const [name, setName] = useState<string | null>(chosen);
+  const shown = name ?? entries?.[0]?.name ?? null;
+  const { report, error } = useFlightReport(shown);
 
   useEffect(() => {
     fetch('/api/recordings')
@@ -37,21 +39,23 @@ function Flights() {
     value: entry.name,
     label: `${startTime(entry.started)} · ${clock(entry.seconds)}`,
   }));
+  const problem = listError || error;
+  const palette = usePalette();
   return (
-    <div className="flex min-h-dvh flex-col lg:h-dvh lg:overflow-hidden">
-      <header className="flex h-14 shrink-0 items-center gap-6 border-b px-4">
-        <h1 className="font-semibold">Flights</h1>
+    <div className="flex h-dvh flex-col bg-background text-foreground" style={paletteStyle(palette)}>
+      <header className="flex h-12 shrink-0 items-center gap-4 border-b border-border px-4">
         <Select
-          value={name}
+          value={shown}
           items={items}
           onValueChange={(value) => {
+            setName(String(value));
             const url = new URL(window.location.href);
             url.searchParams.set('name', String(value));
             window.history.replaceState(null, '', url);
           }}
         >
-          <SelectTrigger aria-label="Recording" className="w-64">
-            <SelectValue />
+          <SelectTrigger aria-label="Flight" className="w-60">
+            <SelectValue placeholder="No flights yet" />
           </SelectTrigger>
           <SelectContent align="start" alignItemWithTrigger={false}>
             <SelectGroup>
@@ -63,11 +67,17 @@ function Flights() {
             </SelectGroup>
           </SelectContent>
         </Select>
-        {(listError || error) && (
-          <span className="text-sm text-red-700">{listError || error}</span>
+        {report && (
+          <span className="text-sm text-muted-foreground tabular-nums">
+            {report.max_height !== null && `${report.max_height.toFixed(1)} m up`}
+            {report.stop_reason && ` · ${report.stop_reason.toLowerCase()}`}
+          </span>
         )}
+        {problem && <span className="text-sm text-red-700">{problem}</span>}
       </header>
-      {report && <FlightReportView report={report} />}
+      <main className="min-h-0 flex-1">
+        {report ? <Replay key={report.name} trajectory={report.trajectory} /> : <div className="h-full" />}
+      </main>
     </div>
   );
 }
