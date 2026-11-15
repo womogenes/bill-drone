@@ -12,10 +12,7 @@
 // The push observer: each camera velocity correction, spread over PUSH_TAU (s), moves the push estimate (critically damped with VELOCITY_TAU at 4 VELOCITY_TAU), up to MAX_PUSH (m/s²).
 #define PUSH_TAU 1.6f
 #define MAX_PUSH 3.0f
-// With the drag model the velocity runs on the measured specific force, which already carries every real push (a thrust tilt the servo command does not show, the room's flow), so what the camera keeps correcting is that level acceleration's own error (the attitude estimate against the accelerometer): with DRAG_CAMERA_BIAS the corrections teach it as the drag model's bias, which the dead reckoning takes off, instead of the push, which it does not, so the push only ever grew. On 2026-11-11 with rubber bands on the servos the level acceleration read 0.1-0.4 m/s² forward, the push ran to -2.9 m/s² within 25 s, and the hold, cancelling it outright, leaned the drone at the tag 1-1.5 m inside its range target (sw/sim/hold_replay.py, sw/sim/band_hold.py).
-#ifndef DRAG_CAMERA_BIAS
-#define DRAG_CAMERA_BIAS 1
-#endif
+// With the drag model the velocity runs on the measured specific force, which already carries every real push (a thrust tilt the servo command does not show, the room's flow), so what the camera keeps correcting is that level acceleration's own error (the attitude estimate against the accelerometer): the corrections teach it as the drag model's bias, which the dead reckoning takes off, instead of the push, which it does not, so the push only ever grew. On 2026-11-11 with rubber bands on the servos the level acceleration read 0.1-0.4 m/s² forward, the push ran to -2.9 m/s² within 25 s, and the hold, cancelling it outright, leaned the drone at the tag 1-1.5 m inside its range target (sw/sim/hold_replay.py, sw/sim/band_hold.py).
 // Without the tag the dead-reckoned velocity leaks toward zero over this long (s), as the trim never quite matches the push it cancels.
 #define DRIFT_TAU 3.0f
 // Each sighting with a settled tilt moves the wall-normal estimate this fraction of the way to its own.
@@ -55,9 +52,6 @@
 #ifndef PROBE_SHARE
 #define PROBE_SHARE 0.5f
 #endif
-#ifndef PROBE_EXPLAINED
-#define PROBE_EXPLAINED 1
-#endif
 // A probe that finds air gives back the thrust it started from and waits PROBE_WAIT (s) before the next. The sink it caused (up to MAX_SINK, m/s) fades from the climb-rate command over SINK_TAU (s) instead of being caught at once, which with a climb-rate estimate that already reads low near the floor carried the simulated drone back up.
 #ifndef PROBE_WAIT
 #define PROBE_WAIT 1.0f
@@ -91,13 +85,7 @@
 #define LAND_SLACK 0.3f
 #endif
 // A landing integrates its climb rate from the specific force the hold read rather than the resting one (motors off, they differ by a percent or two of g, and 0.01 g is 0.1 m/s of climb rate per second wherever the camera does not hold it).
-#ifndef LAND_BIAS
-#define LAND_BIAS 1
-#endif
-// After touchdown thrust falls from the hold's to zero over LANDED_RAMP (s) with the attitude targets at the attitude the floor gives (LANDED_ATTITUDE 1) rather than level, and a shock or tilt past the contact limits below still cuts it at once (06:08 pitched over to 42 degrees nose-down as thrust faded over 0.5 s with the servos at their 60 degree limits).
-#ifndef LANDED_ATTITUDE
-#define LANDED_ATTITUDE 1
-#endif
+// After touchdown thrust falls from the hold's to zero over LANDED_RAMP (s) with the attitude targets at the attitude the floor gives rather than level, and a shock or tilt past the contact limits below still cuts it at once (06:08 pitched over to 42 degrees nose-down as thrust faded over 0.5 s with the servos at their 60 degree limits).
 #ifndef LANDED_RAMP
 #define LANDED_RAMP 0.25f
 #endif
@@ -335,7 +323,7 @@ static void take(HoverState *state, const HoverGains *g, const HoverPose *pose) 
         // The tag stands still, so its apparent motion is the drone's, reversed: the average velocity over the interval, compared with the estimate at its middle. The horizontal estimate runs on tilt between sightings, so the correction moves it and its recorded past alike.
         float *then = state->history[recorded(state, pose->capture_us - interval_us / 2)];
         float correction[2];
-        bool biased = DRAG_CAMERA_BIAS && state->dragging;
+        bool biased = state->dragging;
         for (int i = 0; i < 2; i++) {
             correction[i] = (1 - keep) * ((state->position[i] - position[i]) / interval - then[3 + i]);
             state->velocity[i] += correction[i];
@@ -580,7 +568,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         state->dragging = false;
         if (fabsf(roll) > LAND_TILT || fabsf(pitch) > LAND_TILT || vertical_g > LAND_SHOCK) state->force = 0;
         state->force = fmaxf(0, state->force - state->hold_force / LANDED_RAMP * dt);
-        *output = (HoverOutput){.roll = LANDED_ATTITUDE ? roll : 0, .pitch = LANDED_ATTITUDE ? pitch : 0, .force = state->force};
+        *output = (HoverOutput){.roll = roll, .pitch = pitch, .force = state->force};
         return;
     }
     // Heading from the gyro; horizontal velocity from tilt (g tan(tilt) less the push the trim cancels, once airborne, as on the ground a resting tilt pushes nothing); both recorded with the attitude.
@@ -670,8 +658,8 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
         }
     }
 
-    // IMU: integrate vertical acceleration (LAND_BIAS); without the camera, leak the climb rate.
-    state->climb_rate += ((vertical_g - (LAND_BIAS && mode != HOVER_HOLD ? state->hold_g : state->bias)) * GRAVITY - state->accel_bias) * dt;
+    // IMU: integrate vertical acceleration (a landing from the specific force the hold read); without the camera, leak the climb rate.
+    state->climb_rate += ((vertical_g - (mode != HOVER_HOLD ? state->hold_g : state->bias)) * GRAVITY - state->accel_bias) * dt;
     if (pose && (!state->have_pose || pose->sequence != state->sequence)) {
         // Reacquiring the tag in the air keeps the targets: they are relative to the tag, so a drift while it was lost is flown back rather than adopted. On the ground they restart from the new sighting.
         if (!seeing) {
@@ -856,7 +844,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
             state->probe_start = state->probe_force = state->force * lean;
             // A probe started by a jolt (stopped) judges air and floor against no more than the specific force its thrust explains in the air (probe_settled): against the jolt itself the jolt's fading back to 1 g reads as a fall, and it found air on the floor (2026-11-12 01:09 UTC: started 0.02 s after contact at 1.45 g, "air" 0.18 s later, the motors on the floor 2.3 s more). What it felt (the blind tilt cut) still goes against the specific force before it: in landing_test --outdoor the settled reference made the tilt cut live in the air on drones already losing control.
             state->probe_g = state->recent_g;
-            state->probe_air_g = PROBE_EXPLAINED && stopped ? fminf(state->recent_g, state->hold_g * state->probe_start / state->hold_force) : state->recent_g;
+            state->probe_air_g = stopped ? fminf(state->recent_g, state->hold_g * state->probe_start / state->hold_force) : state->recent_g;
             state->probe_velocity = state->probe_settled = state->probe_expected = 0;
         }
         if (state->probing) {
