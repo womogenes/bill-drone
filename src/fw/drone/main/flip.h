@@ -45,9 +45,12 @@ typedef struct {
 
 // The airframe's authority: angular acceleration (rad/s²) per newton of differential thrust (roll), per newton of collective per radian of common tilt (pitch), per newton per radian of differential tilt (yaw); and the weight (N).
 // indi and unmodeled: per axis (roll, pitch, yaw) the share INDI takes (0 = off) of the unmodeled angular acceleration it found on this authority (indi.h; rad/s²), which the allocation takes off what it is asked; the rotors' gyroscopic feedforwards (gyro_ff in pitch, yaw_ff in yaw) give way by the same share, as the measured acceleration has them.
+// predicted: the servos' dead-time predictor's change in pitch (radians) and pitch rate (rad/s) at the share taken now (indi.h indi_predict, settings.def pitch_predict), which the burst's and the recovery's attitude laws act on as the controller's does.
 typedef struct {
-    float roll, pitch, yaw, weight, indi[3], unmodeled[3];
+    float roll, pitch, yaw, weight, indi[3], unmodeled[3], predicted[2];
 } FlipAuthority;
+// The attitude law's inputs with the predictor's change in pitch taken: the error less the pitch to come, the rate plus its change.
+void flip_predicted(const FlipAuthority *a, float *error, const float *gyro, float *rate);
 
 // One tick's commands: while owned the burst flies the motors itself (thrusts in N, each assembly's physical forward tilt in radians); while arresting (collective_set) it only sets the collective (N) under the attitude controller. handed_back marks the tick it gives the attitude back.
 typedef struct {

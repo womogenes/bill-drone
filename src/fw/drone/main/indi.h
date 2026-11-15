@@ -27,6 +27,8 @@ typedef struct {
     bool sent, started;
     // The unmodeled angular acceleration (rad/s²; roll, pitch, yaw) by each model, bounded; the allocation takes its share (settings.def indi) off what it is asked.
     float unmodeled[INDI_MODELS][3];
+    // The pitch acceleration the drone has beyond the predictor's model of the actuators (rad/s², low-passed; indi.c PREDICT_AUTHORITY): the speed moment, the CoM, wind, which indi_predict takes to hold over its horizon.
+    float beyond;
 } Indi;
 
 void indi_reset(Indi *indi);
@@ -34,3 +36,5 @@ void indi_reset(Indi *indi);
 void indi_sent(Indi *indi, const float *tilt, const float *thrust);
 // The tick's gyro (rad/s, body roll, pitch, yaw) against the actuators as estimated through each model.
 void indi_update(Indi *indi, const float *gyro, const IndiModel *models, float dt);
+// A Smith predictor for the servos' dead time (Normey-Rico and Camacho, "Dead-time compensators: a survey", 2008): how much the pitch rate (rad/s) and pitch (radians, with the horizon's travel at the measured pitch_rate) will have changed by the time a servo command sent now first moves the assemblies, from the commands already on their way (INDI_SERVO_DELAY - 1 ticks of them, stepped through the servos' estimate) on model's pitch scaled to the drone's (indi.c PREDICT_AUTHORITY), with what the drone has beyond that held as it is now. After indi_update in the same tick.
+void indi_predict(const Indi *indi, const IndiModel *model, float pitch_rate, float dt, float *rate, float *angle);

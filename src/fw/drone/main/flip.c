@@ -117,6 +117,13 @@ static bool profile(float turn, float speed, float accel, float t, float *angle,
 }
 
 // One tick of the turn: the reference (the attitude at the start's heading rolled by the profile's angle about its forward axis) tracked by the one attitude law with its rate and acceleration fed forward, through flip_allocate. The collective holds the height: its vertical part is the weight (asking for no more than the weight in all sank a banked burst), and at the height cap, while still rising, ARREST_FLOOR of it, so the climb brakes under the cap. Hands back once the reference is back, within right_angle of upright and under handoff_rate, or at timeout.
+void flip_predicted(const FlipAuthority *a, float *error, const float *gyro, float *rate) {
+    error[1] -= a->predicted[0];
+    rate[0] = gyro[0];
+    rate[1] = gyro[1] + a->predicted[1];
+    rate[2] = gyro[2];
+}
+
 static void track(Flip *flip, const FlipParams *p, const FlipAuthority *a, const float *up, const float *gyro, float dt, FlipOutput *out) {
     float angle, rate, accel, ahead, unused;
     float speed = p->ref_rate * sqrtf(fminf(flip->turn / TWO_PI, 1));
@@ -137,7 +144,9 @@ static void track(Flip *flip, const FlipParams *p, const FlipAuthority *a, const
     accel *= pace * pace;
     float rates[3] = {rate * axis[0], rate * axis[1], rate * axis[2]}, accels[3] = {accel * axis[0], accel * axis[1], accel * axis[2]}, wanted[3];
     AttitudeGains g = {p->track_kp, p->brake, p->max_rate, p->track_heading, {p->track_roll, p->track_pitch, p->track_yaw}};
-    attitude_rates(&g, error, rates, accels, gyro, wanted);
+    float seen[3];
+    flip_predicted(a, error, gyro, seen);
+    attitude_rates(&g, error, rates, accels, seen, wanted);
     float collective = a->weight / fmaxf(up[2], 0.5f);
     if (capped(flip) && flip->vertical > 0) collective = ARREST_FLOOR * a->weight / fmaxf(up[2], 0.5f);
     FlipAllocation r = {p->servo_max, p->floor, p->ceiling, p->gyro_ff * (1 - a->indi[1]), p->yaw_ff * (1 - a->indi[2])};

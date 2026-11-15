@@ -72,6 +72,9 @@ def fly(prepared, out, harness, n, overrides, draws, workers, seed):
         options = {"sag": flip_esc.SAG, "table_volts": flip_esc.STAND_VOLTS} if hasattr(flip_esc, "SAG") else {}
     from sw.flight_log import recording, settings as recording_settings
     from sw.sim.flip_esc import STAND
+    from sw.sim import flight
+    # The IMU's ranges as this tree's firmware sets them (runtime.h: ±8 g from william/consolidate, ±2 g before).
+    gyro_range, accel_range = math.radians(getattr(flight, "GYRO_RANGE", 2000.0)), getattr(flight, "ACCEL_RANGE", 2.0)
     data = json.loads(Path(prepared).read_text())
     FF.TRACE = True
     name = "burst_closed_plant.json"
@@ -88,7 +91,7 @@ def fly(prepared, out, harness, n, overrides, draws, workers, seed):
     for k in range(n):
         drawn = {key: float(rng.uniform(*span)) for key, span in draws.items()}
         job_options = options | {"table": STAND, "thrust_scale": flown.get("left_thrust_scale", 1.3), "hover_mass": flown.get("hover_mass", 1.02), "set": drawn}
-        jobs.append((flown, 0.0, seed + 1000 * k, 1, flip_at + 7.0, math.radians(2000), 2.0, flip_at, True, name, "none", {}, job_options))
+        jobs.append((flown, 0.0, seed + 1000 * k, 1, flip_at + 7.0, gyro_range, accel_range, flip_at, True, name, "none", {}, job_options))
     with Pool(workers) as pool:
         rows = [r | {"drawn": j[12]["set"]} for j, batch in zip(jobs, pool.map(FF.fly, jobs, chunksize=1)) for r in batch]
     runs = []

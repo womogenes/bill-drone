@@ -1,5 +1,5 @@
 """
-Takeoffs from a tilted rest on drone 1's forward legs (since 2026-11-11): uv run -m sw.sim.takeoff_test [--rests -12,-8,-4,0,4,8] [--seeds 8] [--recording 2026-11-12T01-31-56] [--workers 1]
+Takeoffs from a tilted rest on drone 1's forward legs (since 2026-11-11): uv run -m sw.sim.takeoff_test [--rests -12,-8,-4,0,4,8] [--seeds 8] [--recording 2026-11-12T01-31-56] [--workers 1] [--set name=value,...]
 
 Each run flies the recording's settings (its hover takeoff, outdoors: no camera, the GPS hold and the barometer as flown) on sweep.CURRENT_AIRFRAME's plant from a rest on LEG_FEET, the floor sloped under it so it rests at the given pitch (positive nose-down), with the floor's friction drawn from 0.7-1.5 (--friction), and reports how far the pitch went past the rest (away from level) while the feet are still within 5 cm of the floor, the peak pitch rate then, the largest tilt in the first 1.5 s and whether it was lost. On 2026-11-12 (01:31:56 from -11.5 degrees, 01:05:26 from +7.6, 00:53:45 from -12.5, 01:07:43 from +4.5) the drone pitched 20-30 degrees further from its rest at up to 155 degrees/s before its feet were 4 cm up; from within 3 degrees of level it stayed within 6.
 """
@@ -18,11 +18,11 @@ CLEAR = 0.05
 
 
 def fly(job):
-    rest, seed, recording_name, friction = job
+    rest, seed, recording_name, friction, overrides = job
     from sw.flight_log import recording, settings
     from sw.sim import flight, sweep
 
-    flown = settings(recording(recording_name))
+    flown = settings(recording(recording_name)) | overrides
     rng = random.Random(seed + 7)
     # The floor slopes down ahead for a nose-down rest; a little sideways slope too.
     plant = sweep.CURRENT | {"feet": LEG_FEET, "friction": rng.uniform(*friction), "ground_slope": (-math.tan(math.radians(rest)), math.tan(math.radians(rng.uniform(-2, 2)))),
@@ -61,10 +61,13 @@ def main():
     parser.add_argument("--recording", default=RECORDING)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--friction", default="0.7,1.5", help="the floor's friction is drawn from this range; on grass the feet grip (try 3,6)")
+    parser.add_argument("--set", default="", help="setting overrides, name=value,...")
     args = parser.parse_args()
     rests = [float(r) for r in args.rests.split(",")]
     friction = tuple(float(f) for f in args.friction.split(","))
-    jobs = [(rest, seed, args.recording, friction) for rest in rests for seed in range(args.seeds)]
+    from sw.flight_log import parse_settings
+    overrides = parse_settings(args.set) if args.set else {}
+    jobs = [(rest, seed, args.recording, friction, overrides) for rest in rests for seed in range(args.seeds)]
     with ProcessPoolExecutor(args.workers) as pool:
         results = list(pool.map(fly, jobs))
     print("rest   tilt past the rest on the floor (median, max)   rate there (median, max)   tilt in 1.5 s (median, max)   lost")

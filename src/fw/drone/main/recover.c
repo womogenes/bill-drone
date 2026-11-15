@@ -179,7 +179,9 @@ void recover_tick(RecoverRun *run, const RecoverParams *p, const RecoverInput *i
         quaternion_target(target, quaternion_heading(q), 0, 0);
         attitude_error(q, target, error, NULL);
         AttitudeGains g = {p->kp, p->brake, p->max_rate, 0, {p->k_roll, p->k_pitch, p->kd_yaw}};
-        attitude_rates(&g, error, none, NULL, w, wanted);
+        float seen[3];
+        flip_predicted(a, error, w, seen);
+        attitude_rates(&g, error, none, NULL, seen, wanted);
         flip_allocate(&r, a, wanted[0], wanted[1], wanted[2], collective, w[1], &run->thrust, NULL, dt, &out->motors);
         out->owned = true;
         return;

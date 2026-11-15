@@ -221,26 +221,32 @@ class IndiModel(ctypes.Structure):
 class Indi(ctypes.Structure):
     _fields_ = [("sent_tilt", ctypes.c_float * 2 * 6), ("sent_thrust", ctypes.c_float * 2), ("next", ctypes.c_int), ("tilt", ctypes.c_float * 2), ("tilt_rate", ctypes.c_float * 2), ("thrust", ctypes.c_float * 2),
                 ("filter", ctypes.c_float * 2 * (3 + 3 * INDI_MODELS)), ("gyro", ctypes.c_float * 3), ("model", ctypes.c_float * 3 * INDI_MODELS), ("sent", ctypes.c_bool), ("started", ctypes.c_bool),
-                ("unmodeled", ctypes.c_float * 3 * INDI_MODELS)]
+                ("unmodeled", ctypes.c_float * 3 * INDI_MODELS), ("beyond", ctypes.c_float)]
 
 
 library.indi_sent.argtypes = [ctypes.POINTER(Indi), ctypes.c_float * 2, ctypes.c_float * 2]
 library.indi_update.argtypes = [ctypes.POINTER(Indi), ctypes.c_float * 3, IndiModel * INDI_MODELS, ctypes.c_float]
+library.indi_predict.argtypes = [ctypes.POINTER(Indi), ctypes.POINTER(IndiModel), ctypes.c_float, ctypes.c_float, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
 
 
 class Incremental:
     """
-    INDI as flight_rt.c runs it (incremental, fly): settings' indi (roll and yaw) and indi_pitch are the shares of the correction taken (0 = off); each tick update() before the controller (and the burst and the recovery, which take unmodeled[INDI_FLIP] on their one authority, flip.h FLIP_*_AUTHORITY), apply() to the controller's command, and sent() with the actuators as sent.
+    INDI as flight_rt.c runs it (incremental, fly): settings' indi (roll and yaw) and indi_pitch are the shares of the correction taken (0 = off); each tick update() before the controller (and the burst and the recovery, which take unmodeled[INDI_FLIP] on their one authority, flip.h FLIP_*_AUTHORITY), apply() to the controller's command, and sent() with the actuators as sent update() also runs the servos' dead-time predictor (indi.h indi_predict; settings' pitch_predict its share), whose change in pitch and pitch rate apply() hands the controller and the harness the burst's and the recovery's authority (flip.h FlipAuthority predicted).
     """
 
     def __init__(self, settings, model=MODEL):
         self.shares = (settings.get("indi", 0.0), settings.get("indi_pitch", 0.0), settings.get("indi", 0.0))
-        self.on = max(self.shares) > 0
+
         self.integrate = settings.get("integrate_throttle", 0.0)
         m = model | {key: settings[key] for key in MODEL_TUNING_KEYS if key in settings}
         self.controller = (m["arm"] / m["roll_inertia"], m["pivot_height"] / m["pitch_inertia"], m["com_x"] / m["pitch_inertia"], m["arm"] / m["yaw_inertia"], m["reaction_torque_ratio"] / m["yaw_inertia"])
         self.state = Indi()
         self.fade = 0.0
+        # The servos' dead-time predictor's share (settings.def pitch_predict) and, each tick, its pitch and pitch rate change (flight_rt.c incremental).
+        self.predict = settings.get("pitch_predict", 0.0)
+        self.predicted = (0.0, 0.0)
+        # Whether anything takes INDI's estimate (on the drone it runs whenever armed; off, it changes nothing).
+        self.on = max(self.shares) > 0 or self.predict > 0
 
     def update(self, gyro, holding, height, base, owned=False, flip=(0.0, 0.0, 0.0), dt=0.01):
         """gyro (rad/s); whether the hold flies (engaged in a hover mode and not landed), its height above where it engaged (m), last tick's collective throttle, whether the burst or a recovery flies the motors, and their authority (roll, pitch, yaw)."""
@@ -248,6 +254,13 @@ class Incremental:
         self.fade = min(max(self.fade + (dt if flying else -dt) / INDI_FADE_S, 0.0), 1.0)
         models = (IndiModel * INDI_MODELS)(IndiModel(*self.controller), IndiModel(flip[0], flip[1], 0.0, flip[2], 0.0))
         library.indi_update(ctypes.byref(self.state), (ctypes.c_float * 3)(*gyro), models, dt)
+        rate, angle = ctypes.c_float(), ctypes.c_float()
+        library.indi_predict(ctypes.byref(self.state), ctypes.byref(models[INDI_CONTROLLER]), gyro[1], dt, ctypes.byref(rate), ctypes.byref(angle))
+        self.predicted = (angle.value, rate.value)
+
+    def prediction(self):
+        """The predictor's change in pitch and pitch rate at the share taken now (flight_rt.c incremental: pitch_predict faded in with INDI)."""
+        return [self.fade * self.predict * x for x in self.predicted]
 
     def share(self):
         """The share taken per axis now (roll, pitch, yaw): the settings faded in (flight_rt.c incremental)."""
@@ -257,7 +270,7 @@ class Incremental:
         return list(self.state.unmodeled[which])
 
     def apply(self, controller):
-        controller.command[INDI:INDI + 6] = array("f", self.share() + self.unmodeled())
+        controller.command[INDI - 1:INDI + 8] = array("f", [self.predict] + self.share() + self.unmodeled() + self.prediction())
 
     def sent(self, tilt, thrust):
         """Each assembly's physical forward tilt (radians) and each motor's thrust (N) as sent."""

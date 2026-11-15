@@ -228,12 +228,14 @@ static FlipRun flip;
 static FlipAuthority maneuver = {.roll = FLIP_ROLL_AUTHORITY, .pitch = FLIP_PITCH_AUTHORITY, .yaw = FLIP_YAW_AUTHORITY};
 // Tumble recovery and the pilot's level-and-hold (recover.h). held: since a recovery or a level-and-hold began, the hover holds whatever mode the laptop streams, until the laptop asks for another mode than held_from, the one it streamed then (the pilot's L, or manual); the laptop's tilt is dropped only while the recovery and its grace run, so the pilot steers the hold again after it.
 static RecoverRun recovery;
-// INDI (indi.h; settings.def indi) and the share of its correction taken now: it fades in to the setting over INDI_FADE_S once the hold (or the flip, or a recovery) flies at least INDI_HEIGHT above where it engaged, and out as fast below that, on landing or in manual flight: on the ground the feet hold the drone against what INDI takes as unmodeled, and asking ever more against it winds up like an integrator (the 2026-11-15 bench run, motors off at collective 817: the servos swung -34 to +20 degrees). The controller's airborne count is no liftoff, since it starts when the collective reaches integrate_throttle, nor is the hold's lifted, which runs out after TAKEOFF_WAIT_S on the floor.
+// INDI (indi.h; settings.def indi) and the share of its correction taken now (and of the servos' dead-time predictor, pitch_predict): it fades in to the setting over INDI_FADE_S once the hold (or the flip, or a recovery) flies at least INDI_HEIGHT above where it engaged, and out as fast below that, on landing or in manual flight: on the ground the feet hold the drone against what INDI takes as unmodeled, and asking ever more against it winds up like an integrator (the 2026-11-15 bench run, motors off at collective 817: the servos swung -34 to +20 degrees). The controller's airborne count is no liftoff, since it starts when the collective reaches integrate_throttle, nor is the hold's lifted, which runs out after TAKEOFF_WAIT_S on the floor.
 #define INDI_FADE_S 0.5f
 #define INDI_HEIGHT 0.3f
 static Indi indi;
 // How far INDI has faded in (0-1), and the shares that gives per axis (roll, pitch, yaw: indi, indi_pitch, indi).
 static float indi_fade, indi_share[3];
+// The servos' dead-time predictor's pitch and pitch rate change (indi_predict on the controller's model) at the share taken now: pitch_predict faded in with INDI.
+static float predicted[2];
 static bool held;
 static int held_from;
 static Command flown;
@@ -617,11 +619,12 @@ static void incremental(float dt) {
     if (!state.enabled) {
         indi_reset(&indi);
         indi_fade = 0;
+        predicted[0] = predicted[1] = maneuver.predicted[0] = maneuver.predicted[1] = 0;
         memset(indi_share, 0, sizeof(indi_share));
         return;
     }
     bool owned = flip_active(&flip) || recover_active(&recovery);
-    bool flying = (command.indi > 0 || command.indi_pitch > 0) && (owned || (hover_mode && hover.engaged && !hover.landed && hover.height >= INDI_HEIGHT && flown.base >= command.integrate_throttle));
+    bool flying = (command.indi > 0 || command.indi_pitch > 0 || command.pitch_predict > 0) && (owned || (hover_mode && hover.engaged && !hover.landed && hover.height >= INDI_HEIGHT && flown.base >= command.integrate_throttle));
     indi_fade = clampf(indi_fade + (flying ? dt : -dt) / INDI_FADE_S, 0, 1);
     indi_share[0] = indi_share[2] = indi_fade * command.indi;
     indi_share[1] = indi_fade * command.indi_pitch;
@@ -633,8 +636,11 @@ static void incremental(float dt) {
         [INDI_FLIP] = {a->roll, a->pitch, 0, a->yaw, 0},
     };
     indi_update(&indi, state.gyro, models, dt);
+    indi_predict(&indi, &models[INDI_CONTROLLER], state.gyro[1], dt, &predicted[1], &predicted[0]);
+    for (int i = 0; i < 2; i++) predicted[i] *= indi_fade * command.pitch_predict;
     memcpy(a->indi, indi_share, sizeof(indi_share));
     memcpy(a->unmodeled, indi.unmodeled[INDI_FLIP], sizeof(a->unmodeled));
+    memcpy(a->predicted, predicted, sizeof(a->predicted));
 }
 
 // The attitude estimate (on the gyro alone through a burst or a recovery), INDI and the burst's tick on the body attitude, then the Kalman filter, which takes every tick, GPS solution and barometer reading, flying or not, and hands the hold its estimate. Returns when the timed part of the tick (the log's control_us) began.
@@ -821,6 +827,7 @@ static void fly(Tick *t) {
     if (command.recover_enable >= 1 && isfinite(t->recovered.cap)) setpoint.base = fminf(setpoint.base, collective_throttle(t->recovered.cap));
     memcpy(setpoint.indi_share, indi_share, sizeof(setpoint.indi_share));
     memcpy(setpoint.unmodeled, indi.unmodeled[INDI_CONTROLLER], sizeof(setpoint.unmodeled));
+    memcpy(setpoint.predicted, predicted, sizeof(setpoint.predicted));
     flown = setpoint;
     // Propeller thrust at a fixed throttle goes with the square of battery voltage, so the table's newtons are scaled to the measured voltage: a sagging pack gets more throttle for the same force.
     if (command.thrust_voltage > 0 && battery_v > 0) {

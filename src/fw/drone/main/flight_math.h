@@ -63,7 +63,8 @@ typedef struct {
     // Tumble recovery in place of the tip cut in flight (recover.h; settings.def recover_enable). Runtime-only, last.
     float recover_enable;
     // Incremental nonlinear dynamic inversion (indi.h): the settings indi (roll and yaw) and indi_pitch, and per axis (roll, pitch, yaw) the share now taken (indi_share, the settings faded in by flight_rt.c; 0 = off, the controller as before) of the unmodeled angular acceleration INDI found on this controller's model (unmodeled, rad/s²), which flight_control takes off what it asks. Runtime-only, last.
-    float indi, indi_pitch, indi_share[3], unmodeled[3];
+    // The servos' dead-time predictor (indi.h indi_predict; settings.def pitch_predict, the share of it taken, 0 = off) and what it predicts at the share flight_rt.c takes now (faded in as INDI is): the change in pitch (radians) and pitch rate (rad/s) the servo commands already on their way will make before this tick's command first moves them, which flight_control flies on.
+    float indi, indi_pitch, pitch_predict, indi_share[3], unmodeled[3], predicted[2];
     // The attitude (w, x, y, z; body to level, from pose_zero, as roll and pitch are taken): the controller's roll and pitch errors are the tilt-prioritized error (attitude_error) against the setpoint's roll and pitch at its own heading. Runtime-only, last.
     float attitude[4];
 } Command;

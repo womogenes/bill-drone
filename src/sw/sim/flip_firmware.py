@@ -79,7 +79,7 @@ class Flip(ctypes.Structure):
 
 
 class Authority(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_float) for name in ("roll", "pitch", "yaw", "weight")] + [("indi", ctypes.c_float * 3), ("unmodeled", ctypes.c_float * 3)]
+    _fields_ = [(name, ctypes.c_float) for name in ("roll", "pitch", "yaw", "weight")] + [("indi", ctypes.c_float * 3), ("unmodeled", ctypes.c_float * 3), ("predicted", ctypes.c_float * 2)]
 
 
 
@@ -409,6 +409,7 @@ def fly(job):
                 lane["indi"].update(gyro, bool(hover.state.engaged) and not hover.state.landed, hover.state.height, controller.command[BASE], owned, (a.roll, a.pitch, a.yaw), R.DT)
                 a.indi[:] = lane["indi"].share()
                 a.unmodeled[:] = lane["indi"].unmodeled(flight.INDI_FLIP)
+                a.predicted[:] = lane["indi"].prediction()
                 library.flip_tick(ctypes.byref(run), ctypes.byref(a), quaternion(estimate), (ctypes.c_float * 3)(*gyro), (ctypes.c_float * 3)(*accel), R.DT, controller.state.buffer_info()[0], lane["integral"], ctypes.byref(out))
             else:
                 out = Output()

@@ -276,6 +276,9 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     quaternion_target(target, quaternion_heading(c->attitude), state->setpoint_roll, state->setpoint_pitch);
     attitude_error(c->attitude, target, error, NULL);
     float roll_error = error[0], pitch_error = error[1];
+    // The predictor (indi_predict): the P and damping terms act on where the servos already sent will have taken the pitch, so the loop's phase no longer carries their dead time; the integrator stays on the error now.
+    float pitch_seen_now = pitch_error, gy = c->gy + c->predicted[1];
+    pitch_error -= c->predicted[0];
     // Below integrate_throttle the feet are still down: integrating an error the ground holds would only wind up.
     if (c->base < c->integrate_throttle) {
         state->roll_i = clampf(c->roll_bias, -c->integral_limit, c->integral_limit);
@@ -284,7 +287,7 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     } else {
         state->yaw_i = clampf(state->yaw_i + c->yaw_i * (c->target_yaw - c->gz) * c->dt, -c->integral_limit, c->integral_limit);
         float roll_seen = clampf(roll_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
-        float pitch_seen = clampf(pitch_error, -INTEGRATE_ERROR, INTEGRATE_ERROR);
+        float pitch_seen = clampf(pitch_seen_now, -INTEGRATE_ERROR, INTEGRATE_ERROR);
         state->roll_i = clampf(state->roll_i + c->roll_i * roll_seen * c->dt, -c->integral_limit, c->integral_limit);
         state->pitch_i = clampf(state->pitch_i + c->pitch_i * pitch_seen * c->dt, -c->integral_limit, c->integral_limit);
     }
@@ -295,7 +298,7 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     float speed_torque = c->pitch_speed * state->velocity[1];
     // The pitch damping acts on the rate low-passed over pitch_damping_tau: above pitch_damping 6 the raw rate's damping drove a 2.6-2.8 Hz shake (2026-11-02 04:36 UTC, pitch rate 67 deg/s RMS there at pitch_damping 8), where the servo's lag and the assembly's rising tilt authority leave the loop without phase, while the 0.6-0.9 Hz swing of the 2026-11-08 hops wants more damping than 6 gives. The filter gives up damping above its corner to keep it below.
     float smooth = c->pitch_damping_tau > 0 ? c->dt / (c->pitch_damping_tau + c->dt) : 1;
-    state->damped_gy += (c->gy - state->damped_gy) * smooth;
+    state->damped_gy += (gy - state->damped_gy) * smooth;
     float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * state->damped_gy + speed_torque);
     float yaw_torque = model->yaw_inertia * (c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias + state->yaw_i);
     // INDI (indi.h): its share of what the model leaves out is taken off; the integrators trim whatever it leaves.
