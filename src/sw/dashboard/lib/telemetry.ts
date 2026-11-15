@@ -240,8 +240,7 @@ export type LinkReport = {
   rate: number;
   rate_name: string | null;
   power: number;
-  follow: boolean;
-  hopping: boolean;
+  flags: number;
 };
 
 // The drone service's own view of the last second: status messages received (20 expected), the longest gap between them, packets it dropped as late, and link timeouts.

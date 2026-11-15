@@ -11,7 +11,7 @@
 #define LINK_CHANNEL 7
 #define LINK_REPORT_US 1000000
 
-// The rates a radio_rate setting (drone) or RCF1 rate (relay) picks, by index; 0 is the drone's usual 1 Mbps and 1 the relay's usual 500 kbps long range (both since 2026-10-29), 5 the 11 Mbps update rate (request F).
+// The rates by index, as an RCF1 rate (relay) picks them; 0 is the drone's usual 1 Mbps and 1 the relay's usual 500 kbps long range (both since 2026-10-29), 5 the 11 Mbps update rate (request F).
 static const esp_now_rate_config_t link_rates[] = {
     {.phymode = WIFI_PHY_MODE_11B, .rate = WIFI_PHY_RATE_1M_L},
     {.phymode = WIFI_PHY_MODE_LR, .rate = WIFI_PHY_RATE_LORA_500K},
@@ -23,11 +23,7 @@ static const esp_now_rate_config_t link_rates[] = {
 };
 #define LINK_RATES (sizeof(link_rates) / sizeof(link_rates[0]))
 
-// The 2.4 GHz channels that do not overlap; the drone tries them in this order while it follows its controller (radio_follow). The camera's FPV video uses 11 (fw/esp32cam/README.md).
-static const uint8_t link_channels[] = {6, 1, 11};
-#define LINK_CHANNELS (sizeof(link_channels) / sizeof(link_channels[0]))
-
-// One interval's counts, as sent. rx: packets from the partner (MAC-matched, header-valid); rejected: of those, the drone's refused as stale or from another session, the relay's USB frames dropped (bad frame or a full queue); gaps: the partner's sequence numbers that never arrived (the laptop's on the drone, the drone's on the relay; numbers the sender used without transmitting count too, see refused); silence_ms: the longest time without a partner packet, including the one still running; RSSI of the partner's packets (mean and lowest, dBm, -128 with none) and the receiver's noise floor; tx_ok and tx_fail: the send callbacks (fail: no acknowledgement after the MAC's retries); refused: sends that never went out (window full or esp_now_send failing); latency_ms: the longest send-to-callback time; then the radio's channel, rate index (link_rates), maximum transmit power (0.25 dBm) and flags (drone: 1 radio_follow on, 2 hopping channels, 4 sending through the camera, radio_via_camera; its power is then 0, as the camera keeps its own).
+// One interval's counts, as sent. rx: packets from the partner (MAC-matched, header-valid); rejected: of those, the drone's refused as stale or from another session, the relay's USB frames dropped (bad frame or a full queue); gaps: the partner's sequence numbers that never arrived (the laptop's on the drone, the drone's on the relay; numbers the sender used without transmitting count too, see refused); silence_ms: the longest time without a partner packet, including the one still running; RSSI of the partner's packets (mean and lowest, dBm, -128 with none) and the receiver's noise floor; tx_ok and tx_fail: the send callbacks (fail: no acknowledgement after the MAC's retries); refused: sends that never went out (window full or esp_now_send failing); latency_ms: the longest send-to-callback time; then the radio's channel, rate index (link_rates), maximum transmit power (0.25 dBm) and flags (0 from the drone since 2026-11-15; before, 1 radio_follow, 2 hopping channels, 4 through the camera).
 typedef struct __attribute__((packed)) {
     char magic[4];
     uint16_t interval_ms, rx, rejected, gaps, silence_ms;

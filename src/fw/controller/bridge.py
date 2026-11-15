@@ -11,7 +11,7 @@ The laptop's drone service. It owns the controller's USB port and serves, on 127
 - /update: raw id-tagged requests (tools/ota_direct.py, the dashboard's camera requests), from any number of clients at once; each reply goes to the client that sent its id.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
 - GET /recordings: the recordings for the dashboard's flights page, newest first; ?name=<recording>&columns=<name>,... one recording's events and its records' columns as log_format.py decode_records gives them (each record once, in sequence order; null for NaN), with the flip's phases by number.
-- POST /radio {"rate": i, "power": dBm, "channel": c}: the controller's sending rate (fw/link.h link_rates index), maximum transmit power (0 = the driver's own) and channel until it resets, each optional; only while the drone is disarmed, and another channel than 6 only to a drone that follows its controller (its radio_follow setting). Replies with the controller's next link report.
+- POST /radio {"rate": i, "power": dBm}: the controller's sending rate (fw/link.h link_rates index) and maximum transmit power (0 = the driver's own) until it resets, each optional; only while the drone is disarmed (the drone stays on channel 6). Replies with the controller's next link report.
 - POST /log_test {"drop": fraction, "ack_drop": fraction, "ack_delay_ms": n}: induced flight-log loss for testing the log's repair (drop arriving log fragments, drop or delay the acknowledgements); off until set, cleared by a restart.
 - POST /pattern {"after": s, "repeat": n, "segments": [{"ticks": n, "<channel>": value, ...}, ...]}: load the identification test pattern (log_format.py PATTERN_CHANNELS; drone/main/flight_rt.c excite), or clear it with no segments. It lasts until the drone restarts, and every recording from then on starts with it as a "pattern" event. sw/excite.py builds and sends them.
 
@@ -176,8 +176,6 @@ def decode_link(payload):
         report["rssi"] = report["rssi_min"] = None
     report["rate_name"] = LINK_RATES[report["rate"]] if report["rate"] < len(LINK_RATES) else None
     report["power"] /= 4
-    report["follow"] = bool(report["flags"] & 1)
-    report["hopping"] = bool(report["flags"] & 2)
     return {"source": LINK_SOURCES[magic], **report}
 
 
@@ -1161,25 +1159,20 @@ class Service:
 
     async def post_radio(self, request):
         """
-        The controller's rate, power and channel until it resets (RCF1, fw/controller/native/main/relay.c apply_config); see the module docstring.
+        The controller's rate and power until it resets (RCF1, fw/controller/native/main/relay.c apply_config); see the module docstring.
         """
         try:
             body = await request.json()
-            rate, power, channel = (body.get(key) for key in ("rate", "power", "channel"))
+            rate, power = (body.get(key) for key in ("rate", "power"))
             if rate is not None and not 0 <= int(rate) < len(LINK_RATES):
                 raise ValueError(f"rate is an index 0-{len(LINK_RATES) - 1}: {', '.join(LINK_RATES)}")
             if power is not None and not 0 <= int(power) <= 20:
                 raise ValueError("power is 0 (the driver's own) or 2-20 dBm")
-            if channel is not None and int(channel) not in (1, 6, 11):
-                raise ValueError("channel is 1, 6 or 11")
         except (ValueError, TypeError, AttributeError) as error:
             return web.json_response({"error": str(error)}, status=400)
         if self.reading and self.reading["control"]["enabled"]:
             return web.json_response({"error": "Disarm first: the radio changes only on the ground"}, status=409)
-        drone = self.link["drone"]
-        if channel is not None and int(channel) != 6 and not (drone and drone["follow"]):
-            return web.json_response({"error": "The drone does not follow its controller to another channel: set its radio_follow to 1 first (it needs firmware from 2026-11-09)"}, status=409)
-        payload = b"RCF1" + bytes(0xFF if value is None else int(value) for value in (rate, power, channel))
+        payload = b"RCF1" + bytes(0xFF if value is None else int(value) for value in (rate, power, None))
         waiter = asyncio.get_running_loop().create_future()
         self.radio_waiters.append(waiter)
         if not self.send(LINK_CHANNEL, payload):

@@ -81,10 +81,6 @@ TUNE(hover_return_speed, hover.return_speed, 1, 0, 5, 1)
 TUNE(hover_nudge_accel, hover.nudge_accel, 1, 0, 5, 0)
 TUNE(auto_trim, auto_trim, 1, 0, 1, 0)
 TUNE(pitch_damping_tau, pitch_damping_tau, 1, 0, 0.2, 0)
-// The radio (radio.c, fw/link.h): the rate this drone sends at (link_rates index: 0 1 Mbps, 1 long range 500 kbps, 2 long range 250 kbps, 3 2 Mbps, 4 5.5 Mbps, 5 11 Mbps, 6 802.11g 6 Mbps), its maximum transmit power in dBm (0 = the driver's own, 20 dBm on the ESP32), and whether a disarmed drone that lost its controller looks for it on channels 1, 6 and 11 (1). The controller hears every rate, so the rate and power change only this drone's packets; the defaults are the link as flown before 2026-11-09.
-TUNE(radio_rate, radio_rate, 1, 0, 6, 0)
-TUNE(radio_power, radio_power, 1, 0, 20, 0)
-TUNE(radio_follow, radio_follow, 1, 0, 1, 0)
 // The fly-away failsafe and the test pattern's limits (guard.h; 0 turns a speed, distance or pattern check off). failsafe_land 3 s and failsafe_tilt 20 degrees: in sw/sim/outdoor.py (2026-11-09 06:38 UTC settings, GPS and barometer, 48 runs per wind) they held the worst tenth's furthest distance from takeoff at 4 m/s of wind to 30 m, against 43 m at 5 s and 15 degrees and 85 m without the failsafe, with no more runs lost.
 TUNE(failsafe_speed, guard.speed, 1, 0, 10, 2)
 TUNE(failsafe_distance, guard.distance, 1, 0, 200, 10)
@@ -108,17 +104,6 @@ TUNE(indi, indi, 1, 0, 1, 0)
 TUNE(indi_pitch, indi_pitch, 1, 0, 1, 0)
 // The quaternion attitude (flight_math.c, flip.c, recover.c): 1 carries the attitude as one quaternion (the gyro turning it, the accelerometer pulling its up as the Euler estimate's blend does, gated as before), the attitude controller's roll and pitch errors are the tilt-prioritized error onto the setpoint at the drone's own heading, the bursts (flip_enable 2 and 3) track one reference rotation with the same law in place of the spin and the righting, never over the lower of hover_ceiling and 5 m, the whole flip (flip_enable 1) is refused, and the flip and the recovery fly the estimate itself, with no Euler hand-back and no roll-over (sw/sim/models/NOTES.md "Quaternion attitude"); 0, the default, flies the Euler angles as before.
 TUNE(quaternion, quaternion, 1, 0, 1, 0)
-// BOOT(name, min, max, default): changed by the T request like TUNE, but read only at boot rather than copied into the controller's command. Where an include site does not name BOOT it is a TUNE without a member.
-#ifndef BOOT
-#define BOOT(name, min, max, value) TUNE(name, , 1, min, max, value)
-#define BOOT_AS_TUNE
-#endif
-// 1: the drone's ESP-NOW link goes through the camera's radio and u.FL dipole over their wire (fw/relay_link.h) instead of this board's antenna under the GPS; 0: its own radio. Takes effect at the next restart (T, then R), which also sets the camera's mode.
-BOOT(radio_via_camera, 0, 1, 0)
-#ifdef BOOT_AS_TUNE
-#undef BOOT
-#undef BOOT_AS_TUNE
-#endif
 STATE(servo_offset_left, -60, 60, -3)
 STATE(servo_offset_right, -60, 60, 0)
 // Gyro bias in rad/s and the stationary pose in degrees, valid only for the sensor frame they were taken in:

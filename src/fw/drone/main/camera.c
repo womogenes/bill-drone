@@ -19,7 +19,6 @@
 #include "esp_timer.h"
 #include "camera.h"
 #include "camera_link.h"
-#include "../../relay_link.h"
 
 #define PORT UART_NUM_2
 #define RX 34
@@ -56,9 +55,6 @@ static uint32_t awaited;
 static CameraUpdateReply answer;
 // camera_update's callers (the request service and the radio's relay mode task) take turns.
 static SemaphoreHandle_t update_turn;
-// The radio relay (camera_relay_start): what the camera heard and each send's outcome go to these, from the receive task.
-static void (*relay_received)(const uint8_t *src, int8_t rssi, int8_t noise_floor, const uint8_t *packet, size_t length);
-static void (*relay_sent)(bool delivered);
 
 // A packet's first start bit: the first falling edge on RX after start_arm. It disarms itself, so the 2 Mbaud bytes that follow cost no interrupts. The edge time is the low 32 bits of esp_timer, compared by unsigned difference. This ISR runs from flash, so during a flash write (only while disarmed) the edge is stamped late and the age reads low.
 static volatile bool start_armed;
@@ -125,7 +121,6 @@ static void accept(const CameraPacket *packet, bool synced, uint32_t since_edge_
 static void receive_task(void *arg) {
     static CameraParser parser;
     static CameraReplyParser replies;
-    static RelayParser relays;
     static uint8_t bytes[256];
     uint32_t used_edges = 0;
     while (true) {
@@ -174,22 +169,9 @@ static void receive_task(void *arg) {
                 if (wanted) xSemaphoreGive(answered);
                 completed = true;
             }
-            // Relay frames too, when the radio uses them; their bytes are taken back out of the TAG3 parser's skipped count, so it still counts only noise and boot text.
-            uint32_t relay_bytes = 0;
-            const uint8_t *relay_data = bytes;
-            size_t relay_length = relay_received ? n : 0, total;
-            while ((total = relay_parse(&relays, &relay_data, &relay_length))) {
-                relay_bytes += total;
-                completed = true;
-                const uint8_t *frame = relays.bytes;
-                size_t payload = total - RELAY_HEADER - 2;
-                if (frame[4] == 'R' && payload > 8) relay_received(frame + RELAY_HEADER, (int8_t)frame[RELAY_HEADER + 6], (int8_t)frame[RELAY_HEADER + 7], frame + RELAY_HEADER + 8, payload - 8);
-                else if (frame[4] == 'A' && payload == 1) relay_sent(frame[RELAY_HEADER] == 0);
-            }
             CameraPacket packet;
             while (true) {
-                uint32_t skipped = parser.skipped + relay_bytes, corrupt = parser.corrupt;
-                relay_bytes = 0;
+                uint32_t skipped = parser.skipped, corrupt = parser.corrupt;
                 bool complete = camera_parse(&parser, &data, &length, &packet);
                 portENTER_CRITICAL(&lock);
                 stats.skipped_bytes += parser.skipped - skipped;
@@ -210,7 +192,7 @@ static void receive_task(void *arg) {
             portENTER_CRITICAL(&lock);
             uint32_t since = (uint32_t)esp_timer_get_time() - edge_us;
             portEXIT_CRITICAL(&lock);
-            if (completed || (since > CAMERA_SYNC_WINDOW_US && !parser.have && !replies.have && !relays.have)) start_arm();
+            if (completed || (since > CAMERA_SYNC_WINDOW_US && !parser.have && !replies.have)) start_arm();
         }
     }
 }
@@ -222,8 +204,7 @@ void camera_start(void) {
     answered = xSemaphoreCreateBinary();
     update_turn = xSemaphoreCreateMutex();
     if (!answered || !update_turn) abort();
-    // In relay mode the radio's packets go out through a 4 KB transmit buffer, so neither the radio's timer nor its request service waits for the wire (16 full packets, 2 ms each).
-    ESP_ERROR_CHECK(uart_driver_install(PORT, 2048, relay_received ? 4096 : 0, 16, &events, 0));
+    ESP_ERROR_CHECK(uart_driver_install(PORT, 2048, 0, 16, &events, 0));
     ESP_ERROR_CHECK(uart_param_config(PORT, &link));
     // The driver empties the 128-byte hardware FIFO when it holds 120 bytes, which at 2 Mbaud leaves 8 bytes (40 us) for the interrupt to run before bytes are lost; the camera's packets overflowed it on 10-40% of frames (2026-10-26). At 32 bytes the interrupt has 96 bytes (480 us) of slack, for a few more interrupts per packet.
     ESP_ERROR_CHECK(uart_set_rx_full_threshold(PORT, 32));
@@ -341,20 +322,6 @@ size_t camera_raw(uint32_t baud, const uint8_t *data, size_t length, uint32_t wa
     uart_flush_input(PORT);
     raw_mode = false;
     return n;
-}
-
-void camera_relay_start(void (*received)(const uint8_t *src, int8_t rssi, int8_t noise_floor, const uint8_t *packet, size_t length), void (*sent)(bool delivered)) {
-    relay_sent = sent;
-    relay_received = received;
-}
-
-bool camera_relay_send(const uint8_t *packet, size_t length, uint8_t rate) {
-    uint8_t frame[RELAY_FRAME];
-    size_t total = relay_frame(frame, 'S', rate, packet, length);
-    size_t room = 0;
-    // Never waits: a full buffer (the camera not reading, or a burst) refuses the packet as a full ESP-NOW queue would. The driver's mutex keeps each frame whole against the update requests written from other tasks.
-    if (!total || uart_get_tx_buffer_free_size(PORT, &room) != ESP_OK || room < total) return false;
-    return uart_write_bytes(PORT, frame, total) == (int)total;
 }
 
 void camera_reset(bool download) {
