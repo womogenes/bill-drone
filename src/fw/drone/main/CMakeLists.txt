@@ -12,3 +12,5 @@ target_compile_options(${COMPONENT_LIB} PRIVATE -fno-merge-constants)
 if(BENCH)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE BENCH=1)
 endif()
+# Smaller code for the control tick's glue and the hold (flight.lf): its cost is flash cache misses, not instructions, and hover.c at -Os leaves room in IRAM for flight_math.c. Measured with make bench: -Os here cut the tick by about 15%; flip.c and ekf.c, which compute more, stay at -O2.
+set_source_files_properties(hover.c flight_rt.c guard.c PROPERTIES COMPILE_OPTIONS -Os)
