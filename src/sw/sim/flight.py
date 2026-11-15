@@ -4,6 +4,7 @@ The drone's attitude estimator and flight controller for the host simulation, th
 
 import ctypes
 import math
+import re
 import struct
 import subprocess
 from array import array
@@ -73,6 +74,11 @@ def throttle(force):
     """Convert newtons to an ESC command using the table's rising part, capped at its peak."""
     return interpolate(force, THRUST_TABLE[:PEAK + 1], input_column=1)
 
+
+# The IMU's full scales as the firmware sets them (runtime.h GYRO_COUNTS_PER_DEG_S and ACCEL_COUNTS_PER_G over 16-bit samples): deg/s and g.
+RUNTIME = SOURCE.with_name("runtime.h").read_text()
+GYRO_RANGE = 32768 / float(re.search(r"#define GYRO_COUNTS_PER_DEG_S ([0-9.]+)f", RUNTIME).group(1))
+ACCEL_RANGE = 32768 / float(re.search(r"#define ACCEL_COUNTS_PER_G ([0-9.]+)f", RUNTIME).group(1))
 
 # Geometry and inertia of the current 900 g drone, in meters and kg·m².
 MODEL = {

@@ -47,8 +47,6 @@ UNITS = ("deg/s", "deg/s", "deg/s", "deg", "deg", "g", "g", "g", "m")
 GROUPS = {"rates": (0, 1, 2), "attitude": (3, 4), "accel": (5, 6, 7), "height": (8,)}
 # The bands' accelerometer error (g, body forward) as flip.py and sweep.py have it.
 BAND_ACCEL = 0.025
-# The accelerometer's full scale (g; flight_log reads 16384 counts per g of 16-bit samples).
-ACCEL_RANGE = 2.0
 # Both motors over this throttle: the motors on.
 ON_THROTTLE = 300
 # A drone with the motors on is airborne from this height (m, the filter's) up; without a good height, once the motors are on.
@@ -182,8 +180,10 @@ class Flight:
         self.configuration = configuration
         path = recording(self.name)
         df = read_flight(path)[0].reset_index(drop=True)
-        meta_counts = json.loads(path.with_suffix(".jsonl").read_text().splitlines()[0]).get("gyro_counts_per_deg_s", 131.0)
-        self.gyro_range = 32768 / meta_counts * A.DEG
+        # The IMU's full scales as the recording was flown (its metadata; ±250 deg/s and ±2 g before it said).
+        meta = json.loads(path.with_suffix(".jsonl").read_text().splitlines()[0])
+        self.gyro_range = 32768 / meta.get("gyro_counts_per_deg_s", 131.0) * A.DEG
+        self.accel_range = 32768 / meta.get("accel_counts_per_g", 16384.0)
         self.time = (df["esp_time_us"] - df["esp_time_us"].iloc[0]).to_numpy() / 1e6
         self.gyro = df[["gx_deg_s", "gy_deg_s", "gz_deg_s"]].to_numpy() * A.DEG
         self.throttle = df[["left_throttle", "right_throttle"]].to_numpy(float)
@@ -215,7 +215,7 @@ class Flight:
         self.on = (self.throttle > ON_THROTTLE).all(1)
         self.airborne = airborne_mask(self.on, self.height, self.accel[:, 2])
         self.clipped = (np.abs(self.gyro) >= 0.97 * self.gyro_range).any(1)
-        self.accel_clipped = (np.abs(self.accel) >= 0.97 * ACCEL_RANGE).any(1)
+        self.accel_clipped = (np.abs(self.accel) >= 0.97 * self.accel_range).any(1)
         # The attitude estimate is left out for 2 s after the gyro clipped.
         after = np.convolve(self.clipped.astype(float), np.ones(200), "full")[: len(self.time)] > 0
         self.attitude_good = ~after
@@ -386,7 +386,7 @@ def predict(flight, plant, index, warmup, horizon):
             up = R.rotation(sim.quat)[:, 2, :]
             roll, pitch = np.arctan2(up[:, 1], up[:, 2]), np.arctan2(-up[:, 0], np.hypot(up[:, 1], up[:, 2]))
             rates = np.clip(sim.turned, -flight.gyro_range, flight.gyro_range)
-            out[:, step - 1] = np.column_stack([rates / A.DEG, roll / A.DEG, pitch / A.DEG, np.clip((sim.accel + sim.accel_bias) / A.G, -ACCEL_RANGE, ACCEL_RANGE), sim.pos[:, 2] - z0])
+            out[:, step - 1] = np.column_stack([rates / A.DEG, roll / A.DEG, pitch / A.DEG, np.clip((sim.accel + sim.accel_bias) / A.G, -flight.accel_range, flight.accel_range), sim.pos[:, 2] - z0])
     return out
 
 

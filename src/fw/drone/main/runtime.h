@@ -14,6 +14,10 @@
 // MPU6050 gyro full scale: FS_SEL 3 is ±2000 deg/s at 16.4 counts per deg/s (0 was ±250 at 131 until 2026-11-12). A roll flip spins at about 950 deg/s, which at ±250 the gyro clipped: in sw/sim/flip_firmware.py every flip then hit the ground. The recording's metadata carries the scale (gyro_counts_per_deg_s; sw/flight_log.py takes 131 without it).
 #define GYRO_FS_SEL 3
 #define GYRO_COUNTS_PER_DEG_S 16.4f
+// MPU6050 accelerometer full scale: AFS_SEL 2 is ±8 g at 4096 counts per g (0 was ±2 g at 16384 until 2026-11-15). At ±2 g it clipped in the bursts and tumbles (righting at full throttle asks up to 2.9 g along the thrust axis, a ground strike more), which left the recovery's integrated vertical speed wrong; at ±8 g a count is 0.24 mg, far under the rotors' vibration (about 0.08 g). The recording's metadata carries the scale (accel_counts_per_g; sw/flight_log.py takes 16384 without it).
+#define ACCEL_AFS_SEL 2
+#define ACCEL_COUNTS_PER_G 4096.0f
+#define ACCEL_FULL_SCALE_G (32768 / ACCEL_COUNTS_PER_G)
 // Servo (MG995, analog) and ESC refresh rates, independent of each other; the ESCs take 1000–2200 us pulses at 50 or 400 Hz alike.
 #define SERVO_HZ 100
 #define ESC_HZ 400

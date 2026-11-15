@@ -150,9 +150,9 @@ def ekf_values(values):
     ]
 
 
-def decode_records(data, session, signs, bias, counts):
+def decode_records(data, session, signs, bias, counts, accel_counts):
     """
-    A recording's records (its .bin, FLG1 batches laid end to end) as rows of COLUMNS in the order they were written, resent ones included: signs the sensor-to-body axes, bias the gyro's (deg/s) and counts its counts per deg/s, from the recording's metadata. Also whether it ends mid-batch. Raises ValueError for a batch that is not this session's or not FLG1.
+    A recording's records (its .bin, FLG1 batches laid end to end) as rows of COLUMNS in the order they were written, resent ones included: signs the sensor-to-body axes, bias the gyro's (deg/s), counts its counts per deg/s and accel_counts the accelerometer's per g, from the recording's metadata. Also whether it ends mid-batch. Raises ValueError for a batch that is not this session's or not FLG1.
     """
     rows, truncated, offset = [], False, 0
     while offset < len(data):
@@ -170,7 +170,7 @@ def decode_records(data, session, signs, bias, counts):
             left, right, left_servo, right_servo, target_roll, target_pitch, target_yaw, base, control_us, flags, voltage_mv = fields[11:22]
             rows.append([
                 session, seq, stamp,
-                *(value * sign / 16384 for value, sign in zip((ax, ay, az), signs)),
+                *(value * sign / accel_counts for value, sign in zip((ax, ay, az), signs)),
                 *(value * sign / counts - zero for value, sign, zero in zip((gx, gy, gz), signs, bias)),
                 temperature / 340 + 36.53,
                 *(value / 100 for value in (roll, pitch)),

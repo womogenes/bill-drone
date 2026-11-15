@@ -74,7 +74,7 @@ def jobs(params, n, seed, settings, batch=4, flip_at=7.0, seconds=17.0, randomiz
             low, high = (0.0, MOMENTUM_TOP) if band is None else MOMENTUM_BANDS[band]
             left = 1 - (1 - LEFT_LOW) * ((seed * 0.001 + k * golden * golden) % 1)
             options = {"set": {"rotor_momentum": low + (high - low) * spread}, "airframe": {"right_thrust_gain": 1 / left}}
-        out.append((flown, offset, seed + start, batch, seconds, math.radians(2000), 2.0, flip_at, True, airframe, randomize, params, options))
+        out.append((flown, offset, seed + start, batch, seconds, math.radians(FF.flight.GYRO_RANGE), FF.flight.ACCEL_RANGE, flip_at, True, airframe, randomize, params, options))
     return out
 
 

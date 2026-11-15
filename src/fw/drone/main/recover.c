@@ -1,4 +1,5 @@
 #include "recover.h"
+#include "runtime.h"
 
 #include <math.h>
 
@@ -9,8 +10,8 @@
 // Leveling counts as settled under this vertical speed (m/s) held for SETTLE_S (s).
 #define ARREST_SPEED 0.3f
 #define SETTLE_S 0.3f
-// The vertical speed is checked. The accelerometer's full scale is ±2 g (flight_rt.c's sensor setup); a tick's mean within the gyro's SATURATED share of it (95%) has clipped samples in it. Then the specific force integrated into the vertical speed is no longer the drone's, and the error stays in the integral: righting at full throttle asks up to 2.9 g along the thrust axis and a ground strike more, so on 2026-11-15's lost burst90 in the sim leveling believed a 10 m/s fall while the drone climbed at 11 m/s, and the hold it handed to coasted to 26 m. A jolt or a tumble that stays inside the scale integrates correctly (the 1 kHz samples' mean keeps the impulse, and up is the gyro's, which is good until the gyro saturates too), so saturation of either sensor is the test.
-#define ACCEL_SATURATED (0.95f * 2)
+// The vertical speed is checked. A tick's mean within the gyro's SATURATED share (95%) of the accelerometer's full scale (runtime.h ACCEL_FULL_SCALE_G) has clipped samples in it. Then the specific force integrated into the vertical speed is no longer the drone's, and the error stays in the integral: righting at full throttle asks up to 2.9 g along the thrust axis and a ground strike more, so on 2026-11-15's lost burst90 in the sim leveling believed a 10 m/s fall while the drone climbed at 11 m/s, and the hold it handed to coasted to 26 m. A jolt or a tumble that stays inside the scale integrates correctly (the 1 kHz samples' mean keeps the impulse, and up is the gyro's, which is good until the gyro saturates too), so saturation of either sensor is the test.
+#define ACCEL_SATURATED (0.95f * ACCEL_FULL_SCALE_G)
 // The hold's climb rate integrates the same accelerometer, and only its barometer filter (hover.c take_baro, a triple pole at 1 / hover_baro_tau) takes out what a saturation left in it: (1 + x + x² / 2) e^-x of it after x time constants, 6% after HOLD_SETTLE. A recovery starts from the hold's climb rate only that long after the last saturation; without the barometer, never after one.
 #define HOLD_SETTLE 6
 // The barometer's rate is the slope of a line through its readings over BARO_RATE_S (s). At its 0.09 m RMS in flight (ekf.c: 2026-11-09 under 10 degrees of tilt) and 50 readings a second the slope's noise is 0.09 / sqrt(25 × 0.5² / 12) = 0.12 m/s, well under ARREST_SPEED, so leveling can judge settling on it; it is the rate at the window's middle, BARO_RATE_S / 2 plus the reading's latency ago. The Kalman filter's vertical speed is no alternative: ekf.c integrates the same accelerometer and does not know when it clips.

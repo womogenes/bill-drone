@@ -317,7 +317,7 @@ def read_recording(directory, name, columns):
         if event.get("type") in ("start", "metadata"):
             meta = event | meta
     bias = [math.degrees(value) for value in meta.get("gyro_bias_rad_s", (0, 0, 0))]
-    rows, truncated = decode_records((directory / f"{name}.bin").read_bytes(), meta.get("session"), meta.get("sensor_to_body", (1, 1, 1)), bias, meta.get("gyro_counts_per_deg_s", 131))
+    rows, truncated = decode_records((directory / f"{name}.bin").read_bytes(), meta.get("session"), meta.get("sensor_to_body", (1, 1, 1)), bias, meta.get("gyro_counts_per_deg_s", 131), meta.get("accel_counts_per_g", 16384))
     first, sequence = {}, COLUMNS.index("sequence")
     for row in rows:
         first.setdefault(row[sequence], row)

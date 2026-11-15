@@ -60,7 +60,7 @@ def jobs(case, kind, n, seed, band, batch=4, params=None, extra=None, airframe=F
         options = options_for(case, k, seed, band, airframe) | ({"thrust_scale": 1.2, "hover_mass": 1.05} if scaled else {})
         # The bands' tilt offset drawn as tune_flip does, none on an airframe without the bands (models/airframe_2026-11-15_bursts.json).
         banded = any(FF.R.A.model(airframe).get(key, 0.0) for key in ("left_band", "right_band"))
-        out.append((flown, T.BANDS[k % len(T.BANDS)] if banded else 0.0, seed + start, batch, 17.0, math.radians(2000), 2.0, 7.0, True, airframe, "flip", params or {}, options))
+        out.append((flown, T.BANDS[k % len(T.BANDS)] if banded else 0.0, seed + start, batch, 17.0, math.radians(FF.flight.GYRO_RANGE), FF.flight.ACCEL_RANGE, 7.0, True, airframe, "flip", params or {}, options))
     return out
 
 

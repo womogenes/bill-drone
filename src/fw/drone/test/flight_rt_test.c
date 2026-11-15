@@ -250,7 +250,7 @@ static void step_plant(double dt) {
             body[3 + i] = plant.rate[i] + uniform(-0.01, 0.01) + (i == 1 ? 0.02 : 0);
         }
         for (int i = 0; i < 3; i++) {
-            imu.fifo[k][sensor_axis[i]] = counts(sensor_to_body[i] * body[i], 16384);
+            imu.fifo[k][sensor_axis[i]] = counts(sensor_to_body[i] * body[i], ACCEL_COUNTS_PER_G);
             imu.fifo[k][3 + sensor_axis[i]] = counts(sensor_to_body[i] * body[3 + i], 180 / M_PI * GYRO_COUNTS_PER_DEG_S);
         }
     }

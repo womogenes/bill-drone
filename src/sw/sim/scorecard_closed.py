@@ -14,6 +14,7 @@ import numpy as np
 
 from sw.flight_log import parse_settings, recording, settings as recording_settings
 from sw.sim import airframe as A
+from sw.sim import flight
 from sw.sim import flip_firmware as FF
 from sw.sim import rigid as R
 from sw.sim import scorecard as S
@@ -25,7 +26,7 @@ FLIGHTS = ("2026-11-15T06-53-20", "2026-11-15T06-53-00", "2026-11-15T06-42-27", 
 BAND = (1.5, 4.0)
 SETTLE, SPAN = 1.0, 15.0
 # The sim's IMU: the firmware's ranges (deg/s, g).
-GYRO_RANGE, ACCEL_RANGE = 2000.0, 2.0
+GYRO_RANGE, ACCEL_RANGE = flight.GYRO_RANGE, flight.ACCEL_RANGE
 
 
 class Tracing(R.Sim):

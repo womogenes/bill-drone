@@ -92,7 +92,7 @@ def jobs(scenario, height, settings, options, n, seed, off=False, airframe=AIRFR
         extra["landing"] = EVENT_AT
     seconds = 50.0 if scenario == "flip" else EVENT_AT + AFTER + (4.0 if scenario == "landing" else 0.0)
     batch = 16
-    return [(flown, 0.0, seed + s, batch, seconds, math.radians(2000), 2.0, 25.0, scenario == "flip", airframe, randomize, flip_params or {}, extra) for s in range(0, n, batch)]
+    return [(flown, 0.0, seed + s, batch, seconds, math.radians(F.flight.GYRO_RANGE), F.flight.ACCEL_RANGE, 25.0, scenario == "flip", airframe, randomize, flip_params or {}, extra) for s in range(0, n, batch)]
 
 
 def summary(rows, scenario, holds=None):

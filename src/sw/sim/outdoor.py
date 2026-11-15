@@ -24,6 +24,7 @@ from scipy.signal import butter, sosfiltfilt
 from sw.flight_log import parse_settings, recording
 from sw.flight_log import settings as recording_settings
 from sw.sim import airframe as A
+from sw.sim import flight
 from sw.sim.sweep import BARO, CURRENT, NUDGE_MAX, run
 
 SETTINGS = "2026-11-02T08-15-23"
@@ -137,7 +138,7 @@ def fly(job):
     if args.tilt_offset:
         p["tilt_offset"] = args.tilt_offset
     if args.gyro:
-        p |= {"gyro_counts": args.gyro[0], "imu_range": (args.gyro[1], 2.0)}
+        p |= {"gyro_counts": args.gyro[0], "imu_range": (args.gyro[1], flight.ACCEL_RANGE)}
     if args.flight_accel_bias:
         p["flight_accel_bias"] = (args.flight_accel_bias, 0.0, 0.0)
     if args.gyro_bias:

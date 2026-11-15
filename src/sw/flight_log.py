@@ -73,7 +73,8 @@ def read_flight(path):
     signs = meta["sensor_to_body"]
     # The gyro's counts per deg/s: 131 (±250 deg/s) in recordings from before the metadata said.
     counts = meta.get("gyro_counts_per_deg_s", 131)
-    rows, truncated = decode_records(path.read_bytes(), meta["session"], signs, bias, counts)
+    # The accelerometer's counts per g: 16384 (±2 g) in recordings from before the metadata said.
+    rows, truncated = decode_records(path.read_bytes(), meta["session"], signs, bias, counts, meta.get("accel_counts_per_g", 16384))
     data = pd.DataFrame(rows, columns=COLUMNS).drop_duplicates(["session", "sequence"])
     return data, truncated
 
