@@ -68,10 +68,10 @@ def load_plant(airframe="airframe_2026-10-28.json", disturbances="disturbances_2
     return {"airframe": params, "geometry": A.geometry_of(params), "disturbances": A.model(disturbances) if disturbances else [], "rotor_drag": (0.58, 0.34)}
 
 
-def throttle_for(force):
+def throttle_for(force, table=TABLE):
     """The throttle for a thrust (N) on the table's rising part."""
-    peak = int(np.argmax(TABLE[:, 1]))
-    return np.interp(force, TABLE[: peak + 1, 1], TABLE[: peak + 1, 0])
+    peak = int(np.argmax(table[:, 1]))
+    return np.interp(force, table[: peak + 1, 1], table[: peak + 1, 0])
 
 
 def quat_multiply(a, b):
@@ -160,6 +160,8 @@ class Sim:
         a = plant["airframe"]
         self.a = a
         self.geometry = g = plant.get("geometry") or A.geometry_of(a)
+        # The motors' thrust against throttle: the firmware's table by default; a plant may carry its own (rows of throttle, N), as the 2026-11-14 thrust stand measured the new ESCs, while the firmware flies on its table.
+        self.table = np.asarray(plant.get("table", TABLE), float)
         self.mass = g["mass"]
         # The servos' physical tilt behind their commands (plant["tilt_offset"], degrees, one value or one per env; the 2026-11-11 rubber bands about -2.5) and the accelerometer's steady error in flight (plant["accel_bias"], g, body forward, left, up; the bands about 0.025 forward), as sweep.py has them.
         self.tilt_offset = np.radians(np.broadcast_to(np.asarray(plant.get("tilt_offset", 0.0), float), (n,)))[:, None]
@@ -201,7 +203,7 @@ class Sim:
         self.state.horn[:] = self.state.tilt[:] = tilt_deg
         # The lagged tilted thrust (pitch_wake) starts steady at the starting thrust and tilt.
         self.state.wake[:, 0] = (self.state.motor * np.sin(np.radians(tilt_deg * np.array([1.0, self.p["right_gain"]])))).sum(1)
-        self.throttles = np.zeros((n, self.history, 2)) if motor is None else np.repeat(throttle_for(A.table_for(self.p, self.state.motor, self.trim) / self.thrust_gain)[:, None], self.history, 1)
+        self.throttles = np.zeros((n, self.history, 2)) if motor is None else np.repeat(throttle_for(A.table_for(self.p, self.state.motor, self.trim) / self.thrust_gain, self.table)[:, None], self.history, 1)
         self.commands = np.repeat(tilt_deg[:, None], self.history, 1)
         self.time = 0.0
         self.contact = np.zeros(n)  # largest contact force so far (N)
@@ -226,7 +228,7 @@ class Sim:
         level, mean = A.hover_trim(self.a, self.geometry)
         scalars = [p[key] for key in C_AIRFRAME] + [self.resolved[key] for key in C_GEOMETRY] + [level, mean[0], mean[1]] + [self.mass, THROTTLE_MAX, SERVO_LIMIT, GROUND_K, GROUND_C, FRICTION, AIR_DRAG, self.tilt_share]
         self.c_params = np.concatenate([np.array(scalars, float), HULL.ravel()])
-        self.c_table = np.ascontiguousarray(TABLE)
+        self.c_table = np.ascontiguousarray(self.table)
         self.c_disturbance = np.zeros((self.n, 6))
         self.c_throttle, self.c_tilt = np.zeros((self.n, 2)), np.zeros((self.n, 2))
         address = lambda array: array.ctypes.data
@@ -265,7 +267,7 @@ class Sim:
         st.vel = np.clip(np.einsum("nji,nj->ni", R0, self.vel)[:, :2], -SPEED_RANGE, SPEED_RANGE) * fade[:, None]
         # The airframe's in-flight terms (attitude and speed moments, pushes) come with the rotors' thrust: off on the ground, and fading as the motors spin down, so a drone that has cut its motors is not pushed over.
         airborne = (self.contact_now == 0) * np.clip((self.state.motor[:, 0] + self.state.motor[:, 1]) / (self.mass * G), 0, 1)
-        self.state, alpha_model = A.step(self.p, st, self.throttles, self.commands, np.full(self.n, self.history - 1), np.ones(self.n), self.push, self.trim, airborne, geometry=self.geometry)
+        self.state, alpha_model = A.step(self.p, st, self.throttles, self.commands, np.full(self.n, self.history - 1), np.ones(self.n), self.push, self.trim, airborne, geometry=self.geometry, table=self.table)
         alpha_model = alpha_model / self.inertia_scale[:, None]
         wash = np.clip((self.state.motor[:, 0] + self.state.motor[:, 1]) / (self.mass * G), 0, 1)
         force_disturbance, torque_disturbance = force_disturbance * wash[:, None], torque_disturbance * wash[:, None]

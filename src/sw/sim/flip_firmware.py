@@ -223,7 +223,7 @@ def fly(job):
     """
     One batch of runs on the same drawn plants: per run, whether and when the flip started, why it was refused, and the measures.
 
-    job: settings, tilt offset, seed, runs, seconds, gyro and accelerometer range, flip_at, whether to ask for the flip, the airframe, the randomization, and optionally the flip's parameters (a dict on top of flip_defaults, for tuning) and options, what sw/sim/recover_firmware.py tests on top of the plant: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "recover" (recover.c RecoverParams on top of recover_defaults), "airframe" (factors on the drawn airframe's terms), "roll_thrust" (the roll authority's range, as recover.randomization's, in place of the randomization's), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up, for airframes without rotor_momentum), "deadband" (per run, the throttle under which an ESC stops its motor), "set" (airframe terms set outright after the draws), "recover_limit" (whether the recovery's throttles are slewed and capped, in place of RECOVER_LIMIT) and "trace" (s of the recovery's trace after the event).
+    job: settings, tilt offset, seed, runs, seconds, gyro and accelerometer range, flip_at, whether to ask for the flip, the airframe, the randomization, and optionally the flip's parameters (a dict on top of flip_defaults, for tuning) and options, what sw/sim/recover_firmware.py tests on top of the plant: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "recover" (recover.c RecoverParams on top of recover_defaults), "airframe" (factors on the drawn airframe's terms), "roll_thrust" (the roll authority's range, as recover.randomization's, in place of the randomization's), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up, for airframes without rotor_momentum), "deadband" (per run, the throttle under which an ESC stops its motor), "set" (airframe terms set outright after the draws), "recover_limit" (whether the recovery's throttles are slewed and capped, in place of RECOVER_LIMIT), "trace" (s of the recovery's trace after the event), "table" (the motors' thrust table, rows of throttle and N, in place of the firmware's), "geometry" (geometry terms set outright), "thrust_scale" (the firmware's thrust scales as set, instead of calibrated to each plant) and "hover_mass" (the firmware's hover_mass as set, instead of the plant's mass).
     """
     settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping, airframe, randomize = job[:11]
     # The maneuver's parameters: flip.c's flip_defaults with the job's changes (job[11], a dict, for tuning).
@@ -242,6 +242,10 @@ def fly(job):
         plant["airframe"] = plant["airframe"] | {key: plant["airframe"][key] * factor}
     # "set": airframe terms set outright after the draws (sw/sim/tune_flip.py's robust runs place rotor_momentum in its bands).
     plant["airframe"] = plant["airframe"] | options.get("set", {})
+    # "table": the motors' own thrust table (rows of throttle, N) in place of the firmware's (the 2026-11-14 stand's for the new ESCs); "geometry": geometry terms set outright (a sideways CoM offset as "com").
+    if "table" in options:
+        plant["table"] = options["table"]
+    plant["geometry"] = plant["geometry"] | options.get("geometry", {})
     rng = np.random.default_rng(seed + 31)
     if "roll_thrust" in options:
         scale = (scale or {}) | {"roll_thrust": np.exp(rng.uniform(*np.log(options["roll_thrust"]), n))}
@@ -253,10 +257,13 @@ def fly(job):
     # Each plant's motors against the firmware's thrust table: the drone's thrust scales are calibrated to its own motors (requested newtons are divided by them before the table lookup).
     sim.reset(np.tile([0, 0, 3.0], (n, 1)), np.zeros((n, 3)), np.tile([1.0, 0, 0, 0], (n, 1)), np.zeros((n, 3)), motor=np.column_stack([np.full(n, hover_n), np.full(n, hover_n)]))
     scales = [hover_n / flight.thrust(b) for b in sim.throttles[:, -1].mean(axis=1)]
+    # "thrust_scale": the firmware's thrust scales as set on the drone (left_thrust_scale and right_thrust_scale) instead of calibrated to each plant's motors.
+    if "thrust_scale" in options:
+        scales = [options["thrust_scale"]] * n
     obs = sim.reset(np.tile([0, 0, BELLY], (n, 1)), np.zeros((n, 3)), np.tile([1.0, 0, 0, 0], (n, 1)), np.zeros((n, 3)))
     # The airframe's constant pushes, which the props' gyroscopic push adds to.
     pushes = sim.push.copy()
-    flown = settings | {"enabled": 1, "roll": 0, "pitch": 0, "yaw_rate": 0, "base_throttle": 0.0, "hover_mass": sim.mass}
+    flown = settings | {"enabled": 1, "roll": 0, "pitch": 0, "yaw_rate": 0, "base_throttle": 0.0, "hover_mass": options.get("hover_mass", sim.mass)}
     trim = math.radians(flown["pitch_trim"])
     trims = (math.radians(flown["left_trim"]), math.radians(flown["right_trim"]))
     directions = (flight.MODEL["left_servo_direction"], flight.MODEL["right_servo_direction"])

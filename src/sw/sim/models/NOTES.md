@@ -702,3 +702,47 @@ Today at hover_tilt 15 and 20 the overshoot's 90th percentile is 2.7 and 9.3 m f
 - **Recovery**: recover_firmware_params.json is recover.c's recover_defaults (its idle is now FLIP_FLOOR, 0.2). recover_params.json is sw/sim/recover.py's controller, which predates the firmware.
 - **The recovery on the raised airframe** (recover_firmware.py defaults, 256 runs a row, 2 m / 3 m): tip 95.7 / 95.7% recovered, tilt 73.4 / 85.5%, tumble 27.3 / 46.5%, link-loss landing 53.5 / 55.1%, Level 98.0 / 98.0%; the robust flip from 3 m 99.6% clean, none on the ground. src/fw/FLIP.md "Review and cleanup" has the rest.
 - handoff_2026-11-12.md is the outdoor session's handoff of that day, kept as written.
+
+## The new ESCs: the flip rechecked on the thrust stand's table (2026-11-14)
+
+Today the ESCs are Nuofany 40A (Hobbywing Skywalker-40A clones) calibrated to 1000-2000 µs, and the firmware maps throttle 0-1200 onto that range (5421b0f). The thrust stand (one motor with its 10-inch prop, sw/recordings/stand/2026-11-14T18-07-54, a fresh 4S sagging from 16.3 to 15.3 V; the median of each 2 s step's last 0.8 s) against the firmware's table times the drone's thrust scale 1.3, per motor:
+
+| throttle | 120 | 240 | 360 | 480 | 600 | 720 | 840 | 960 | 1080 | 1200 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| stand (N) | 0.58 | 1.40 | 2.37 | 3.44 | 4.98 | 6.88 | 8.97 | 11.01 | 13.09 | 15.48 |
+| pack (V) | 16.29 | 16.29 | 16.25 | 16.19 | 16.14 | 16.03 | 15.89 | 15.74 | 15.56 | 15.33 |
+| firmware × 1.3 (N) | 1.39 | 2.33 | 3.28 | 4.34 | 5.54 | 7.07 | 8.88 | 10.83 | 12.71 | 14.58 |
+| stand / firmware | 0.41 | 0.59 | 0.71 | 0.78 | 0.89 | 0.98 | 1.04 | 1.06 | 1.10 | 1.17 |
+
+So the firmware overrates the motors below hover (the flip's floor, 0.26 of the weight a motor, is throttle 274 and gives 1.7 N, 0.17 of the weight) and underrates them from 840 up. The stand's motors turn 6015 rpm at 5 N (630 rad/s) and thrust goes as rpm² within 7%. Today's four hovers (2026-11-15T00-19-08 to 00-28-51) at 15.7-14.8 V carry 1.07 kg on the stand's table with thrust as the voltage squared (the firmware's thrust_voltage compensation), so the stand's table holds in flight within about 2%; the firmware's at 1.3 carries 1.12-1.14 kg, 7-9% too strong at hover. The left motor needs 8-10% of the total more thrust than the right in all four, which the coordinator's analysis puts mostly on a CoM 13-18 mm to the left (the two motor/ESC pairs matched within 2% on the stand). On the stand's table with the CoM 15.5 mm left, the firmware at 1.3 and hover_mass 1.02, the sim's hold hovers at 641/586 (the flights 674/607 to 725/647 on a sagging pack).
+
+**rotor_momentum from flight data** (sw/sim models' open-loop replay as flip_replay.fit, rates set back every 0.2 s, rotor_momentum held at each value and the window's other terms refitted; costs are RMS residuals):
+
+| window | refitted | 0 | 0.006 | 0.012 | 0.018 | 0.024 | 0.03 | 0.04 | 0.05 |
+|---|---|---|---|---|---|---|---|---|---|
+| the first flip, 9.85-10.88 s | motor_coast, inflow_damping, yaw_from_roll | 1.009 | **0.963** | 1.027 | 1.177 | 1.370 | 1.479 | 1.605 | 1.697 |
+| ladder 2026-11-12T01-18-33 | prop_torque, yaw_from_roll, inflow_damping | 0.321 | 0.320 | 0.319 | **0.317** | 0.318 | 0.318 | 0.319 | 0.324 |
+| ladder 01-55-51 | the same | 0.319 | 0.316 | 0.314 | 0.312 | 0.312 | **0.311** | 0.312 | 0.315 |
+| ladder 01-59-36 | the same | 0.318 | 0.313 | 0.309 | 0.306 | 0.304 | **0.304** | 0.305 | 0.309 |
+
+The flip favours 0.006-0.012, but only with the roll damping at 0.20-0.25 (four times the hover's; at 0.03 it wants 0.05), so the two trade off; the ladders are flat to 2% over 0-0.05. Today's hovers (on the stand's table) say nothing: the costs wander by 3% with no trend and the fits do not move. Physics with the stand's measured speed gives about 0.020 (a 15 g 10-inch prop's 7e-5 kg·m² at 630 rad/s over √5 N, plus the bell; the inertia is not measured, ±40%). So the data and physics put it at 0.006-0.03 and nothing measured rules out 0.03-0.04.
+
+**The robust flip check on the new ESCs** (sw/sim/flip_esc.py: tune_flip's bands from 5 m, every other untested term drawn, seed 95000; 256 runs a band for the flip, 128 for the bursts; clean % / on the ground %):
+
+| case | 0-0.01 | 0.01-0.02 | 0.02-0.03 | 0.03-0.04 | 0.04-0.05 |
+|---|---|---|---|---|---|
+| before: the robust retune's own check (the firmware's table, left motor 0.8-1) | 99.6 / 0 | 99.6 / 0 | 100 / 0 | 100 / 0 | 97.6 / 2.0 |
+| now: the stand's table, CoM 15.5 mm left, scale 1.3, hover_mass 1.02 | 100 / 0 | 100 / 0 | 98.4 / 1.2 | 91.4 / 8.2 | 79.3 / 20.3 |
+| the battery 15 mm right (CoM 11.9 mm left with a 0.25 kg pack) | 100 / 0 | 100 / 0 | 98.8 / 1.2 | 92.6 / 7.4 | 84.8 / 14.5 |
+| the CoM centered | 100 / 0 | 100 / 0 | 99.2 / 0.8 | 93.4 / 6.6 | 90.6 / 8.6 |
+| scale 1.2, hover_mass 1.05 (settings) | 100 / 0 | 100 / 0 | 98.8 / 0.8 | 94.1 / 5.5 | 87.9 / 10.5 |
+| centered, scale 1.2 | 100 / 0 | 100 / 0 | 99.6 / 0.4 | 95.3 / 4.3 | 93.8 / 5.9 |
+| the stand's table in the firmware (/1.3, at 16.1 V) | 100 / 0 | 99.6 / 0 | 98.4 / 1.2 | 96.5 / 3.1 | 86.2 / 13.4 |
+| the stand's table in the firmware, centered | 100 / 0 | 100 / 0 | 100 / 0 | 99.2 / 0.4 | 93.4 / 6.6 |
+| now, the old weak-left draw on top | 98.0 / 2.0 | 95.7 / 3.1 | 94.1 / 4.3 | 90.6 / 8.2 | 84.0 / 13.3 |
+
+The flip from now: peak roll 577-641 deg/s median, pitch 234-277 below 0.03 and 437-664 above, height lost 90th 0.01-0.13 m below 0.03, 3.3-5.0 m above; it climbs 1.9-2.0 m; tilt after the hand-back 32-37 degrees median below 0.04. The failures above 0.03 are the old ones: the gyroscopic pitch past what gyro_ff takes out (pitch rates to 1000-1300 deg/s at the 90th), the drone handed back at the timeout. Three things cost about equally (the cases apart): the table's shape (the floor's motor slower than the firmware thinks, so the rotors' momenta cancel less, and likely gyro_ff, which takes the firmware's thrusts, undercounting), the scale (all the spin's thrusts 7-10% short at mid throttle) and the CoM (its 0.23 N·m against the right roll while the spin's collective is up). A 15 mm battery shift moves the CoM only 3.6 mm and buys nothing measurable; centering it needs about 65 mm.
+
+The bursts stay robust: as the drone is now, the 60-degree burst is 100% clean with none on the ground in every band (roll 218-234 deg/s median, 90th to 281; pitch 174-187, 90th 225-266; yaw 59-207, 90th 123-289), the 90-degree burst 100% (roll 267-290, 90th to 346; pitch 193-240, 90th to 308; past 90 degrees 90th 0.02-0.27 s; one run lost 4 m in the top band); with the CoM centered, scale 1.2 or the stand's table in the firmware 99.2-100% clean, at most 0.8% on the ground in a band.
+
+Not modelled: the pack's sag through the flip (the plant is the stand as measured, sag included; the firmware's voltage compensation is off in the sim, so it neither helps nor misleads), the rotors in their own wake, the stand's single motor standing for both.
