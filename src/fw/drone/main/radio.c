@@ -774,6 +774,9 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         *size = flight_runtime_servo_result(text, REPLY - 5);
         return *size ? NULL : "Result does not fit the reply";
     }
+#ifdef BENCH
+    if (op == 'b') return flight_runtime_bench(body, length, text, REPLY - 5, size);
+#endif
     if (op == 'P') {
         const char *failure = flight_runtime_pattern(body, length, text, REPLY - 5);
         if (failure) return failure;

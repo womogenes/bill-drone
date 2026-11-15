@@ -111,6 +111,10 @@ bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias);
 // Loads (or with no segments clears) the identification test pattern; NULL and a JSON summary in text, or an error.
 const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *text, size_t size);
 void flight_runtime_status(Status *status);
+#ifdef BENCH
+// The compute and scheduling benchmark's request (test build only, make bench: bench_flight.c); the reply's text and its length in written.
+const char *flight_runtime_bench(const uint8_t *body, size_t length, char *text, size_t size, size_t *written);
+#endif
 
 // The ESP-NOW link and request service (radio.c).
 void radio_start(void);
