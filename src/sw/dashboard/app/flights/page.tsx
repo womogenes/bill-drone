@@ -54,7 +54,7 @@ function Flights() {
             window.history.replaceState(null, '', url);
           }}
         >
-          <SelectTrigger aria-label="Flight" className="w-60 border-border bg-transparent">
+          <SelectTrigger aria-label="Flight" className="w-60">
             <SelectValue placeholder="No flights yet" />
           </SelectTrigger>
           <SelectContent align="start" alignItemWithTrigger={false}>
