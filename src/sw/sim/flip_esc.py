@@ -1,5 +1,5 @@
 """
-The robust burst check (sw/sim/tune_flip.py --check --bands: 5 rotor_momentum bands over 0-0.05, every other untested term drawn as flip_firmware.uncertain, from the 5 m hold) on the 2026-11-14 ESCs: uv run -m sw.sim.flip_esc CASE [--kind burst30|burst60|burst90] [--n 256] [--workers 90] [--out results.json]
+The robust burst check (sw/sim/tune_flip.py --check --bands: 5 rotor_momentum bands over 0-0.05, every other untested term drawn as flip_firmware.uncertain, from the 5 m hold) on the 2026-11-14 ESCs: uv run -m sw.sim.flip_esc CASE [--kind burst30|burst60|burst90] [--sag] [--n 256] [--workers 90] [--out results.json]
 
 The plant's motors are the thrust stand's (STAND: one motor with its 10-inch prop on the Nuofany 40A calibrated to 1000-2000 us, sw/recordings/stand/2026-11-14T18-07-54, a fresh 4S sagging from 16.3 to 15.3 V; per motor, against the drone's throttle 0-1200) with no ceiling (the table's top is measured now), both motors alike within 3% (the stand found the two pairs within about 2%), while the firmware flies on its own table (flight_math.c) at the drone's thrust scales 1.3 and hover_mass 1.02, as set on 2026-11-14 (SETTINGS, the GPS hold 5 m up as tune_flip.HIGH). Today's 8-10% hover split, left high (2026-11-15T00-19-08 to 00-28-51 UTC), is a CoM offset to the left (COM_LEFT, (L - R) / (L + R) = offset / arm); on this plant the sim's hold needs 641/586 against the flights' 674/607 to 725/647 on a sagging pack. roll_bias is today's 12.87 scaled with the offset (the auto-trim's).
 
@@ -21,6 +21,8 @@ from sw.sim import tune_flip as T
 # The stand (2026-11-14T18-07-54, the median of each 2 s step's last 0.8 s; the load cell lags about 0.16 s): drone throttle (the stand's times 1.2), thrust per motor (N) and the pack under that load (V).
 STAND = np.array([[0, 0.0], [120, 0.575], [240, 1.400], [360, 2.372], [480, 3.438], [600, 4.975], [720, 6.875], [840, 8.973], [960, 11.014], [1080, 13.090], [1200, 15.484]])
 STAND_VOLTS = [16.34, 16.29, 16.29, 16.25, 16.19, 16.14, 16.03, 15.89, 15.74, 15.56, 15.33]
+# The pack's sag under the stand's load (--sag): V0 - k T^1.5 per motor's thrust T (N), fitted to STAND_VOLTS (0.013 V RMS): 16.31 V and 0.0160 V per N^1.5.
+SAG = tuple(float(v) for v in np.polyfit(STAND[:, 1] ** 1.5, STAND_VOLTS, 1)[::-1] * (1, -1))
 ARM, MASS = 0.172, 1.05
 WEIGHT = MASS * 9.81
 COM_LEFT = 0.0155
@@ -51,13 +53,13 @@ def options_for(case, k, seed, band, airframe=FF.AIRFRAME):
     return options
 
 
-def jobs(case, kind, n, seed, band, batch=4, params=None, extra=None, airframe=FF.AIRFRAME):
+def jobs(case, kind, n, seed, band, batch=4, params=None, extra=None, airframe=FF.AIRFRAME, sag=False):
     scaled = case.endswith("_s12")
     case = case.removesuffix("_s12")
     flown = recording_settings(recording(SETTINGS)) | FF.FLIGHT | T.HIGH | T.FAST_CLIMB | {"flip_angle": KINDS[kind], "roll_bias": ROLL_BIAS * max(CASES[case], 0) / COM_LEFT} | (extra or {})
     out = []
     for k, start in enumerate(range(0, n, batch)):
-        options = options_for(case, k, seed, band, airframe) | ({"thrust_scale": 1.2, "hover_mass": 1.05} if scaled else {})
+        options = options_for(case, k, seed, band, airframe) | ({"thrust_scale": 1.2, "hover_mass": 1.05} if scaled else {}) | ({"sag": SAG, "table_volts": STAND_VOLTS} if sag else {})
         # The bands' tilt offset drawn as tune_flip does, none on an airframe without the bands (models/airframe_2026-11-15_bursts.json).
         banded = any(FF.R.A.model(airframe).get(key, 0.0) for key in ("left_band", "right_band"))
         out.append((flown, T.BANDS[k % len(T.BANDS)] if banded else 0.0, seed + start, batch, 17.0, math.radians(FF.flight.GYRO_RANGE), FF.flight.ACCEL_RANGE, 7.0, True, airframe, "flip", params or {}, options))
@@ -83,12 +85,13 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--set", default="", help="settings on top, name=value,...")
     parser.add_argument("--airframe", default=FF.AIRFRAME, help="the plant's airframe in sw/sim/models (airframe_2026-11-15_bursts.json: the 2026-11-15 bursts' plant, the bands off)")
+    parser.add_argument("--sag", action="store_true", help="the pack sags under the motors' load as on the stand (SAG), and the firmware compensates where thrust_voltage is set (--set thrust_voltage=16.1)")
     parser.add_argument("--params", default="{}", help="flip parameters over flip_defaults, as JSON (e.g. '{\"yaw_ff\": 2.7}')")
     args = parser.parse_args()
     out = {}
     with Pool(args.workers) as pool:
         for band, (low, high) in enumerate(T.MOMENTUM_BANDS):
-            rows = [r for batch in pool.map(FF.fly, jobs(args.case, args.kind, args.n, args.seed, band, params=json.loads(args.params), extra=parse_settings(args.set), airframe=args.airframe), chunksize=1) for r in batch]
+            rows = [r for batch in pool.map(FF.fly, jobs(args.case, args.kind, args.n, args.seed, band, params=json.loads(args.params), extra=parse_settings(args.set), airframe=args.airframe, sag=args.sag), chunksize=1) for r in batch]
             s = out[f"{low:.2f}-{high:.2f}"] = stats(rows)
             print(f"{args.case} {args.kind} rotor_momentum {low:.2f}-{high:.2f}: clean {s['clean'] * 100:.1f}%, touched {s['touched'] * 100:.1f}%, height lost 90th {s['lost_90']:.2f} m (worst {s['lost_worst']:.2f}); peak rates roll/pitch/yaw median {s['rates_median']} (90th {s['rates_90']}) deg/s; "
                   f"tilt after the hand-back {s['after_tilt_median']:.0f} deg (90th {s['after_tilt_90']:.0f}); climbed {s['climbed_median']:.2f} m; handed back {s['handed_median']:.2f} s (90th {s['handed_90']:.2f}); past 90 deg 90th {s['past90_90']:.2f} s", flush=True)
