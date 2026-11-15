@@ -1,0 +1,1470 @@
+{
+ "logs": {
+  "2026-11-15T06-53-20": {
+   "liftoff": 2.010087,
+   "tip_after_liftoff": 0.7099609999999998,
+   "largest_pitch": 44.09,
+   "peak_hz": 2.222335808274645,
+   "pitch_rate_rms": 167.16038728968616
+  },
+  "2026-11-15T06-53-00": {
+   "liftoff": 2.970053,
+   "tip_after_liftoff": 0.9096030000000002,
+   "largest_pitch": 41.44,
+   "peak_hz": 2.221822294209265,
+   "pitch_rate_rms": 244.9134422383958
+  },
+  "2026-11-15T06-42-27": {
+   "liftoff": 1.680029,
+   "tip_after_liftoff": null,
+   "largest_pitch": 10.63,
+   "peak_hz": 1.6440314510364546,
+   "band_rms": 5.520419352077736,
+   "pitch_rate_rms": 13.147936861414413
+  },
+  "2026-11-15T06-30-27": {
+   "liftoff": 1.940089,
+   "tip_after_liftoff": null,
+   "largest_pitch": 30.189999999999998,
+   "peak_hz": 3.0,
+   "band_rms": 15.139777643765676,
+   "pitch_rate_rms": 15.523943708295109
+  },
+  "2026-11-15T06-58-00": {
+   "liftoff": 2.000065,
+   "tip_after_liftoff": null,
+   "largest_pitch": 9.06,
+   "peak_hz": 2.28734810578985,
+   "band_rms": 12.455568350303878,
+   "pitch_rate_rms": 13.132746027406016
+  },
+  "2026-11-15T07-12-25": {
+   "liftoff": 2.169642,
+   "tip_after_liftoff": null,
+   "largest_pitch": 10.64,
+   "peak_hz": 2.3547880690737832,
+   "band_rms": 16.59658277342366,
+   "pitch_rate_rms": 18.52462597110788
+  },
+  "2026-11-15T05-18-14": {
+   "liftoff": 1.690116,
+   "tip_after_liftoff": null,
+   "largest_pitch": 7.04,
+   "peak_hz": 2.28734810578985,
+   "band_rms": 13.492419733554138,
+   "pitch_rate_rms": 14.011743705656485
+  },
+  "2026-11-15T04-12-31": {
+   "liftoff": 2.080129,
+   "tip_after_liftoff": null,
+   "largest_pitch": 10.72,
+   "peak_hz": 2.5,
+   "band_rms": 11.618070084429561,
+   "pitch_rate_rms": 12.294519650688507
+  },
+  "2026-11-12T01-07-43": {
+   "liftoff": 1.720128,
+   "tip_after_liftoff": null,
+   "largest_pitch": 13.36,
+   "peak_hz": 2.5,
+   "band_rms": 15.447701973770837,
+   "pitch_rate_rms": 17.84709579330219
+  },
+  "2026-11-12T01-38-41": {
+   "liftoff": 2.270403,
+   "tip_after_liftoff": null,
+   "largest_pitch": 9.49,
+   "peak_hz": 2.355460385438972,
+   "band_rms": 19.278414329243596,
+   "pitch_rate_rms": 19.422900936252557
+  },
+  "2026-11-12T02-21-10": {
+   "liftoff": 1.56011,
+   "tip_after_liftoff": null,
+   "largest_pitch": 15.14,
+   "peak_hz": 2.357142857142857,
+   "band_rms": 18.605996094030377,
+   "pitch_rate_rms": 19.446162037266387
+  }
+ },
+ "runs": [
+  {
+   "name": "2026-11-15T06-53-20",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.535848518899861,
+     "peak_hz": 2.6119402985074625,
+     "band_rms": 7.124082292301555,
+     "pitch_rate_rms": 16.248966970641465,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.936027171814786,
+     "peak_hz": 2.2556390977443606,
+     "band_rms": 12.0848173798413,
+     "pitch_rate_rms": 19.22798897190372,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.757599581325521,
+     "peak_hz": 2.247191011235955,
+     "band_rms": 8.65454906433891,
+     "pitch_rate_rms": 16.89787356247433,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.687361938547926,
+     "peak_hz": 2.247191011235955,
+     "band_rms": 9.503441803220703,
+     "pitch_rate_rms": 17.746909659913456,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-53-20",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": 1.36,
+     "largest_pitch": 49.987940139269035,
+     "peak_hz": 2.0833333333333335,
+     "pitch_rate_rms": 217.47017236415323,
+     "tipped": true
+    },
+    {
+     "liftoff": 1.6500000000000001,
+     "tip_after_liftoff": 1.3,
+     "largest_pitch": 45.19504200666567,
+     "peak_hz": 2.1052631578947367,
+     "pitch_rate_rms": 224.74042327697484,
+     "tipped": true
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": 1.3199999999999998,
+     "largest_pitch": 48.221806160731326,
+     "peak_hz": 2.1052631578947367,
+     "pitch_rate_rms": 221.81687332750877,
+     "tipped": true
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": 1.3199999999999998,
+     "largest_pitch": 46.19653670456745,
+     "peak_hz": 2.1052631578947363,
+     "pitch_rate_rms": 213.086752016507,
+     "tipped": true
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-53-20",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 1.74,
+     "tip_after_liftoff": null,
+     "largest_pitch": 12.654919464329256,
+     "peak_hz": 1.5625,
+     "band_rms": 35.27808835951786,
+     "pitch_rate_rms": 39.69760300113614,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.78,
+     "tip_after_liftoff": null,
+     "largest_pitch": 11.150289431255707,
+     "peak_hz": 1.984126984126984,
+     "band_rms": 35.26433535604802,
+     "pitch_rate_rms": 41.02726926098791,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.76,
+     "tip_after_liftoff": null,
+     "largest_pitch": 11.424862218085247,
+     "peak_hz": 1.9685039370078738,
+     "band_rms": 33.427595434888104,
+     "pitch_rate_rms": 39.069436489448016,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.77,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.14590957571216,
+     "peak_hz": 1.9762845849802368,
+     "band_rms": 29.558686090444528,
+     "pitch_rate_rms": 35.838508908814205,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-53-00",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.535848518899861,
+     "peak_hz": 1.6233766233766234,
+     "band_rms": 6.840069698896397,
+     "pitch_rate_rms": 15.428443649501306,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.936027171814786,
+     "peak_hz": 1.9607843137254903,
+     "band_rms": 10.565297930616087,
+     "pitch_rate_rms": 18.24317935389385,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.757599581325521,
+     "peak_hz": 1.9543973941368078,
+     "band_rms": 8.379042414431455,
+     "pitch_rate_rms": 16.10245383408008,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.687361938547926,
+     "peak_hz": 1.9543973941368078,
+     "band_rms": 9.073556068247987,
+     "pitch_rate_rms": 16.762301575944687,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-53-00",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": 1.36,
+     "largest_pitch": 49.987940139269035,
+     "peak_hz": 2.0833333333333335,
+     "pitch_rate_rms": 217.47017236415323,
+     "tipped": true
+    },
+    {
+     "liftoff": 1.6500000000000001,
+     "tip_after_liftoff": 1.3,
+     "largest_pitch": 45.19504200666567,
+     "peak_hz": 2.1052631578947367,
+     "pitch_rate_rms": 224.74042327697484,
+     "tipped": true
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": 1.3199999999999998,
+     "largest_pitch": 48.221806160731326,
+     "peak_hz": 2.1052631578947367,
+     "pitch_rate_rms": 221.81687332750877,
+     "tipped": true
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": 1.3199999999999998,
+     "largest_pitch": 46.19653670456745,
+     "peak_hz": 2.1052631578947363,
+     "pitch_rate_rms": 213.086752016507,
+     "tipped": true
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-53-00",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 1.74,
+     "tip_after_liftoff": null,
+     "largest_pitch": 12.654919464329256,
+     "peak_hz": 1.689189189189189,
+     "band_rms": 31.852769699675093,
+     "pitch_rate_rms": 39.672255007623484,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.78,
+     "tip_after_liftoff": null,
+     "largest_pitch": 11.42474616220911,
+     "peak_hz": 1.7123287671232876,
+     "band_rms": 32.82615212309211,
+     "pitch_rate_rms": 42.91907001606913,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.76,
+     "tip_after_liftoff": null,
+     "largest_pitch": 11.424862218085247,
+     "peak_hz": 1.7006802721088434,
+     "band_rms": 30.978485527350287,
+     "pitch_rate_rms": 40.59456984597866,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.77,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.14590957571216,
+     "peak_hz": 1.706484641638225,
+     "band_rms": 27.390673937884813,
+     "pitch_rate_rms": 36.94297569050712,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-42-27",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.127824098245847,
+     "peak_hz": 1.5703069236259817,
+     "band_rms": 1.9544552945128582,
+     "pitch_rate_rms": 10.671549634478904,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.727194316252598,
+     "peak_hz": 1.7130620985010707,
+     "band_rms": 2.123867472688848,
+     "pitch_rate_rms": 9.969841000309705,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.957588059802218,
+     "peak_hz": 1.6416845110635263,
+     "band_rms": 2.9205717290073228,
+     "pitch_rate_rms": 10.391686967984164,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.6401519235633,
+     "peak_hz": 1.5703069236259817,
+     "band_rms": 1.9970941507352444,
+     "pitch_rate_rms": 10.405162680975028,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-42-27",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 13.408112460032017,
+     "peak_hz": 2.069950035688794,
+     "band_rms": 15.097936260456548,
+     "pitch_rate_rms": 16.642874236988515,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6500000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.682894241949796,
+     "peak_hz": 2.142857142857143,
+     "band_rms": 12.926379944967088,
+     "pitch_rate_rms": 14.13451861202588,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.787945503447986,
+     "peak_hz": 2.1413276231263385,
+     "band_rms": 8.964733702733774,
+     "pitch_rate_rms": 12.121570766922089,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.813082211618982,
+     "peak_hz": 2.069950035688794,
+     "band_rms": 16.435016297228724,
+     "pitch_rate_rms": 17.29882931216821,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-42-27",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 1.74,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.383140492246786,
+     "peak_hz": 1.857142857142857,
+     "band_rms": 5.822761811755621,
+     "pitch_rate_rms": 13.325893918010468,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.78,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.47711711597024,
+     "peak_hz": 2.2127052105638834,
+     "band_rms": 7.097751631347964,
+     "pitch_rate_rms": 12.664620226290138,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.76,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.33616208703664,
+     "peak_hz": 1.85581727337616,
+     "band_rms": 4.674654713325107,
+     "pitch_rate_rms": 12.789879976731152,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.77,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.748944034177688,
+     "peak_hz": 1.7844396859386153,
+     "band_rms": 6.644822828679854,
+     "pitch_rate_rms": 12.429911849857298,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-30-27",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.183799112848241,
+     "peak_hz": 2.9264810849393292,
+     "band_rms": 4.460597560745217,
+     "pitch_rate_rms": 7.272447291322302,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.638857256637151,
+     "peak_hz": 1.7130620985010707,
+     "band_rms": 3.885402824656628,
+     "pitch_rate_rms": 7.459927516906675,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 1.8244465419301157,
+     "peak_hz": 2.855103497501785,
+     "band_rms": 2.203871907127019,
+     "pitch_rate_rms": 2.9728719284690226,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.677955711606977,
+     "peak_hz": 2.997858672376874,
+     "band_rms": 5.305657726374483,
+     "pitch_rate_rms": 7.485676532762861,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-30-27",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 15.4165461757762,
+     "peak_hz": 1.9271948608137046,
+     "band_rms": 44.317698322500945,
+     "pitch_rate_rms": 44.40268570124098,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.94970270881939,
+     "peak_hz": 2.069950035688794,
+     "band_rms": 24.12046024955535,
+     "pitch_rate_rms": 24.262903828149618,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.843782164381988,
+     "peak_hz": 2.2127052105638834,
+     "band_rms": 16.50704835563997,
+     "pitch_rate_rms": 16.750924395491165,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": 13.23,
+     "largest_pitch": 45.244242088569315,
+     "peak_hz": 1.8790849673202614,
+     "band_rms": 122.64081129759853,
+     "pitch_rate_rms": 122.79743849715008,
+     "tipped": true
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-30-27",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 1.73,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.587604587924762,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 9.038872363085765,
+     "pitch_rate_rms": 12.910539723887517,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.77,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.389943140520131,
+     "peak_hz": 2.5695931477516063,
+     "band_rms": 9.564621408230904,
+     "pitch_rate_rms": 11.862359133099028,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.75,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.819876712053556,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 9.702161658440946,
+     "pitch_rate_rms": 11.970734565965664,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.77,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.342529570898002,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 9.63996037834446,
+     "pitch_rate_rms": 12.264724821349963,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-58-00",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.43255564663388,
+     "peak_hz": 3.2833690221270526,
+     "band_rms": 3.462300110628083,
+     "pitch_rate_rms": 8.820230070766048,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.343619450105696,
+     "peak_hz": 1.7130620985010707,
+     "band_rms": 3.249160812474695,
+     "pitch_rate_rms": 8.164257829873169,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.574999232207455,
+     "peak_hz": 1.7844396859386153,
+     "band_rms": 2.9958906464455146,
+     "pitch_rate_rms": 8.626415367545738,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.421102744495053,
+     "peak_hz": 1.7130620985010707,
+     "band_rms": 4.088881054242555,
+     "pitch_rate_rms": 8.23653265963345,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-58-00",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 13.554918449382066,
+     "peak_hz": 2.069950035688794,
+     "band_rms": 24.00233257575395,
+     "pitch_rate_rms": 24.409975177926842,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6500000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.153904622924088,
+     "peak_hz": 2.071428571428571,
+     "band_rms": 23.331108405787784,
+     "pitch_rate_rms": 23.61491683492997,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 11.770886655810212,
+     "peak_hz": 2.069950035688794,
+     "band_rms": 21.787020361329958,
+     "pitch_rate_rms": 22.33567402376467,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": 15.52,
+     "largest_pitch": 34.30931594650813,
+     "peak_hz": 1.9271948608137046,
+     "band_rms": 100.6846396899281,
+     "pitch_rate_rms": 100.82507892299189,
+     "tipped": true
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T06-58-00",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 1.74,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.405502709330213,
+     "peak_hz": 2.571428571428571,
+     "band_rms": 8.949539921458918,
+     "pitch_rate_rms": 12.669001578324407,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.78,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.305676312754446,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 9.436608417311362,
+     "pitch_rate_rms": 11.779417552809194,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.76,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.626664203420871,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 9.091153756403473,
+     "pitch_rate_rms": 12.430892625356284,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.77,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.285606068599108,
+     "peak_hz": 2.7123483226266956,
+     "band_rms": 9.429986260175166,
+     "pitch_rate_rms": 12.174214718118126,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T07-12-25",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.967095702097247,
+     "peak_hz": 1.85581727337616,
+     "band_rms": 3.071149609428539,
+     "pitch_rate_rms": 8.713445230720575,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.7986886162709474,
+     "peak_hz": 2.1413276231263385,
+     "band_rms": 3.069213253950325,
+     "pitch_rate_rms": 7.87829911100049,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.921169306969463,
+     "peak_hz": 1.7844396859386153,
+     "band_rms": 3.040609834370398,
+     "pitch_rate_rms": 8.075212570753973,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.078047071303545,
+     "peak_hz": 2.997858672376874,
+     "band_rms": 4.611323724874304,
+     "pitch_rate_rms": 8.100835295535703,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T07-12-25",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 13.184747396466392,
+     "peak_hz": 2.2127052105638834,
+     "band_rms": 20.367021804656922,
+     "pitch_rate_rms": 20.954717180992496,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6500000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.13500380534309,
+     "peak_hz": 2.142857142857143,
+     "band_rms": 21.075948870843895,
+     "pitch_rate_rms": 21.431487982384763,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 11.975988863962344,
+     "peak_hz": 2.355460385438972,
+     "band_rms": 16.297222710398618,
+     "pitch_rate_rms": 17.238839777066406,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.806347373501406,
+     "peak_hz": 2.2840827980014278,
+     "band_rms": 19.07240926079272,
+     "pitch_rate_rms": 19.618455766433268,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T07-12-25",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 1.74,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.085092529856476,
+     "peak_hz": 2.642857142857143,
+     "band_rms": 8.728424678036532,
+     "pitch_rate_rms": 12.606336181932164,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.78,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.439340780769731,
+     "peak_hz": 2.7123483226266956,
+     "band_rms": 9.013353526778301,
+     "pitch_rate_rms": 11.535684832222959,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.76,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.520209875553416,
+     "peak_hz": 2.4982155603140614,
+     "band_rms": 8.01044102142758,
+     "pitch_rate_rms": 12.25817643598576,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.77,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.461864898332722,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 9.99990917569343,
+     "pitch_rate_rms": 12.489323473780166,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T05-18-14",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 3.670304025638045,
+     "peak_hz": 3.1406138472519634,
+     "band_rms": 3.4716832075003956,
+     "pitch_rate_rms": 3.8054814646027713,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.565032982708926,
+     "peak_hz": 2.997858672376874,
+     "band_rms": 5.906734022785087,
+     "pitch_rate_rms": 7.724222284492254,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 2.517312307213201,
+     "peak_hz": 3.2119914346895078,
+     "band_rms": 3.1969742404835655,
+     "pitch_rate_rms": 3.431595568553754,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.803763472817361,
+     "peak_hz": 3.2833690221270526,
+     "band_rms": 6.104358768261572,
+     "pitch_rate_rms": 7.602312124931796,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T05-18-14",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 5.068557708706205,
+     "peak_hz": 2.355460385438972,
+     "band_rms": 13.221996051854674,
+     "pitch_rate_rms": 13.285249782483435,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6500000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 11.588525965045614,
+     "peak_hz": 2.0,
+     "band_rms": 31.525678320626792,
+     "pitch_rate_rms": 31.659931494391,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 3.692371065173594,
+     "peak_hz": 2.2840827980014278,
+     "band_rms": 13.33710414602822,
+     "pitch_rate_rms": 13.413383868748681,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.646797608498161,
+     "peak_hz": 2.2840827980014278,
+     "band_rms": 16.15338848525392,
+     "pitch_rate_rms": 16.44513979513581,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T05-18-14",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 1.73,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.193395306033932,
+     "peak_hz": 2.5695931477516063,
+     "band_rms": 6.321756365508928,
+     "pitch_rate_rms": 6.749156769126973,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.78,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.263993766837238,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 10.211237947244339,
+     "pitch_rate_rms": 12.024483986180226,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.75,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.948505687046913,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 9.868497983218115,
+     "pitch_rate_rms": 11.152665625888774,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.77,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.137432694428881,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 9.155313006476685,
+     "pitch_rate_rms": 11.947250980848645,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T04-12-31",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 3.7933046913975508,
+     "peak_hz": 3.2833690221270526,
+     "band_rms": 3.341308903744106,
+     "pitch_rate_rms": 3.563272862020026,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 2.7127403744361693,
+     "peak_hz": 3.2833690221270526,
+     "band_rms": 3.2438141647618637,
+     "pitch_rate_rms": 3.466858207425254,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 2.639085018788836,
+     "peak_hz": 3.2833690221270526,
+     "band_rms": 3.6079296132879786,
+     "pitch_rate_rms": 3.8192472721120727,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 2.5883679936985704,
+     "peak_hz": 3.2833690221270526,
+     "band_rms": 3.4498351782567536,
+     "pitch_rate_rms": 3.6399084211447015,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T04-12-31",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 1.62,
+     "tip_after_liftoff": null,
+     "largest_pitch": 5.624883364998282,
+     "peak_hz": 2.2840827980014278,
+     "band_rms": 15.787938251015527,
+     "pitch_rate_rms": 15.819282082912832,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 5.316047931705836,
+     "peak_hz": 2.2840827980014278,
+     "band_rms": 16.14728755036154,
+     "pitch_rate_rms": 16.187910100017348,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6300000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 3.6093416367828204,
+     "peak_hz": 2.355460385438972,
+     "band_rms": 13.391420957527515,
+     "pitch_rate_rms": 13.429094142051289,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.6400000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 4.712996466857469,
+     "peak_hz": 2.355460385438972,
+     "band_rms": 14.61999606831753,
+     "pitch_rate_rms": 14.6604349419292,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-15T04-12-31",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 1.73,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.503284815134156,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 8.036419094331514,
+     "pitch_rate_rms": 8.192874311873469,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.78,
+     "tip_after_liftoff": null,
+     "largest_pitch": 4.792793048011642,
+     "peak_hz": 2.7123483226266956,
+     "band_rms": 7.583560981855579,
+     "pitch_rate_rms": 7.723147901099017,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.75,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.359614549986736,
+     "peak_hz": 2.7123483226266956,
+     "band_rms": 7.99987182606889,
+     "pitch_rate_rms": 8.243326405482048,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.77,
+     "tip_after_liftoff": null,
+     "largest_pitch": 4.847580225489724,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 7.995432353006331,
+     "pitch_rate_rms": 8.176180641198377,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-12T01-07-43",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 2.02,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.416434395251129,
+     "peak_hz": 3.2119914346895078,
+     "band_rms": 5.16157483232632,
+     "pitch_rate_rms": 8.45670532064593,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.2,
+     "tip_after_liftoff": null,
+     "largest_pitch": 5.426360848369647,
+     "peak_hz": 3.0692362598144185,
+     "band_rms": 6.025108615669767,
+     "pitch_rate_rms": 7.629507705646105,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.1,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.027153799027868,
+     "peak_hz": 2.997858672376874,
+     "band_rms": 5.513381031459732,
+     "pitch_rate_rms": 7.863059658095151,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.18,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.187418578878159,
+     "peak_hz": 3.1406138472519634,
+     "band_rms": 5.573969872920796,
+     "pitch_rate_rms": 8.247603339909721,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-12T01-07-43",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 2.04,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.653226171258153,
+     "peak_hz": 2.4982155603140614,
+     "band_rms": 13.53090556573118,
+     "pitch_rate_rms": 14.796845858805446,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.23,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.277746833991214,
+     "peak_hz": 2.426837972876517,
+     "band_rms": 13.213820258218703,
+     "pitch_rate_rms": 13.827625354282748,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.13,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.064006629298712,
+     "peak_hz": 2.426837972876517,
+     "band_rms": 13.80893120491258,
+     "pitch_rate_rms": 14.590657755924951,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.2,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.166947243770135,
+     "peak_hz": 2.4982155603140614,
+     "band_rms": 14.476848657709024,
+     "pitch_rate_rms": 15.251638712496192,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-12T01-07-43",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 3.34,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.878277715444772,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 6.934335138162812,
+     "pitch_rate_rms": 7.223612628614728,
+     "tipped": false
+    },
+    {
+     "liftoff": 7.37,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.747122425316023,
+     "peak_hz": 2.6920031670625493,
+     "band_rms": 7.515745220361321,
+     "pitch_rate_rms": 7.86653643691964,
+     "tipped": false
+    },
+    {
+     "liftoff": 4.33,
+     "tip_after_liftoff": null,
+     "largest_pitch": 4.241390249165327,
+     "peak_hz": 2.642857142857143,
+     "band_rms": 7.354034213455522,
+     "pitch_rate_rms": 7.601038050198488,
+     "tipped": false
+    },
+    {
+     "liftoff": 8.06,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.340293377193019,
+     "peak_hz": 2.596314907872697,
+     "band_rms": 10.680106610012862,
+     "pitch_rate_rms": 11.498535932060161,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-12T01-38-41",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 2.02,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.564278069894574,
+     "peak_hz": 3.1406138472519634,
+     "band_rms": 4.989939669024231,
+     "pitch_rate_rms": 9.383475784802432,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.2,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.298147857226317,
+     "peak_hz": 2.997858672376874,
+     "band_rms": 6.672209416094118,
+     "pitch_rate_rms": 8.518250612185792,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.11,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.615681730565642,
+     "peak_hz": 3.0692362598144185,
+     "band_rms": 5.733232253274401,
+     "pitch_rate_rms": 8.50057205106597,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.17,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.886301522334548,
+     "peak_hz": 2.997858672376874,
+     "band_rms": 6.215018860486562,
+     "pitch_rate_rms": 8.688449206502598,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-12T01-38-41",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 2.04,
+     "tip_after_liftoff": null,
+     "largest_pitch": 12.618794368226395,
+     "peak_hz": 2.355460385438972,
+     "band_rms": 14.21777990704164,
+     "pitch_rate_rms": 15.363625566218523,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.23,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.80767275685706,
+     "peak_hz": 2.426837972876517,
+     "band_rms": 14.892206787444085,
+     "pitch_rate_rms": 15.554276525967376,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.13,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.757308177037753,
+     "peak_hz": 2.426837972876517,
+     "band_rms": 13.568291685967969,
+     "pitch_rate_rms": 14.448884039489737,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.2,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.452255028851,
+     "peak_hz": 2.426837972876517,
+     "band_rms": 14.914232660673068,
+     "pitch_rate_rms": 15.610372812839216,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-12T01-38-41",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 3.3200000000000003,
+     "tip_after_liftoff": null,
+     "largest_pitch": 5.470394376509909,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 6.861336351652292,
+     "pitch_rate_rms": 7.144746263930648,
+     "tipped": false
+    },
+    {
+     "liftoff": 7.37,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.432198000948473,
+     "peak_hz": 2.6128266033254155,
+     "band_rms": 6.8227635546385805,
+     "pitch_rate_rms": 7.129907491421048,
+     "tipped": false
+    },
+    {
+     "liftoff": 4.3100000000000005,
+     "tip_after_liftoff": null,
+     "largest_pitch": 4.147696002713718,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 6.994339783965434,
+     "pitch_rate_rms": 7.1831319507581695,
+     "tipped": false
+    },
+    {
+     "liftoff": 7.86,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.585154866185514,
+     "peak_hz": 2.6359143327841843,
+     "band_rms": 10.914722930998845,
+     "pitch_rate_rms": 11.44895495375469,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-12T02-21-10",
+   "plant": "airframe_2026-11-12_raised.json",
+   "runs": [
+    {
+     "liftoff": 1.81,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.14768395343606,
+     "peak_hz": 3.0692362598144185,
+     "band_rms": 5.436651271153489,
+     "pitch_rate_rms": 9.282793954300669,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.87,
+     "tip_after_liftoff": null,
+     "largest_pitch": 6.7534345339895,
+     "peak_hz": 2.997858672376874,
+     "band_rms": 6.191950783421051,
+     "pitch_rate_rms": 8.079930493044891,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.85,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.426085258174283,
+     "peak_hz": 2.997858672376874,
+     "band_rms": 6.0153795031306,
+     "pitch_rate_rms": 8.882301306795084,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.86,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.6021228799771645,
+     "peak_hz": 3.0,
+     "band_rms": 6.192400990159487,
+     "pitch_rate_rms": 8.798288407539381,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-12T02-21-10",
+   "plant": "airframe_2026-11-15_bursts.json",
+   "runs": [
+    {
+     "liftoff": 1.82,
+     "tip_after_liftoff": null,
+     "largest_pitch": 12.88873139912036,
+     "peak_hz": 2.5,
+     "band_rms": 13.509968015829184,
+     "pitch_rate_rms": 14.819405997848607,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.8800000000000001,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.665229603853795,
+     "peak_hz": 2.4982155603140614,
+     "band_rms": 13.028287693087659,
+     "pitch_rate_rms": 13.849257269778212,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.85,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.045934045212666,
+     "peak_hz": 2.4982155603140614,
+     "band_rms": 13.638288540226773,
+     "pitch_rate_rms": 14.670379032195134,
+     "tipped": false
+    },
+    {
+     "liftoff": 1.87,
+     "tip_after_liftoff": null,
+     "largest_pitch": 10.325397351242549,
+     "peak_hz": 2.426837972876517,
+     "band_rms": 13.04757112140184,
+     "pitch_rate_rms": 13.811374434306808,
+     "tipped": false
+    }
+   ]
+  },
+  {
+   "name": "2026-11-12T02-21-10",
+   "plant": "/tmp/claude-1000/-home-willi-coding-ee-bill-drone/e97ae06d-9a8a-4370-ac37-c6eee0960042/scratchpad/airframe_2026-11-15_bandsoff.json",
+   "runs": [
+    {
+     "liftoff": 2.15,
+     "tip_after_liftoff": null,
+     "largest_pitch": 9.332304643943932,
+     "peak_hz": 2.642857142857143,
+     "band_rms": 8.737677914878494,
+     "pitch_rate_rms": 10.17522846752823,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.36,
+     "tip_after_liftoff": null,
+     "largest_pitch": 7.999499762003835,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 10.109720601187508,
+     "pitch_rate_rms": 11.540102218202414,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.2600000000000002,
+     "tip_after_liftoff": null,
+     "largest_pitch": 8.003895754275282,
+     "peak_hz": 2.6409707351891507,
+     "band_rms": 9.008130427198656,
+     "pitch_rate_rms": 11.468946611141098,
+     "tipped": false
+    },
+    {
+     "liftoff": 2.33,
+     "tip_after_liftoff": null,
+     "largest_pitch": 3.348891541306837,
+     "peak_hz": 2.714285714285714,
+     "band_rms": 6.832299035675292,
+     "pitch_rate_rms": 7.054945575897441,
+     "tipped": false
+    }
+   ]
+  }
+ ]
+}
