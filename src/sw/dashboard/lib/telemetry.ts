@@ -287,11 +287,11 @@ export type Reading = {
       | 'landing'
       | 'recovery'
       | null;
-    // The roll flip's phase (fw/drone/main/flip.h), null when none runs.
-    flip?: 'climb' | 'flip' | 'arrest' | null;
-    // A recovery's stage and what started it (fw/drone/main/recover.h), null when none runs.
+    // The roll flip's phase (fw/drone/main/flip.h) and what started a recovery (fw/drone/main/recover.h), as fw/controller/log_format.py FLIP_PHASES and RECOVERY_CAUSES word them; null when none runs.
+    flip?: string | null;
+    // A recovery's stage, null when none runs.
     recovery?: 'righting' | 'leveling' | null;
-    recovery_cause?: 'tilt' | 'flip' | 'gyro' | 'level' | null;
+    recovery_cause?: string | null;
   };
   recorder?: RecorderStatus;
   imu?: ImuReading | null;

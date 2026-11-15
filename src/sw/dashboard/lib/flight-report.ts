@@ -40,11 +40,12 @@ export const RECORD_COLUMNS = [
 ] as const;
 type RecordColumn = (typeof RECORD_COLUMNS)[number];
 
-// A recording as the bridge serves it: its events, its records' columns (each record once, in sequence order; null where a record has no value) and whether the .bin ends mid-batch.
+// A recording as the bridge serves it: its events, its records' columns (each record once, in sequence order; null where a record has no value), whether the .bin ends mid-batch, and the flip's phases by number (log_format.py FLIP_PHASES).
 export type Recording = {
   events: Event[];
   columns: Record<RecordColumn, (number | null)[]>;
   truncated: boolean;
+  flip_phases: (string | null)[];
 };
 
 // The drone's esp_timer microseconds in the start record wrap at 2^32.
@@ -57,7 +58,6 @@ const REPLAY_HZ = 50;
 // The firmware's highest throttle (fw/drone/main/flight_rt.c THROTTLE_MAX), the rotors' full thrust in the replay.
 const THROTTLE_MAX = 1200;
 const MODES = ['manual', 'hold', 'land', 'land fast'];
-const FLIP_PHASES = ['', 'flip climbs', 'flip turns', 'flip arrests'];
 // Liftoff as sw/sim/identify_airframe.py load finds it: vertical specific force past 1.12 g once the collective reaches 600, plus 3 ticks.
 const LIFT_BASE = 600;
 const LIFT_G = 1.12;
@@ -728,7 +728,8 @@ export function analyzeFlight(name: string, recording: Recording): FlightReport 
   const trajectory = replayOf(
     { time, roll, pitch, rollTarget, pitchTarget, height, heightTarget, heading, flip, recovery, rates, motors, tilts, place },
     warnings,
-    commands
+    commands,
+    recording.flip_phases
   );
 
   return {
@@ -759,7 +760,7 @@ type Columns = Record<'time' | 'roll' | 'pitch' | 'rollTarget' | 'pitchTarget' |
   Record<'rates' | 'motors' | 'tilts' | 'place', Float64Array[]>;
 
 // The decoded columns as a replay (lib/trajectory.ts) at REPLAY_HZ from the first record, each frame the latest record at its time, so dropped records hold the last pose instead of stretching the clock. Its events: the report's warnings (signal), the pilot's mode changes, and the flip's and the recovery's phases as the guards' word logs them.
-function replayOf(c: Columns, warnings: FlightWarning[], commands: { time: number; mode?: number }[]): Trajectory {
+function replayOf(c: Columns, warnings: FlightWarning[], commands: { time: number; mode?: number }[], flipPhases: (string | null)[]): Trajectory {
   const count = c.time.length;
   const start = count ? c.time[0] : 0;
   const frames = count ? Math.floor((c.time[count - 1] - start) * REPLAY_HZ) + 1 : 0;
@@ -823,7 +824,7 @@ function replayOf(c: Columns, warnings: FlightWarning[], commands: { time: numbe
   for (let index = 0; index < count; index++) {
     const nextPhase = c.flip[index];
     const nextStage = c.recovery[index];
-    if (nextPhase !== phase && nextPhase) events.push({ time: c.time[index] - start, label: FLIP_PHASES[nextPhase] });
+    if (nextPhase !== phase && nextPhase) events.push({ time: c.time[index] - start, label: `flip ${flipPhases[nextPhase]}` });
     if (nextStage !== stage && nextStage) events.push({ time: c.time[index] - start, label: 'recovery', signal: true });
     phase = nextPhase;
     stage = nextStage;

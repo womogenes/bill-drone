@@ -10,7 +10,7 @@ The laptop's drone service. It owns the controller's USB port and serves, on 127
 - /view: a dashboard that only watches (a second tab while the first has /ws): the same readings; what it sends is ignored.
 - /update: raw id-tagged requests (tools/ota_direct.py, the dashboard's camera requests), from any number of clients at once; each reply goes to the client that sent its id.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
-- GET /recordings: the recordings for the dashboard's flights page, newest first; ?name=<recording>&columns=<name>,... one recording's events and its records' columns as log_format.py decode_records gives them (each record once, in sequence order; null for NaN).
+- GET /recordings: the recordings for the dashboard's flights page, newest first; ?name=<recording>&columns=<name>,... one recording's events and its records' columns as log_format.py decode_records gives them (each record once, in sequence order; null for NaN), with the flip's phases by number.
 - POST /radio {"rate": i, "power": dBm, "channel": c}: the controller's sending rate (fw/link.h link_rates index), maximum transmit power (0 = the driver's own) and channel until it resets, each optional; only while the drone is disarmed, and another channel than 6 only to a drone that follows its controller (its radio_follow setting). Replies with the controller's next link report.
 - POST /log_test {"drop": fraction, "ack_drop": fraction, "ack_delay_ms": n}: induced flight-log loss for testing the log's repair (drop arriving log fragments, drop or delay the acknowledgements); off until set, cleared by a restart.
 - POST /pattern {"after": s, "repeat": n, "segments": [{"ticks": n, "<channel>": value, ...}, ...]}: load the identification test pattern (log_format.py PATTERN_CHANNELS; drone/main/flight_rt.c excite), or clear it with no segments. It lasts until the drone restarts, and every recording from then on starts with it as a "pattern" event. sw/excite.py builds and sends them.
@@ -36,7 +36,7 @@ from aiohttp import WSMsgType, web
 import serial
 
 from find_port import LISTEN_S, by_path, candidates, holder, listen
-from log_format import COLUMNS, FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, RECORD_SIZE, batches, decode_records, PATTERN_CHANNELS, STOP_REASONS, decode_reason, guard_state, pattern_refusal
+from log_format import COLUMNS, FLIP_PHASES, FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, RECORD_SIZE, batches, decode_records, PATTERN_CHANNELS, STOP_REASONS, decode_reason, guard_state, pattern_refusal
 from wire import LINK_CHANNEL, PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 # Messages of more fragments than this go out twice (send_message).
@@ -297,7 +297,7 @@ def refuse_constant(name):
 
 def read_recording(directory, name, columns):
     """
-    A recording for the dashboard's report (sw/dashboard/lib/flight-report.ts): its events (the .jsonl's lines, less one cut off mid-write), the columns asked for (log_format COLUMNS, decoded by decode_records), each record once in sequence order (the drone resends unacknowledged batches) with None for NaN, and whether the .bin ends mid-batch. Raises FileNotFoundError for an unknown recording, KeyError for an unknown column and ValueError for a recording that does not decode.
+    A recording for the dashboard's report (sw/dashboard/lib/flight-report.ts): its events (the .jsonl's lines, less one cut off mid-write), the columns asked for (log_format COLUMNS, decoded by decode_records), each record once in sequence order (the drone resends unacknowledged batches) with None for NaN, whether the .bin ends mid-batch, and the flip's phases by number (log_format FLIP_PHASES). Raises FileNotFoundError for an unknown recording, KeyError for an unknown column and ValueError for a recording that does not decode.
     """
     if not recording_start(name):
         raise FileNotFoundError(f"No recording {name}")
@@ -325,7 +325,7 @@ def read_recording(directory, name, columns):
         first.setdefault(row[sequence], row)
     ordered = [first[key] for key in sorted(first)]
     picked = {column: [None if value != value else value for value in (row[COLUMNS.index(column)] for row in ordered)] for column in columns}
-    return {"events": events, "columns": picked, "truncated": truncated}
+    return {"events": events, "columns": picked, "truncated": truncated, "flip_phases": FLIP_PHASES}
 
 
 class Recorder:

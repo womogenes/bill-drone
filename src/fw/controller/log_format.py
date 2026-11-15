@@ -49,12 +49,12 @@ STOP_REASONS = (
     "Tilt limit exceeded", "Control sample delayed", "IMU calibration", "Landed", "Landed after link loss", "Landed by the fly-away failsafe",
     "Recovery failed",
 )
-# The guards' states (drone/main/guard.h FAILSAFE_* and PATTERN_*), the roll flip's phase (drone/main/flip.h flip_phase: climbing, spinning or righting, arresting) and a recovery's stage and cause (drone/main/recover.h RECOVER_*: righting or leveling; past tip_limit, a failing flip, the gyro at full scale, the pilot's level-and-hold), as the record's guard field holds them; the status carries the first eight bits in its flags' bits 8-15 and the recovery in its reason (decode_recovery).
+# The guards' states (drone/main/guard.h FAILSAFE_* and PATTERN_*), the roll flip's phase (drone/main/flip.h flip_phase: climbing, spinning or righting, arresting) and a recovery's stage and cause (drone/main/recover.h RECOVER_*: righting or leveling; past tip_limit, a failing flip, the gyro at full scale, the pilot's level-and-hold), as the record's guard field holds them; the status carries the first eight bits in its flags' bits 8-15 and the recovery in its reason (decode_reason). The flip's phases and the recovery's causes are worded as the dashboard shows them (the status, the replay's events).
 FAILSAFE_PHASES = (None, "brake", "hold", "land")
 PATTERN_STOPS = (None, "distance", "tag lost", "tilt", "stick", "landing", "recovery", None)
-FLIP_PHASES = (None, "climb", "flip", "arrest")
+FLIP_PHASES = (None, "climbs", "turns", "arrests")
 RECOVERY_STAGES = (None, "righting", "leveling", None)
-RECOVERY_CAUSES = (None, "tilt", "flip", "gyro", "level", None, None, None)
+RECOVERY_CAUSES = (None, "tipped", "flip failed", "gyro saturated", "level", None, None, None)
 # The Kalman filter's flags from bit 0 (flight_rt.c Record ekf_flags): its heading is known, it is resting still, it is good enough for the hold to fly horizontally and vertically, and the hold flew on it this tick.
 EKF_FLAGS = ("aligned", "still", "horizontal", "vertical", "flown")
 

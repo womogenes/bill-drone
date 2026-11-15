@@ -37,19 +37,6 @@ import {
   type Reading,
 } from '@/lib/telemetry';
 
-const FLIP_PHASES = {
-  climb: 'climbing',
-  flip: 'spinning',
-  arrest: 'arresting',
-};
-
-const RECOVERY_CAUSES = {
-  tilt: 'tipped',
-  flip: 'flip failed',
-  gyro: 'gyro saturated',
-  level: 'level',
-};
-
 const keyIcons: Record<string, LucideIcon> = {
   ArrowUp,
   ArrowDown,
@@ -945,9 +932,9 @@ export const ControlPanel = memo(function ControlPanel({
         className={`h-6 truncate ${status?.recovery || status?.flip ? 'font-medium text-blue-700 dark:text-blue-400' : problem ? 'text-red-700' : 'text-green-700'}`}
       >
         {status?.recovery
-          ? `Recovering (${status.recovery_cause ? RECOVERY_CAUSES[status.recovery_cause] : 'tipped'}): ${status.recovery}`
+          ? `Recovering${status.recovery_cause ? ` (${status.recovery_cause})` : ''}: ${status.recovery}`
           : status?.flip
-            ? `Flip: ${FLIP_PHASES[status.flip]}`
+            ? `Flip ${status.flip}`
             : problem || 'Good to fly.'}
       </p>
     </Panel>
