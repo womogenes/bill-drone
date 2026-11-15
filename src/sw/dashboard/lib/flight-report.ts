@@ -2,10 +2,11 @@
 
 import { distance } from '@/lib/gps';
 import { rotorTilt } from '@/lib/telemetry';
+import { quaternionOf, type Trajectory } from '@/lib/trajectory';
 
 // Each FLG1 batch: magic, session, record count, record size (log_format.py HEADER_FORMAT "<4sIHH").
 export const HEADER_SIZE = 12;
-// The record sizes log_format.py FORMATS knows: the 48-byte base record, plus the hover state (80), plus the barometer (84), plus the guards' word (86: fly-away failsafe phase and pattern stop, fw/drone/main/guard.h), plus the Kalman filter's estimate (108, fw/drone/main/ekf.h), plus the camera's newest frame (112), plus its tag rotation (120); the report reads none of the last three yet.
+// The record sizes log_format.py FORMATS knows: the 48-byte base record, plus the hover state (80), plus the barometer (84), plus the guards' word (86: fly-away failsafe phase and pattern stop, fw/drone/main/guard.h; the flip's phase and the recovery's stage since), plus the Kalman filter's estimate (108, fw/drone/main/ekf.h), plus the camera's newest frame (112), plus its tag rotation (120); the replay reads the guards and the filter's heading and position, the report neither camera field.
 const BASE_SIZE = 48;
 const HOVER_SIZE = 80;
 const BARO_SIZE = 84;
@@ -20,6 +21,12 @@ const WRAP_MS = 2 ** 32 / 1000;
 // The control rate; the charts take every CHART_STRIDE-th record (25 Hz), which is plenty for a screen and keeps a 3-minute flight's JSON small.
 const RATE_HZ = 100;
 const CHART_STRIDE = 4;
+// The replay's frame rate (Hz): half the control rate, enough for a flip's 300 deg/s at 6 degrees a frame, which the viewer interpolates.
+const REPLAY_HZ = 50;
+// The firmware's highest throttle (fw/drone/main/flight_rt.c THROTTLE_MAX), the rotors' full thrust in the replay.
+const THROTTLE_MAX = 1200;
+const MODES = ['manual', 'hold', 'land', 'land fast'];
+const FLIP_PHASES = ['', 'flip climbs', 'flip turns', 'flip arrests'];
 // Liftoff as sw/sim/identify_airframe.py load finds it: vertical specific force past 1.12 g once the collective reaches 600, plus 3 ticks.
 const LIFT_BASE = 600;
 const LIFT_G = 1.12;
@@ -129,6 +136,8 @@ export type FlightReport = {
   wind: number | null;
   gps_hold: boolean;
   series: FlightSeries;
+  // The flight for the replay viewer (lib/trajectory.ts), on the same clock as series.
+  trajectory: Trajectory;
   track: FlightTrackPoint[];
   spans: HandsOffSpan[];
   warnings: FlightWarning[];
@@ -382,6 +391,13 @@ export function analyzeFlight(
   const velocityX = new Float64Array(count).fill(NaN);
   const velocityY = new Float64Array(count).fill(NaN);
   const baro = new Float64Array(count).fill(NaN);
+  // For the replay: the body rates (deg/s), each motor's throttle and each servo's forward tilt from its trim (degrees), the guards' word, and the Kalman filter's heading (degrees, left from north) and position (m north, west and up).
+  const rates = new Float64Array(count * 3);
+  const motors = new Float64Array(count * 2);
+  const tilts = new Float64Array(count * 2);
+  const guards = new Uint16Array(count);
+  const heading = new Float64Array(count).fill(NaN);
+  const place = new Float64Array(count * 3).fill(NaN);
   // Runs of records whose seven raw IMU values repeat the one before: a read that failed and left the last sample in place.
   let repeats = 0;
   let longestRepeat = 0;
@@ -429,6 +445,21 @@ export function analyzeFlight(
     if (sizes[index] >= BARO_SIZE) {
       const value = view.getInt32(at + 80, true);
       if (value !== BARO_NONE) baro[index] = value / 1000;
+    }
+    for (let axis = 0; axis < 3; axis++)
+      rates[index * 3 + axis] = (int16(16 + 2 * axis) * signs[axis]) / gyroCounts - bias[axis];
+    motors[index * 2] = uint16(26);
+    motors[index * 2 + 1] = uint16(28);
+    tilts[index * 2] = int16(30) / 100 - (settings.left_trim ?? 0);
+    tilts[index * 2 + 1] = -(int16(32) / 100 - (settings.right_trim ?? 0));
+    if (sizes[index] >= GUARD_SIZE) guards[index] = uint16(84);
+    if (sizes[index] >= EKF_SIZE) {
+      heading[index] = int16(90) / 100;
+      place[index * 3] = int16(98) / 100;
+      place[index * 3 + 1] = int16(100) / 100;
+      place[index * 3 + 2] = int16(102) / 1000;
+    } else if (sizes[index] >= HOVER_SIZE) {
+      heading[index] = yaw[index];
     }
   }
   let missing = 0;
@@ -782,6 +813,12 @@ export function analyzeFlight(
     series.shake.push(round(shake[index], 1));
   }
 
+  const trajectory = replayOf(
+    { time, roll, pitch, rollTarget, pitchTarget, height, heightTarget, rates, motors, tilts, guards, heading, place },
+    warnings,
+    commands
+  );
+
   return {
     name,
     started: String(start.received_at),
@@ -799,8 +836,86 @@ export function analyzeFlight(
     wind: winds.length ? winds.reduce((a, b) => a + b) / winds.length : null,
     gps_hold: (settings.hover_gps_tau ?? 0) > 0,
     series,
+    trajectory,
     track,
     spans,
     warnings,
   };
+}
+
+type Columns = Record<'time' | 'roll' | 'pitch' | 'rollTarget' | 'pitchTarget' | 'height' | 'heightTarget' | 'heading', Float64Array> &
+  Record<'rates' | 'motors' | 'tilts' | 'place', Float64Array> & { guards: Uint16Array };
+
+// The decoded columns as a replay (lib/trajectory.ts) at REPLAY_HZ from the first record, each frame the latest record at its time, so dropped records hold the last pose instead of stretching the clock. Its events: the report's warnings (signal), the pilot's mode changes, and the flip's and the recovery's phases as the guards' word logs them.
+function replayOf(c: Columns, warnings: FlightWarning[], commands: { time: number; mode?: number }[]): Trajectory {
+  const count = c.time.length;
+  const start = count ? c.time[0] : 0;
+  const frames = count ? Math.floor((c.time[count - 1] - start) * REPLAY_HZ) + 1 : 0;
+  const picks: number[] = [];
+  for (let frame = 0, index = 0; frame < frames; frame++) {
+    const at = start + frame / REPLAY_HZ;
+    while (index + 1 < count && c.time[index + 1] <= at) index++;
+    picks.push(index);
+  }
+  const fixed = (value: number, digits: number) => (Number.isFinite(value) ? round(value, digits) : null);
+  const anyPlace = picks.some((index) => Number.isFinite(c.place[index * 3]));
+  const position: number[] = [];
+  const attitude: number[] = [];
+  const thrust: number[] = [];
+  const tilt: number[] = [];
+  let last = [0, 0, 0];
+  for (const index of picks) {
+    const yaw = Number.isFinite(c.heading[index]) ? c.heading[index] : 0;
+    const q = quaternionOf((c.roll[index] * Math.PI) / 180, (c.pitch[index] * Math.PI) / 180, (yaw * Math.PI) / 180);
+    attitude.push(...q.map((value) => round(value, 4)!));
+    if (anyPlace) {
+      if (Number.isFinite(c.place[index * 3])) last = [c.place[index * 3], c.place[index * 3 + 1], c.place[index * 3 + 2]];
+      position.push(...last.map((value) => round(value, 3)!));
+    }
+    thrust.push(round(c.motors[index * 2] / THROTTLE_MAX, 3)!, round(c.motors[index * 2 + 1] / THROTTLE_MAX, 3)!);
+    tilt.push(round(c.tilts[index * 2], 2)!, round(c.tilts[index * 2 + 1], 2)!);
+  }
+  const series = (name: string, group: string, unit: string, value: (index: number) => number, digits: number, dashed = false) => ({
+    name,
+    group,
+    unit,
+    dashed,
+    values: picks.map((index) => fixed(value(index), digits)),
+  });
+  const channels = [
+    series('height', 'height', 'm', (index) => (anyPlace ? c.place[index * 3 + 2] : c.height[index]), 3),
+    series('target', 'height', 'm', (index) => c.heightTarget[index], 3, true),
+    series('roll', 'attitude', '°', (index) => c.roll[index], 2),
+    series('pitch', 'attitude', '°', (index) => c.pitch[index], 2),
+    series('roll target', 'attitude', '°', (index) => c.rollTarget[index], 2, true),
+    series('pitch target', 'attitude', '°', (index) => c.pitchTarget[index], 2, true),
+    series('roll', 'rates', '°/s', (index) => c.rates[index * 3], 1),
+    series('pitch', 'rates', '°/s', (index) => c.rates[index * 3 + 1], 1),
+    series('yaw', 'rates', '°/s', (index) => c.rates[index * 3 + 2], 1),
+    series('left', 'throttle', '', (index) => c.motors[index * 2], 0),
+    series('right', 'throttle', '', (index) => c.motors[index * 2 + 1], 0),
+    series('left', 'tilt', '°', (index) => c.tilts[index * 2], 1),
+    series('right', 'tilt', '°', (index) => c.tilts[index * 2 + 1], 1),
+  ];
+  const events: Trajectory['events'] = [];
+  for (const warning of warnings)
+    if (warning.time !== null) events.push({ time: warning.time - start, label: warning.text, signal: true });
+  let mode: number | undefined;
+  for (const command of commands)
+    if (command.mode !== undefined && command.mode !== null && command.mode !== mode) {
+      if (mode !== undefined) events.push({ time: command.time - start, label: MODES[command.mode] ?? `mode ${command.mode}` });
+      mode = command.mode;
+    }
+  let phase = 0;
+  let stage = 0;
+  for (let index = 0; index < count; index++) {
+    const nextPhase = (c.guards[index] >> 6) & 3;
+    const nextStage = (c.guards[index] >> 8) & 3;
+    if (nextPhase !== phase && nextPhase) events.push({ time: c.time[index] - start, label: FLIP_PHASES[nextPhase] });
+    if (nextStage !== stage && nextStage) events.push({ time: c.time[index] - start, label: 'recovery', signal: true });
+    phase = nextPhase;
+    stage = nextStage;
+  }
+  events.sort((a, b) => a.time - b.time);
+  return { rate: REPLAY_HZ, position: anyPlace ? position : null, attitude, thrust, tilt, channels, events };
 }
