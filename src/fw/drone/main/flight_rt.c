@@ -227,7 +227,7 @@ static Command flown;
 // The laptop's hold-point nudge for hover (m; toward the tag, left, up), from the targets.
 #define NUDGE_MAX 1.5f
 static float nudge[3];
-// Self-trim: through a hop, the attitude controller's total roll and pitch command (rad/s²) summed over steady samples (from TRIM_SETTLE s after collective reached integrate_throttle, body rates under TRIM_RATE, no test pattern, not landing: the floor's wash and the touchdown are not the airframe's trim), as sw/learn_bias.py does from the log. At the stop, with at least TRIM_SAMPLES of them, each bias moves auto_trim of the way to the mean, by at most TRIM_STEP; radio.c stores it once disarmed. So a moved battery costs one hop instead of a retune.
+// Self-trim: through a hop, the attitude controller's total roll and pitch command (rad/s²) summed over steady samples (from TRIM_SETTLE s after collective reached integrate_throttle, body rates under TRIM_RATE, no test pattern, not landing: the floor's wash and the touchdown are not the airframe's trim). At the stop, with at least TRIM_SAMPLES of them, each bias moves auto_trim of the way to the mean, by at most TRIM_STEP; radio.c stores it once disarmed. So a moved battery costs one hop instead of a retune.
 // The hold's own trim is not carried over (hover_trim_start stays as set): it learns its push in flight, and a carried one was the last flight's room, CoM or misfit. On 2026-11-01 a sideways 0.9 m/s², learned in a hover that kept losing the tag, rolled every later liftoff 5 degrees left; a forward one had pitched liftoffs nose-up the hour before.
 #define TRIM_SETTLE 1.0f
 #define TRIM_RATE (15 / DEG)

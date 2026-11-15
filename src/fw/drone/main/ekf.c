@@ -7,7 +7,7 @@
 // Where each state's error sits in the covariance.
 enum { TILT = 0, VELOCITY = 3, POSITION = 6, GYRO_BIAS = 9, ACCEL_BIAS = 12, BARO_OFFSET = 15, BARO_TRANSIENT = 16 };
 
-// What the IMU's readings are worth: the gyro's and accelerometer's noise (rad/s and m/s² per root Hz; the accelerometer's is the airframe's vibration, 1 m/s² a sample at 100 Hz as sw/sim/gps_truth.py) and how fast their biases and the barometer's offset wander (per root second).
+// What the IMU's readings are worth: the gyro's and accelerometer's noise (rad/s and m/s² per root Hz; the accelerometer's is the airframe's vibration, 1 m/s² a sample at 100 Hz as gps_truth.py) and how fast their biases and the barometer's offset wander (per root second).
 #ifndef EKF_GYRO_NOISE
 #define EKF_GYRO_NOISE 0.002f
 #endif

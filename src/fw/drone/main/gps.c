@@ -30,7 +30,7 @@ static const UbxSetting configuration[] = {
     {0x20110021, 8},         // CFG-NAVSPG-DYNMODEL: airborne < 4 g
 };
 
-// Three major systems, the most that keep 10 Hz on the SPG 5.10 ROM (u-blox PCN UBX-23006557: 10 Hz for three, 5 Hz for four without the one-time-programmed high-rate mode), all in the 1575.42 MHz band; the ROM's default is GPS and Galileo only (interface description UBX-21035062 table 79). BeiDou's B1C shares GPS L1, where B1I (1561 MHz) or GLONASS (1602 MHz, near the 40th harmonic of the ESP32s' 40 MHz crystals) would widen what the front end must hear; GLONASS can be tried at 5 Hz through sw.gps_remote set.
+// Three major systems, the most that keep 10 Hz on the SPG 5.10 ROM (u-blox PCN UBX-23006557: 10 Hz for three, 5 Hz for four without the one-time-programmed high-rate mode), all in the 1575.42 MHz band; the ROM's default is GPS and Galileo only (interface description UBX-21035062 table 79). BeiDou's B1C shares GPS L1, where B1I (1561 MHz) or GLONASS (1602 MHz, near the 40th harmonic of the ESP32s' 40 MHz crystals) would widen what the front end must hear; GLONASS needs 5 Hz with a fourth system.
 static const UbxSetting signals[] = {
     {0x1031001f, 1},  // CFG-SIGNAL-GPS_ENA
     {0x10310001, 1},  // CFG-SIGNAL-GPS_L1CA_ENA
