@@ -66,7 +66,7 @@ class Flip(ctypes.Structure):
 
 
 class Authority(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_float) for name in ("roll", "pitch", "yaw", "weight", "indi")] + [("unmodeled", ctypes.c_float * 3)]
+    _fields_ = [(name, ctypes.c_float) for name in ("roll", "pitch", "yaw", "weight")] + [("indi", ctypes.c_float * 3), ("unmodeled", ctypes.c_float * 3)]
 
 
 
@@ -364,7 +364,7 @@ def fly(job):
                 owned = library.flip_active(ctypes.byref(run)) or library.recover_active(ctypes.byref(recovery))
                 a = run.authority
                 lane["indi"].update(gyro, bool(hover.state.engaged) and not hover.state.landed, hover.state.height, controller.command[BASE], owned, (a.roll, a.pitch, a.yaw), R.DT)
-                run.authority.indi = lane["indi"].fade
+                run.authority.indi[:] = lane["indi"].share()
                 run.authority.unmodeled[:] = lane["indi"].unmodeled(flight.INDI_FLIP)
                 library.flip_tick(ctypes.byref(run), (ctypes.c_float * 3)(*gyro), (ctypes.c_float * 3)(*accel), R.DT, estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(out))
             else:
@@ -380,7 +380,7 @@ def fly(job):
                                      allowed=controller.state[10] >= RECOVER_AIRBORNE_S and not s.landed and not s.probing and not (s.engaged and s.lifted < 0) and not (landing and s.height < RECOVER_LAND_HEIGHT) and recovery.recoveries < RECOVER_MAX,
                                      gyro=gyro_c, accel=accel_c, dt=R.DT, tip_limit=tip_limit, flip_active=library.flip_active(ctypes.byref(run)), flip_gyro_only=library.flip_gyro_only(ctypes.byref(run)),
                                      flip_phase=library.flip_phase(ctypes.byref(run)), climb_rate=s.climb_rate, collective=2 * flight.thrust(max(controller.command[BASE], 0.0)),
-                                     authority=Authority(authority.roll, authority.pitch, authority.yaw, authority.weight, lane["indi"].fade, (ctypes.c_float * 3)(*lane["indi"].unmodeled())))
+                                     authority=Authority(authority.roll, authority.pitch, authority.yaw, authority.weight, (ctypes.c_float * 3)(*lane["indi"].share()), (ctypes.c_float * 3)(*lane["indi"].unmodeled())))
                 before = library.recover_active(ctypes.byref(recovery))
                 library.recover_tick(ctypes.byref(recovery), ctypes.byref(recover_params), ctypes.byref(given), estimate.state.buffer_info()[0], controller.state.buffer_info()[0], lane["integral"], ctypes.byref(recovered))
                 if recovered.cancel_flip:

@@ -10,8 +10,8 @@
 #define SERVO_ZETA 0.87f
 #define SERVO_SLEW 4.97f
 #define SERVO_STEPS 4
-// Swinging a motor assembly turns the body the other way (rad/s² of body pitch per rad/s² of the assembly's tilt): its inertia about the tilt axis over the body's pitch inertia (sw/sim/airframe.py resolve J, 4.78e-4 kg m², over Iyy 5.25e-3, airframe_2026-11-12_raised). In the first instant of a servo move this is several times the tilted thrust's own pitch, and left out, INDI takes it as unmodeled and swings the servos harder against it.
-#define ASSEMBLY_RATIO 0.091f
+// Swinging a motor assembly turns the body the other way (rad/s² of body pitch per rad/s² of the assembly's tilt). The CAD's inertia ratio gives 0.091 (sw/sim/airframe.py resolve J, 4.78e-4 kg m², over Iyy 5.25e-3); the 2026-11-15 hovers fit 0.27 with INDI_SERVO_DELAY's 60 ms (the link's spring and the servo's load add to it). In the first instant of a servo move this is several times the tilted thrust's own pitch, and left out, INDI takes it as unmodeled and swings the servos harder against it.
+#define ASSEMBLY_RATIO 0.27f
 // The motors' lag (s; the same fit's motor_tau). Their 11 ms dead time is the tick between sending and the next update.
 #define MOTOR_TAU 0.066f
 // The low-pass both the measured and the modeled acceleration go through (Hz; second-order Butterworth): the gyro's difference at 100 Hz is noise above it, and the motor assemblies ring on their links at about 11 Hz (link_k over J), which the servo estimate leaves out; at 15 Hz the sim's hovers shook at that ring (sw/sim/models/NOTES.md "INDI").

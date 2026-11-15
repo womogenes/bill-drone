@@ -11,8 +11,8 @@ typedef struct {
 // The two allocations' models: the attitude controller's (flight_math.c, from the settings' Model; the recovery's righting shares it, recover.c's authority) and the flip's (flip.c, its own authority).
 enum { INDI_CONTROLLER, INDI_FLIP, INDI_MODELS };
 
-// Ticks of servo dead time held (sw/sim/airframe.py servo_delay: 0.040-0.043 s at 100 Hz).
-#define INDI_SERVO_DELAY 4
+// Ticks of servo dead time held: 6 (60 ms) fits the hovers of 2026-11-15 (06:29-06:34 UTC): with the horn at SERVO_WN, the modeled pitch acceleration explains 83% of the measured below 2 Hz and 98% in 2-4 Hz, against 31% and 86% at sw/sim/airframe.py's 40 ms (servo_delay 0.040-0.043), where INDI at 0.25-0.5 doubled the 3 Hz pitch shake.
+#define INDI_SERVO_DELAY 6
 
 typedef struct {
     // What was sent each of the last ticks (physical forward tilt, radians, newest at next - 1) and the motors' thrust asked last tick (N).

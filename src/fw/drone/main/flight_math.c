@@ -200,12 +200,10 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     state->damped_gy += (c->gy - state->damped_gy) * smooth;
     float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * state->damped_gy + speed_torque);
     float yaw_torque = model->yaw_inertia * (c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias + state->yaw_i);
-    if (c->indi > 0) {
-        // INDI (indi.h): its share of what the model leaves out is taken off; the integrators trim whatever it leaves.
-        roll_torque -= model->roll_inertia * c->indi * c->unmodeled[0];
-        pitch_torque -= model->pitch_inertia * c->indi * c->unmodeled[1];
-        yaw_torque -= model->yaw_inertia * c->indi * c->unmodeled[2];
-    }
+    // INDI (indi.h): its share of what the model leaves out is taken off; the integrators trim whatever it leaves.
+    if (c->indi_share[0] > 0) roll_torque -= model->roll_inertia * c->indi_share[0] * c->unmodeled[0];
+    if (c->indi_share[1] > 0) pitch_torque -= model->pitch_inertia * c->indi_share[1] * c->unmodeled[1];
+    if (c->indi_share[2] > 0) yaw_torque -= model->yaw_inertia * c->indi_share[2] * c->unmodeled[2];
 
     // The motors' vertical thrusts: the collective plus and less the roll differential, each kept from going negative. With mix_ceiling (0 = off, as before, when the reverse lookup and the runtime's clamp drop whatever is past the table's top) neither motor is asked for more than the table gives at that throttle (at its thrust scale): the collective gives way before the roll differential, which is cut only by what no collective could give, and the roll integrator does not wind further into a cut at either end. The collective is never raised to keep the differential (no air mode): near the ground that would lift a drone the hover is setting down.
     float lift = force, differential = roll_torque / model->arm;
@@ -224,7 +222,7 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     float forward = (pitch_torque - model->com_x * force) / model->pivot_height;
     yaw_torque -= model->reaction_torque_ratio * (right_vertical - left_vertical);
     float twist = yaw_torque / model->arm;
-    if (c->indi > 0) fit_tilts(c, upright, left_vertical, right_vertical, &forward, &twist);
+    if (c->indi_share[0] > 0 || c->indi_share[1] > 0 || c->indi_share[2] > 0) fit_tilts(c, upright, left_vertical, right_vertical, &forward, &twist);
     float left_horizontal = (forward - twist) / 2;
     float right_horizontal = (forward + twist) / 2;
 

@@ -45,9 +45,9 @@ typedef struct {
 } Flip;
 
 // The airframe's authority as the firmware's model has it: angular acceleration (rad/s²) per newton of differential thrust (roll), per newton of collective per radian of common tilt (pitch), per newton per radian of differential tilt (yaw); and the weight (N).
-// indi and unmodeled: the share INDI takes (0 = off) of the unmodeled angular acceleration it found on this authority (indi.h; rad/s², roll, pitch, yaw), which the allocation takes off what it is asked; the rotors' gyroscopic feedforwards (gyro_ff, yaw_ff) give way by the same share, as the measured acceleration has them.
+// indi and unmodeled: per axis (roll, pitch, yaw) the share INDI takes (0 = off) of the unmodeled angular acceleration it found on this authority (indi.h; rad/s²), which the allocation takes off what it is asked; the rotors' gyroscopic feedforwards (gyro_ff in pitch, yaw_ff in yaw) give way by the same share, as the measured acceleration has them.
 typedef struct {
-    float roll, pitch, yaw, weight, indi, unmodeled[3];
+    float roll, pitch, yaw, weight, indi[3], unmodeled[3];
 } FlipAuthority;
 
 // One tick's commands: while owned the flip flies the motors itself (thrusts in N, each assembly's physical forward tilt in radians); while climbing or arresting (collective_set) it only sets the collective (N) under the attitude controller. handed_back marks the tick it gives the attitude back, with the attitude it has then (roll and pitch, radians, as flight_attitude's), which the estimate takes.

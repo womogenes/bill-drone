@@ -4,7 +4,7 @@
 
 // Where Command's runtime-only fields that the host sets by name sit, in floats from its start.
 const size_t flight_command_mix_ceiling = offsetof(Command, mix_ceiling) / sizeof(float);
-const size_t flight_command_indi = offsetof(Command, indi) / sizeof(float);
+const size_t flight_command_indi = offsetof(Command, indi_share) / sizeof(float);
 
 void flight_control_many(float *states, size_t state_stride, const float *commands, size_t command_stride, const float *table, size_t count, size_t lanes) {
     for (size_t i = 0; i < lanes; i++) flight_control((Controller *)(states + i * state_stride), (const Command *)(commands + i * command_stride), table, count);

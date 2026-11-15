@@ -352,7 +352,7 @@ static void randomize_settings(void) {
         {SETTING_roll_bias, {0, 0.5f, -0.5f}, 3}, {SETTING_hover_mass, {0.9f, 1.05f}, 2}, {SETTING_left_thrust_scale, {1, 1.3f}, 2}, {SETTING_right_thrust_scale, {1, 1.3f}, 2},
 #ifdef TEST_INDI
         // INDI (indi.c) on at random: built with -DTEST_INDI, since a setting the base build lacks would change the random stream it is compared on.
-        {SETTING_indi, {0, 0.5f, 1}, 3},
+        {SETTING_indi, {0, 0.5f, 1}, 3}, {SETTING_indi_pitch, {0, 0.25f, 1}, 3},
 #endif
     };
     for (size_t i = 0; i < sizeof(choices) / sizeof(choices[0]); i++)

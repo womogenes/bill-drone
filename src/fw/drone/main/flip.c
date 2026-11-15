@@ -89,11 +89,9 @@ static float gyroscopic(const FlipRighting *r, const FlipAuthority *a, float rol
 
 // recover.py's allocation, from the thrust the motors have by now. spread follows √T_right - √T_left as the motors' lag lets it (NULL without yaw_ff): its rate of change is the rotors' spin momentum turning over between them, which the body takes in yaw as the rotors speed apart in the flip's roll (-dH_z/dt), and with the shafts tilted the pitch rate turns their difference into yaw too (ω_pitch H_x); yaw_ff feeds both forward.
 void flip_allocate(const FlipRighting *r, const FlipAuthority *a, float roll, float pitch, float yaw, float collective, float pitch_rate, float *thrust, float *spread, float dt, FlipOutput *out) {
-    if (a->indi > 0) {
-        roll -= a->indi * a->unmodeled[0];
-        pitch -= a->indi * a->unmodeled[1];
-        yaw -= a->indi * a->unmodeled[2];
-    }
+    roll -= a->indi[0] * a->unmodeled[0];
+    pitch -= a->indi[1] * a->unmodeled[1];
+    yaw -= a->indi[2] * a->unmodeled[2];
     split(r, a, roll, collective, &out->left, &out->right);
     float total = out->left + out->right, keep = expf(-dt / FLIP_MOTOR_TAU);
     *thrust += (total - *thrust) * (1 - keep);
@@ -163,8 +161,8 @@ void flip_step(Flip *flip, const FlipParams *p, const FlipAuthority *a, const fl
     }
     out->owned = true;
     FlipRighting r = righting(p);
-    r.gyro_ff *= 1 - a->indi;
-    r.yaw_ff *= 1 - a->indi;
+    r.gyro_ff *= 1 - a->indi[1];
+    r.yaw_ff *= 1 - a->indi[2];
     // A staged burst (a turn short of the whole flip) never turns its thrust far from up, so it asks for no more than the weight: the flip's spin and righting collectives took a 60-degree burst 7 m up.
     float burst = flip->turn < TWO_PI ? a->weight : INFINITY;
     if (flip->stage == FLIP_SPIN) {

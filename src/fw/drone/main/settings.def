@@ -44,7 +44,7 @@ TUNE(hover_kz, hover.kz, 1, 0, 10, 1.5)
 TUNE(hover_kdz, hover.kdz, 1, 0, 20, 4)
 TUNE(hover_kiz, hover.kiz, 1, 0, 20, 2)
 TUNE(hover_mass, hover.mass, 1, 0.3, 2, 0.9)
-// hover_climb and hover_ceiling go to 5 and 5.5 m (1.5 and 3 until 2026-11-12, then 3 and 3.5) so the hold can sit high enough for the flip (flip_height up to 5) and its staged tests: the first real flip lost 1.2 m before it tumbled, and the fitted sim loses up to 3 m in its worst plants.
+// hover_climb and hover_ceiling go to 5 m at most, the user's fixed cap on drone 1's height (2026-11-15: never above 5 m; hover_ceiling went to 5.5 before; 1.5 and 3 until 2026-11-12, then 3 and 3.5) so the hold can sit high enough for the flip (flip_height up to 5) and its staged tests: the first real flip lost 1.2 m before it tumbled, and the fitted sim loses up to 3 m in its worst plants.
 TUNE(hover_climb, hover.climb, 1, 0, 5, 0.3)
 TUNE(hover_climb_rate, hover.climb_rate, 1, 0.05, 1, 0.3)
 TUNE(hover_land_rate, hover.land_rate, 1, 0.05, 0.5, 0.2)
@@ -53,7 +53,7 @@ TUNE(hover_yaw_rate, hover.yaw_rate, RAD, 0, 90, 30)
 TUNE(hover_center, hover.center, 1, 0, 1, 1)
 TUNE(hover_distance, hover.distance, 1, 0, 5, 1.79)
 TUNE(hover_approach, hover.approach, 1, 0.02, 1, 0.25)
-TUNE(hover_ceiling, hover.ceiling, 1, 0.2, 5.5, 1.8)
+TUNE(hover_ceiling, hover.ceiling, 1, 0.2, 5, 1.8)
 TUNE(hover_square, hover.square, 1, 0, 1, 1)
 TUNE(hover_cam_pitch, hover.cam_pitch, RAD, -30, 30, 4.3)
 TUNE(hover_cam_roll, hover.cam_roll, RAD, -180, 180, 0)
@@ -113,8 +113,10 @@ TUNE(recover_enable, recover_enable, 1, 0, 1, 0)
 TUNE(mix_ceiling, mix_ceiling, 1, 0, 1200, 0)
 // The attitude estimate's gyro bias from the Kalman filter (flight_rt.c, ekf.c ekf_attitude_bias): 1 takes the filter's in-flight estimate of the gyro's bias off the gyro the attitude integrates (each axis within 0.02 rad/s), learned while the filter holds the heading on the GPS or rests and held otherwise, so without the GPS it stays at what the last rest gave; 0, the default, only the boot calibration's, as before. bank_tilt's gyro-only attitude takes it too; the flip's and the recovery's own attitude, the controller's rate damping and the filter itself keep the calibrated gyro.
 TUNE(attitude_bias, attitude_bias, 1, 0, 1, 0)
-// Incremental nonlinear dynamic inversion (indi.c, flight_rt.c): the share (0-1) of the angular acceleration the gyro measures beyond what the models give for the actuators as estimated (servo dead time and lag, the assemblies' swing, motor lag) that the attitude controller, the flip and the recovery take off what they ask, faded in over half a second once the hold flies 0.3 m above where it engaged (and out below that, on landing and in manual flight); the rotors' gyroscopic feedforwards in the flip give way by the same share, and a servo at its stop gives up yaw before pitch. 0, the default, flies as before. Much over 0.5 rings the motor assemblies' links (about 11 Hz) in the sim.
+// Incremental nonlinear dynamic inversion (indi.c, flight_rt.c): in roll and yaw (indi_pitch below is pitch's) the share (0-1) of the angular acceleration the gyro measures beyond what the models give for the actuators as estimated (servo dead time and lag, the assemblies' swing, motor lag) that the attitude controller, the flip and the recovery take off what they ask, faded in over half a second once the hold flies 0.3 m above where it engaged (and out below that, on landing and in manual flight); the rotors' gyroscopic feedforwards in the flip give way by the same share, and a servo at its stop gives up yaw before pitch. 0, the default, flies as before. Much over 0.5 rings the motor assemblies' links (about 11 Hz) in the sim.
 TUNE(indi, indi, 1, 0, 1, 0)
+// INDI's share in pitch alone (as indi is in roll and yaw; 0 off). On 2026-11-15 indi 0.25 and 0.5 on all axes doubled the hover's 2.6-3 Hz pitch shake (pitch rate 7.8 deg/s RMS in 2-4 Hz without, 13.9 and 15.3 with), the mode pitch_damping over 6 drives, while roll steadied (roll 1.2 -> 0.7 degrees RMS at 0.5).
+TUNE(indi_pitch, indi_pitch, 1, 0, 1, 0)
 // BOOT(name, min, max, default): changed by the T request like TUNE, but read only at boot rather than copied into the controller's command. Where an include site does not name BOOT it is a TUNE without a member.
 #ifndef BOOT
 #define BOOT(name, min, max, value) TUNE(name, , 1, min, max, value)

@@ -273,7 +273,8 @@ static RecoverRun recovery;
 #define INDI_FADE_S 0.5f
 #define INDI_HEIGHT 0.3f
 static Indi indi;
-static float indi_fade;
+// How far INDI has faded in (0-1), and the shares that gives per axis (roll, pitch, yaw: indi, indi_pitch, indi).
+static float indi_fade, indi_share[3];
 static bool held;
 static int held_from;
 static Command flown;
@@ -655,11 +656,14 @@ static void incremental(float dt) {
     if (!state.enabled) {
         indi_reset(&indi);
         indi_fade = 0;
+        memset(indi_share, 0, sizeof(indi_share));
         return;
     }
     bool owned = flip_active(&flip) || recover_active(&recovery);
-    bool flying = command.indi > 0 && (owned || (hover_mode && hover.engaged && !hover.landed && hover.height >= INDI_HEIGHT && flown.base >= command.integrate_throttle));
-    indi_fade = clampf(indi_fade + (flying ? dt : -dt) * command.indi / INDI_FADE_S, 0, command.indi);
+    bool flying = (command.indi > 0 || command.indi_pitch > 0) && (owned || (hover_mode && hover.engaged && !hover.landed && hover.height >= INDI_HEIGHT && flown.base >= command.integrate_throttle));
+    indi_fade = clampf(indi_fade + (flying ? dt : -dt) / INDI_FADE_S, 0, 1);
+    indi_share[0] = indi_share[2] = indi_fade * command.indi;
+    indi_share[1] = indi_fade * command.indi_pitch;
     const Model *m = &command.model;
     const FlipAuthority *a = &flip.authority;
     IndiModel models[INDI_MODELS] = {
@@ -667,7 +671,7 @@ static void incremental(float dt) {
         [INDI_FLIP] = {a->roll, a->pitch, 0, a->yaw, 0},
     };
     indi_update(&indi, state.gyro, models, dt);
-    flip.authority.indi = indi_fade;
+    memcpy(flip.authority.indi, indi_share, sizeof(indi_share));
     memcpy(flip.authority.unmodeled, indi.unmodeled[INDI_FLIP], sizeof(flip.authority.unmodeled));
 }
 
@@ -717,7 +721,7 @@ static void tip_or_recover(Tick *t) {
         .gyro = state.gyro, .accel = state.accel, .dt = t->dt, .tip_limit = command.tip_limit,
         .flip_active = flip_active(&flip), .flip_gyro_only = flip_gyro_only(&flip), .flip_phase = flip_phase(&flip),
         .climb_rate = hover.climb_rate, .collective = 2 * thrust(fmaxf(flown.base, 0)),
-        .authority = {command.model.arm / command.model.roll_inertia, command.model.pivot_height / command.model.pitch_inertia, command.model.arm / command.model.yaw_inertia, command.hover.mass * GRAVITY, indi_fade,
+        .authority = {command.model.arm / command.model.roll_inertia, command.model.pivot_height / command.model.pitch_inertia, command.model.arm / command.model.yaw_inertia, command.hover.mass * GRAVITY, {indi_share[0], indi_share[1], indi_share[2]},
                       {indi.unmodeled[INDI_CONTROLLER][0], indi.unmodeled[INDI_CONTROLLER][1], indi.unmodeled[INDI_CONTROLLER][2]}},
     };
     bool before = recover_active(&recovery);
@@ -857,7 +861,7 @@ static void fly(Tick *t) {
         setpoint.target_roll = setpoint.target_pitch = 0;
         setpoint.base = collective_throttle(t->recovered.motors.collective);
     }
-    setpoint.indi = indi_fade;
+    memcpy(setpoint.indi_share, indi_share, sizeof(setpoint.indi_share));
     memcpy(setpoint.unmodeled, indi.unmodeled[INDI_CONTROLLER], sizeof(setpoint.unmodeled));
     flown = setpoint;
     // Propeller thrust at a fixed throttle goes with the square of battery voltage, so the table's newtons are scaled to the measured voltage: a sagging pack gets more throttle for the same force.
