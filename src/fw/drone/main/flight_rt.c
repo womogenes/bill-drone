@@ -335,8 +335,11 @@ static void pulse(int index, float us) {
     LEDC.channel_group[LEDC_HIGH_SPEED_MODE].channel[index].conf1.duty_start = 1;
 }
 
+// On USB alone (no pack: battery_v under NO_PACK_V, or not read yet) the servos get no pulses, so they are not commanded and do not hold against load on the USB supply (servos drawing power browned out the board on 2026-11-14); the commanded angle is sent again when a pack is connected (servo_pack).
+static bool servo_pack;
+
 static void write_servo(int side) {
-    pulse(side * 2, 1500 + (state.servo[side] + state.offsets[side]) * 1000 / 90);
+    pulse(side * 2, servo_pack ? 1500 + (state.servo[side] + state.offsets[side]) * 1000 / 90 : 0);
 }
 
 static void stop_locked(int reason) {
@@ -642,6 +645,11 @@ static void runtime_task(void *arg) {
         if (voltage_mv) {
             float volts = voltage_mv / 1000.0f;
             battery_v = battery_v ? battery_v + (volts - battery_v) * (1 - expf(-dt / VOLTAGE_TAU)) : volts;
+        }
+        if ((battery_v > NO_PACK_V) != servo_pack) {
+            servo_pack = battery_v > NO_PACK_V;
+            write_servo(0);
+            write_servo(1);
         }
         if (state.enabled && previous && now - previous > MAX_SAMPLE_MS * 1000ULL) stop_locked(5);
         for (int i = 0; i < 3; i++) {
