@@ -67,6 +67,8 @@ typedef struct {
     float flip_enable, flip_height;
     // Tumble recovery in place of the tip cut in flight (recover.h; settings.def recover_enable). Runtime-only, last.
     float recover_enable;
+    // Mixer saturation (flight_math.c, settings.def mix_ceiling): the throttle no motor goes past, the roll differential kept before the collective and the integrators not winding into a limit (0 = off, as before). Runtime-only, last.
+    float mix_ceiling;
 } Command;
 
 // Rows of (throttle, thrust in N); flight_control takes it flattened.

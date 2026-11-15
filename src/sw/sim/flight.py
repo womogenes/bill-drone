@@ -115,6 +115,8 @@ HOVER_GAINS = 53
 DAMPING_TAU = PITCH_SPEED + 1 + HOVER_GAINS + 2
 # The roll setpoint's own slew rate (rad/s, 0 = target_rate; flight_math.c), after pitch_damping_tau.
 ROLL_TARGET_RATE = DAMPING_TAU + 1
+# The mixer's ceiling throttle (0 = off; flight_math.c mix_ceiling), read from the library rather than counted.
+MIX_CEILING = ctypes.c_size_t.in_dll(library, "flight_command_mix_ceiling").value
 
 
 class Attitude:
@@ -161,6 +163,7 @@ class Controller:
             self.command[MODEL_OFFSET + MODEL_KEYS.index(key)] = settings[key]
         self.command[DAMPING_TAU] = settings.get("pitch_damping_tau", 0.0)
         self.command[ROLL_TARGET_RATE] = math.radians(settings.get("roll_target_rate", 0.0))
+        self.command[MIX_CEILING] = settings.get("mix_ceiling", 0.0)
 
     def update(self, attitude, gyro, dt):
         struct.pack_into("<6f", self.command, 0, *attitude, *gyro, dt)

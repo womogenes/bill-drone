@@ -161,6 +161,7 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     }
     float roll_error = state->setpoint_roll - c->roll;
     float pitch_error = state->setpoint_pitch - c->pitch;
+    float roll_i = state->roll_i, pitch_i = state->pitch_i, yaw_i = state->yaw_i;
     // Below integrate_throttle the feet are still down: integrating an error the ground holds would only wind up.
     if (c->base < c->integrate_throttle) {
         state->roll_i = clampf(c->roll_bias, -c->integral_limit, c->integral_limit);
@@ -184,8 +185,20 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
     float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * state->damped_gy + speed_torque);
     float yaw_torque = model->yaw_inertia * (c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias + state->yaw_i);
 
-    float left_vertical = fmaxf(0, (force + roll_torque / model->arm) / 2);
-    float right_vertical = fmaxf(0, (force - roll_torque / model->arm) / 2);
+    // The motors' vertical thrusts: the collective plus and less the roll differential, each kept from going negative. With mix_ceiling (0 = off, as before, when the reverse lookup and the runtime's clamp drop whatever is past the table's top) neither motor is asked for more than the table gives at that throttle (at its thrust scale): the collective gives way before the roll differential, which is cut only by what no collective could give, and the roll integrator does not wind further into a cut at either end. The collective is never raised to keep the differential (no air mode): near the ground that would lift a drone the hover is setting down.
+    float lift = force, differential = roll_torque / model->arm;
+    if (c->mix_ceiling > 0) {
+        float top_left = flight_interpolate(c->mix_ceiling, table, count, 0) * c->left_thrust_scale;
+        float top_right = flight_interpolate(c->mix_ceiling, table, count, 0) * c->right_thrust_scale;
+        differential = clampf(differential, -top_right, top_left);
+        lift = fminf(lift, fminf(2 * top_left - differential, 2 * top_right + differential));
+    }
+    float left_vertical = fmaxf(0, (lift + differential) / 2);
+    float right_vertical = fmaxf(0, (lift - differential) / 2);
+    // The differential lost to the limits (N; more than rounding).
+    float cut = roll_torque / model->arm - (left_vertical - right_vertical);
+    bool windup = c->mix_ceiling > 0 && c->base >= c->integrate_throttle;
+    if (windup && fabsf(cut) > 1e-3f && cut * (state->roll_i - roll_i) > 0) state->roll_i = roll_i;
     float forward = (pitch_torque - model->com_x * force) / model->pivot_height;
     yaw_torque -= model->reaction_torque_ratio * (right_vertical - left_vertical);
     float left_horizontal = (forward - yaw_torque / model->arm) / 2;
@@ -193,8 +206,21 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
 
     float left_angle = model->left_servo_direction * (atan2f(left_horizontal, left_vertical) - upright) + c->left_trim;
     float right_angle = model->right_servo_direction * (atan2f(right_horizontal, right_vertical) - upright) + c->right_trim;
-    state->left_angle = clampf(compensate(state, 0, left_angle, c->servo_compensation), model->servo_min, model->servo_max);
-    state->right_angle = clampf(compensate(state, 1, right_angle, c->servo_compensation), model->servo_min, model->servo_max);
+    left_angle = compensate(state, 0, left_angle, c->servo_compensation);
+    right_angle = compensate(state, 1, right_angle, c->servo_compensation);
+    state->left_angle = clampf(left_angle, model->servo_min, model->servo_max);
+    state->right_angle = clampf(right_angle, model->servo_min, model->servo_max);
     state->left = roundf(flight_interpolate(hypotf(left_horizontal, left_vertical) / c->left_thrust_scale, table, count, 1));
     state->right = roundf(flight_interpolate(hypotf(right_horizontal, right_vertical) / c->right_thrust_scale, table, count, 1));
+    if (c->mix_ceiling > 0) {
+        state->left = fminf(state->left, c->mix_ceiling);
+        state->right = fminf(state->right, c->mix_ceiling);
+    }
+    if (windup) {
+        // A servo at its stop: the pitch and yaw integrators do not wind further into it (each side's tilt forward past its stop; pitch tilts both forward, yaw the right forward and the left back).
+        float left_past = model->left_servo_direction * (left_angle - state->left_angle), right_past = model->right_servo_direction * (right_angle - state->right_angle);
+        float pitch_step = state->pitch_i - pitch_i, yaw_step = state->yaw_i - yaw_i;
+        if (pitch_step * left_past > 0 || pitch_step * right_past > 0) state->pitch_i = pitch_i;
+        if (yaw_step * right_past > 0 || yaw_step * left_past < 0) state->yaw_i = yaw_i;
+    }
 }
