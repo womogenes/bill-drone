@@ -37,7 +37,7 @@ HEADERS = [MAIN / "flip.h", MAIN / "recover.h", MAIN / "flight_math.h", MAIN / "
 LIBRARY = Path(__file__).with_name("libflip.so")
 # The GPS hold as the roll-step ladder was cleared with on 2026-11-12 (sw/flight_steps.py ladder), held at 3 m (hover_climb and hover_ceiling as settings.def now allows), the flip allowed from 2.5 m.
 FLIGHT = {"hover_camera": 0, "hover_center": 0, "hover_gps_tau": 0.5, "hover_gps_place_tau": 2.0, "hover_tilt": 10.0, "hover_kd": 1.5, "hover_thrust_direction": 0.8, "pitch_damping": 6.0,
-          "hover_gps_calibrate": 5.0, "roll_target_rate": 360.0, "hover_climb": 3.0, "hover_ceiling": 3.5, "hover_ekf": 0, "flip_enable": 1, "flip_height": 2.5, "thrust_voltage": 0.0}
+          "hover_gps_calibrate": 5.0, "roll_target_rate": 360.0, "hover_climb": 3.0, "hover_ceiling": 3.5, "flip_enable": 1, "flip_height": 2.5, "thrust_voltage": 0.0}
 # The height lost to the flip: its lowest point within this long after it begins (s).
 LOST_WINDOW = 4.0
 # The belly's height below the center of mass (rigid.py HULL): the height above the ground is the position's less this.
@@ -83,7 +83,7 @@ class Output(ctypes.Structure):
 
 
 class Check(ctypes.Structure):
-    _fields_ = ([(name, ctypes.c_bool) for name in ("enabled", "armed", "done", "holding", "camera", "gps", "aligned", "located", "ekf", "landing", "failsafe", "pattern")]
+    _fields_ = ([(name, ctypes.c_bool) for name in ("enabled", "armed", "done", "holding", "camera", "gps", "aligned", "located", "landing", "failsafe", "pattern")]
                 + [(name, ctypes.c_float) for name in ("airborne", "height", "climb_rate", "speed", "roll", "pitch")] + [("rate", ctypes.c_float * 3), ("min_height", ctypes.c_float), ("battery", ctypes.c_float), ("whole_quaternion", ctypes.c_bool)])
 
 
@@ -348,7 +348,7 @@ def fly(job):
                 s = hover.state
                 pose = (wrap(estimate.state[0]), wrap(estimate.state[1]))
                 check = Check(enabled=flown["flip_enable"] >= 1, armed=True, done=run.done, holding=bool(s.engaged), camera=flown.get("hover_camera", 1) != 0, gps=flown.get("hover_gps_tau", 0) > 0,
-                              aligned=bool(s.aligned), located=bool(s.gps_us) and now_us - s.gps_us <= 500000, ekf=flown.get("hover_ekf", 0) > 0, landing=lane["mode"] > HOLD, failsafe=lane["guard"].state.failsafe != 0,
+                              aligned=bool(s.aligned), located=bool(s.gps_us) and now_us - s.gps_us <= 500000, landing=lane["mode"] > HOLD, failsafe=lane["guard"].state.failsafe != 0,
                               pattern=False, airborne=controller.state[10], height=s.height, climb_rate=s.climb_rate, speed=math.hypot(s.gps_fix[0], s.gps_fix[1]), roll=pose[0], pitch=pose[1] - trim,
                               rate=(ctypes.c_float * 3)(*lane["gyro"]), min_height=flown["flip_height"], battery=BATTERY,
                               whole_quaternion=quaternion and flown["flip_enable"] < 2 and not options.get("whole_quaternion"))

@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Hover and landing: height from the IMU's vertical acceleration, corrected by the camera when it sees the tag (and without it by the barometer, GPS or flow when they are on), which also holds the range and bearing to the tag. No ESP-IDF, so the host can replay recordings through it.
+// Hover and landing: height from the IMU's vertical acceleration, corrected by the camera when it sees the tag (and without it by the barometer or GPS when they are on), which also holds the range and bearing to the tag. No ESP-IDF, so the host can replay recordings through it.
 // The camera's tag rotation is ambiguous and noisy at range (fw/esp32cam/README.md), so the hold flies on the tag centre in the camera frame: turned level by the IMU's roll and pitch, it gives range, bearing and height to the tag; the gyro's yaw separates the drone's own turning from its travel, and tilt dead-reckons the velocity between sightings. Only the rotations the camera settled outright steer, slowly, where on the circle about the tag the drone sits.
 // Body conventions (flight_math.c): positive pitch (nose down) accelerates forward, positive roll (right side down) accelerates right, positive yaw rate turns left.
 
@@ -36,16 +36,14 @@ typedef struct {
     float thrust_tilt, thrust_tilt_tau;
     // The trim a hold starts from (m/s²; body forward, left): flight_rt.c's self-trim carries each hop's learned trim over, so the steady push need not be relearned from zero every hop.
     float trim_start_x, trim_start_y;
-    // Optical flow without the tag (flight_rt.c flow_input): the scene's assumed distance along the camera's axis (m; 0 = off) turns the flow's translational rate into velocity across the camera, which pulls the estimate over flow_tau (s) and teaches the drag model its sideways offset (the wind, as the camera teaches it on the tag). Holding still needs only zero flow, so the distance sets the correction's strength, not where it settles.
-    float flow_depth, flow_tau;
     // Speed from the servos: forward airspeed pitches this airframe (rotor flapping), so the pitch loop holds it with a steady thrust tilt, tilt = speed_pitch * pitch + speed_tilt * forward speed + offset (fitted on the camera's speed over five tag hovers, 2026-10-31 and 11-01: speed_tilt 5.0 degrees per m/s, speed_pitch -0.54, the servo compensation's share; 0.19 m/s error on flights left out of the fit). speed_tilt (radians per m/s; 0 = off) turns it on; the offset (CoM and servo zero) is learned from the camera while it sees the tag, else from the first SPEED_TAKEOFF_S airborne plus speed_takeoff (radians: the climb reads that much lower); without the tag it pulls the forward velocity estimate over speed_tau (s).
     float speed_tilt, speed_pitch, speed_takeoff, speed_tau;
     // The dashboard's arrows on the tag move the hold point at this speed (m/s); kept here so it is set like the rest. The hold flies at the point's speed (nudge_rate).
     float nudge_speed;
     // The furthest from the picture's centre the hold's pitch may put the tag, as last seen (radians; 0 = no limit): the camera sees about 18 degrees either way and the body overshoots.
     float view;
-    // GPS without the tag (hover.c take_gps): its velocity pulls the estimate over gps_tau (s; 0 = off), its position the hold's place over gps_place_tau and its height the height over gps_height_tau (s; 0 = not used); gps_heading is the first guess at where the drone's nose points at engage (radians clockwise from true north): the hold takes the GPS's velocity and position only once the flight's own accelerations against the GPS's have pinned the heading (hover.c HEADING_SURE), so the guess no longer steers anything. Firmware before that (2026-11-09, 4320732 and earlier) trusted it from the first fix and rarely corrected it: there point the nose at it (0 = north) for takeoff.
-    float gps_tau, gps_place_tau, gps_height_tau, gps_heading;
+    // GPS without the tag (hover.c take_gps): its velocity pulls the estimate over gps_tau (s; 0 = off), and its position the hold's place over gps_place_tau. The hold takes the GPS's velocity and position only once the flight's own accelerations against the GPS's have pinned the heading (hover.c HEADING_SURE).
+    float gps_tau, gps_place_tau;
     // Barometer without the tag (hover.c take_baro): its height above the ground it read with the motors off pulls the height and climb rate over baro_tau (s; 0 = off, the IMU's height alone as before). On, the hold also never asks for more height than ceiling, so a height above it descends.
     float baro_tau;
     // Not settings: the laptop's nudge of the hold point (m; toward the tag, to the drone's left, and up), streamed with the targets (the dashboard's arrows and W/S in hover).
@@ -58,8 +56,6 @@ typedef struct {
     float thrust_direction;
     // GPS heading calibration (hover.c CALIBRATE_S): the tilt of the pulses the hold flies while the GPS's heading is not yet pinned (radians; 0 = off): forward and back, then left and back, a pulse pair moving the simulated drone about 0.15 m at 5 degrees. The liftoff alone usually pins the heading (2-13 s after engaging on the 2026-11-09 replays, 2.6 s median in the simulator); the pulses are for a takeoff too gentle to.
     float gps_calibrate;
-    // The Kalman filter (ekf.c, hover_estimate): 0 = the hold flies its own estimates and the filter is only logged; 1 = without the tag the hold flies the filter's heading, horizontal velocity and travel wherever the filter is sure of them (HoverEstimate horizontal), its own estimates running underneath for where it is not; 2 = and, while holding, the filter's height and climb rate from liftoff (a landing keeps the hold's own, carried on from the filter's).
-    float ekf;
     // The fastest the hold flies back to its hold point without the tag (m/s; 0 = no limit): the place's pull is capped where the velocity damping meets it at this speed (the offset counts as at most return_speed × kd / kp), so a hold point meters away is flown back to and not lunged at. Uncapped the pull asks for kp / kd of speed per meter (1.3 m/s at kp 2, kd 1.5), more than the drone can stop from: in sw/sim/outdoor.py the hold points left 3-7 m behind by the drift before the heading was pinned were flown back to at 2.5-4.3 m/s and overshot until the fly-away failsafe landed the drone.
     float return_speed;
     // The most the GPS hold's hold-point speed changes in a second (m/s²; 0 = as the laptop's nudge changes it): let go at speed, the hold point moves on as far as the drone can stop in at this deceleration, and the hold brakes along it instead of asking for kd times the speed at once. In sw/sim/speed_limit.py (2026-11-12, the raised airframe, wind 0-3 m/s) that step saturated the lean cap at hover_tilt 15-20 and the braking rang (pitch 50 degrees peak to peak after stopping from 3 m/s at hover_tilt 20, the hold point overshot 2.5 m median); at 1.5 every lean cap stops from 3 and 5 m/s within 0.3 m of the hold point (90th percentile 0.8-0.95 m) and without ringing.
@@ -80,12 +76,6 @@ typedef struct {
     float specific[3], tilt;
 } HoverDrag;
 
-// One camera flow measurement: its frame's capture time and the scene's translational angular rate in camera axes (rad/s; right, down), the drone's own rotation over the interval taken out.
-typedef struct {
-    int64_t capture_us;
-    float rate[2];
-} HoverFlow;
-
 // One GPS solution: when it was measured (us, this clock), velocity (m/s; north, east, up) and position (m; north and east of any fixed origin, and up).
 typedef struct {
     int64_t capture_us;
@@ -98,7 +88,7 @@ typedef struct {
     float altitude;
 } HoverBaro;
 
-// The Kalman filter's estimate (ekf.c ekf_estimate) for a hold flown on it (gains ekf): the nose's heading (radians counterclockwise from north), the velocity (m/s; north, west, up), the position (m; north, west, from any fixed point) and the height above the ground it last rested on (m); horizontal while its heading is known and its velocity sure enough to fly on, vertical while its height is.
+// The Kalman filter's estimate (ekf.c ekf_estimate), which the landing's touchdown takes (hover.c EKF_STILL_S) and the log records: the nose's heading (radians counterclockwise from north), the velocity (m/s; north, west, up), the position (m; north, west, from any fixed point) and the height above the ground it last rested on (m); horizontal while its heading is known and its velocity sure enough to fly on, vertical while its height is.
 typedef struct {
     float yaw, velocity[3], position[2], height;
     bool horizontal, vertical;
@@ -143,9 +133,8 @@ typedef struct {
     float push[2];
     // What a later hold should start its trim from (m/s²; body forward, left): the trim plus the push's opposite turned into the body, for flight_rt.c's carry-over.
     float carry[2];
-    // Optical flow (hover.c take_flow): the vertical acceleration's bias it has found (m/s²), and the previous flow's capture time (us, 0 before the first), so each flow corrects over the time it covers.
-    float flow_bias;
-    int64_t flow_us;
+    // The vertical acceleration's bias the GPS and the barometer have found (m/s²).
+    float accel_bias;
     // Since a stick was let go, how long the hold may still take to brake (s; hover.c BRAKE_S, ended early once under BRAKED): meanwhile the place follows the drone, so it holds where it stops, not where the stick was let go.
     float braking;
     // Speed from the servos (gains speed_tilt): the thrust tilt less speed_pitch times the pitch, smoothed (radians); its offset, and the sum and time of the takeoff window that first sets it; the forward speed it gives (m/s, NaN until the offset is known).
@@ -187,10 +176,9 @@ typedef struct {
     float anchor[2];
     // The heading evidence's inertial changes' squared magnitudes summed (m²/s², fading as turn_weight), for its noise floor.
     float heading_inertial;
-    // The Kalman filter's estimate for the coming tick (hover_estimate; estimated until hover_update has taken it), whether the last tick flew its horizontal part (flown), its position at the last tick, for the travel since, and the dead reckoning where its position is zero (flown_anchor, m, yaw-turned frame; flown_tied once known).
+    // The Kalman filter's estimate for the coming tick (hover_estimate; estimated until hover_update has taken it).
     HoverEstimate estimate;
-    bool estimated, flown, flown_tied;
-    float flown_position[2], flown_anchor[2];
+    bool estimated;
     // The heading evidence's steady part: the fading mean of the blocks' changes (GPS north, east; inertial x, y; m/s) and the blocks it is worth, taken off each change before the product.
     float heading_steady[4], heading_steady_weight;
     // The newest fix as the GPS gave it, which needs no heading (m/s north, east; m north, east of the first fix), for the fly-away failsafe (guard.c); and whether the failsafe is braking, when the calibration pulses run unasked until the heading is pinned.
@@ -212,13 +200,11 @@ typedef struct {
 // While not hovering: forget the hover. With the motors off, learn the resting vertical specific force (g) and, from baro (the newest barometer reading or NULL, each passed once), the ground's pressure altitude; spinning (manual flight), keep integrating the climb rate and height so a later hover or landing starts from them.
 void hover_rest(HoverState *state, float vertical_g, bool spinning, float dt, const HoverBaro *baro);
 // One control tick. mode is HOVER_HOLD, HOVER_LAND or HOVER_LAND_FAST; pose is the newest camera sighting or NULL (camera disabled or no tag); roll and pitch are the measured attitude from level and yaw_rate the measured heading rate (rad/s, positive left); vertical_g is the measured specific force along vertical, in g; force is the collective thrust in N being flown now, so taking over mid-flight is smooth; drag is what the rotor-drag model needs (used when gains->drag is set).
-// A body vector (forward, left, up) in camera axes (right, down, forward): the inverse of the mounting the hover turns sightings by (cam_roll, cam_pitch), for taking the drone's own rotation out of the flow.
-void hover_body_to_camera(const HoverGains *gains, const float *body, float *camera);
-// The Kalman filter's estimate for the next hover_update (gains ekf), passed every tick the filter has one.
+// The Kalman filter's estimate for the next hover_update, passed every tick the filter has one.
 void hover_estimate(HoverState *state, const HoverEstimate *estimate);
-// flow is the newest camera flow measurement, gps the newest GPS solution and baro the newest barometer reading, or NULL (each is passed once).
+// gps is the newest GPS solution and baro the newest barometer reading, or NULL (each is passed once).
 void hover_update(HoverState *state, const HoverGains *gains, int mode, const HoverPose *pose, int64_t now_us, float dt,
-                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag, const HoverFlow *flow,
+                  float roll, float pitch, float yaw_rate, float vertical_g, float force, const HoverDrag *drag,
                   const HoverGps *gps, const HoverBaro *baro, HoverOutput *output);
 
 #endif

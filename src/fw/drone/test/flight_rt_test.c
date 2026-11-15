@@ -296,14 +296,6 @@ bool camera_candidates(CameraPose *pose, uint32_t max_age_us) {
     pose->tag_position_m[2] = (float)(1.8 + hashed(at, 14) * 0.2);
     return true;
 }
-bool camera_flow(CameraFlow *flow, uint32_t *sequence, uint32_t max_age_us) {
-    int64_t at = frame_us();
-    uint32_t number = (uint32_t)(at / 33333);
-    if (number == *sequence || clock_us - at > (int64_t)max_age_us || hashed(at, 21) < 0.2) return false;
-    *sequence = number;
-    *flow = (CameraFlow){.sequence = number, .capture_us = at - 20000, .shift = {(float)(hashed(at, 22) - 0.5) * 4, (float)(hashed(at, 23) - 0.5) * 4}, .interval_us = 33333, .inliers = 10, .residual_px = 0.5f};
-    return true;
-}
 bool camera_newest(uint32_t *sequence, int64_t *centre_us) {
     int64_t at = frame_us();
     *sequence = (uint32_t)(at / 33333);

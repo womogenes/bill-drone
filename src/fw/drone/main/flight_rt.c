@@ -84,7 +84,7 @@ typedef struct __attribute__((packed)) {
     int32_t baro;
     // The guards (guard.h): bits 0-1 the fly-away failsafe's phase (FAILSAFE_*), bit 2 set off by distance rather than speed, bits 3-5 why the test pattern stopped (PATTERN_*, 0 while it plays or never did), bits 6-7 the flip's phase (flip.h flip_phase).
     uint16_t guard;
-    // The Kalman filter's estimate (ekf.h), whether or not the hold flies it: roll and pitch as attitude above and yaw (centidegrees; from north once the heading is known, until then from where the nose pointed at the start), velocity north, west and up (mm/s), position north and west of where it last rested (cm) and height above it (mm), the standard deviations of its horizontal velocity (cm/s) and height (cm; 255 at most), and flags: bit 0 the heading is known, bit 1 resting still, bits 2 and 3 good enough for the hold to fly horizontally and vertically (ekf_estimate), bit 4 the hold flew on it this tick (hover.h gains ekf), bits 8-15 the GPS solutions it has refused in a row (255 at most).
+    // The Kalman filter's estimate (ekf.h): roll and pitch as attitude above and yaw (centidegrees; from north once the heading is known, until then from where the nose pointed at the start), velocity north, west and up (mm/s), position north and west of where it last rested (cm) and height above it (mm), the standard deviations of its horizontal velocity (cm/s) and height (cm; 255 at most), and flags: bit 0 the heading is known, bit 1 resting still, bits 2 and 3 its horizontal and vertical estimates sure (ekf_estimate), bits 8-15 the GPS solutions it has refused in a row (255 at most).
     int16_t ekf_attitude[3], ekf_velocity[3], ekf_position[2], ekf_height;
     uint8_t ekf_sd[2];
     uint16_t ekf_flags;
@@ -123,15 +123,6 @@ typedef struct {
 
 static Config config;
 static State state;
-// The last gyro readings (body rad/s) with their times, for taking the drone's rotation out of the camera's flow (flow_input).
-#define GYRO_HISTORY 16
-static struct { int64_t us[GYRO_HISTORY]; float rate[GYRO_HISTORY][3]; int next; } gyro_history;
-// The tracking camera's focal length in its full-resolution pixels (fw/esp32cam/src/config.h fx, fy at 320x240), and the flow it is trusted with.
-#define FLOW_FOCAL_PX 370.0f
-#define FLOW_MIN_INLIERS 6
-#define FLOW_MAX_RESIDUAL_PX 2.0f
-#define FLOW_MAX_AGE_US 150000
-
 // GPS solutions the hover takes: a 3D fix inside the module's accuracy masks, its speed known to GPS_MAX_SPEED_ACCURACY (m/s) and its position to GPS_MAX_ACCURACY (m), arriving no later than GPS_MAX_AGE_US. NAV-PVT comes out about GPS_LATENCY_US after the epoch it describes (the u-blox M10's solution time at 10 Hz plus the 100 bytes at 115200).
 #define GPS_MAX_SPEED_ACCURACY 0.6f
 #define GPS_MAX_ACCURACY 8.0f
@@ -181,32 +172,6 @@ static bool baro_input(HoverBaro *out) {
     return true;
 }
 
-// The camera's newest flow as the hover takes it: its shift turned into an angular rate (rad/s; right, down) less the part the drone's own rotation over the interval explains (a rotation rate W in camera axes sweeps the image centre at -W_down right and +W_right down). False without a new, trusted flow.
-static bool flow_input(const HoverGains *gains, HoverFlow *out) {
-    static uint32_t sequence;
-    CameraFlow flow;
-    if (!camera_flow(&flow, &sequence, FLOW_MAX_AGE_US) || flow.inliers < FLOW_MIN_INLIERS || flow.residual_px > FLOW_MAX_RESIDUAL_PX ||
-        flow.interval_us == 0 || flow.interval_us > 100000)
-        return false;
-    float mean[3] = {0, 0, 0};
-    int count = 0;
-    for (int k = 0; k < GYRO_HISTORY; k++) {
-        int64_t t = gyro_history.us[k];
-        if (t > flow.capture_us - (int64_t)flow.interval_us && t <= flow.capture_us) {
-            for (int i = 0; i < 3; i++) mean[i] += gyro_history.rate[k][i];
-            count++;
-        }
-    }
-    if (!count) return false;
-    for (int i = 0; i < 3; i++) mean[i] /= count;
-    float camera[3];
-    hover_body_to_camera(gains, mean, camera);
-    float interval = flow.interval_us / 1e6f;
-    out->capture_us = flow.capture_us - (int64_t)flow.interval_us / 2;
-    out->rate[0] = flow.shift[0] / FLOW_FOCAL_PX / interval + camera[1];
-    out->rate[1] = flow.shift[1] / FLOW_FOCAL_PX / interval - camera[0];
-    return true;
-}
 static Command command;
 // One motor's thrust (N) at a throttle on the firmware's table, and the throttle for a thrust on its rising curve, at most THROTTLE_MAX.
 static float thrust(float throttle) {
@@ -258,7 +223,7 @@ static bool link_landing;
 static int requested_mode;
 static uint64_t link_land_us;
 static HoverState hover;
-// The Kalman filter (ekf.h) and its newest estimate: it runs every tick, armed or not, beside the estimates above, and the hold flies on it only where the hover_ekf setting says (hover.h gains ekf).
+// The Kalman filter (ekf.h) and its newest estimate: it runs every tick, armed or not, beside the estimates above; the landing's touchdown takes it (hover.c EKF_STILL_S) and the log records it.
 static Ekf ekf;
 static EkfOutput filtered;
 // The gyro bias the attitude estimate takes off with attitude_bias (rad/s; ekf_attitude_bias), zero until the filter first pins one and again when a calibration restarts it.
@@ -553,7 +518,7 @@ static void capture(uint64_t now, const int16_t *raw, uint32_t duration) {
     record->ekf_height = scaled(filtered.height, 1000);
     record->ekf_sd[0] = fminf(filtered.velocity_sd * 100, 255);
     record->ekf_sd[1] = fminf(filtered.height_sd * 100, 255);
-    record->ekf_flags = filtered.aligned | filtered.still << 1 | hover.estimate.horizontal << 2 | hover.estimate.vertical << 3 | hover.flown << 4 |
+    record->ekf_flags = filtered.aligned | filtered.still << 1 | hover.estimate.horizontal << 2 | hover.estimate.vertical << 3 |
                         (filtered.rejected > 255 ? 255 : filtered.rejected) << 8;
     uint32_t camera_sequence;
     int64_t centre_us;
@@ -631,7 +596,7 @@ static void imu_sample(int16_t *sensor, const int32_t *sum, int samples, int16_t
     }
 }
 
-// Calibrated accelerometer (g) and gyro (rad/s, less its bias) into state, with a gyro calibration's sums and its result once complete, and the gyro history the camera's flow needs.
+// Calibrated accelerometer (g) and gyro (rad/s, less its bias) into state, with a gyro calibration's sums and its result once complete.
 static void take_imu(const float *body, uint64_t now) {
     for (int i = 0; i < 3; i++) {
         state.accel[i] = (body[i] * config.accel_scale[i] - state.accel_offset[i]) * state.accel_gain[i];
@@ -659,9 +624,6 @@ static void take_imu(const float *body, uint64_t now) {
         }
     }
     for (int i = 0; i < 3; i++) state.gyro[i] -= state.bias[i];
-    gyro_history.us[gyro_history.next] = now;
-    memcpy(gyro_history.rate[gyro_history.next], state.gyro, sizeof(state.gyro));
-    gyro_history.next = (gyro_history.next + 1) % GYRO_HISTORY;
 }
 
 // INDI's tick (indi.h), before the flip, the recovery and the controller, which take its unmodeled acceleration on their own models: the controller's (Model, which the recovery's authority shares) and the flip's. Off and reset while disarmed.
@@ -797,8 +759,6 @@ static bool hover_setpoint(Tick *t, Command *setpoint) {
     // Heading rate about vertical from the body rates (positive left).
     float heading_rate = (state.gyro[1] * sinf(t->pose.roll) + state.gyro[2] * cosf(t->pose.roll)) / cosf(t->pose.pitch);
     HoverDrag drag = drag_inputs(&state, &command);
-    HoverFlow flow;
-    bool have_flow = gains.flow_depth > 0 && flow_input(&gains, &flow);
     bool have_gps = gains.gps_tau > 0 && t->have_fix;
     // The fly-away failsafe may ignore the stick, brake harder or land (guard.c).
     int mode = guard_hover(&guard, &command.guard, &hover, &gains, hover_mode, t->now, t->dt);
@@ -806,7 +766,7 @@ static bool hover_setpoint(Tick *t, Command *setpoint) {
     if (guard.failsafe != FAILSAFE_OFF) flip_abort(&flip, &hover.integral);
     if (flip_active(&flip) || recover_active(&recovery)) mode = HOVER_HOLD;
     hover_update(&hover, &gains, mode, tag, t->now, t->dt, t->pose.roll, t->pose.pitch, heading_rate, t->vertical, flying, &drag,
-                 have_flow ? &flow : NULL, have_gps ? &t->gps : NULL, t->have_baro ? &t->baro : NULL, &out);
+                 have_gps ? &t->gps : NULL, t->have_baro ? &t->baro : NULL, &out);
     // A finished landing disarms, ending the session like a stop, so the laptop can take off again (H or Enable) instead of being left armed with hover holding thrust at zero.
     if (hover.landed && out.force <= 0 && !flip_active(&flip) && !recover_active(&recovery)) stop_locked(link_landing ? STOP_LINK_LANDED : guard.failsafe == FAILSAFE_LAND ? STOP_FAILSAFE_LANDED : STOP_LANDED);
     setpoint->base = out.force > 0 ? collective_throttle(out.force) : 0;
@@ -1351,7 +1311,7 @@ const char *flight_runtime_flip(void) {
     FlipCheck check = {
         .enabled = command.flip_enable >= 1, .armed = state.enabled, .done = flip.done,
         .holding = hover_mode == HOVER_HOLD && hover.engaged, .camera = command.hover_camera != 0, .gps = command.hover.gps_tau > 0,
-        .aligned = hover.aligned, .located = hover.gps_us && now - hover.gps_us <= FLIP_FIX_US, .ekf = command.hover.ekf > 0,
+        .aligned = hover.aligned, .located = hover.gps_us && now - hover.gps_us <= FLIP_FIX_US,
         .landing = link_landing, .failsafe = guard.failsafe != FAILSAFE_OFF, .pattern = excite.active,
         .airborne = state.controller.airborne, .height = hover.height, .climb_rate = hover.climb_rate, .speed = hypotf(hover.gps_fix[0], hover.gps_fix[1]),
         .roll = pose.roll, .pitch = pose.pitch - command.pitch_trim, .rate = {state.gyro[0], state.gyro[1], state.gyro[2]},

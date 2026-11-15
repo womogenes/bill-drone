@@ -46,8 +46,6 @@ static volatile uint32_t edges, edge_us;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static CameraPose latest;
 static bool have_pose;
-static CameraFlow latest_flow;
-static bool have_flow;
 static CameraStats stats = {.frame_us = -1};
 // The camera's link diagnostics (fw/esp32cam/src/packet.h altRotation on frames without a trusted tag): bytes its UART0 received, falling edges its pulse counter saw on its RX pin (GPIO44), packets it had to queue behind other bytes (so their start bit came after the stamp, and their dating is late), and its test receiver's bytes and 0x55 bytes; with the arrival time of the last report, -1 before the first.
 static uint32_t camera_link_report[5];
@@ -117,13 +115,6 @@ static void accept(const CameraPacket *packet, bool synced, uint32_t since_edge_
         stats.flows += packet->flow_interval_us && fresh;
         have_pose = packet->trusted && fresh;
         if (have_pose) latest = pose;
-        if (packet->flow_interval_us && fresh) {
-            // The frame's centre row, which the flow belongs to, rather than the tag's.
-            latest_flow = (CameraFlow){.sequence = packet->sequence, .capture_us = now - age + packet->flow_offset_us,
-                                       .shift = {packet->flow[0], packet->flow[1]}, .interval_us = packet->flow_interval_us,
-                                       .inliers = packet->flow_inliers, .residual_px = packet->flow_residual_px};
-            have_flow = true;
-        }
     }
     portEXIT_CRITICAL(&lock);
     // A restarted camera counts from zero again, so only an exact repeat is refused.
@@ -350,18 +341,6 @@ size_t camera_raw(uint32_t baud, const uint8_t *data, size_t length, uint32_t wa
     uart_flush_input(PORT);
     raw_mode = false;
     return n;
-}
-
-bool camera_flow(CameraFlow *flow, uint32_t *sequence, uint32_t max_age_us) {
-    int64_t now = esp_timer_get_time();
-    portENTER_CRITICAL(&lock);
-    bool fresh = have_flow && latest_flow.sequence != *sequence && now - latest_flow.capture_us <= max_age_us;
-    if (fresh) {
-        *flow = latest_flow;
-        *sequence = latest_flow.sequence;
-    }
-    portEXIT_CRITICAL(&lock);
-    return fresh;
 }
 
 void camera_relay_start(void (*received)(const uint8_t *src, int8_t rssi, int8_t noise_floor, const uint8_t *packet, size_t length), void (*sent)(bool delivered)) {

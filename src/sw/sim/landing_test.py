@@ -101,14 +101,14 @@ def install(source, defines):
             self.landing_us = None
             self.off = 0.0
 
-        def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None, gps=None, baro=None, gains=None):
+        def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, gps=None, baro=None, gains=None):
             # The camera's height error near the floor (the drone's attitude error times the 2 m range): from the landing's start the tag's apparent height drifts by height_error (m, positive reads the drone low) over the time the descent should take.
             if mode != hover.HOLD and self.landing_us is None:
                 self.landing_us, self.descent = now_us, max(0.5, self.state.height / self.gains.land_rate)
             if pose and self.landing_us is not None:
                 share = min(1.0, (now_us - self.landing_us) / 1e6 / self.descent)
                 pose.tag[1] += Recorded.height_error * share
-            out = super().update(mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow, gps, baro, gains)
+            out = super().update(mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, gps, baro, gains)
             state = self.state
             self.off = self.off + dt if state.landed and out.force <= 0 else 0
             if self.off > Recorded.wait:
@@ -195,7 +195,6 @@ def fly(case, source=None, defines=()):
             plant |= {"feet": feet, "ground_pitch": rest, "friction": case["tray"]["friction"], "ground": tuple(case["tray"]["ground"]), "ground_slope": tuple(case["tray"]["slope"]),
                       "imu_range": (2000.0, 2.0), "tumble": 80.0}
             recorded.wait = 2.0
-        settings["hover_gps_heading"] = random.Random(case["seed"] + 1).uniform(-30, 30)
         expected = case["climb"] / case["land_rate"]
     else:
         settings = recording_settings(recording(INDOOR))
@@ -216,9 +215,9 @@ def fly(case, source=None, defines=()):
     if not case.get("guard", True):
         plant["guard"] = False
     if case.get("ekf"):
-        # The Kalman filter beside the hover (--ekf), as flight_rt.c runs it on the drone whatever hover_ekf says.
+        # The Kalman filter beside the hover (--ekf), as flight_rt.c runs it on the drone.
         plant["ekf"] = True
-    if settings.get("hover_ekf", 0) > 0 or case.get("ekf"):
+    if case.get("ekf"):
         # The Kalman filter has run since boot on the drone: a rest long enough for it to see the drone rest (as sw/sim/outdoor.py EKF_REST).
         plant["armed_s"] = 5.0
     thrust_voltage = settings["thrust_voltage"]
@@ -370,7 +369,7 @@ def replay(recording, contact=None, source=None, defines=(), overrides=None):
     pick = np.searchsorted(t, grid, side="right") - 1
     t, roll, pitch, vertical, force, mode = grid, roll[pick], pitch[pick], vertical[pick], force[pick], mode[pick]
     height, climb = data.hover_height_m.values[pick], data.hover_climb_m_s.values[pick]
-    # The Kalman filter's estimate as the drone logged it (flight_rt.c computes it every tick and hands it to the hold whatever hover_ekf is), where the recording has it.
+    # The Kalman filter's estimate as the drone logged it (flight_rt.c computes it every tick and hands it to the hold), where the recording has it.
     filtered = "ekf_up_m_s" in data and np.isfinite(data.ekf_up_m_s.values).any()
     if filtered:
         names = ("ekf_yaw_deg", "ekf_north_m_s", "ekf_west_m_s", "ekf_up_m_s", "ekf_north_m", "ekf_west_m", "ekf_height_m", "ekf_horizontal", "ekf_vertical")

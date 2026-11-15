@@ -38,17 +38,6 @@ typedef struct {
 void camera_start(void);
 // Copies the newest frame's pose if the camera trusted that frame's tag corners, whether or not it decided the tilt, and the pose is at most max_age_us old now.
 bool camera_candidates(CameraPose *pose, uint32_t max_age_us);
-// The camera's image flow between consecutive frames (fw/esp32cam/src/flow.h): the shift in its full-resolution pixels (right, down) over interval_us, ending at the frame whose centre row was read at capture_us on this clock, with how many blocks agreed and their median deviation (px).
-typedef struct {
-    uint32_t sequence;
-    int64_t capture_us;
-    float shift[2];
-    uint32_t interval_us;
-    uint16_t inliers;
-    float residual_px;
-} CameraFlow;
-// The newest flow if it is newer than *sequence (which it then updates) and at most max_age_us old.
-bool camera_flow(CameraFlow *flow, uint32_t *sequence, uint32_t max_age_us);
 void camera_stats(CameraStats *stats);
 // The newest dated frame's sequence and the readout of its centre row on this clock, for the flight log to tie the camera's black-box frames to the IMU; false before the first.
 bool camera_newest(uint32_t *sequence, int64_t *centre_us);

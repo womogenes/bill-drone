@@ -256,7 +256,6 @@ const char *flip_refusal(const FlipCheck *c) {
     if (c->whole_quaternion) return "The whole flip is not flown with quaternion 1 (bursts only: flip_enable 2 to 4)";
     if (!c->holding || c->landing) return "Flip only from the hover hold";
     if (c->camera || !c->gps) return "Flip only from the GPS hold (hover_camera 0, hover_gps_tau on)";
-    if (c->ekf) return "Flip only with the hold on its own estimates (hover_ekf 0)";
     if (!c->aligned || !c->located) return "GPS hold not settled: heading not pinned or no fresh fix";
     if (c->failsafe) return "Fly-away failsafe active";
     if (c->pattern) return "Test pattern playing";
