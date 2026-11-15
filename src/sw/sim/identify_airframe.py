@@ -42,7 +42,7 @@ UNTIL = {"2026-10-29T06-25-19": 18.6, "2026-10-29T06-30-28": 20.1, "2026-10-29T0
 INSTRUMENT_BANDS = ((1.0, 1.8), (1.8, 2.8), (2.8, 4.0), (4.0, 6.0))
 INSTRUMENT_SEGMENT = 200
 # Parameters held by default (--free releases them): roll authority at the table's (the PRBS flights measure 1.0 ± 0.1 of the table's differential thrust), the thrust's voltage law (table × (V/16.1)^1.6 carries the weight on both nights and both packs), the horizontal acceleration from attitude at g (the camera measures 0.9 g on both axes, which is the camera's scale) the servo tilt's forward push at what the camera measures (0.66 of the same body pitch's, 2026-10-29 hovers), and no roll attitude stiffness (free flight has none, and the PRBS flights show none at 1-5 Hz; fitted, it traded against the roll actuator's authority and lag and made the hover loop's velocity damping act backwards) and no band spring (it improved the 2026-10-29 fit by under 0.3%). The sideways speed moment (drag_z_y) is as loose in the fit (0.3%) but sets the hover loop's sideways damping, so calibrate_sim sets it.
-# From 2026-11-09 the GPS measures drone 1's 10-inch airframe outdoors (sw/sim/gps_truth.py): the tilt's forward push 0.77-0.80 of the same body pitch's (0.78 held), the voltage law (V/16.1)^1.42, the roll axis' push at g (gain 1.00), and the horizontal drag 0.04-0.08/s forward and 0.20-0.22/s sideways from the accelerometer alone (0.07 and 0.2 held, so the speed moments are drag_z_x and drag_z_y's lever on that drag).
+# From 2026-11-09 the GPS measures drone 1's 10-inch airframe outdoors (gps_truth.py): the tilt's forward push 0.77-0.80 of the same body pitch's (0.78 held), the voltage law (V/16.1)^1.42, the roll axis' push at g (gain 1.00), and the horizontal drag 0.04-0.08/s forward and 0.20-0.22/s sideways from the accelerometer alone (0.07 and 0.2 held, so the speed moments are drag_z_x and drag_z_y's lever on that drag).
 TIED = {"differential_slope": 1.0, "voltage_power": 1.42, "vx_pitch": 9.81, "vy_roll": -9.81, "tilt_push": 0.78, "vx_drag": 0.07, "vy_drag": 0.2, "roll_pendulum": 0.0, "band_k": 0.0, "speed_moment2": 0.0, "tilt_speed": 0.0, "tilt_push_speed": 0.0}
 # Parameters held equal to another unless --free releases them: the ESCs' dynamics (their static gains differ, pinned by the thrust split; separate dead times and lags improved the 2026-10-29 fit by under 0.1%).
 EQUAL = {"right_motor_delay": "motor_delay", "right_motor_tau": "motor_tau"}
@@ -148,7 +148,7 @@ def truth_velocity(record, folder):
 
 
 def truth_world(record, folder):
-    """The flight's smoothed GPS truth (folder/<name>.npz from sw/sim/gps_truth.py --save) per sample: the world velocity as north + i west (m/s, gps_truth's convention) and the nose's heading (rad counterclockwise from north), NaN outside the smoothed span; None without one or without a heading."""
+    """The flight's smoothed GPS truth (folder/<name>.npz from gps_truth.py --save) per sample: the world velocity as north + i west (m/s, gps_truth's convention) and the nose's heading (rad counterclockwise from north), NaN outside the smoothed span; None without one or without a heading."""
     path = Path(folder) / f"{record['name']}.npz"
     if not path.exists():
         return None
@@ -534,7 +534,7 @@ def main():
     parser.add_argument("--evaluations", type=int, default=60)
     parser.add_argument("--folds", type=int, default=5, help="held-out groups of flights to score (0 to skip)")
     parser.add_argument("--shortest", type=float, default=0.5, help="seconds airborne a flight needs")
-    parser.add_argument("--truth", help="a folder of smoothed GPS truths (sw/sim/gps_truth.py --save): their body-frame velocity is the airframe's on flights that have one")
+    parser.add_argument("--truth", help="a folder of smoothed GPS truths (gps_truth.py --save): their body-frame velocity is the airframe's on flights that have one")
     parser.add_argument("--workers", type=int, default=os.cpu_count())
     parser.add_argument("--out", help="default: sw/sim/models/airframe_<newest recording's day>_<the drone's MAC, last three bytes>.json")
     args = parser.parse_args()
@@ -599,7 +599,7 @@ def main():
             closed.append(score(xt, test, True))
             logged.append(score(xt, test, False))
             saved_folds.append({"held_out": [records[i]["name"] for i in test], "params": {key: round(value, 6) for key, value in zip(free, map(float, xt))}})
-        # Each fold's free parameters, for drawing held-out predictions (sw/sim/plot_prediction.py --held-out).
+        # Each fold's free parameters, for drawing held-out predictions (plot_prediction.py --held-out).
         out.write_text(json.dumps(result | {"folds": saved_folds}, indent=1) + "\n")
     report(closed, "held out by flight, closed loop (the firmware controller flying the model on the logged references):")
     report(logged, "held out by flight, on the logged commands:")

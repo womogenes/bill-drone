@@ -36,7 +36,7 @@ from sw.sim import flight as F
 from sw.sim import rigid as R
 from sw.sim.burst_replay import BAND_TILT, BANDS
 from sw.sim.flip_esc import STAND
-from sw.sim.flip_replay import quaternion
+from sw.sim.burst_replay import quaternion
 from sw.sim.takeoff_test import LEG_FEET
 
 FLIGHTS = Path(__file__).with_name("scorecard_flights.json")

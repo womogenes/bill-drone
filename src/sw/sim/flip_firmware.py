@@ -1,11 +1,11 @@
 """
 The firmware's roll flip (fw/drone/main/flip.c) as flight_rt.c flies it, from the GPS hold, in the full-attitude simulation: uv run -m sw.sim.flip_firmware [--n 256] [--bands 0 -2.5 -5] [--settings 2026-11-11T23-35] [--flip-at 25] [--workers 16] [--no-flip] [--airframe airframe_2026-11-12_raised.json] [--randomize flip|wide|none] [--batch 16]
 
-Each run flies drone 1 on the raised pivots (models/airframe_2026-11-12_raised.json; --airframe another) with every term the flip leans on that nothing real tests drawn over its whole range (--randomize flip, uncertain; wide: the sw/sim/toss.py plant randomized as recover.randomization, as on airframe_2026-11-09.json before 2026-11-13) in sw/sim/rigid.py on the firmware's own C, ticked in flight_rt.c's order: the attitude estimate (flight_math.c flight_attitude), the flip (flip.c flip_tick), the tip cut or with recover_enable the recovery in its place (recover.c recover_tick; tip_limit, off where flip_tip_exempt says), the fly-away failsafe (guard.c), the hover hold (hover.c) on the GPS (10 Hz, as sweep.run's, sw/sim/outdoor.py GPS) and the barometer (sweep.BARO), the attitude controller (flight_control), while the flip or the recovery's righting owns the motors flip_actuators, and flip_limit's slew and cap. It rests, arms, takes off in the hold and climbs to hover_climb; from --flip-at s after liftoff it asks for the flip once a second as the dashboard's Flip button does, through flip_refusal with the checks flight_runtime_flip makes, until one starts. The IMU reads no more than --gyro-range and --accel-range (the firmware's ±2000 deg/s and ±2 g by default). Calm air: rigid.py has no wind.
+Each run flies drone 1 on the raised pivots (models/airframe_2026-11-12_raised.json; --airframe another) with every term the flip leans on that nothing real tests drawn over its whole range (--randomize flip, uncertain; wide: randomization's draws, as on airframe_2026-11-09.json before 2026-11-13) in sw/sim/rigid.py on the firmware's own C, ticked in flight_rt.c's order: the attitude estimate (flight_math.c flight_attitude), the flip (flip.c flip_tick), the tip cut or with recover_enable the recovery in its place (recover.c recover_tick; tip_limit, off where flip_tip_exempt says), the fly-away failsafe (guard.c), the hover hold (hover.c) on the GPS (10 Hz, as sweep.run's, sw/sim/outdoor.py GPS) and the barometer (sweep.BARO), the attitude controller (flight_control), while the flip or the recovery's righting owns the motors flip_actuators, and flip_limit's slew and cap. It rests, arms, takes off in the hold and climbs to hover_climb; from --flip-at s after liftoff it asks for the flip once a second as the dashboard's Flip button does, through flip_refusal with the checks flight_runtime_flip makes, until one starts. The IMU reads no more than --gyro-range and --accel-range (the firmware's ±2000 deg/s and ±2 g by default). Calm air: rigid.py has no wind.
 
 Settings: the recording's (--settings), then FLIGHT (the GPS hold as the roll-step ladder was cleared with on 2026-11-12, the hold at 3 m, the flip on), then --set. The firmware's thrust scales and hover_mass are set to each drawn plant's, as the drone's are calibrated to its own motors and weight.
 
-Clean, as sw/sim/flip.py counts it: never touched the ground after the flip began, the tip cut never fired, within 10 degrees of upright and turning under 1 rad/s at the end, the whole turn made. It also prints the height lost (from the flip's start to the lowest point in LOST_WINDOW), the lowest height above the ground, how long the hold took to come back within 0.3 m of its height, and how far the flip carried the drone over the ground. With --no-flip it flies the same plants without the request: the firmware's attitude loop at the recording's gains does not hold every drawn plant (recover.randomization's roll authority spans 0.8-5 times the fit), so the flip's results are also given among the plants that hold without one.
+Clean: never touched the ground after the flip began, the tip cut never fired, within 10 degrees of upright and turning under 1 rad/s at the end, the whole turn made. It also prints the height lost (from the flip's start to the lowest point in LOST_WINDOW), the lowest height above the ground, how long the hold took to come back within 0.3 m of its height, and how far the flip carried the drone over the ground. With --no-flip it flies the same plants without the request: the firmware's attitude loop at the recording's gains does not hold every drawn plant (randomization's roll authority spans 0.8-5 times the fit), so the flip's results are also given among the plants that hold without one.
 """
 
 import argparse
@@ -22,7 +22,6 @@ import numpy as np
 
 from sw.flight_log import parse_settings, recording, settings as recording_settings
 from sw.sim import flight
-from sw.sim import recover as C
 from sw.sim import rigid as R
 from sw.sim.hover import GAIN_KEYS, GPS_LATENCY, BARO_LATENCY, HOLD, LAND, Gains, Hover, State as HoverState
 from sw.sim.guard import Guard
@@ -55,6 +54,8 @@ RECOVER_MAX = 3
 RECOVER_AIRBORNE_S = 1.0
 RECOVER_LAND_HEIGHT = 1.0
 LINK_HOLD_S = 2.0
+# The GPS-measured rotor drag (1/s, forward and sideways), in place of the indoor calibration's.
+ROTOR_DRAG = (0.07, 0.2)
 # The plant by default: drone 1 on the raised pivots (models/NOTES.md "Raised pivots"), with the flip's untested terms drawn (--randomize flip).
 AIRFRAME = "airframe_2026-11-12_raised.json"
 # flight_rt.c's BARO_MAX_AGE_US: the newest barometer reading stands for this long (s).
@@ -224,18 +225,24 @@ def uncertain(seed, n):
     return overrides, scale, gyro
 
 
+def randomization(n, seed):
+    """--randomize wide: per-run plant variations over what the identification cannot pin down (the roll authority, on differential_slope, spans 0.8-5x: hover fits put the slope at 0.25-0.32 of the thrust table with fast motors, the 2026-10-27 fit at 1.33, and a full-differential command is far outside what hover measured)."""
+    rng = np.random.default_rng(seed + 99)
+    u = lambda low, high: np.exp(rng.uniform(math.log(low), math.log(high), n))
+    return {"pitch_tilt": u(0.7, 1.5), "roll_thrust": u(0.8, 5.0), "thrust": u(0.9, 1.1), "motor_delay": u(0.8, 1.4), "servo_delay": u(0.8, 1.4), "inertia": u(0.85, 1.2), "drag": u(0.6, 1.6), "disturbance": u(0.5, 2.0)}
+
+
 def plant_of(airframe):
-    """A rigid.Sim plant from a saved airframe (sw/sim/toss.py's rotor drag and no disturbance terms)."""
-    from sw.sim import toss
+    """A rigid.Sim plant from a saved airframe (ROTOR_DRAG and no disturbance terms)."""
     params = R.A.model(airframe)
-    return {"airframe": params, "geometry": R.A.geometry_of(params), "disturbances": [], "rotor_drag": toss.ROTOR_DRAG}
+    return {"airframe": params, "geometry": R.A.geometry_of(params), "disturbances": [], "rotor_drag": ROTOR_DRAG}
 
 
 def fly(job):
     """
     One batch of runs on the same drawn plants: per run, whether and when the flip started, why it was refused, and the measures.
 
-    job: settings, tilt offset, seed, runs, seconds, gyro and accelerometer range, flip_at, whether to ask for the flip, the airframe, the randomization, and optionally the flip's parameters (a dict on top of flip_defaults, for tuning) and options, what sw/sim/recover_firmware.py tests on top of the plant: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "recover" (recover.c RecoverParams on top of recover_defaults), "airframe" (factors on the drawn airframe's terms), "roll_thrust" (the roll authority's range, as recover.randomization's, in place of the randomization's), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up, for airframes without rotor_momentum), "deadband" (per run, the throttle under which an ESC stops its motor), "set" (airframe terms set outright after the draws), "recover_limit" (whether the recovery's throttles are slewed and capped, in place of RECOVER_LIMIT), "trace" (s of the recovery's trace after the event), "table" (the motors' thrust table, rows of throttle and N, in place of the firmware's), "geometry" (geometry terms set outright), "thrust_scale" (the firmware's thrust scales as set, instead of calibrated to each plant) and "hover_mass" (the firmware's hover_mass as set, instead of the plant's mass).
+    job: settings, tilt offset, seed, runs, seconds, gyro and accelerometer range, flip_at, whether to ask for the flip, the airframe, the randomization, and optionally the flip's parameters (a dict on top of flip_defaults, for tuning) and options, what sw/sim/recover_firmware.py tests on top of the plant: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "recover" (recover.c RecoverParams on top of recover_defaults), "airframe" (factors on the drawn airframe's terms), "roll_thrust" (the roll authority's range, as randomization's, in place of the randomization's), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up, for airframes without rotor_momentum), "deadband" (per run, the throttle under which an ESC stops its motor), "set" (airframe terms set outright after the draws), "recover_limit" (whether the recovery's throttles are slewed and capped, in place of RECOVER_LIMIT), "trace" (s of the recovery's trace after the event), "table" (the motors' thrust table, rows of throttle and N, in place of the firmware's), "geometry" (geometry terms set outright), "thrust_scale" (the firmware's thrust scales as set, instead of calibrated to each plant) and "hover_mass" (the firmware's hover_mass as set, instead of the plant's mass).
     """
     settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping, airframe, randomize = job[:11]
     # The maneuver's parameters: flip.c's flip_defaults with the job's changes (job[11], a dict, for tuning).
@@ -249,7 +256,7 @@ def fly(job):
         overrides, scale, gyro_scale = uncertain(seed, n)
         plant["airframe"] = plant["airframe"] | overrides
     else:
-        scale = C.randomization(n, seed) if randomize == "wide" else None
+        scale = randomization(n, seed) if randomize == "wide" else None
     for key, factor in options.get("airframe", {}).items():
         plant["airframe"] = plant["airframe"] | {key: plant["airframe"][key] * factor}
     # "set": airframe terms set outright after the draws (sw/sim/tune_flip.py's robust runs place rotor_momentum in its bands).

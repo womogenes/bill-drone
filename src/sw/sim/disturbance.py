@@ -7,7 +7,7 @@ A term is a dict with "channel" and "kind":
   white     {"sd"}: independent each control tick (fast jitter that only shakes)
   sine      {"amplitude", "period", "phase"}: a periodic force (phase in radians)
   ramp      {"rate", "start", "limit"}: zero until start (s from the run's start), then growing at rate per second up to limit (a battery sliding forward: a pitch torque that grows through the flight)
-Terms on one channel add. sw/sim/fit_disturbances.py fits constants and drifts from flight logs.
+Terms on one channel add. fit_disturbances.py fits constants and drifts from flight logs.
 """
 
 import math

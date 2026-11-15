@@ -1,7 +1,7 @@
 """
 The drone's Kalman filter (fw/drone/main/ekf.c: attitude, velocity, position, IMU biases and barometer offset from the IMU, GPS and barometer) for the host, through ctypes on the firmware's own C, compiled here on first use. Sample and Output mirror ekf.h; the filter's own state is opaque (ekf_size bytes).
 
-replay(f) runs it over a whole recording (sw/sim/gps_truth.py Flight) as flight_rt.c would feed it, after a few seconds of rest: every 100 Hz tick's gyro and calibrated accelerometer in the IMU's body axes, each GPS solution inside the firmware's accuracy masks at its arrival, dated GPS_LATENCY earlier, and each barometer reading dated BARO_LATENCY earlier.
+replay(f) runs it over a whole recording (gps_truth.py Flight) as flight_rt.c would feed it, after a few seconds of rest: every 100 Hz tick's gyro and calibrated accelerometer in the IMU's body axes, each GPS solution inside the firmware's accuracy masks at its arrival, dated GPS_LATENCY earlier, and each barometer reading dated BARO_LATENCY earlier.
 
 Where the radio dropped a batch of records (Flight.gap) the recording has no gyro, and the Flight's is a straight line between the records either side, which integrates to the wrong attitude (2026-11-09 06:19 UTC at 165-167 s: 10 degrees over two gaps). On the drone the filter has every sample, so there replay turns it as the logged attitude turned across the gap (gap_gyro).
 """

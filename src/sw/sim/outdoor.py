@@ -19,17 +19,17 @@ from multiprocessing import Pool
 from pathlib import Path
 
 import numpy as np
+from scipy.signal import butter, sosfiltfilt
 
 from sw.flight_log import parse_settings, recording
 from sw.flight_log import settings as recording_settings
 from sw.sim import airframe as A
-from sw.sim.pitch_check import SWING, band
 from sw.sim.sweep import BARO, CURRENT, NUDGE_MAX, run
 
 SETTINGS = "2026-11-02T08-15-23"
 AIRFRAME = A.MODELS / "airframe_2026-11-02_9in_calibrated.json"
 DISTURBANCES = A.MODELS / "disturbances_2026-11-02_9in_calibrated.json"
-# At the GPS-held liftoffs of 2026-11-09 (05:45, 05:50, 06:19, 06:25 UTC) the GPS's climb rate read 0.5-1.2 m/s down for 0.3-0.5 s while the drone climbed at up to 1 m/s (sw/sim/gps_truth.py); in flight it is 0.18-0.39 m/s RMS off.
+# At the GPS-held liftoffs of 2026-11-09 (05:45, 05:50, 06:19, 06:25 UTC) the GPS's climb rate read 0.5-1.2 m/s down for 0.3-0.5 s while the drone climbed at up to 1 m/s (gps_truth.py); in flight it is 0.18-0.39 m/s RMS off.
 GPS = {"rate": 10.0, "latency": 0.06, "velocity_noise": 0.05, "vertical_noise": 0.25, "position_noise": 0.7, "position_tau": 30.0, "liftoff_descent": (0.5, 1.2), "liftoff_s": 0.4}
 # Ground effect: 10-inch rotors (0.127 m radius) 0.115 m above the floor at rest (geometry_2026-11-08b rotor_z 0.094 m above the tube, the body's underside 0.02 m below it).
 GROUND_EFFECT = {"radius": 0.127, "rotor": 0.115}
@@ -43,6 +43,16 @@ STOPPED = 0.3
 STOP_WINDOW = 8.0
 # With the Kalman filter (--ekf, hover_ekf): the rest before liftoff (s). On the drone it runs from boot.
 EKF_REST = 5.0
+# The hold's slow pitch swing (Hz), as swing_band reports it, and the log's rate (Hz) its filter runs at.
+SWING = (0.4, 1.6)
+FS = 100.0
+
+
+def band(x, low, high):
+    """x filtered to low-high Hz (zero phase), or zeros when too short to filter."""
+    if len(x) < 40:
+        return np.zeros_like(x)
+    return sosfiltfilt(butter(2, (low, high), btype="band", fs=FS, output="sos"), x - x.mean(), padlen=min(len(x) - 1, 30))
 
 
 def loguniform(rng, low, high):
@@ -127,7 +137,7 @@ def fly(job):
 
         install(args.source, args.defines.split())
     p, draws = plant(airframe, wind, seed, args.gps, args.nominal, args.climb, disturbances, args.headwind, args.flow, args.baro, args.speed_draw, args.gps_noise, args.level_sd)
-    # The servos' real tilt behind their commands and the accelerometer's in-flight forward bias (2026-11-11's rubber bands; sw/sim/band_hold.py).
+    # The servos' real tilt behind their commands and the accelerometer's in-flight forward bias (2026-11-11's rubber bands; band_hold.py).
     if args.tilt_offset:
         p["tilt_offset"] = args.tilt_offset
     if args.gyro:

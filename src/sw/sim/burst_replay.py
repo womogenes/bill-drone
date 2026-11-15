@@ -14,9 +14,9 @@ from scipy.ndimage import uniform_filter1d
 from scipy.optimize import least_squares
 from scipy.signal import butter, filtfilt
 
-from sw.flight_log import parse_settings, read_flight, recording
+from sw.flight_log import metadata, parse_settings, read_flight, recording, settings
 from sw.sim import airframe as A
-from sw.sim import flip_replay as F
+from sw.sim import flight
 from sw.sim import rigid as R
 from sw.sim.flip_esc import STAND
 
@@ -31,8 +31,47 @@ BOUNDS = {"tilt_authority": (0.3, 5.0), "servo_delay": (0.0, 0.12), "servo_inert
 PAIRED = {"servo_delay": "right_servo_delay", "servo_wn": "right_servo_wn", "motor_tau": "right_motor_tau"}
 
 
-class Window(F.Log):
-    """flip_replay.Log over a window, with the hover throttles before it (for the trim on the stand's table) and whether the bands were on."""
+class Log:
+    """The recording's samples over [start, end] (s from its first sample): time, gyro (rad/s), throttles, servo angles (degrees), roll and pitch (rad), specific force (g), the hold's height and climb rate, the barometer, the flip's phase."""
+
+    def __init__(self, name, start, end):
+        path = recording(name)
+        df = read_flight(path)[0]
+        time = (df["esp_time_us"] - df["esp_time_us"].iloc[0]).to_numpy() / 1e6
+        # The thrust trim from the hover before the window (both motors over 300, no flip), or from the whole recording's when the window starts with it.
+        flying = (df["flip"].fillna(0) == 0) & (df["left_throttle"] > 300) & (df["right_throttle"] > 300)
+        airborne = df[flying & (time < start)] if (flying & (time < start)).sum() > 100 else df[flying]
+        self.table_thrust = np.column_stack([airborne[f"{side}_throttle"].map(flight.thrust) for side in ("left", "right")])
+        self.settings = settings(path)
+        self.gyro_range = 32768 / metadata(path).get("gyro_counts_per_deg_s", 131.0) * A.DEG
+        rows = df[(time >= start - 1e-6) & (time <= end + 1e-6)]
+        self.time = time[rows.index]
+        self.gyro = rows[["gx_deg_s", "gy_deg_s", "gz_deg_s"]].to_numpy() * A.DEG
+        self.throttle = rows[["left_throttle", "right_throttle"]].to_numpy(float)
+        self.servo = rows[["left_servo_deg", "right_servo_deg"]].to_numpy(float)
+        self.attitude = rows[["roll_deg", "pitch_deg"]].to_numpy() * A.DEG
+        self.accel = rows[["ax_g", "ay_g", "az_g"]].to_numpy()
+        self.height = rows["hover_height_m"].to_numpy()
+        self.climb = rows["hover_climb_m_s"].to_numpy()
+        self.baro = rows["baro_altitude_m"].to_numpy()
+        self.phase = rows["flip"].fillna(0).to_numpy()
+
+    def tilt(self):
+        """The physical tilt commands (rad, positive forward) the servo angles stand for."""
+        s = self.settings
+        trims = np.array([s.get("left_trim", 0.0), s.get("right_trim", 0.0)])
+        directions = np.array([flight.MODEL["left_servo_direction"], flight.MODEL["right_servo_direction"]])
+        return np.radians(directions * (self.servo - trims))
+
+
+def quaternion(roll, pitch):
+    """Roll about forward, then pitch about left (flight_attitude's), the heading zero."""
+    cr, sr, cp, sp = math.cos(roll / 2), math.sin(roll / 2), math.cos(pitch / 2), math.sin(pitch / 2)
+    return np.array([cr * cp, sr * cp, cr * sp, -sr * sp])
+
+
+class Window(Log):
+    """Log over a window, with the hover throttles before it (for the trim on the stand's table) and whether the bands were on."""
 
     def __init__(self, spec):
         name, start, end, *rest = spec.split(":")
@@ -44,7 +83,7 @@ class Window(F.Log):
         self.hover_throttle = df.loc[hover, ["left_throttle", "right_throttle"]].to_numpy(float)
         self.usable = np.abs(self.gyro).max(1) < 0.97 * self.gyro_range
         # The velocity (m/s, world) from the logged attitude and specific force, from the hold's climb rate and no horizontal speed at the start: the bursts reach 4-6 m/s, where the speed terms matter, and the plant's own translation open loop drifts from it.
-        attitude, velocity = F.quaternion(*self.attitude[0])[None], np.array([0.0, 0.0, self.climb[0]])
+        attitude, velocity = quaternion(*self.attitude[0])[None], np.array([0.0, 0.0, self.climb[0]])
         self.velocity = np.zeros((len(self.time), 3))
         for k in range(len(self.time)):
             self.velocity[k] = velocity
@@ -74,7 +113,7 @@ def replay(window, plant, every):
     p = sim.p
     gain = np.array([[1.0, p["right_thrust_gain"]]])
     start = A.actual_thrust(p, A.table_thrust(p, window.throttle[:1], np.ones(1), table=sim.table, gain=gain), sim.trim)
-    sim.reset(np.array([[0, 0, 10.0]]), np.array([[0, 0, window.climb[0]]]), F.quaternion(*window.attitude[0])[None], window.gyro[:1], motor=start, tilt=tilt[:1] - sim.tilt_offset)
+    sim.reset(np.array([[0, 0, 10.0]]), np.array([[0, 0, window.climb[0]]]), quaternion(*window.attitude[0])[None], window.gyro[:1], motor=start, tilt=tilt[:1] - sim.tilt_offset)
     sim.throttles[:] = window.throttle[0]
     sim.bind()
     stride = max(1, round(every / A.DT))
@@ -83,7 +122,7 @@ def replay(window, plant, every):
     for k in range(1, len(window.time)):
         if k % stride == 0:
             sim.omega[:] = window.gyro[k - 1]
-            sim.quat[:] = F.quaternion(*window.attitude[k - 1])
+            sim.quat[:] = quaternion(*window.attitude[k - 1])
             sim.vel[:] = window.velocity[k - 1]
         sim.step(window.throttle[k][None], tilt[k][None])
         rates[k] = sim.turned[0]
