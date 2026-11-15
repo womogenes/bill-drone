@@ -14,6 +14,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import scipy.optimize
+import scipy.sparse
 import yaml
 
 from sw.vio import dataset
@@ -45,23 +47,85 @@ def square(size):
     return np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], np.float64)
 
 
-def calibrate(found, size, matrix, distortion, shape, views=400):
-    """The camera matrix and (k1, k2) refined on up to views tag sightings spread through the recording."""
-    pick = found[:: max(1, len(found) // views)]
-    objects = [square(size).astype(np.float32) for _ in pick]
-    images = [c.astype(np.float32) for _, _, c in pick]
-    flags = cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_ZERO_TANGENT_DIST | cv2.CALIB_FIX_K3
-    error, matrix, distortion, _, _ = cv2.calibrateCamera(objects, images, shape, matrix.copy(), distortion.copy(), flags=flags)
-    return error, matrix, distortion
+def rotate(vectors, points):
+    """Points (n, 3) turned by rotation vectors (n, 3), row by row (Rodrigues)."""
+    theta = np.linalg.norm(vectors, axis=1, keepdims=True)
+    axis = vectors / np.maximum(theta, 1e-12)
+    cos, sin = np.cos(theta), np.sin(theta)
+    return points * cos + np.cross(axis, points) * sin + axis * np.sum(axis * points, axis=1, keepdims=True) * (1 - cos)
+
+
+def calibrate(found, size, matrix, distortion, shape, views=100):
+    """
+    The camera matrix and k1 (k2 held at 0) by bundle adjustment over up to views frames: the intrinsics, every tag's pose relative to the most-seen one (the tags must stay put) and each frame's camera pose, fitted together to all the tags' corners. On synthetic 640x480 frames of four tags it finds fx 698.4, fy 700.3, cx 329.8, cy 235.5 against the true 700, 702, 330, 236 from any starting guess. Fitting each sighting on its own instead leaves the focal length trading against distance. Even fitted together, tags close to each other and small in the image leave it loose: on 2026-11-14's 480x320 recording of three tags 30-45 cm apart the fit was within 0.03 px for any fx from 450 to 900, so spread the tags across the whole view.
+    """
+    seen, corners = collections.defaultdict(dict), collections.defaultdict(dict)
+    for time, tag, c in found:
+        transform = pose(c, size, matrix, distortion)
+        if transform is not None:
+            seen[time][tag], corners[time][tag] = transform, c
+    reference, placed = place(seen)
+    tag_ids = [tag for tag in placed if tag != reference]
+    frames = [time for time in sorted(corners) if corners[time].keys() & placed.keys()]
+    frames = frames[:: max(1, len(frames) // views)]
+    # Each observation: its frame's index, its tag's index (-1 the reference), its four corners.
+    rows = [(f, tag_ids.index(tag) if tag != reference else -1, corners[time][tag]) for f, time in enumerate(frames) for tag in corners[time] if tag in placed]
+    frame_of = np.repeat([r[0] for r in rows], 4)
+    tag_of = np.repeat([r[1] for r in rows], 4)
+    seen_px = np.concatenate([r[2] for r in rows])
+    local = np.tile(square(size), (len(rows), 1))
+    start = [matrix[0, 0], matrix[1, 1], matrix[0, 2], matrix[1, 2], distortion.ravel()[0], distortion.ravel()[1]]
+    for tag in tag_ids:
+        start += [*cv2.Rodrigues(placed[tag][:3, :3])[0].ravel(), *placed[tag][:3, 3]]
+    for time in frames:
+        # The camera from the frame's tags in the reference tag's frame (a global solver: the iterative one found wrong minima on these nearly flat layouts).
+        points = np.concatenate([(placed[tag] @ np.c_[square(size), np.ones(4)].T).T[:, :3] for tag in corners[time] if tag in placed])
+        image = np.concatenate([corners[time][tag] for tag in corners[time] if tag in placed])
+        _, rvec, tvec = cv2.solvePnP(points, image, matrix, distortion, flags=cv2.SOLVEPNP_SQPNP)
+        start += [*rvec.ravel(), *tvec.ravel()]
+    start = np.array(start)
+    tag_base, frame_base = 6, 6 + 6 * len(tag_ids)
+
+    def residual(x):
+        fx, fy, cx, cy, k1 = x[:5]
+        k2 = 0.0
+        tag_pose = x[tag_base:frame_base].reshape(-1, 6)
+        frame_pose = x[frame_base:].reshape(-1, 6)
+        world = local.copy()
+        moved = tag_of >= 0
+        if moved.any():
+            world[moved] = rotate(tag_pose[tag_of[moved], :3], local[moved]) + tag_pose[tag_of[moved], 3:]
+        camera = rotate(frame_pose[frame_of, :3], world) + frame_pose[frame_of, 3:]
+        x_n, y_n = camera[:, 0] / camera[:, 2], camera[:, 1] / camera[:, 2]
+        r2 = x_n ** 2 + y_n ** 2
+        scale = 1 + k1 * r2 + k2 * r2 ** 2
+        return np.concatenate([fx * x_n * scale + cx - seen_px[:, 0], fy * y_n * scale + cy - seen_px[:, 1]])
+
+    # Which parameters each residual depends on, for the sparse solver.
+    n = len(seen_px)
+    sparsity = scipy.sparse.lil_matrix((2 * n, len(start)), dtype=int)
+    sparsity[:, :6] = 1
+    for i in range(n):
+        for row in (i, n + i):
+            sparsity[row, frame_base + 6 * frame_of[i]:frame_base + 6 * frame_of[i] + 6] = 1
+            if tag_of[i] >= 0:
+                sparsity[row, tag_base + 6 * tag_of[i]:tag_base + 6 * tag_of[i] + 6] = 1
+    fit = scipy.optimize.least_squares(residual, start, method="lm")
+    fx, fy, cx, cy, k1, k2 = fit.x[:6]
+    k2 = 0.0
+    error = float(np.sqrt(np.mean(residual(fit.x).reshape(2, -1).T ** 2) * 2))
+    return error, np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]), np.array([k1, k2, 0.0, 0.0, 0.0])
 
 
 def pose(corners, size, matrix, distortion):
     """The tag's pose in the camera (4x4) from its corners."""
     ok, rvec, tvec = cv2.solvePnP(square(size), corners, matrix, distortion, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+    if not ok or not np.isfinite(tvec).all():
+        return None
     transform = np.eye(4)
     transform[:3, :3] = cv2.Rodrigues(rvec)[0]
     transform[:3, 3] = tvec.ravel()
-    return transform if ok else None
+    return transform
 
 
 def mean_transform(transforms):
@@ -124,8 +188,8 @@ def main():
     distortion = np.array(camera["distortion_coeffs"] + [0.0], np.float64)
     found = detect(folder)
     print(f"{len(found)} tag sightings, tags {dict(sorted(collections.Counter(tag for _, tag, _ in found).items()))}")
-    # One tag seen briefly calibrates nothing: 64 sightings of one tag put the principal point 13 px from the image's edge.
-    if len(found) >= 200 and len({tag for _, tag, _ in found}) >= 3:
+    # One tag alone leaves the focal length trading against distance (64 sightings of one put the principal point 13 px from the image's edge; 1175 on 2026-11-14 gave 890-1030 px with the starting guess): calibration needs two or more fixed tags seen together.
+    if len(found) >= 200 and len({tag for _, tag, _ in found}) >= 2:
         error, refined, refined_distortion = calibrate(found, args.size, matrix, distortion, tuple(camera["resolution"]))
         width, height = camera["resolution"]
         if abs(refined[0, 2] - width / 2) < width / 8 and abs(refined[1, 2] - height / 2) < height / 8:
