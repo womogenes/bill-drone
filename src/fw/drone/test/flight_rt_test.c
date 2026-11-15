@@ -343,23 +343,15 @@ static void set_setting(int index, float value) {
 }
 
 static void randomize_settings(void) {
-    static const struct { int index; float values[4]; int count; } choices[] = {
-        {SETTING_hover_camera, {0, 1}, 2}, {SETTING_hover_gps_tau, {0, 0.5f}, 2}, {SETTING_hover_baro_tau, {0, 1}, 2}, {SETTING_hover_ekf, {0, 1, 2}, 3},
-        {SETTING_flip_enable, {0, 1, 2, 3}, 4}, {SETTING_recover_enable, {0, 1}, 2}, {SETTING_bank_tilt, {0, 30}, 2}, {SETTING_auto_trim, {0, 0.5f}, 2},
-        {SETTING_pitch_damping_tau, {0, 0.03f}, 2}, {SETTING_tip_limit, {45, 80}, 2}, {SETTING_thrust_voltage, {0, 16}, 2}, {SETTING_hover_drag, {0, 1}, 2},
-        {SETTING_hover_flow_depth, {0, 5}, 2}, {SETTING_integrate_throttle, {580, 350}, 2}, {SETTING_roll_target_rate, {0, 360}, 2}, {SETTING_hover_climb, {0.3f, 3}, 2},
-        {SETTING_yaw_i, {0, 2}, 2}, {SETTING_pitch_speed, {0, 2}, 2}, {SETTING_failsafe_speed, {0, 2}, 2}, {SETTING_hover_gps_calibrate, {0, 5}, 2},
-        {SETTING_roll_bias, {0, 0.5f, -0.5f}, 3}, {SETTING_hover_mass, {0.9f, 1.05f}, 2}, {SETTING_left_thrust_scale, {1, 1.3f}, 2}, {SETTING_right_thrust_scale, {1, 1.3f}, 2},
-#ifdef TEST_INDI
-        // INDI (indi.c) on at random: built with -DTEST_INDI, since a setting the base build lacks would change the random stream it is compared on.
-        {SETTING_indi, {0, 0.5f, 1}, 3}, {SETTING_indi_pitch, {0, 0.25f, 1}, 3},
-#endif
-#ifdef TEST_QUATERNION
-        // The quaternion attitude (flight_math.c, flip.c, recover.c) on at random, built with -DTEST_QUATERNION for the same reason.
-        {SETTING_quaternion, {0, 1}, 2},
-#endif
+    static const struct { int index; float values[5]; int count; } choices[] = {
+        {SETTING_hover_camera, {0, 1}, 2}, {SETTING_hover_gps_tau, {0, 0.5f}, 2}, {SETTING_hover_baro_tau, {0, 1}, 2}, {SETTING_flip_enable, {0, 1, 2, 3, 4}, 5},
+        {SETTING_recover_enable, {0, 1}, 2}, {SETTING_auto_trim, {0, 0.5f}, 2}, {SETTING_pitch_damping_tau, {0, 0.03f}, 2}, {SETTING_tip_limit, {45, 80}, 2},
+        {SETTING_thrust_voltage, {0, 16}, 2}, {SETTING_hover_drag, {0, 1}, 2}, {SETTING_integrate_throttle, {580, 350}, 2}, {SETTING_roll_target_rate, {0, 360}, 2},
+        {SETTING_hover_climb, {0.3f, 3}, 2}, {SETTING_yaw_i, {0, 2}, 2}, {SETTING_pitch_speed, {0, 2}, 2}, {SETTING_failsafe_speed, {0, 2}, 2},
+        {SETTING_hover_gps_calibrate, {0, 5}, 2}, {SETTING_roll_bias, {0, 0.5f, -0.5f}, 3}, {SETTING_hover_mass, {0.9f, 1.05f}, 2}, {SETTING_left_thrust_scale, {1, 1.3f}, 2},
+        {SETTING_right_thrust_scale, {1, 1.3f}, 2}, {SETTING_indi, {0, 0.5f, 1}, 3}, {SETTING_indi_pitch, {0, 0.25f, 1}, 3},
 #ifdef TEST_LAND_EKF
-        // Blind touchdown by the Kalman filter (hover.c EKF_STILL_S) on at random, built with -DTEST_LAND_EKF for the same reason.
+        // Blind touchdown by the Kalman filter (hover.c EKF_STILL_S) on at random, built with -DTEST_LAND_EKF, since a setting the base build lacks would change the random stream it is compared on.
         {SETTING_hover_land_ekf, {0, 1}, 2},
 #endif
     };
@@ -607,6 +599,8 @@ int main(int argc, char **argv) {
     ticks = strtol(argv[2], NULL, 10);
     trace = argc > 3 ? fopen(argv[3], "w") : NULL;
     settings_load();
+    // The quaternion attitude, the one the drone flies (the Euler path goes).
+    set_setting(SETTING_quaternion, 1);
     flight_runtime_outputs();
     randomize_settings();
     flight_runtime_start();
