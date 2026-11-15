@@ -40,6 +40,8 @@ constexpr unsigned maxAgeUs = 150000;
 constexpr int windowW = 2048, windowH = 1536, outW = 320, outH = 240;
 // Binned rows read per row kept: 2 reads every other binned row (vertical increment 0x71 in place of binning's 0x31), 384 of the 768 for the 240 output rows, which halves the frame at the same line time and so the same DMA pace; the field of view and calibration stay.
 constexpr int rowSkip = 2;
+// The weakest edges on the camera's clocks and pixel bus, both modes: the XCLK pin's drive (gpio_drive_cap_t, 0 = 5 mA; ESP-IDF's default 2) and the OV3660's output pads (0x302c bits 7:6, 0 = 1x; its driver's 3 = 4x). Measured 2026-11-14 indoors through the GPS's MON-SPAN (camera_clock_sweep): with the defaults the camera put tones 14-17 dB above the floor at 1580 MHz and 8-13 dB at 1570/1590 in tag mode (CW jamming indicator 24-32), 14-15 dB at 1580 in FPV (29-35); both at their weakest left 1580 at +4 dB and 1570/1590 at +1 (indicator 6-14, about the camera-off 6), with FPV's JPEGs all decoding at the same 26-27 fps and tag mode's frame rate unchanged. Either alone was not enough in tag mode: the pads' drive took out 1570/1590 (PCLK's 157th and 159th) but 1580 also carries XCLK's 79th.
+constexpr int xclkPinDrive = 0, sensorPadDrive = 0;
 // Tag mode's XCLK; the sensor's PLL (clocks.h) keeps SYSCLK at sysclkMhz and PCLK at 10 MHz for any XCLK.
 constexpr uint32_t tagXclkHz = 20000000;
 constexpr int hts = 2300, sysclkMhz = 40, vts = windowH / 2 / rowSkip + 15;

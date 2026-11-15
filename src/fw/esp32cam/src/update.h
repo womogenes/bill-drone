@@ -184,7 +184,7 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
         return nullptr;
     }
     if (op == 'C') {
-        // The sensor's clocks (clocks.h): mode (0 tag, 1 FPV), then XCLK (Hz, u32, 0 for the mode's default), flags (bit 0 allows a fractional divider), the XCLK pin's drive (0-3, 0xff the default) and the sensor pads' (0-3, 0xff the driver's), then optionally the PLL multiplier (0 keeps the mode's PLLCLK), prediv index and PCLK divider (0 the mode's own). Kept until restart; the camera restarts now to take them in its current mode, the other mode at its next start. With only the mode it describes that mode's clocks (clocks::describe), with nothing the current mode's.
+        // The sensor's clocks (clocks.h): mode (0 tag, 1 FPV), then XCLK (Hz, u32, 0 for the mode's default), flags (bit 0 allows a fractional divider), the XCLK pin's drive and the sensor pads' (0-3, 0xff config.h's), then optionally the PLL multiplier (0 keeps the mode's PLLCLK), prediv index and PCLK divider (0 the mode's own). Kept until restart; the camera restarts now to take them in its current mode, the other mode at its next start. With only the mode it describes that mode's clocks (clocks::describe), with nothing the current mode's.
         const bool jpeg = length ? body[0] != 0 : fpvActive;
         if (length > 1) {
             if (length < 8)
@@ -201,8 +201,8 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
             clocks::Setting &setting = clocks::settings[jpeg];
             setting.xclkHz = hz;
             setting.fractional = body[5] & 1;
-            setting.pinDrive = body[6] == 0xff ? -1 : body[6];
-            setting.padDrive = body[7] == 0xff ? -1 : body[7];
+            setting.pinDrive = body[6] == 0xff ? config::xclkPinDrive : body[6];
+            setting.padDrive = body[7] == 0xff ? config::sensorPadDrive : body[7];
             setting.multiplier = length >= 10 ? body[8] : 0;
             setting.prediv = length >= 10 ? body[9] : 0;
             setting.pclkDivider = length >= 11 ? body[10] : 0;

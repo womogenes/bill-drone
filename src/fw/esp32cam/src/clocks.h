@@ -10,7 +10,7 @@
 // The image sensor's clocks, per mode, and the drone's K C override of them (update.h) for finding a clock whose harmonics stay off the GPS: with the camera running the drone's u-blox M10 reported jamming (CW indicator 38-46 against 6, best-four C/N0 26.5 against 40 dB-Hz, 2026-11-14) and cutting the camera's radio to 2 dBm changed nothing, so the camera's own clocks were suspected: 20 MHz XCLK's 79th harmonic and 10 MHz PCLK's 158th both land on 1580 MHz, 4.6 MHz from L1 (1575.42).
 // On the ESP32-S3 the driver makes XCLK with the LCD_CAM peripheral's clock divider (its ll_cam.c xclk_timer_conf, not LEDC): 160 MHz (PLL_F160M) over an integer 160e6 / xclk_freq_hz, truncated, so the exact frequencies are 160 / N MHz (20 at 8, 17.78 at 9, 16 at 10) and anything between is the next one up. The divider also has a fraction (N + b/a, a up to 63), which K C uses only when asked: it dithers the period by a whole 6.25 ns source cycle, so its energy spreads into sidebands around every harmonic. On the ESP32 the driver uses LEDC from the 80 MHz APB with a 1-bit duty, exact at 40 / N MHz.
 // The OV3660 multiplies XCLK up (its driver's set_pll, registers 0x303a-0x303d, 0x3824): PLLCLK = XCLK x multiplier / prediv (prediv index 0-3: 1, 1.5, 2, 3) / sys divider, SYSCLK = PLLCLK / 4 (the line and frame timing: config.h hts, vts, rowUs, fpvFramePeriodS) and PCLK = PLLCLK / 2 / pclk divider (the pixel bus to the ESP32). For any XCLK the multiplier and prediv are chosen to keep each mode's own PLLCLK (tag mode 160 MHz, set here; FPV's JPEG 200 MHz, the driver's for 20 MHz), so the timing constants and the 10 MHz PCLK stay as they were and only XCLK moves. Its driver picks a slower PLL for exactly 16 MHz XCLK in JPEG mode (32 MHz SYSCLK, 8 MHz PCLK, whose 197th harmonic is 1576 MHz), which this overrides back to 200 MHz.
-// Also the edges, which set how much of a clock reaches the 79th or 158th harmonic: the XCLK pin's drive (gpio_drive_cap_t 0-3, 5-40 mA; default 2) and the sensor's output pads (register 0x302c bits 7:6, 1x-4x; its driver sets 4x), PCLK, HREF, VSYNC and the eight data lines.
+// Also the edges, which set how much of a clock reaches the 79th or 158th harmonic: the XCLK pin's drive (gpio_drive_cap_t 0-3, 5-40 mA; ESP-IDF's default 2) and the sensor's output pads (register 0x302c bits 7:6, 1x-4x; its driver sets 4x), PCLK, HREF, VSYNC and the eight data lines; config.h xclkPinDrive and sensorPadDrive, both the weakest from 2026-11-14. Moving XCLK alone could not help much: PCLK's 10 MHz comb (1570, 1580, 1590) stays, and FPV stopped delivering frames at 16 MHz XCLK (its JPEG mode with the PLL at 25 / prediv 2), where tag mode ran.
 namespace clocks {
 #if CONFIG_IDF_TARGET_ESP32S3
 constexpr uint32_t sourceHz = 160000000;
@@ -28,8 +28,8 @@ struct Setting {
     uint8_t multiplier;  // 0: chosen to keep the mode's PLLCLK
     uint8_t prediv;      // index 0-3, with multiplier
     uint8_t pclkDivider; // 0: the mode's own
-    int8_t pinDrive;     // XCLK pin, gpio_drive_cap_t; -1 leaves the default
-    int8_t padDrive;     // sensor pads 0-3 (1x-4x); -1 leaves the driver's
+    int8_t pinDrive;     // XCLK pin, gpio_drive_cap_t 0-3
+    int8_t padDrive;     // sensor pads 0-3 (1x-4x)
 };
 
 // What a start will use or used: the divider (N + b/a), the frequency it makes, and the sensor's PLL.
@@ -43,7 +43,8 @@ struct Plan {
 };
 
 // Until restart only: a value that stops the camera is gone after a reset. Index 0 tag mode, 1 FPV.
-Setting settings[2] = {{config::tagXclkHz, false, 0, 0, 0, -1, -1}, {config::fpvXclkHz, false, 0, 0, 0, -1, -1}};
+Setting settings[2] = {{config::tagXclkHz, false, 0, 0, 0, config::xclkPinDrive, config::sensorPadDrive},
+                       {config::fpvXclkHz, false, 0, 0, 0, config::xclkPinDrive, config::sensorPadDrive}};
 // The last start's plan as read back from the hardware, per mode, and whether that start has happened.
 Plan applied[2];
 bool appliedValid[2] = {false, false};
@@ -109,14 +110,15 @@ inline bool apply(const Plan &p, bool jpeg, sensor_t *sensor, int xclkPin) {
         LCD_CAM.cam_ctrl.cam_update = 1;
     }
 #endif
-    if (p.pinDrive >= 0 && gpio_set_drive_capability(gpio_num_t(xclkPin), gpio_drive_cap_t(p.pinDrive)) != ESP_OK)
+    // Always set: the pin keeps its drive across camera restarts, so a K C value would otherwise outlive the next setting.
+    if (gpio_set_drive_capability(gpio_num_t(xclkPin), gpio_drive_cap_t(p.pinDrive)) != ESP_OK)
         return false;
     if (sensor->id.PID != OV3660_PID)
         return true;
     const bool driverOwn = jpeg && p.integerHz == 20000000 && !p.fractionA && p.multiplier == 30 && p.prediv == 3 && p.pclkDivider == fpvPclkDivider;
     if (!driverOwn && sensor->set_pll(sensor, 0, p.multiplier, p.sysDivider, 0, p.prediv, 0, 1, p.pclkDivider) != 0)
         return false;
-    return p.padDrive < 0 || sensor->set_reg(sensor, 0x302c, 0xc0, p.padDrive << 6) == 0;
+    return sensor->set_reg(sensor, 0x302c, 0xc0, p.padDrive << 6) == 0;
 }
 
 // The started camera's clocks as the hardware has them, kept for K C (read here, on the camera's own core, not from the request's).
