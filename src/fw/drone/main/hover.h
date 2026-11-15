@@ -113,6 +113,8 @@ typedef struct {
     float height, climb_rate, target, command, integral, force;
     // Heading integrated from the gyro (positive left, drifting), and the attitude, heading, horizontal velocity, commanded thrust tilt and inertial velocity (state->inertial) of recent ticks, so a sighting is levelled with the attitude it was captured at and compared with the velocity of its time, and the drag model sees the tilt the servos have reached.
     float yaw;
+    // The heading held until the tag is first seen (in state->yaw's terms): where the hover started, or where the laptop's yaw (A and D) last turned it (flight_rt.c).
+    float yaw_hold;
     int64_t history_us[HOVER_HISTORY];
     float history[HOVER_HISTORY][8];
     int next;

@@ -957,7 +957,7 @@ static void hold(HoverState *state, const HoverGains *g, int mode, const HoverPo
 
     *output = (HoverOutput){.force = state->force};
     // Until the tag is first seen, hold the heading the hover started with (the gyro's, which drifts only slowly): only the tag steers the heading, so a yaw kick at liftoff turned the camera away from it for good (2026-11-02 04:47 UTC: 58 degrees/s, 30 degrees counterclockwise, the tag never seen and the drone at its ceiling looking for it).
-    if (!state->found) output->yaw_rate = clamp(-g->kyaw * state->yaw, -g->yaw_rate, g->yaw_rate);
+    if (!state->found) output->yaw_rate = clamp(-g->kyaw * wrap(state->yaw - state->yaw_hold), -g->yaw_rate, g->yaw_rate);
     float forward, left;
     if (!seeing) {
         // Tag lost after flying on it: keep damping the dead-reckoned velocity, with the trim learned on the tag. Before the tag is first flown on, the attitude controller's own damping holds the drone, unless the drag model keeps the velocity: then the hold flies on it from takeoff, and also returns to the place where the tag was last seen (or where it took off), as far as the dead reckoning knows it.

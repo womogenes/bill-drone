@@ -794,8 +794,10 @@ static void runtime_task(void *arg) {
                 scaled.base = out.force > 0 ? collective_throttle(out.force) : 0;
                 scaled.target_roll = out.roll;
                 scaled.target_pitch = out.pitch;
-                // The tag steers the heading; without the camera nothing does, so the laptop's yaw (A and D) turns the drone, as in manual flight.
-                scaled.target_yaw = command.hover_camera ? out.yaw_rate : command.target_yaw;
+                // The tag steers the heading, and the laptop's yaw (A and D) overrides it while held, as in manual flight (and always without the camera, where nothing else steers it): on 2026-11-14 a liftoff yaw of 20-30 degrees turned the camera off the tag and the keys could not turn it back. Before the tag is first seen the hold then keeps the heading the keys left it at, not the one it started with.
+                bool pilot_yaw = command.target_yaw != 0;
+                scaled.target_yaw = command.hover_camera && !pilot_yaw ? out.yaw_rate : command.target_yaw;
+                if (pilot_yaw) hover.yaw_hold = hover.yaw;
                 // Once flying on the tag, hover damps the velocity itself, measured by the camera and dead-reckoned through losses: flight_math's damping is off, since its leaky integral of attitude error would cancel any steady tilt hover asks for, and its velocity follows hover's, so it would resume from the real velocity.
                 if (out.tracking) {
                     state.controller.velocity[0] = out.velocity[0];
