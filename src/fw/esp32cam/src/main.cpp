@@ -4,6 +4,7 @@
 #include "esp_timer.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include "driver/pcnt.h"
 #include "esp_rom_sys.h"
 #include "soc/gpio_reg.h"
 #include "tag16h5.h"
@@ -50,6 +51,132 @@ volatile uint32_t linkSent = 0, linkDropped = 0, linkReceived = 0;
 
 void noPrint(char) {}
 
+// Link diagnostics (2026-11-14, the drone's requests not answered): a pulse counter shares the link's RX pin through the GPIO matrix and counts its falling edges, so a silent wire can be told from a receiver fault; each wrap at rxEdgeLimit is counted by its interrupt. syncTestPulses counts the SYNC pulses emitted by syncTest for the drone's SYNC counter to compare. Both, with linkReceived, go to the drone in TAG3 packets without a trusted tag (packet.h altRotation) and answer update op Y.
+constexpr pcnt_unit_t rxEdgeUnit = PCNT_UNIT_0;
+constexpr int16_t rxEdgeLimit = 30000;
+volatile uint32_t rxEdgeWraps = 0, syncTestPulses = 0;
+
+void IRAM_ATTR rxEdgeWrap(void *) {
+    rxEdgeWraps = rxEdgeWraps + 1;
+}
+
+uint32_t rxEdges() {
+    uint32_t wraps;
+    int16_t count = 0;
+    do {
+        wraps = rxEdgeWraps;
+        pcnt_get_counter_value(rxEdgeUnit, &count);
+    } while (wraps != rxEdgeWraps);
+    return wraps * uint32_t(rxEdgeLimit) + uint16_t(count);
+}
+
+void countRxEdges() {
+    pcnt_config_t unit = {};
+    unit.pulse_gpio_num = config::linkRxPin;
+    unit.ctrl_gpio_num = PCNT_PIN_NOT_USED;
+    unit.lctrl_mode = PCNT_MODE_KEEP;
+    unit.hctrl_mode = PCNT_MODE_KEEP;
+    unit.pos_mode = PCNT_COUNT_DIS;
+    unit.neg_mode = PCNT_COUNT_INC;
+    unit.counter_h_lim = rxEdgeLimit;
+    unit.counter_l_lim = -1;
+    unit.unit = rxEdgeUnit;
+    unit.channel = PCNT_CHANNEL_0;
+    if (pcnt_unit_config(&unit) != ESP_OK)
+        return;
+    pcnt_filter_disable(rxEdgeUnit);
+    pcnt_event_enable(rxEdgeUnit, PCNT_EVT_H_LIM);
+    pcnt_isr_service_install(0);
+    pcnt_isr_handler_add(rxEdgeUnit, rxEdgeWrap, nullptr);
+    pcnt_counter_pause(rxEdgeUnit);
+    pcnt_counter_clear(rxEdgeUnit);
+    pcnt_counter_resume(rxEdgeUnit);
+}
+
+// How the SYNC pin drives its line, for testing the line the drone's TX turned out to share (2026-11-14): 0 push-pull, high for each pulse (the normal); 1 released (input with pull-up, no pulses), so only the drone drives the line; 2 open drain, low for each pulse and released otherwise, idle high through the pull-ups, so the drone's TX can share it. A test mode reverts to 0 at syncModeUntilMs.
+volatile uint8_t syncMode = 0;
+volatile uint32_t syncModeUntilMs = 0;
+
+inline void syncPulseStart() {
+    if (syncMode == 0)
+        REG_WRITE(GPIO_OUT_W1TS_REG, 1u << config::syncPin);
+    else if (syncMode == 2)
+        REG_WRITE(GPIO_ENABLE_W1TS_REG, 1u << config::syncPin);
+}
+
+inline void syncPulseEnd() {
+    if (syncMode == 0)
+        REG_WRITE(GPIO_OUT_W1TC_REG, 1u << config::syncPin);
+    else if (syncMode == 2)
+        REG_WRITE(GPIO_ENABLE_W1TC_REG, 1u << config::syncPin);
+}
+
+void setSyncMode(uint8_t mode, uint32_t seconds) {
+    const gpio_num_t pin = gpio_num_t(config::syncPin);
+    REG_WRITE(GPIO_OUT_W1TC_REG, 1u << config::syncPin);
+    if (mode == 0) {
+        gpio_set_pull_mode(pin, GPIO_FLOATING);
+        REG_WRITE(GPIO_ENABLE_W1TS_REG, 1u << config::syncPin);
+    } else {
+        REG_WRITE(GPIO_ENABLE_W1TC_REG, 1u << config::syncPin);
+        gpio_set_pull_mode(pin, GPIO_PULLUP_ONLY);
+    }
+    syncModeUntilMs = millis() + seconds * 1000;
+    syncMode = mode;
+}
+
+// Emits count SYNC pulses of 25 us, 25 us apart (20 kHz), in the current mode, for the drone's SYNC edge counter; a frame's own pulse may merge with one of them.
+void syncTest(uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        syncPulseStart();
+        esp_rom_delay_us(25);
+        syncPulseEnd();
+        esp_rom_delay_us(25);
+    }
+    syncTestPulses = syncTestPulses + count;
+}
+
+// A second receiver on the link's RX pin at a test baud (UART1 through the GPIO matrix, receive only), so the drone's bytes can be tried at rates below the link's 2 Mbaud while UART0 keeps sending at 2 Mbaud; counts bytes and those that are 0x55 (the drone's H burst).
+constexpr uart_port_t testPort = UART_NUM_1;
+bool testUart = false;
+volatile uint32_t testBytes = 0, testPattern = 0;
+
+void setTestBaud(uint32_t baud) {
+    if (!baud)
+        return;
+    if (!testUart) {
+        uart_config_t test = {};
+        test.baud_rate = int(baud);
+        test.data_bits = UART_DATA_8_BITS;
+        test.parity = UART_PARITY_DISABLE;
+        test.stop_bits = UART_STOP_BITS_1;
+        test.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+        test.source_clk = UART_SCLK_APB;
+        if (uart_driver_install(testPort, 2048, 0, 0, nullptr, 0) != ESP_OK || uart_param_config(testPort, &test) != ESP_OK)
+            return;
+        uart_set_pin(testPort, UART_PIN_NO_CHANGE, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+        // As for the edge counter: the link's own pin setup again gives the pad back to UART0.
+        uart_set_pin(linkPort, config::linkTxPin, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+        testUart = true;
+    }
+    uart_set_baudrate(testPort, baud);
+    uart_flush_input(testPort);
+}
+
+void readTestUart() {
+    if (!testUart)
+        return;
+    uint8_t bytes[256];
+    int n;
+    while ((n = uart_read_bytes(testPort, bytes, sizeof(bytes), 0)) > 0) {
+        uint32_t pattern = 0;
+        for (int i = 0; i < n; ++i)
+            pattern += bytes[i] == 0x55;
+        testBytes = testBytes + n;
+        testPattern = testPattern + pattern;
+    }
+}
+
 // DEBUG_CONSOLE (the debug build environment): UART0 is a 115200 console with ESP logs and a status line instead of the drone link; no packets are sent.
 void startLink() {
 #ifndef DEBUG_CONSOLE
@@ -68,6 +195,9 @@ void startLink() {
     link.source_clk = UART_SCLK_APB;
     ESP_ERROR_CHECK(uart_driver_install(linkPort, linkRxBytes, linkTxBytes, 0, nullptr, 0));
     ESP_ERROR_CHECK(uart_param_config(linkPort, &link));
+    ESP_ERROR_CHECK(uart_set_pin(linkPort, config::linkTxPin, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    // The counter's setup selects the pad's GPIO function; the UART's pin setup again afterwards gives the pad back to UART0 (its IO_MUX function where the driver uses it), while the counter keeps the pad's input through the matrix.
+    countRxEdges();
     ESP_ERROR_CHECK(uart_set_pin(linkPort, config::linkTxPin, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 }
 
@@ -104,6 +234,9 @@ void serviceTask(void *) {
             update::receive(linkPort, received, n);
             relay::receive(received, n);
         }
+        readTestUart();
+        if (syncMode && int32_t(millis() - syncModeUntilMs) >= 0)
+            setSyncMode(0, 0);
         update::poll();
         air::poll();
         relay::poll();
@@ -346,7 +479,7 @@ void publish(PosePacket &packet) {
     portENTER_CRITICAL(&syncLock);
     const uint32_t now = uint32_t(esp_timer_get_time());
     if (clear)
-        REG_WRITE(GPIO_OUT_W1TS_REG, 1u << config::syncPin);
+        syncPulseStart();
     portEXIT_CRITICAL(&syncLock);
     packet.ageUs = now - packet.captureUs;
     if (packet.ageUs > config::maxAgeUs)
@@ -358,6 +491,9 @@ void publish(PosePacket &packet) {
         memset(packet.tagPosition, 0, sizeof(packet.tagPosition));
         memset(packet.altPosition, 0, sizeof(packet.altPosition));
         memset(packet.altRotation, 0, sizeof(packet.altRotation));
+        // The link diagnostics, where a frame without a trusted tag has no alternative pose (packet.h).
+        const uint32_t report[5] = {linkReceived, rxEdges(), syncTestPulses, testBytes, testPattern};
+        memcpy(packet.altRotation, report, sizeof(report));
     }
     packet.checksum = crc16(reinterpret_cast<const uint8_t *>(&packet), offsetof(PosePacket, checksum));
     if (!clear) {
@@ -370,7 +506,7 @@ void publish(PosePacket &packet) {
     ++linkSent;
     while (uint32_t(esp_timer_get_time()) - now < config::syncPulseUs) {
     }
-    REG_WRITE(GPIO_OUT_W1TC_REG, 1u << config::syncPin);
+    syncPulseEnd();
 }
 
 // Restarts the camera in the mode wanted (fpvActive).

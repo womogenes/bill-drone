@@ -747,7 +747,7 @@ static const char *change_settings(const int *indices, const float *values, int 
     return NULL;
 }
 
-// Requests: A arm, O record while disarmed (1) or stop recording (0), U raw bytes to the camera's wire (recovery), J reset the camera (1: into download mode), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update), M the radio quiet test, N the GPS tunnel (gps_send, gps_take), f the roll flip (flight_runtime_flip), h level-and-hold (flight_runtime_level). Fills reply after the id and status bytes; returns an error or NULL.
+// Requests: A arm, O record while disarmed (1) or stop recording (0), U raw bytes to the camera's wire (recovery), J reset the camera (1: into download mode), I info, W write sector, C copy sector from the running slot, B boot, V confirm, R reset, S read settings, T tune (JSON object), D schema page, G calibrate IMU, Z zero a servo, X servo bench test (start or read), P load the test pattern (flight_runtime_pattern), Q set the accelerometer correction (offset x, y, z then gain x, y, z as float32), Y write a deflate-compressed sector, F the fast update rate on (1) or off (0), K a camera firmware update request (its op, then its body; camera_update), M the radio quiet test, N the GPS tunnel (gps_send, gps_take), f the roll flip (flight_runtime_flip), h level-and-hold (flight_runtime_level), H the camera link diagnostics (camera_diagnose). Fills reply after the id and status bytes; returns an error or NULL.
 static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t *size) {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *target = esp_ota_get_next_update_partition(NULL);
@@ -843,6 +843,17 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
             return NULL;
         }
         camera_reset(length >= 1 && body[0] == 1);
+        return NULL;
+    }
+    if (op == 'H') {
+        // The camera link diagnostics (camera_diagnose), only disarmed: it takes the TX pin from the UART for a few seconds. Optional u16 pulses (default 1000), u16 bytes of 0x55 (default 256), u32 baud for them (0 the link's) and a flags byte.
+        if (!flight_runtime_idle()) return "Disarm and zero throttle first";
+        uint16_t pulses = length >= 2 ? body[0] | body[1] << 8 : 1000, bytes = length >= 4 ? body[2] | body[3] << 8 : 256;
+        uint32_t baud = length >= 8 ? body[4] | body[5] << 8 | body[6] << 16 | (uint32_t)body[7] << 24 : 0;
+        uint8_t flags = length >= 9 ? body[8] : 0;
+        if (pulses > 20000 || bytes > 4096) return "At most 20000 pulses and 4096 bytes";
+        if (baud && (baud < 9600 || baud > 2000000)) return "Baud 9600-2000000";
+        *size = camera_diagnose(pulses, bytes, baud, flags, text, REPLY - 5);
         return NULL;
     }
     if (op == 'U') {

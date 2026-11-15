@@ -70,5 +70,7 @@ void camera_hold(bool off);
 bool camera_probe_pin(int gpio, uint32_t ms);
 // Holds IO0 low while the camera restarts itself (no EN wire), for hold_ms.
 void camera_restart_holding_io0(uint32_t hold_ms);
+// Link diagnostics (the drone's H request, disarmed only): samples the levels of TX (GPIO27), SYNC (13) and RX (34) and counts SYNC's rising and RX's falling edges with the UART idle; takes GPIO27 from the UART to drive it 1 and 0 and release it with each pull, reading it back each time; emits pulses falling edges at about 10 kHz on it; restores the UART's pad exactly and sends bytes of 0x55 through it at baud (0: the link's 2 Mbaud), with flags bit 0 the TX pad open drain and pulled up, bit 1 SYNC pulled up instead of down, putting all of it back after; and gives the camera's own link report (bytes and GPIO44 falling edges it received, its test receiver's bytes) before and after each. Writes the readings as text lines; returns their length.
+size_t camera_diagnose(uint16_t pulses, uint16_t bytes, uint32_t baud, uint8_t flags, char *text, size_t size);
 
 #endif
