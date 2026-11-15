@@ -1,7 +1,7 @@
 """
-A recorded burst flown again on a plant by the firmware that flew it, and set against the log: uv run -m sw.sim.burst_closed prepare FLIGHT PLANT.json OUT.json (in this tree: the plant with the flight's own CoM and yaw push from scorecard.flight_terms baked in), then, in a tree of the firmware to fly (the as-flown commit, or the one that will fly), python burst_closed.py fly PREPARED.json OUT.json [--harness DIR] [--n 64] [--set k=v,...] [--draws JSON] [--workers 16], and uv run -m sw.sim.burst_closed plot OUT.json ... FIGURE.png here.
+A recorded burst flown again on a plant by the firmware that flew it, and set against the log: uv run -m sw.sim.burst_closed prepare FLIGHT PLANT.json OUT.json (in this tree: the plant with the flight's own CoM and yaw push from scorecard.flight_terms baked in), then, in a tree of the firmware to fly (the as-flown commit, or the one that will fly), PYTHONPATH=. python burst_closed.py fly PREPARED.json OUT.json [--harness DIR] [--n 64] [--set k=v,...] [--draws JSON] [--workers 16], and uv run -m sw.sim.burst_closed plot OUT.json ... FIGURE.png here.
 
-fly runs the tree's own firmware through its flip_firmware harness (or --harness DIR's ffsag.py: flip_firmware with the pack's sag and thrust_voltage, as william/burst-repro reproduced the 07:03 burst60 with), from the ground through the takeoff, the climb to the recording's hold and the flip request: the recording's settings as flown (the GPS hold, the flip_enable it flew), asked for the flip once a second from the time after liftoff the log asked (until it starts), the stand's thrust table with the pack's sag, the firmware's thrust scales and hover_mass as set, the plant as saved with no randomization but the draws (--draws: {term: [low, high]} drawn uniformly per run, the plant's uncertainty), and calm air. Each run's trace from the flip's start (2 s), and its measures: the largest roll and its time, the largest nose excursion either way and when, the largest pitch rate, the hand-back time (the flip's phase 3), the height lost and the highest point, whether it was clean or touched.
+fly runs the tree's own firmware through its flip_firmware harness (with the pack's sag and thrust_voltage where it has them, as william/consolidate's does; for older trees --harness DIR's ffsag.py, flip_firmware patched with them as william/burst-repro reproduced the 07:03 burst60), from the ground through the takeoff, the climb to the recording's hold and the flip request: the recording's settings as flown (the GPS hold, the flip_enable it flew), asked for the flip once a second from the time after liftoff the log asked (until it starts), the stand's thrust table with the pack's sag, the firmware's thrust scales and hover_mass as set, the plant as saved with no randomization but the draws (--draws: {term: [low, high]} drawn uniformly per run, the plant's uncertainty), and calm air. Each run's trace from the flip's start (2 s), and its measures: the largest roll and its time, the largest nose excursion either way and when, the largest pitch rate, the hand-back time (the flip's phase 3), the height lost and the highest point, whether it was clean or touched.
 """
 
 import argparse
@@ -39,7 +39,8 @@ def prepare(name, plant_path, out):
     entry = next(e for e in S.entries(listing) if e["name"].startswith(name))
     flight = S.Flight(entry, listing["configurations"][entry["configuration"]])
     plant = S.plant_for(flight, plant_path, {})
-    terms = S.flight_terms(flight, plant, 100)
+    # The CoM from the plant without its disturbance state, which would take the CoM's steady torque into its estimate: the closed loop has no observer.
+    terms = S.flight_terms(flight, plant | {"observer": None}, 100)
     if terms is None:
         terms = np.zeros(3)
     params = dict(plant["airframe"])
@@ -66,7 +67,9 @@ def fly(prepared, out, harness, n, overrides, draws, workers, seed):
         options = {"sag": SAG, "thrust_voltage": THRUST_VOLTAGE}
     else:
         from sw.sim import flip_firmware as FF
-        options = {}
+        from sw.sim import flip_esc
+        # Trees whose flip_firmware carries the sag itself (william/consolidate from 112eb6f): the stand's fit of it and its voltages.
+        options = {"sag": flip_esc.SAG, "table_volts": flip_esc.STAND_VOLTS} if hasattr(flip_esc, "SAG") else {}
     from sw.flight_log import recording, settings as recording_settings
     from sw.sim.flip_esc import STAND
     data = json.loads(Path(prepared).read_text())
@@ -76,7 +79,7 @@ def fly(prepared, out, harness, n, overrides, draws, workers, seed):
     # The plant as saved: its own rotor drag (none where the hubs' aerodynamics carry it), no disturbance terms.
     FF.plant_of = lambda airframe: {"airframe": FF.R.A.model(airframe), "geometry": FF.R.A.geometry_of(FF.R.A.model(airframe)), "disturbances": [], "rotor_drag": tuple(FF.R.A.model(airframe).get("rotor_drag", (0.07, 0.2)))}
     flown = recording_settings(recording(data["flight"])) | {"hover_camera": 0, "hover_center": 0} | overrides
-    if harness:
+    if options:
         flown["thrust_voltage"] = THRUST_VOLTAGE
     log = data["log"]
     flip_at = max(1.0, log["start"] - log["liftoff"] - 0.5)

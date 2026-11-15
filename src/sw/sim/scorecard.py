@@ -40,7 +40,7 @@ from sw.sim.flip_replay import quaternion
 from sw.sim.takeoff_test import LEG_FEET
 
 FLIGHTS = Path(__file__).with_name("scorecard_flights.json")
-PLANTS = ("airframe_2026-11-12_raised.json", "airframe_2026-11-15_bursts.json")
+PLANTS = ("airframe_2026-11-15_plant.json", "airframe_2026-11-12_raised.json", "airframe_2026-11-15_bursts.json")
 HORIZONS = (0.05, 0.2, 0.5, 1.0)
 CHANNELS = ("roll_rate", "pitch_rate", "yaw_rate", "roll", "pitch", "accel_x", "accel_y", "accel_z", "height")
 UNITS = ("deg/s", "deg/s", "deg/s", "deg", "deg", "g", "g", "g", "m")

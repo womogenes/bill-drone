@@ -1,5 +1,5 @@
 """
-The pitch frequency response, servo command to pitch rate, measured from the logs and computed from a plant: uv run -m sw.sim.plant_response [--plant PLANT.json ...] [--flights PREFIX ...] [--configuration nobands_new_esc]
+The pitch frequency response, servo command to pitch rate, measured from the logs and computed from a plant: uv run -m sw.sim.plant_response [--plant PLANT.json ...] [--flights PREFIX ...] [--plot FIGURE.png]
 
 Measured: over the hovering spans (3 s after the motors start to 2 s before they stop, flips left out) of the chosen flights, the cross-spectrum of the common servo command (the two servos' mean physical tilt, degrees) with the gyro's pitch rate (deg/s) over the command's spectrum (Welch, 10.24 s segments), with the coherence. In the hold's own pitch shake (2.3-2.4 Hz in every configuration) the coherence is 0.97-1.00, so there the estimate is the plant's whatever the loop; down to 0.5 Hz the pilots' targets used as the instrument (target to rate over target to command) agree with it where they carry power.
 
@@ -123,6 +123,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--plant", nargs="*", default=list(S.PLANTS))
     parser.add_argument("--flights", nargs="+", default=["2026-11-15T06-32", "2026-11-15T06-46", "2026-11-15T06-47", "2026-11-15T06-48", "2026-11-15T06-49", "2026-11-15T06-50", "2026-11-15T06-58", "2026-11-15T07-12"])
+    parser.add_argument("--plot", help="the gain and phase against frequency, the log's with its coherence and each plant's, here")
     args = parser.parse_args()
     listing = S.flight_list()
     entries = [e for e in S.entries(listing) if any(e["name"].startswith(p) for p in args.flights)]
@@ -132,10 +133,36 @@ def main():
     print("frequency (Hz) " + " ".join(f"{frequency[k]:>12.2f}" for k in pick))
     print("log            " + " ".join(f"{abs(response[k]):6.1f}{math.degrees(np.angle(response[k])):6.0f}" for k in pick))
     print("coherence      " + " ".join(f"{coherence[k]:>12.2f}" for k in pick))
+    curves = {}
     for name in args.plant:
         plant = S.plant_for(flights[0], name, {})
         h = computed(plant, frequency[pick])
         print(f"{S.label_of(name)[:14]:14} " + " ".join(f"{abs(v):6.1f}{math.degrees(np.angle(v)):6.0f}" for v in h))
+        band = (frequency >= 0.3) & (frequency <= 4.0)
+        curves[S.label_of(name)] = (frequency[band], computed(plant, frequency[band]))
+    if args.plot:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        band = (frequency >= 0.3) & (frequency <= 4.0)
+        fig, axes = plt.subplots(3, 1, figsize=(8, 8), sharex=True)
+        axes[0].plot(frequency[band], np.abs(response[band]), "k.-", lw=1.2, label="log (hovers' cross-spectra)")
+        axes[1].plot(frequency[band], np.degrees(np.unwrap(np.angle(response[band]))), "k.-", lw=1.2)
+        axes[2].plot(frequency[band], coherence[band], "k.-", lw=1.0)
+        for (label, (f, h)), color in zip(curves.items(), ("#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e")):
+            axes[0].plot(f, np.abs(h), color=color, lw=1.0, label=label)
+            axes[1].plot(f, np.degrees(np.unwrap(np.angle(h))), color=color, lw=1.0)
+        axes[0].set_ylabel("|pitch rate / servo command|\n((deg/s)/deg)", fontsize=8)
+        axes[1].set_ylabel("phase (deg)", fontsize=8)
+        axes[2].set_ylabel("coherence", fontsize=8)
+        axes[2].set_xlabel("Hz", fontsize=8)
+        for ax in axes:
+            ax.grid(alpha=0.3)
+            ax.tick_params(labelsize=7)
+        axes[0].legend(fontsize=7)
+        fig.suptitle("Servo command to pitch rate: " + ", ".join(e["name"] for e in entries)[:180], fontsize=7)
+        fig.tight_layout()
+        fig.savefig(args.plot, dpi=90)
 
 
 if __name__ == "__main__":
