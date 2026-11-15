@@ -3,9 +3,19 @@
 IDF_PATH ?= $(HOME)/esp/esp-idf
 IDF = bash -c 'source $(IDF_PATH)/export.sh >/dev/null && "$$@"' idf
 
-.PHONY: build deploy usb accel level camera-test gps-test flight-test camera-fast camera-fast-wifi camera-wifi camera-deploy camera-usb
+.PHONY: build bench bench-usb deploy usb accel level camera-test gps-test flight-test camera-fast camera-fast-wifi camera-wifi camera-deploy camera-usb
 build:
 	$(IDF) idf.py -C drone build
+
+# The compute and scheduling benchmark (drone/main/bench.h, bench_flight.c): a test build in drone/build-bench with the MPC prototype and BENCH_RECORDING's sensor data for its replay (drone/main/bench_replay.h, not committed). Flash it with make bench-usb PORT=...; tools/bench.py runs it through the laptop service.
+BENCH_RECORDING ?= ../sw/recordings/2026-11-15T07-02-48-960Z_659339735
+bench:
+	uv run tools/bench_replay.py $(BENCH_RECORDING) drone/main/bench_replay.h
+	$(IDF) idf.py -C drone -B drone/build-bench -DSDKCONFIG=$(CURDIR)/drone/build-bench/sdkconfig -DBENCH=1 build
+
+bench-usb: bench
+	$(if $(PORT),,$(error Set PORT to the drone's serial device))
+	$(IDF) esptool.py --chip esp32 --port $(PORT) --baud 460800 write_flash 0xd000 drone/build-bench/ota_data_initial.bin 0x10000 drone/build-bench/drone.bin
 
 # Over the radio through the running laptop service: changed sectors only, then boot and confirm.
 deploy: build

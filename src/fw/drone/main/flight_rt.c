@@ -24,6 +24,19 @@
 #include "hover.h"
 #include "indi.h"
 #include "recover.h"
+// The compute and scheduling benchmark (make bench: BENCH, bench.h) marks the tick's stages and instruments the lock; in the flight build every hook is empty.
+#ifdef BENCH
+#include "bench.h"
+#else
+#define MARK(stage)
+#define BENCH_WAKE()
+#define BENCH_SENSORS(result, data, sensor, sum, samples)
+#define BENCH_BEGIN()
+#define BENCH_END(t)
+#define BENCH_AFTER()
+#define BENCH_START()
+#define BENCH_PULSE(index, us)
+#endif
 
 // Samples kept while the radio catches up: 5 s at 100 Hz (2 s until 2026-11-14). 500 records take 56 KB; with 200 the drone had 129 KB of internal RAM left at its lowest (radio.c I reply), so this leaves about 95 KB.
 #define LOG_CAPACITY 500
@@ -257,8 +270,10 @@ static struct {
 // The control task's state, shared with the radio's requests on core 0, behind one mutex rather than a critical section: the tick (the IMU's sample, the Kalman filter, the hover, the controller and the log record; 2-3.5 ms armed by the records' control_us on 2026-11-14) and each request still run one at a time exactly as before, but interrupts stay on, on core 1 through the tick and on core 0 while a request waits for it (a critical section kept core 1's interrupts off for the whole tick and core 0's while a request spun on the lock, which the camera's 2 Mbaud UART and the radio share). Taken only from tasks, never from an interrupt or inside another critical section; created by flight_runtime_outputs, before the radio starts.
 static StaticSemaphore_t lock_buffer;
 static SemaphoreHandle_t lock;
+#ifndef BENCH
 #define LOCK() xSemaphoreTake(lock, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(lock)
+#endif
 
 static bool spinning(void) { return state.throttle[0] || state.throttle[1]; }
 
@@ -293,6 +308,7 @@ static float esc_us(int throttle) {
 // Caller holds lock so an emergency stop cannot race a later duty write.
 // Latches a duty update without waiting for the previous transition.
 static void pulse(int index, float us) {
+    BENCH_PULSE(index, us);
     LEDC.channel_group[LEDC_HIGH_SPEED_MODE].channel[index].conf1.duty_start = 0;
     LEDC.channel_group[LEDC_HIGH_SPEED_MODE].channel[index].duty.duty = (uint32_t)lroundf(us * ticks[index]) << 4;
     LEDC.channel_group[LEDC_HIGH_SPEED_MODE].channel[index].conf1.duty_start = 1;
@@ -629,22 +645,29 @@ static uint64_t estimate(Tick *t, bool first) {
                      flip_gyro_only(&flip) || recover_gyro_only(&recovery) ? INFINITY : spinning() ? command.attitude_tau : config.gravity_tau};
     flight_attitude(&state.attitude, &motion);
     t->pose = relative_attitude(&state);
+    MARK(S_ATTITUDE);
     incremental(t->dt);
+    MARK(S_INDI);
     if (state.enabled) flip_tick(&flip, &maneuver, t->pose.q, state.gyro, state.accel, t->dt, &state.controller, &hover.integral, &t->flipped);
+    MARK(S_FLIP);
     state.online = true;
     state.sample_us = t->now;
     // The barometer's newest reading, taken once this tick by whichever of the hover's calls runs.
     t->have_baro = baro_input(&t->baro);
     uint64_t started = esp_timer_get_time();
     t->have_fix = gps_input(&t->gps);
+    MARK(S_INPUTS);
     if (t->have_fix) ekf_gps(&ekf, &t->gps);
     if (t->have_baro) ekf_baro(&ekf, &t->baro);
+    MARK(S_EKF_QUEUE);
     EkfSample sample = {.time_us = t->now, .gyro = {state.gyro[0], state.gyro[1], state.gyro[2]},
                         .accel = {state.accel[0] * GRAVITY, state.accel[1] * GRAVITY, state.accel[2] * GRAVITY}, .dt = t->dt, .spinning = spinning()};
     ekf_update(&ekf, &sample, &filtered);
+    MARK(S_EKF);
     HoverEstimate estimate;
     ekf_estimate(&filtered, &estimate);
     hover_estimate(&hover, &estimate);
+    MARK(S_ESTIMATE);
     return started;
 }
 
@@ -785,6 +808,7 @@ static void fly(Tick *t) {
     bool hovering = hover_mode && hover.bias > 0.5f;
     // The pitch speed moment compensation needs a measured speed: the hover's while it flies on the tag.
     bool tracking = hovering && hover_setpoint(t, &setpoint);
+    MARK(S_HOVER);
     float add[EXCITE_CHANNELS] = {0};
     play_pattern(t, &setpoint, add);
     if (!tracking) setpoint.pitch_speed = 0;
@@ -804,7 +828,9 @@ static void fly(Tick *t) {
         setpoint.left_thrust_scale *= ratio * ratio;
         setpoint.right_thrust_scale *= ratio * ratio;
     }
+    MARK(S_SETPOINT);
     flight_control(&state.controller, &setpoint, &flight_thrust[0][0], flight_thrust_count);
+    MARK(S_CONTROL);
     float throttle[2];
     if (t->flipped.owned || t->recovered.owned) {
         flip_actuators(t->recovered.owned ? &t->recovered.motors : &t->flipped, &command, setpoint.left_thrust_scale, setpoint.right_thrust_scale, THROTTLE_MAX, SERVO_LIMIT, throttle, state.servo);
@@ -836,6 +862,7 @@ static void fly(Tick *t) {
         write_servo(side);
         pulse(side * 2 + 1, esc_us(state.throttle[side]));
     }
+    MARK(S_OUTPUT);
 }
 
 static void runtime_task(void *arg) {
@@ -846,6 +873,7 @@ static void runtime_task(void *arg) {
     int bad_ticks = 0;
     bool idle_failure = false;
     while (true) {
+        BENCH_WAKE();
         uint8_t reg = 0x3a, data[15] = {0};
         esp_err_t result = sensor_configured
             ? i2c_master_write_read_device(I2C_NUM_0, MPU, &reg, 1,
@@ -855,8 +883,10 @@ static void runtime_task(void *arg) {
         for (int i = 0; i < 7; i++) sensor[i] = (int16_t)((data[1 + i * 2] << 8) | data[2 + i * 2]);
         int32_t sum[6] = {0};
         int samples = result == ESP_OK ? read_fifo(sum, sensor) : 0;
+        BENCH_SENSORS(&result, data, sensor, sum, &samples);
         Tick t = {.now = esp_timer_get_time()};
         LOCK();
+        BENCH_BEGIN();
         bool recording = log_active;
         t.stale = watch_link(t.now);
         // A failed read, or no new sample (the MPU updates at 1 kHz, so every control tick sees one unless the sensor stalled), ends the tick here; enough failed or stalled ticks in a row while disarmed set the IMU up again.
@@ -906,9 +936,11 @@ static void runtime_task(void *arg) {
         if (state.enabled && previous && t.now - previous > MAX_SAMPLE_MS * 1000ULL) stop_locked(STOP_LATE);
         take_imu(body, t.now);
         state.temperature = raw[3] / 340.0f + 36.53f;
+        MARK(S_IMU);
         uint64_t started = estimate(&t, !previous);
         previous = t.now;
         if (state.enabled) tip_or_recover(&t);
+        MARK(S_RECOVER);
         // Measured specific force along vertical, in g: the accelerometer onto the IMU attitude's up axis.
         float up[3];
         quaternion_up(state.attitude.q, up);
@@ -919,14 +951,18 @@ static void runtime_task(void *arg) {
             hover_rest(&hover, t.vertical, spinning(), t.dt, t.have_baro ? &t.baro : NULL);
             guard.failsafe = FAILSAFE_OFF;
         }
+        MARK(S_REST);
         uint32_t duration = esp_timer_get_time() - started;
         if (recording) capture(t.now, raw, duration);
+        MARK(S_LOG);
         if (log_ends && t.now >= log_ends) {
             log_elapsed = t.now - log_started;
             log_active = false;
             log_ends = 0;
         }
+        BENCH_END(&t);
         UNLOCK();
+        BENCH_AFTER();
         vTaskDelayUntil(&deadline, period);
     }
 }
@@ -1416,5 +1452,10 @@ void flight_runtime_start(void) {
     for (int side = 0; side < 2; side++) write_servo(side);
     running = true;
     UNLOCK();
+    BENCH_START();
     if (xTaskCreatePinnedToCore(runtime_task, "flight", 8192, NULL, 5, NULL, 1) != pdPASS) abort();
 }
+
+#ifdef BENCH
+#include "bench_flight.c"
+#endif

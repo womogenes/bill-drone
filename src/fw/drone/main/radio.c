@@ -674,6 +674,9 @@ static const char *handle(uint8_t op, const uint8_t *body, size_t length, size_t
         if (length < 1) return "Malformed ESC calibration request";
         return flight_runtime_esc_calibration(body[0]);
     }
+#ifdef BENCH
+    if (op == 'b') return flight_runtime_bench(body, length, text, REPLY - 5, size);
+#endif
     if (op == 'P') {
         const char *failure = flight_runtime_pattern(body, length, text, REPLY - 5);
         if (failure) return failure;

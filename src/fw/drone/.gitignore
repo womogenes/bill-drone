@@ -2,3 +2,5 @@ build/
 installed/
 sdkconfig
 sdkconfig.old
+build-bench/
+main/bench_replay.h
