@@ -26,6 +26,8 @@ def main():
     path = recording(args.name)
     settings = recording_settings(path)
     data = read_flight(path)[0]
+    # The collective as the recording's firmware had it, on its own thrust table.
+    table = np.array(F.flight.thrust_table(path), float)
     tip_limit = math.radians(args.tip_limit or settings.get("tip_limit", 45.0))
     model = F.flight.MODEL
     mass = settings.get("hover_mass", 0.9)
@@ -56,7 +58,7 @@ def main():
         accel = (ctypes.c_float * 3)(row.ax_g, row.ay_g, row.az_g)
         attitude = (ctypes.c_float * 2)(roll, pitch)
         given = F.RecoverInput(enabled=True, tipped=not exempt and max(abs(roll), abs(pitch)) > tip_limit, allowed=True, gyro=gyro, accel=accel, dt=float(time.iloc[k] - time.iloc[k - 1]), tip_limit=tip_limit,
-                               flip_active=phase > 0, flip_gyro_only=phase > 0 or grace, flip_phase=phase, climb_rate=float(row.hover_climb_m_s), collective=2 * F.flight.thrust(float(row.base_throttle)), authority=authority)
+                               flip_active=phase > 0, flip_gyro_only=phase > 0 or grace, flip_phase=phase, climb_rate=float(row.hover_climb_m_s), collective=2 * float(np.interp(float(row.base_throttle), table[:, 0], table[:, 1])), authority=authority)
         out = F.RecoverOutput()
         F.library.recover_tick(ctypes.byref(run), ctypes.byref(F.RECOVER_DEFAULTS), ctypes.byref(given), ctypes.addressof(attitude), ctypes.addressof(controller), ctypes.byref(integral), ctypes.byref(out))
         q = run.q

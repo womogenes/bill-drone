@@ -32,7 +32,9 @@ class Log:
         # The thrust trim from the hover before the window (both motors over 300, no flip), or from the whole recording's when the window starts with it.
         flying = (df["flip"].fillna(0) == 0) & (df["left_throttle"] > 300) & (df["right_throttle"] > 300)
         airborne = df[flying & (time < start)] if (flying & (time < start)).sum() > 100 else df[flying]
-        self.table_thrust = np.column_stack([airborne[f"{side}_throttle"].map(flight.thrust) for side in ("left", "right")])
+        # The thrust table the recording's firmware flew (its metadata's), which the plant's motors follow too.
+        self.table = np.array(flight.thrust_table(path), float)
+        self.table_thrust = np.column_stack([A.thrust(airborne[f"{side}_throttle"].to_numpy(float), self.table) for side in ("left", "right")])
         self.settings = settings(path)
         self.gyro_range = 32768 / metadata(path).get("gyro_counts_per_deg_s", 131.0) * A.DEG
         rows = df[(time >= start - 1e-6) & (time <= end + 1e-6)]
@@ -69,7 +71,7 @@ def plant_for(log, airframe, geometry=None, band_tilt=BAND_TILT, **overrides):
     geometry = geometry or A.geometry_of(params)
     level, mean = A.trim_for(log.table_thrust * np.array([1.0, params.get("right_thrust_gain", 1.0)]), geometry)
     params |= {"thrust_level": float(level), "hover_thrust": [float(m) for m in mean]}
-    return {"airframe": params, "geometry": geometry, "disturbances": [], "rotor_drag": (0.07, 0.2), "tilt_offset": band_tilt, "fault": fault}
+    return {"airframe": params, "geometry": geometry, "disturbances": [], "rotor_drag": (0.07, 0.2), "tilt_offset": band_tilt, "fault": fault, "table": log.table}
 
 
 def replay(log, plants, scale=None, every=None):
@@ -96,7 +98,7 @@ def simulate(log, plant, scale, every=None):
     flipping = log.phase > 0
     for side in range(2):
         if fault[side] != 1.0:
-            throttle[flipping, side] = [flight.throttle(fault[side] * flight.thrust(c)) if c > 0 else c for c in throttle[flipping, side]]
+            throttle[flipping, side] = [R.throttle_for(fault[side] * A.thrust(c, log.table), log.table) if c > 0 else c for c in throttle[flipping, side]]
     if sim.backend == "c":
         sim.bind()
     rates, forces, heights, ends = [sim.omega.copy()], [sim.accel / R.G], [np.zeros(n)], [sim.omega.copy()]

@@ -3,13 +3,13 @@
 
 #include "flight_math.h"
 
-// (throttle, thrust in N). Rescaled 2026-10-28 for both ESCs recalibrated to 1000-2200 us (throttle 0-1200), from the median of three load-cell sweeps taken when the ESCs ran from about 200 to 1100 (sw/sim/models/NOTES.md): each throttle c now gives what 200 + 0.75 c gave then. Not yet re-measured; recordings before 2026-10-28 06:40 UTC used the old range.
+// (throttle, thrust in N) at the 1.3 thrust scale and 16.1 V (thrust_voltage). Measured 2026-11-14 on the thrust stand for the Nuofany 40A ESCs calibrated to 1000-2000 us (throttle 0-1200; sw/recordings/stand/2026-11-14T18-07-54, one motor with its 10-inch prop): each step's thrust taken to 16.1 V as the voltage squared (as flight_rt.c compensates), divided by 1.3, a cubic through the steps from throttle 120 up and straight to zero below (sw/sim/models/NOTES.md "The new ESCs"). The table before, from the 2026-10-04 sweeps rescaled by guess for the 2026-10-28 ESC range, overrated the new motors 2.4 times at throttle 120 and 1.1 times at hover and underrated them from 840 up. Recordings carry the table they flew with in their metadata (sw/sim/flight.py thrust_table).
 const float flight_thrust[][2] = {
-    {0, 0.000000f}, {50, 0.569017f}, {100, 0.949508f}, {150, 1.241442f}, {200, 1.544789f}, {250, 1.852657f},
-    {300, 2.154418f}, {350, 2.459095f}, {400, 2.775708f}, {450, 3.140096f}, {500, 3.467688f}, {550, 3.821599f},
-    {600, 4.264942f}, {650, 4.740267f}, {700, 5.232667f}, {750, 5.753304f}, {800, 6.313341f}, {850, 6.957856f},
-    {900, 7.588432f}, {950, 8.207068f}, {1000, 8.815765f}, {1050, 9.411621f}, {1100, 10.024490f}, {1150, 10.633263f},
-    {1200, 11.216827f},
+    {0, 0.000000f}, {50, 0.179979f}, {100, 0.359958f}, {150, 0.583408f}, {200, 0.784781f}, {250, 1.029425f},
+    {300, 1.316747f}, {350, 1.646153f}, {400, 2.017051f}, {450, 2.428848f}, {500, 2.880950f}, {550, 3.372765f},
+    {600, 3.903700f}, {650, 4.473161f}, {700, 5.080556f}, {750, 5.725292f}, {800, 6.406775f}, {850, 7.124413f},
+    {900, 7.877613f}, {950, 8.665781f}, {1000, 9.488324f}, {1050, 10.344650f}, {1100, 11.234166f}, {1150, 12.156278f},
+    {1200, 13.110394f},
 };
 const size_t flight_thrust_count = sizeof(flight_thrust) / sizeof(flight_thrust[0]);
 

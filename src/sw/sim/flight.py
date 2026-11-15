@@ -33,9 +33,20 @@ PRE_RECALIBRATION_TABLE = [[0, 0.0], [200, 0.0], [250, 0.758689175], [300, 1.140
                            [700, 4.898708952], [750, 5.566624474], [800, 6.313341249], [850, 7.172694844], [900, 8.00416899], [950, 8.815765343], [1000, 9.61023936], [1050, 10.438741463], [1100, 11.216827129], [1150, 11.052149476], [1200, 10.992227314]]
 
 
+# The table the firmware flew from 2026-10-28 06:40 UTC until the thrust stand's for the new ESCs (2026-11-14): every recording since carries its table in its metadata, so this is only for one that lacks it.
+RECALIBRATED_TABLE = [[0, 0.0], [50, 0.569017], [100, 0.949508], [150, 1.241442], [200, 1.544789], [250, 1.852657], [300, 2.154418], [350, 2.459095], [400, 2.775708], [450, 3.140096], [500, 3.467688], [550, 3.821599],
+                      [600, 4.264942], [650, 4.740267], [700, 5.232667], [750, 5.753304], [800, 6.313341], [850, 6.957856], [900, 7.588432], [950, 8.207068], [1000, 8.815765], [1050, 9.411621], [1100, 10.02449], [1150, 10.633263], [1200, 11.216827]]
+
+
 def thrust_table(recording):
-    """The thrust table a recording (its path or name, starting with its UTC time) was flown with: [throttle, thrust_N] rows."""
-    return PRE_RECALIBRATION_TABLE if Path(recording).name[:16] < RECALIBRATED else THRUST_TABLE
+    """The thrust table a recording (its path, or a name starting with its UTC time) was flown with: [throttle, thrust_N] rows, from its metadata where it has them (the firmware writes its table there), else by its time."""
+    path = Path(recording)
+    if path.suffix in (".bin", ".jsonl") and path.with_suffix(".jsonl").exists():
+        from sw.flight_log import metadata
+        table = metadata(path.with_suffix(".bin")).get("thrust_table")
+        if table:
+            return [[int(throttle), float(thrust)] for throttle, thrust in table]
+    return PRE_RECALIBRATION_TABLE if path.name[:16] < RECALIBRATED else RECALIBRATED_TABLE
 
 
 def control_many(states, commands, table=THRUST_TABLE):

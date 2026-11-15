@@ -20,13 +20,14 @@ from pathlib import Path
 import numpy as np
 
 from sw.flight_log import FIRST_DRONE, drone
-from sw.sim.flight import THRUST_TABLE
+from sw.sim.flight import RECALIBRATED_TABLE
 
 DT = 0.01
 DEG = math.pi / 180
 G = 9.81
 SUB = 4
-TABLE = np.array(THRUST_TABLE, float)
+# The saved fits' thrust trims (thrust_level, hover_thrust) are in the table they were fitted on, the one the firmware flew from 2026-10-28 to 2026-11-14; the plant keeps it (a plant may carry the stand's own, rigid.Sim plant["table"]) while the firmware's controller flies flight.THRUST_TABLE.
+TABLE = np.array(RECALIBRATED_TABLE, float)
 MODELS = Path(__file__).with_name("models")
 GEOMETRY_FILE = "geometry_2026-10-28.json"
 
