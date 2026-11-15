@@ -617,10 +617,11 @@ const char *flight_runtime_bench(const uint8_t *body, size_t length, char *text,
         UNLOCK();
         n = snprintf(text, size,
                      "{\"active\":%d,\"requested\":%d,\"scenario\":%d,\"tick\":%d,\"of\":%d,\"error\":\"%s\",\"armed\":%d,\"holding\":%d,\"phases\":[%d,%d,%d,%d],\"recovering\":%d,"
-                     "\"gps\":%d,\"baro\":%d,\"both\":%d,\"saturated\":%d,\"flips\":%d,\"kicks\":%d,\"top\":%.2f,\"warm_ekf\":[%.1f,%.1f,%.1f,%.1f],\"warm_hover\":[%.1f,%.1f,%.1f,%.1f],\"stack_free\":%u,\"heap_free\":%u,\"heap_low\":%u}",
+                     "\"gps\":%d,\"baro\":%d,\"both\":%d,\"saturated\":%d,\"flips\":%d,\"kicks\":%d,\"top\":%.2f,\"warm_ekf\":[%.1f,%.1f,%.1f,%.1f],\"warm_hover\":[%.1f,%.1f,%.1f,%.1f],\"stack_free\":%u,\"heap_free\":%u,\"heap_low\":%u,\"heap8_free\":%u,\"heap8_low\":%u}",
                      copy.active, copy.requested, copy.scenario, copy.tick, copy.ticks, copy.error, copy.armed, copy.holding, copy.phase[0], copy.phase[1], copy.phase[2],
                      copy.phase[3], copy.recovering, copy.gps, copy.baro, copy.both, copy.saturated, copy.flips, copy.kicks, copy.top, copy.warm_ekf[0], copy.warm_ekf[1], copy.warm_ekf[2], copy.warm_ekf[3], copy.warm_hover[0], copy.warm_hover[1], copy.warm_hover[2], copy.warm_hover[3], (unsigned)copy.stack_free,
-                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     } else if (body[0] == 'm') {
         int page = length > 1 ? body[1] : 0, first = page * METRICS_PAGE;
         if (first >= METRICS) return "No such page";
