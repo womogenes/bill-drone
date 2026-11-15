@@ -355,8 +355,9 @@ static void pulse(int index, float us) {
 // On USB alone (no pack: battery_v under NO_PACK_V, or not read yet) the servos get no pulses, so they are not commanded and do not hold against load on the USB supply (servos drawing power browned out the board on 2026-11-14); the commanded angle is sent again when a pack is connected (servo_pack).
 static bool servo_pack;
 
+// The servo bench test also drives them on USB alone: its steps are at most 15 degrees (flight_runtime_servo_test), small enough for the USB supply and its capacitors (1000 + 470 uF at the source), and the timing it measures is the servos' own without a pack.
 static void write_servo(int side) {
-    pulse(side * 2, servo_pack ? 1500 + (state.servo[side] + state.offsets[side]) * 1000 / 90 : 0);
+    pulse(side * 2, servo_pack || servo_test.active ? 1500 + (state.servo[side] + state.offsets[side]) * 1000 / 90 : 0);
 }
 
 // Why the motors stopped, as the status and the log carry it (fw/controller/log_format.py STOP_REASONS; the tip cut, 4, and a failed recovery, 10, are recover.h's).
@@ -942,6 +943,7 @@ static void servo_test_tick(uint64_t now) {
     if (servo_test.index >= servo_test.count) {
         servo_test.active = false;
         state.servo[0] = state.servo[1] = 0;
+        if (log_active && !state.enabled) log_ends = now + POST_ROLL_US;
     } else {
         static const float pattern[4] = {1, 0, -1, 0};
         state.servo[side] = pattern[servo_test.index % 4] * servo_test.amp;
@@ -1406,6 +1408,8 @@ const char *flight_runtime_servo_test(float amp, int cycles) {
         servo_test.count = cycles * 8;
         servo_test.step_us = esp_timer_get_time();
         servo_test.active = true;
+        // The test's gyro, servo commands and timing go into a recording of their own (the bridge records any log session the drone starts), closed POST_ROLL_US after the last step.
+        if (!log_active) start_log();
     }
     UNLOCK();
     return idle ? NULL : "Disarm and zero throttle first";
