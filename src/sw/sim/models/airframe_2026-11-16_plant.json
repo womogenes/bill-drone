@@ -1,0 +1,111 @@
+{
+ "motor_delay": 0.05365190306845177,
+ "right_motor_delay": 0.05365190306845177,
+ "motor_tau": 0.08978267920886403,
+ "right_motor_tau": 0.08978267920886403,
+ "right_thrust_gain": 1.067592,
+ "voltage_power": 1.42,
+ "differential_slope": 1.0,
+ "motor_start": 0.16,
+ "motor_tau_down": 0.0,
+ "motor_idle": 0.0,
+ "motor_floor": 0.0,
+ "motor_coast": 0.1865,
+ "coast_below": 150.0,
+ "motor_ceiling": 0.0,
+ "servo_delay": 0.07500602584013859,
+ "right_servo_delay": 0.055206063168767305,
+ "servo_wn": 33.29296349551613,
+ "right_servo_wn": 33.29296349551613,
+ "servo_zeta": 0.21750260565486668,
+ "servo_slew": 284.706786,
+ "link_k": 8.921436158557025,
+ "link_c": 0.09185034345972501,
+ "servo_inertia": 0.0,
+ "servo_compliance": 0.0,
+ "left_play": 0.0,
+ "right_play": 0.0,
+ "left_band": 0.0,
+ "right_band": 0.0,
+ "band_k": 0.0,
+ "right_gain": 1.041818,
+ "prop_torque": 0.01156299149673845,
+ "prop_momentum": 0.0,
+ "rotor_momentum": 0.0027998921512888478,
+ "inflow_damping": 0.0,
+ "edgewise_damping": 0.0,
+ "wash": 0.7528876003450673,
+ "wash_z": 0.020939,
+ "pitch_wake": 0.0,
+ "wake_tau": 0.771754,
+ "roll_pendulum": 0.0,
+ "pitch_pendulum": 0.0,
+ "drag_z_x": 0.128825,
+ "drag_z_y": 0.152306,
+ "speed_moment2": 0.0,
+ "tilt_speed": 0.0,
+ "tilt_push_speed": 0.0,
+ "roll_from_yaw": 0.056306128044146,
+ "yaw_from_roll": -0.017260905023084167,
+ "com_x": 0.000159,
+ "vx_pitch": 9.81,
+ "vx_drag": 0.0,
+ "vy_roll": -9.81,
+ "vy_drag": 0.0,
+ "tilt_push": 0.78,
+ "roll_push": 0.0,
+ "pitch_push": 0.0,
+ "yaw_push": 0.0,
+ "roll_push_sd": 1.0962,
+ "pitch_push_sd": 0.5964,
+ "yaw_push_sd": 0.2678,
+ "drone": "20:50:0d:8b:7e:68",
+ "geometry": "geometry_2026-11-12_raised.json",
+ "thrust_level": 1.2428,
+ "hover_thrust": [
+  4.1498,
+  4.1389
+ ],
+ "source": "airframe_2026-11-15_plant.json with the servos' own deadband (servo_deadband 0.6 degrees: each servo's controller does not answer a position error within 0.3 degrees either side) in place of the links' play (left_play 0.30, right_play 0.15 degrees, now 0), every other term as fitted there (models/NOTES.md 'Servo deadband'). The deadband is upstream of the link, so the bands' preload does not take it up as it did the play: it is the small-signal lag the hold's 2.3-2.5 Hz shake shows with the bands on and off alike, while the bursts' and doublets' large steps barely see it. Chosen on the scorecard (sw/sim/fit_plant.py --score, the plant's training and held-out lists; 0.4-0.7 degrees within 0.004 of each other) and the closed loop (sw/sim/scorecard_closed.py, six hovers): training 0.959 -> 0.952, held out 0.882 -> 0.866, the shake's frequency 2.36-2.50 Hz against the logs' 2.29-2.50 (2.71-2.86 before). Refits with it free (all 31 terms, or the actuator terms with the closed loop weighted) fitted training better and held out worse.",
+ "tilt_authority": 1.5684021792654697,
+ "climb_inflow": 0.0,
+ "speed_range": 0.0,
+ "rotor_drag_h": 0.026703981801600846,
+ "rotor_inflow": 0.36961314441800835,
+ "momentum_tilt": 1.0,
+ "rotor_drag": [
+  0.0,
+  0.0
+ ],
+ "observer": {
+  "correlation": 26.331,
+  "sd": [
+   6.759,
+   11.987,
+   7.862
+  ],
+  "noise": [
+   0.804,
+   6.077,
+   9.57
+  ]
+ },
+ "configurations": {
+  "indoor_nobands": {
+   "motor_tau": 0.0919813649950596,
+   "right_motor_tau": 0.0919813649950596
+  },
+  "indoor_bands": {
+   "motor_tau": 0.0919813649950596,
+   "right_motor_tau": 0.0919813649950596
+  },
+  "bands_old_esc": {
+   "motor_tau": 0.0919813649950596,
+   "right_motor_tau": 0.0919813649950596
+  }
+ },
+ "flap_lever": 0.14232644881676534,
+ "inflow_recovery": 0.1929977240204511,
+ "inflow_steady": 0.21213887368755904,
+ "servo_deadband": 0.6
+}

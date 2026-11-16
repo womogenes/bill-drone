@@ -3,7 +3,7 @@ The pitch frequency response, servo command to pitch rate, measured from the log
 
 Measured: over the hovering spans (3 s after the motors start to 2 s before they stop, flips left out) of the chosen flights, the cross-spectrum of the common servo command (the two servos' mean physical tilt, degrees) with the gyro's pitch rate (deg/s) over the command's spectrum (Welch, 10.24 s segments), with the coherence. In the hold's own pitch shake (2.3-2.4 Hz in every configuration) the coherence is 0.97-1.00, so there the estimate is the plant's whatever the loop; down to 0.5 Hz the pilots' targets used as the instrument (target to rate over target to command) agree with it where they carry power.
 
-Computed: the plant (rigid.Sim's numpy step, play set to zero, which has no slope where the horn sits inside it) linearized about a hover at the flight's thrust trim by central differences of one control tick in its full state (position, velocity, attitude as a rotation vector, body rates, the motors' thrusts, each servo's horn and assembly angle and speed, the lagged tilted thrust), the input a common step of the servos' goal; the servo dead time as a phase, the gyro as the tick's mean rate and the command acting from the tick after it was logged (scorecard.predict), so the two are the same quantity.
+Computed: the plant (rigid.Sim's numpy step, play and the servo's deadband set to zero, which have no slope where the horn sits inside it) linearized about a hover at the flight's thrust trim by central differences of one control tick in its full state (position, velocity, attitude as a rotation vector, body rates, the motors' thrusts, each servo's horn and assembly angle and speed, the lagged tilted thrust), the input a common step of the servos' goal; the servo dead time as a phase, the gyro as the tick's mean rate and the command acting from the tick after it was logged (scorecard.predict), so the two are the same quantity.
 """
 
 import argparse
@@ -43,7 +43,7 @@ def measured(flights, segment=1024):
 
 def linearize(plant, epsilon=1e-4):
     """A and B of one control tick about a level hover at the plant's thrust trim (x_{k+1} = A x_k + B u_k, u the common servo goal in degrees), and the index of the pitch rate in the state."""
-    params = dict(plant["airframe"]) | {"left_play": 0.0, "right_play": 0.0}
+    params = dict(plant["airframe"]) | {"left_play": 0.0, "right_play": 0.0, "servo_deadband": 0.0}
     plant = dict(plant) | {"airframe": params, "disturbances": []}
     # Position, velocity, attitude, body rates (3 each), each side's motor thrust, horn angle and speed, tilt and tilt speed, the lagged tilted thrust.
     size = 23

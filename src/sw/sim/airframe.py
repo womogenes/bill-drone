@@ -48,6 +48,8 @@ PARAMS = {
     "flap_lever": (-0.1, 0.5, 0.0),
     # The inflow's thrust loss is the blade element's at the rotor's speed; a rotor climbing steadily is unloaded and its motor speeds up and wins most of it back. inflow_recovery (s): how fast (0: never, as before); inflow_steady: the share of the loss that stays in a steady climb. So the 2-3 Hz roll sees all of rotor_inflow and a steady climb inflow_steady of it.
     "inflow_recovery": (0.0, 1.0, 0.0), "inflow_steady": (0.0, 1.0, 1.0),
+    # The servo's own deadband (degrees, 2026-11-16; 0 in older models): its controller drives the horn on the position error less half this either side, so it does not answer errors inside it. Upstream of the link, so the bands' preload does not take it up as it does the play.
+    "servo_deadband": (0.0, 3.0, 0.0),
     "inflow_damping": (-2.0, 5.0, 0.2), "edgewise_damping": (-2.0, 5.0, 0.05),
     "wash": (-1.0, 1.5, 0.0), "wash_z": (-0.2, 0.3, 0.02), "pitch_wake": (-1.5, 1.5, 0.0), "wake_tau": (0.01, 2.0, 0.15), "pitch_ground": (-1, 3, 0.0), "ground_scale": (0.01, 2.0, 0.1),
     "roll_pendulum": (-0.2, 0.2, 0.0), "pitch_pendulum": (-0.2, 0.2, 0.0), "drag_z_x": (-0.5, 0.5, 0.017), "drag_z_y": (-0.5, 0.5, 0.06), "speed_moment2": (-0.05, 0.05, 0.0), "tilt_speed": (-0.3, 0.3, 0.0), "tilt_push_speed": (0.0, 0.2, 0.0),
@@ -57,7 +59,7 @@ PARAMS = {
 }
 KEYS = list(PARAMS)
 # Terms a parameter set may leave out (they then stay off).
-OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below", "climb_inflow", "speed_range", "rotor_drag_h", "rotor_inflow", "momentum_tilt", "flap_lever", "inflow_recovery")
+OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below", "climb_inflow", "speed_range", "rotor_drag_h", "rotor_inflow", "momentum_tilt", "flap_lever", "inflow_recovery", "servo_deadband")
 # The running time (s) of a motor that has long been spinning.
 RUNNING = 10.0
 
@@ -376,11 +378,14 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
     pitch_sum = np.zeros(n)
     # The servo's own stiffness (2026-11-08): the horn's loop sees the link's spring and damper torque as a load, so under the assembly's inertia and the body's swing it deflects by servo_compliance per N·m. On the 2026-11-02 chirps the real servo-to-pitch response rises to 1.3x the geometric at 2-3 Hz, which a horn that holds its position whatever the load cannot do.
     give = w2 * p.get("servo_compliance", 0.0) * J
+    dead = p["servo_deadband"] / 2
     for _ in range(SUB):
+        error = goal - state.horn
+        error = np.sign(error) * np.maximum(np.abs(error) - dead, 0)
         gap = state.horn - state.tilt
         gap = np.sign(gap) * np.maximum(np.abs(gap) - half, 0)
         load = c2 * gap + cz * (state.hvel - state.tvel) * (gap != 0)
-        state.hvel = np.clip(state.hvel + (w2 * (goal - state.horn) - z2 * state.hvel - give * load) * h, -p["servo_slew"], p["servo_slew"])
+        state.hvel = np.clip(state.hvel + (w2 * error - z2 * state.hvel - give * load) * h, -p["servo_slew"], p["servo_slew"])
         state.horn = state.horn + state.hvel * h
         gap = state.horn - state.tilt
         gap = np.sign(gap) * np.maximum(np.abs(gap) - half, 0)

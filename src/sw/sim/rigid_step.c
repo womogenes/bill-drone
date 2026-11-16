@@ -20,7 +20,7 @@ typedef struct {
     double link_k, link_c, left_play, right_play, left_band, right_band, band_k, right_gain;
     double prop_torque, prop_momentum, inflow_damping, edgewise_damping, wash, pitch_wake, wake_tau;
     double roll_pendulum, pitch_pendulum, roll_from_yaw, yaw_from_roll;
-    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance, rotor_momentum, motor_tau_down, motor_idle, motor_floor, motor_coast, motor_ceiling, coast_below, climb_inflow, speed_range, speed_moment2, rotor_drag_h, rotor_inflow, momentum_tilt, flap_lever, inflow_recovery, inflow_steady;
+    double vx_pitch, vx_drag, vy_roll, vy_drag, tilt_push, motor_start, servo_compliance, rotor_momentum, motor_tau_down, motor_idle, motor_floor, motor_coast, motor_ceiling, coast_below, climb_inflow, speed_range, speed_moment2, rotor_drag_h, rotor_inflow, momentum_tilt, flap_lever, inflow_recovery, inflow_steady, servo_deadband;
     double Ixx, Iyy, Izz, arm, cx, cy, tilt_arm, hr, hx, hy, J, dz, lever;
     double level, mean_left, mean_right;
     double mass, throttle_max, servo_limit, ground_k, ground_c, friction, air_drag, tilt_share;
@@ -254,7 +254,10 @@ void rigid_step(size_t n, size_t history, const Params *p, const double *table, 
                 double before = st_horn[s] - st_tilt[s];
                 before = sign(before) * fmax(fabs(before) - half[s], 0);
                 double load = c2 * before + cz * (st_hvel[s] - st_tvel[s]) * (before != 0 ? 1.0 : 0.0);
-                st_hvel[s] = clip(st_hvel[s] + (w2[s] * (goal[s] - st_horn[s]) - z2[s] * st_hvel[s] - give[s] * load) * h, -p->servo_slew, p->servo_slew);
+                // The servo's deadband (airframe.py step).
+                double error = goal[s] - st_horn[s];
+                error = sign(error) * fmax(fabs(error) - p->servo_deadband / 2, 0);
+                st_hvel[s] = clip(st_hvel[s] + (w2[s] * error - z2[s] * st_hvel[s] - give[s] * load) * h, -p->servo_slew, p->servo_slew);
                 st_horn[s] = st_horn[s] + st_hvel[s] * h;
                 double gap = st_horn[s] - st_tilt[s];
                 gap = sign(gap) * fmax(fabs(gap) - half[s], 0);
