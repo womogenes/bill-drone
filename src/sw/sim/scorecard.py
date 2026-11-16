@@ -1,5 +1,5 @@
 """
-Drone 1's sim scorecard: how well a plant predicts every flight we have recorded, as one number and per flight: uv run -m sw.sim.scorecard [--plant airframe_2026-11-12_raised.json ...] [--set k=v,...] [--flights NAME ...] [--kinds hover_calm,...] [--workers 8] [--json out.json] [--compare base.json] [--figures DIR] [--history] [--inventory]
+Drone 1's sim scorecard: how well a plant predicts every flight we have recorded, as one number and per flight: uv run -m sw.sim.scorecard [--plant airframe_2026-11-12_raised.json ...] [--set k=v,...] [--flights NAME ...] [--kinds hover_calm,...] [--workers 8] [--json out.json] [--compare base.json] [--figures DIR] [--history] [--inventory] [--firmware]
 
 The rule for plant changes: a plant change must lower the total without worsening any single flight's score beyond noise (--compare base.json flags a flight whose score rises by more than twice its paired block-jackknife standard error, or by 0.05 where it is too short for one). Score held-out flights apart from the ones a plant was fitted on (the "held out" total; scorecard_flights.json "training").
 
@@ -7,6 +7,7 @@ The standard (the user's): at every time step we have all the sensor readings an
 - The hidden state (the servo horns' and assemblies' angles and rates, the motors' thrusts, the command history the dead times read) is reconstructed by running the plant over the --warmup s (1) before t on the logged throttles and servo commands, the body's rates, attitude, velocity and height set to the log's every tick, so at t the actuators are already moving as the commands moved them.
 - From the log's state at t (gyro, roll and pitch, the Kalman filter's velocity turned into the heading-free frame, its height above where it last rested) the plant flies on alone on the logged commands, and is compared with the log at the horizons 0.05, 0.2, 0.5 and 1 s: the gyro (deg/s, each tick's mean rotation as rigid.py observes it, clipped at the recording's full scale), roll and pitch (deg, against the firmware's estimate), the specific force (g, rigid.py's accelerometer with the configuration's bias, clipped at the accelerometer's ±2 g) and the height change (m, the filter's, where it is good and not below the ground).
 - The log's gyro and accelerometer are compared through a zero-phase 15 Hz low-pass (the rotors' vibration, which no plant models, would otherwise set a floor under every short horizon); the start state takes the raw gyro. Targets where the gyro or the accelerometer clipped, and the attitude for 2 s after a gyro clip, are left out, and so is any start whose warm-up or horizon spans samples the link lost.
+With --firmware the firmware flies the horizon (the scorecard to judge plants by): past the start tick the plant flies the logged commands plus what the firmware's own attitude controller (flight.Controller, with INDI and the servos' predictor as the flight's settings set them) changes in them for the plant's departure from the log, on the logged targets and collective, so a prediction answers its own errors as the drone's controller answered the drone's instead of letting the airframe's unstable pitch-speed mode grow them (open loop every plant is worse than do-nothing past 0.5 s). The controller's state at each start (integrators, filters, INDI's actuator history) comes from one replay of the firmware over the whole log on the logged gyro and attitude; flying the change against that replay cancels what it does not reproduce (the pack's voltage compensation, older firmware: the replay's throttles sit 25-40 below the logged, its servos within 0.4-1.6 degrees), and a plant that tracks the log flies the logged commands.
 All start points of a flight fly at once as the rigid.Sim's lanes (the C backend): every flight on three plants scores in under a minute on a laptop (--workers per flight).
 
 Which flights (--inventory writes models/scorecard/inventory.json): every drone 1 recording in sw/recordings inside a configuration's dates whose motors ran (both throttles over 300) and that was airborne for 0.3 s or more, unless scorecard_flights.json excludes it with a reason; the rest are listed there with theirs. A configuration is what changed physically between sessions: the bands (preload, tilt offset and accelerometer bias), the thrust table (the old ESCs' firmware table, flight.thrust_table, or the 2026-11-14 stand's for the Nuofany ESCs), what it rests on, and for the drone before its pivots were raised the geometry (--history scores those apart: their configurations' geometry, --plant era each one's model of its time).
@@ -21,9 +22,11 @@ What it does not model: the firmware's attitude estimator (the plant's true roll
 """
 
 import argparse
+import ctypes
 import json
 import math
 import time as clock
+from array import array
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -40,7 +43,7 @@ from sw.sim.burst_replay import quaternion
 from sw.sim.takeoff_test import LEG_FEET
 
 FLIGHTS = Path(__file__).with_name("scorecard_flights.json")
-PLANTS = ("airframe_2026-11-16_plant.json", "airframe_2026-11-15_plant.json", "airframe_2026-11-12_raised.json")
+PLANTS = ("airframe_2026-11-16b_plant.json", "airframe_2026-11-16_plant.json", "airframe_2026-11-15_plant.json", "airframe_2026-11-12_raised.json")
 HORIZONS = (0.05, 0.2, 0.5, 1.0)
 CHANNELS = ("roll_rate", "pitch_rate", "yaw_rate", "roll", "pitch", "accel_x", "accel_y", "accel_z", "height")
 UNITS = ("deg/s", "deg/s", "deg/s", "deg", "deg", "g", "g", "g", "m")
@@ -354,6 +357,61 @@ def flight_terms(flight, plant, warmup, every=0.2, rounds=3):
     return terms
 
 
+# --firmware: the firmware flies the horizon (main sets it before the workers start).
+FIRMWARE = False
+CONTROL = {key: 6 + F.TUNING_LAYOUT.index(key) for key in ("base_throttle", "roll", "pitch", "yaw_rate", "left_thrust_scale", "right_thrust_scale")}
+DIRECTIONS = np.array([F.MODEL["left_servo_direction"], F.MODEL["right_servo_direction"]])
+replays = {}
+
+
+def firmware(flown):
+    """The flight's attitude controller and INDI as its settings configure them, reset."""
+    controller = F.Controller()
+    controller.configure(flown)
+    controller.command[F.YAW_I] = flown.get("yaw_i", 0.0)
+    for side in ("left", "right"):
+        controller.command[CONTROL[f"{side}_thrust_scale"]] = flown.get(f"{side}_thrust_scale", 1.0)
+    controller.reset()
+    return controller, F.Incremental(flown)
+
+
+def fly(controller, indi, flown, attitude, gyro, q, targets, base, holding, height, last_base):
+    """One firmware tick (flight_rt.c fly's attitude part): INDI's update, the controller, what was sent. Returns the throttles and the servos' physical forward tilts (rad)."""
+    command = controller.command
+    command[CONTROL["base_throttle"]], command[CONTROL["roll"]], command[CONTROL["pitch"]], command[CONTROL["yaw_rate"]] = base, *targets
+    if indi.on:
+        indi.update(gyro, holding, height, last_base)
+        indi.apply(controller)
+    left, right, left_angle, right_angle = controller.update(attitude, gyro, A.DT, q)
+    throttles = np.array([round(min(max(left, 0.0), 1200.0)), round(min(max(right, 0.0), 1200.0))], float) * (base > 0)
+    tilt = DIRECTIONS * (np.array([left_angle, right_angle]) - np.radians([flown.get("left_trim", 0.0), flown.get("right_trim", 0.0)]))
+    if indi.on:
+        indi.sent(list(tilt), [F.thrust(t) * command[CONTROL[f"{side}_thrust_scale"]] if t > 0 else 0.0 for side, t in zip(("left", "right"), throttles)])
+    return throttles, tilt
+
+
+def replay(flight):
+    """The firmware over the whole log on its gyro, attitude, targets and collective: after each tick its controller's and INDI's state and its commands."""
+    if flight.name in replays:
+        return replays[flight.name]
+    path = recording(flight.name)
+    flown = settings(path) | {"enabled": 1}
+    df = read_flight(path)[0].reset_index(drop=True)
+    targets = np.column_stack([np.radians(df[c].fillna(0).to_numpy(float)) for c in ("target_roll_deg", "target_pitch_deg", "target_yaw_deg_s")])
+    base = df["base_throttle"].fillna(0).to_numpy(float)
+    height = np.nan_to_num(flight.height)
+    controller, indi = firmware(flown)
+    n = len(flight.time)
+    out = {"flown": flown, "targets": targets, "base": base, "height": height, "states": np.zeros((n, len(controller.state))), "indis": [], "fades": np.zeros(n), "throttles": np.zeros((n, 2)), "tilts": np.zeros((n, 2))}
+    for t in range(n):
+        out["throttles"][t], out["tilts"][t] = fly(controller, indi, flown, tuple(flight.attitude[t]), tuple(flight.gyro[t]), tuple(flight.quat[t]), targets[t], base[t], bool(flight.airborne[t]), height[t], base[max(t - 1, 0)])
+        out["states"][t] = controller.state
+        out["indis"].append(bytes(indi.state))
+        out["fades"][t] = indi.fade
+    replays[flight.name] = out
+    return out
+
+
 def predict(flight, plant, index, warmup, horizon):
     """The plant's predictions [lane, step, channel] for steps 1..horizon ticks after each start index, its hidden state warmed up over the warmup ticks before it with the body pinned to the log."""
     n = len(index)
@@ -387,7 +445,24 @@ def predict(flight, plant, index, warmup, horizon):
                 z0 = sim.pos[:, 2].copy()
         if observer:
             sim.torque_bias[:] = estimate * math.exp(-(step - 1) * A.DT / observer["correlation"]) if step >= 1 else 0.0
-        sim.step(throttle[:, j], tilt[:, j])
+        if FIRMWARE and step >= 2:
+            # The start tick flies the logged commands (computed from the start state); from the next, each lane's firmware, as the replay left it after the start tick, answers the plant's own state.
+            if step == 2:
+                played = replay(flight)
+                lanes = [firmware(played["flown"]) for _ in index]
+                for (controller, indi), start in zip(lanes, index):
+                    controller.state[:] = array("f", played["states"][start])
+                    ctypes.memmove(ctypes.byref(indi.state), played["indis"][start], ctypes.sizeof(indi.state))
+                    indi.fade = played["fades"][start]
+            up = R.rotation(sim.quat)[:, 2, :]
+            roll, pitch = np.arctan2(up[:, 1], up[:, 2]), np.arctan2(-up[:, 0], np.hypot(up[:, 1], up[:, 2]))
+            t = np.clip(index + step - 1, 0, len(flight.time) - 1)
+            moved = np.zeros((n, 2)), np.zeros((n, 2))
+            for i, (controller, indi) in enumerate(lanes):
+                moved[0][i], moved[1][i] = fly(controller, indi, played["flown"], (roll[i], pitch[i]), tuple(sim.turned[i]), tuple(sim.quat[i]), played["targets"][t[i]], played["base"][t[i]], bool(flight.airborne[t[i]]), played["height"][t[i]], played["base"][max(t[i] - 1, 0)])
+            sim.step(np.where(throttle[:, j] > 0, np.clip(throttle[:, j] + moved[0] - played["throttles"][t], 0, 1200), 0.0), tilt[:, j] + moved[1] - played["tilts"][t])
+        else:
+            sim.step(throttle[:, j], tilt[:, j])
         if observer and step <= 0:
             measured = (flight.gyro[k[:, j]] - flight.gyro[before]) / A.DT
             usable = ~(flight.clipped[k[:, j]] | flight.clipped[before]) & flight.airborne[k[:, j]] & flight.airborne[before] & (sim.contact_now == 0)
@@ -696,7 +771,10 @@ def main():
     parser.add_argument("--inventory", action="store_true", help="classify every recording into models/scorecard/inventory.json instead of scoring")
     parser.add_argument("--observer", help="the disturbance state's filter and correlation times (s), FILTER,CORRELATION, over every plant's own (scorecard.predict); 0 turns it off")
     parser.add_argument("--history", action="store_true", help="score the flights before the pivots were raised (their configurations' geometry; --plant era is each one's model of its time) instead")
+    parser.add_argument("--firmware", action="store_true", help="the firmware flies each horizon from its second tick (see above)")
     args = parser.parse_args()
+    global FIRMWARE
+    FIRMWARE = args.firmware
     listing = flight_list(args.list)
     configurations = listing["configurations"]
     if args.inventory:
