@@ -1,5 +1,5 @@
 """
-Fit drone 1's plant on the scorecard's own measure (sw/sim/scorecard.py): the named terms of an airframe moved by CMA-ES to lower the scorecard total (the mean over kinds of each flight's open-loop prediction error over the do-nothing prediction's) on a training set of flights, the rest held out: uv run -m sw.sim.fit_plant --base PLANT.json --fit name[=low:high],... [--train PREFIX ...] [--hold PREFIX ...] [--every 0.2] [--workers 32] [--generations 40] [--out fitted.json]
+Fit drone 1's plant on the scorecard's own measure (sw/sim/scorecard.py): the named terms of an airframe moved by CMA-ES to lower the scorecard total (the mean over kinds of each flight's prediction error over the do-nothing prediction's; open loop, or with --firmware the firmware in the loop as scorecard.py --firmware) on a training set of flights, the rest held out: uv run -m sw.sim.fit_plant --base PLANT.json --fit name[=low:high],... [--train PREFIX ...] [--hold PREFIX ...] [--every 0.2] [--workers 32] [--generations 40] [--firmware] [--out fitted.json]
 
 A name is an airframe term (airframe.PARAMS, bounds from there unless given), a geometry term the airframe then carries as measured ("geometry:pitch_inertia", "geometry:com_z"), a configuration's own term ("CONFIGURATION:term", e.g. "nobands_new_esc:motor_tau": the plant's "configurations"; several joined by + share one value), or the disturbance state's times ("observer:filter", "observer:correlation"). Side-paired servo and motor terms set alone set both sides (scorecard.plant_for). Each flight's own terms (its CoM forward and left and its yaw push, scorecard.flight_terms) are found on the best plant so far every --terms-every generations and held in between. Flights are read once per worker. --score only scores the base (training and held out) with the same machinery.
 
@@ -31,9 +31,10 @@ def flight(entry):
     return cache[entry["name"]]
 
 
-def initialize(path):
+def initialize(path, firmware=False):
     global listing
     listing = S.flight_list(path)
+    S.FIRMWARE = firmware
 
 
 def apply(base, names, values):
@@ -248,12 +249,13 @@ def main():
     parser.add_argument("--terms-every", type=int, default=10)
     parser.add_argument("--out", default="fitted.json")
     parser.add_argument("--score", action="store_true")
+    parser.add_argument("--firmware", action="store_true", help="score with the firmware in the loop (scorecard.py --firmware)")
     parser.add_argument("--response", type=float, default=0.0, help="weight of the frequency-response misfit in the cost")
     parser.add_argument("--closed", type=float, default=0.0, help="weight of the closed-loop misfit in the cost")
     parser.add_argument("--closed-flights", nargs="*", default=[], help="flights (full recording names) flown closed loop for it")
     args = parser.parse_args()
     import cma
-    initialize(args.list)
+    initialize(args.list, args.firmware)
     base = json.loads(Path(args.base).read_text()) if Path(args.base).exists() else A.model(args.base)
     everything = S.entries(listing)
     held = [e for e in everything if any(e["name"].startswith(p) for p in args.hold)]
@@ -263,9 +265,9 @@ def main():
     names = [s[0] for s in specs]
     bounds = np.array([bounds_of(s[0], s[1] if len(s) > 1 else None) for s in specs])
     began = clock.time()
-    with ProcessPoolExecutor(args.workers, initializer=initialize, initargs=(args.list,)) as pool:
+    with ProcessPoolExecutor(args.workers, initializer=initialize, initargs=(args.list, args.firmware)) as pool:
         terms = find_terms(pool, train + held, base, args.warmup)
-        initialize(args.list)
+        initialize(args.list, args.firmware)
         measured = responses(train) if args.response else []
         if measured:
             print("frequency responses measured for " + ", ".join(m[0]["configuration"] for m in measured), flush=True)

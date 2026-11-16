@@ -714,7 +714,7 @@ def plot(task):
             ax.tick_params(labelsize=7)
     axes[0].legend(fontsize=7, loc="upper left", ncol=len(plants) + 1)
     axes[-1].set_xlabel("s from the recording's start", fontsize=8)
-    lines = [f"{flight.name} UTC, {entry['kind']} ({entry['configuration']}){': ' + entry['note'] if entry.get('note') else ''}. Black: the log; colors: each plant's open-loop prediction from the logged state 0.2 s (upper rows) and 1 s (lower rows) earlier, on the logged commands."]
+    lines = [f"{flight.name} UTC, {entry['kind']} ({entry['configuration']}){': ' + entry['note'] if entry.get('note') else ''}. Black: the log; colors: each plant's prediction from the logged state 0.2 s (upper rows) and 1 s (lower rows) earlier, " + ("the firmware in the loop." if FIRMWARE else "on the logged commands.")]
     lines += [f"{label_of(name)}: {captions.get(name, 'not scored').replace(chr(10), '; ')}" for name in plants]
     fig.suptitle("\n".join(lines), fontsize=8, x=0.01, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 1 - (0.012 * (len(plants) + 1) * 14 / (1.25 * 2 * len(channels) + 0.6 + 0.35 * len(plants)))))
