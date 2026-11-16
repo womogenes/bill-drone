@@ -10,4 +10,4 @@ Host simulations of drone 1 on the firmware's own C (fw/drone/main, compiled her
 
 **Hover**: sweep.py (one flight, nominal with no arguments), outdoor.py (GPS-held hovers in wind), landing_test.py (landings, the battery tray, replays of recorded landings), takeoff_test.py (takeoffs from tilted rests).
 
-**Fitting and checking plants**: identify_airframe.py (closed-loop identification from recordings), burst_replay.py (the bursts open loop), scorecard.py and scorecard_closed.py (every flight's prediction score and closed-loop rerun).
+**Fitting and checking plants**: fit_plant.py (the one plant, fitted on the scorecard), scorecard.py and scorecard_closed.py (every flight's prediction score and closed-loop rerun).

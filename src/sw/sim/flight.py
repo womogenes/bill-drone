@@ -133,8 +133,7 @@ COMMAND_SIZE = ctypes.c_size_t.in_dll(library, "flight_command_size").value
 
 def body_quaternion(q, roll, pitch):
     """flight_rt.c relative_attitude: the estimate's quaternion turned by a level reference's roll and pitch (radians), q ⊗ zero⁻¹."""
-    cr, sr, cp, sp = math.cos(roll / 2), math.sin(roll / 2), math.cos(pitch / 2), math.sin(pitch / 2)
-    z = (cr * cp, sr * cp, cr * sp, -sr * sp)
+    z = from_euler(roll, pitch)
     return (q[0] * z[0] + q[1] * z[1] + q[2] * z[2] + q[3] * z[3], -q[0] * z[1] + q[1] * z[0] - q[2] * z[3] + q[3] * z[2],
             -q[0] * z[2] + q[1] * z[3] + q[2] * z[0] - q[3] * z[1], -q[0] * z[3] - q[1] * z[2] + q[2] * z[1] + q[3] * z[0])
 

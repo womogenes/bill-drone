@@ -10,7 +10,7 @@ import argparse
 import math
 
 import numpy as np
-from scipy.signal import csd, welch
+from scipy.signal import csd
 
 from sw.sim import airframe as A
 from sw.sim import rigid as R

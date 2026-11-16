@@ -14,7 +14,7 @@ import numpy as np
 
 # The trace's columns (flip_firmware TRACE, as the harness records it): s from the flip's start, body rates (deg/s), throttles, servo angles (deg), the flip's phase, the height (m), roll and pitch (deg), the pack (V), the assemblies' tilts (deg).
 COLUMNS = ("t", "p", "q", "r", "left", "right", "left_servo", "right_servo", "phase", "height", "roll", "pitch", "volts", "left_tilt", "right_tilt")
-# The pack's sag (V at no load, V per newton^1.5 summed over the motors) and the thrust_voltage the drone flew (burst_replay's harness, william/burst-repro).
+# The pack's sag (V at no load, V per newton^1.5 summed over the motors) and the thrust_voltage the drone flew (william/burst-repro's harness).
 SAG, THRUST_VOLTAGE = (16.196, 0.0161), 16.1
 
 

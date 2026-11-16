@@ -12,7 +12,7 @@ All start points of a flight fly at once as the rigid.Sim's lanes (the C backend
 
 Which flights (--inventory writes models/scorecard/inventory.json): every drone 1 recording in sw/recordings inside a configuration's dates whose motors ran (both throttles over 300) and that was airborne for 0.3 s or more, unless scorecard_flights.json excludes it with a reason; the rest are listed there with theirs. A configuration is what changed physically between sessions: the bands (preload, tilt offset and accelerometer bias), the thrust table (the old ESCs' firmware table, flight.thrust_table, or the 2026-11-14 stand's for the Nuofany ESCs), what it rests on, and for the drone before its pivots were raised the geometry (--history scores those apart: their configurations' geometry, --plant era each one's model of its time).
 
-Each flight's own terms, the same for every plant: the thrust trim (each lane's: the median table thrust of the 5 s of airborne ticks before it carries the weight, so the pack's sag is followed; the plant's level and split are the flight's median, as identify_airframe takes each flight's), and its CoM forward and left of the plant's and a steady yaw push (flight_terms: the battery is reseated between flights; a CoM's torque scales with the thrust as the flights climb and descend). A flight with too little hover for them takes the nearest flight's in its configuration. A plant's JSON may also carry "configurations": {name: {term: value}} for terms it has per configuration.
+Each flight's own terms, the same for every plant: the thrust trim (each lane's: the median table thrust of the 5 s of airborne ticks before it carries the weight, so the pack's sag is followed; the plant's level and split are the flight's median), and its CoM forward and left of the plant's and a steady yaw push (flight_terms: the battery is reseated between flights; a CoM's torque scales with the thrust as the flights climb and descend). A flight with too little hover for them takes the nearest flight's in its configuration. A plant's JSON may also carry "configurations": {name: {term: value}} for terms it has per configuration.
 
 The score: each channel's RMS error at each horizon over a flight's start points, over the RMS of the do-nothing prediction on the same start points (the log's own change over the horizon), averaged within the channel groups (rates, attitude, specific force, height where logged), then over the groups and the horizons. 1 is as good as predicting that nothing changes; 0 is perfect. Hovers held by the controller change little, so open-loop predictions of them score near 1 even when they follow the shake well. A kind's score is the mean of its flights'; takeoffs (the first 2.5 s with the motors on), landings and cuts (the last 2.5 s, as the flight ended by landing or by a stop or the tip cut) of the whole-flight entries are pooled into kinds of their own, and their starts are left out of the flights' scores; hops (under 5 s airborne), divergences and the windowed bursts are scored whole. The total is the mean over the kinds, so many hovers do not outweigh the few bursts. Each flight's noise is its score's standard error by a block jackknife over 2 s blocks of start points.
 
@@ -37,12 +37,13 @@ from sw.flight_log import FIRST_DRONE, RECORDINGS, drone, events, parse_settings
 from sw.sim import airframe as A
 from sw.sim import flight as F
 from sw.sim import rigid as R
-from sw.sim.burst_replay import BAND_TILT, BANDS
 from sw.sim.flip_esc import STAND
-from sw.sim.burst_replay import quaternion
 from sw.sim.takeoff_test import LEG_FEET
 
 FLIGHTS = Path(__file__).with_name("scorecard_flights.json")
+# The bands' preload as the raised pivots' fit has it (N·m) and their tilt offset (degrees), for plants that do not carry their own.
+BANDS = {"left_band": 0.07189, "right_band": 0.003407}
+BAND_TILT = -2.5
 PLANTS = ("airframe_2026-11-16b_plant.json", "airframe_2026-11-16_plant.json", "airframe_2026-11-15_plant.json", "airframe_2026-11-12_raised.json")
 HORIZONS = (0.05, 0.2, 0.5, 1.0)
 CHANNELS = ("roll_rate", "pitch_rate", "yaw_rate", "roll", "pitch", "accel_x", "accel_y", "accel_z", "height")
@@ -88,7 +89,7 @@ def flight_list(path=FLIGHTS):
 
 
 def airborne_mask(on, height, vertical):
-    """Airborne ticks: the motors on and, with the filter's height, above AIRBORNE_HEIGHT; without one (before 2026-11-09), from the liftoff (the vertical specific force past 1.12 g with the motors on, as identify_airframe finds it) to the motors' stop."""
+    """Airborne ticks: the motors on and, with the filter's height, above AIRBORNE_HEIGHT; without one (before 2026-11-09), from the liftoff (the vertical specific force past 1.12 g with the motors on) to the motors' stop."""
     if np.isfinite(height[on]).any():
         return on & ~(height < AIRBORNE_HEIGHT)
     lifted = on & (vertical > 1.12)
@@ -195,7 +196,7 @@ class Flight:
         directions = np.array([F.MODEL["left_servo_direction"], F.MODEL["right_servo_direction"]])
         self.tilt = np.radians(directions * (df[["left_servo_deg", "right_servo_deg"]].to_numpy(float) - trims))
         self.attitude = df[["roll_deg", "pitch_deg"]].to_numpy() * A.DEG
-        self.quat = np.array([quaternion(*a) for a in self.attitude])
+        self.quat = np.array([F.from_euler(*a) for a in self.attitude])
         self.accel = df[["ax_g", "ay_g", "az_g"]].to_numpy()
         self.flip = df["flip"].fillna(0).to_numpy()
         # Samples the link lost: a start's warm-up and horizon must have none (the commands and the log would slip against each other).
@@ -284,7 +285,7 @@ def plant_for(flight, name, overrides):
     if bands == "plant":
         preload = {}
     params = params | preload | params.get("configurations", {}).get(flight.entry["configuration"], {}) | overrides
-    # A side-paired term set alone sets both sides (burst_replay.PAIRED).
+    # A side-paired term set alone sets both sides .
     for key, other in (("servo_delay", "right_servo_delay"), ("servo_wn", "right_servo_wn")):
         if key in overrides and other not in overrides:
             params[other] = overrides[key]

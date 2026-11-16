@@ -176,11 +176,6 @@ class Sim:
         self.resolved = A.resolve(self.p, g)
         self.push = np.tile([a.get("roll_push", 0.0), a.get("pitch_push", 0.0), a.get("yaw_push", 0.0)], (n, 1))
         self.inertia_scale = s("inertia")
-        # For controllers that allocate with the identified authority: angular acceleration per newton of table thrust difference, per newton of tilted thrust, per newton of differential tilted thrust.
-        c = self.resolved
-        self.k_roll = self.p["differential_slope"] * level * c["arm"] / c["Ixx"]
-        self.k_pitch = c["tilt_arm"] * self.p["tilt_gain"] / c["Iyy"]
-        self.k_yaw = (1 - self.p["wash"]) * c["arm"] / c["Izz"] * ones
         self.thrust_gain = np.stack([ones, a["right_thrust_gain"] * ones], -1)
         self.rotor_drag = np.array(plant.get("rotor_drag", (0.58, 0.34))) * s("drag")[:, None]
         # The share of the tilted thrust's horizontal force that moves the drone: tilt_push for models that carry it, all of it for older ones (sw/sim/sweep.py does the same).

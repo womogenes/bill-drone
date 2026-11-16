@@ -21,8 +21,8 @@ AIRFRAME = FF.AIRFRAME
 HIGH = {"hover_climb": 4.5, "hover_ceiling": 5.0, "flip_height": 4.0}
 # The tuning climbs there faster than the drone would (the climb is not what is tuned).
 FAST_CLIMB = {"hover_climb_rate": 1.0}
-# Fixed motor limits (flip.c FlipParams): each motor at least FLOOR of the weight (0.2 of 10.3 N is 2.1 N, about throttle 230 on the thrust table at the 1.3 thrust scale: the ESC keeps driving it, above the coast_below 150 where the first flip's cut motor coasted, and twice what the table's foot near throttle 100 gives), the full throttle range in no less than 0.12 s (about twice the motors' 0.066 s lag), at most throttle 1100 (92%).
-FLOOR, SLEW, THROTTLE_CAP = 0.2, 10000.0, 1100.0
+# Fixed motor limits (flip.c FlipParams): the full throttle range in no less than 0.12 s (about twice the motors' 0.066 s lag), at most throttle 1100 (92%).
+SLEW, THROTTLE_CAP = 10000.0, 1100.0
 # Searched: (name, low, high, log scale), each spanning flip_defaults' tuned value about threefold either way. The rate gains (track_roll, track_pitch, track_yaw, track_kp, brake) stop where the motors' 0.066 s lag and the slew's 0.12 s for the full range would make them chatter: a search left free took them there and the throttles swung between 200 and 1100 every 0.1 s. gyro_ff 0-16: the physics gives rotor_momentum over the pitch inertia, 3.4 at 0.018 and 9.5 at 0.05; yaw_ff 0-6: rotor_momentum over the yaw inertia, 1.8 at 0.02 and 4.5 at 0.05.
 SPACE = [
     ("ref_accel", 8.0, 80.0, True), ("ref_rate", 4.0, 30.0, True), ("ref_lead", 0.0, 0.2, False), ("track_slack", 0.4, 3.0, True),
