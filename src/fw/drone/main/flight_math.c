@@ -292,27 +292,26 @@ void flight_control(Controller *state, const Command *c, const float *table, siz
         state->pitch_i = clampf(state->pitch_i + c->pitch_i * pitch_seen * c->dt, -c->integral_limit, c->integral_limit);
     }
 
-    float roll_torque = model->roll_inertia * (c->roll_p * roll_error + state->roll_i - c->roll_damping * c->gx);
+    float roll_accel = c->roll_p * roll_error + state->roll_i - c->roll_damping * c->gx;
     float pitch_bias = clampf(c->pitch_bias, -c->integral_limit, c->integral_limit) * clampf(state->airborne / PITCH_BIAS_RAMP, 0, 1);
     // Speed moment (pitch_speed, 0 = off): forward speed pitches this airframe nose-up (the rotors flap back; on the hover sim's model a backward drift likewise kept the nose falling through the braking tilt, as at 2026-11-02 04:55 UTC). The torque builds with the speed, so it lags the tilt that made it by the speed's own time constant, and the attitude loop meets it only as error; cancelled here from the forward velocity. flight_rt.c sets pitch_speed only while the hover flies on the tag, when velocity is the hover's measured one, not the g tan(pitch) dead reckoning above. With 0 the torque is exactly as before.
-    float speed_torque = c->pitch_speed * state->velocity[1];
+    float speed_accel = c->pitch_speed * state->velocity[1];
     // The pitch damping acts on the rate low-passed over pitch_damping_tau: above pitch_damping 6 the raw rate's damping drove a 2.6-2.8 Hz shake (2026-11-02 04:36 UTC, pitch rate 67 deg/s RMS there at pitch_damping 8), where the servo's lag and the assembly's rising tilt authority leave the loop without phase, while the 0.6-0.9 Hz swing of the 2026-11-08 hops wants more damping than 6 gives. The filter gives up damping above its corner to keep it below.
     float smooth = c->pitch_damping_tau > 0 ? c->dt / (c->pitch_damping_tau + c->dt) : 1;
     state->damped_gy += (gy - state->damped_gy) * smooth;
-    float pitch_torque = model->pitch_inertia * (c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * state->damped_gy + speed_torque);
-    float yaw_torque = model->yaw_inertia * (c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias + state->yaw_i);
+    float pitch_accel = c->pitch_p * pitch_error + state->pitch_i + pitch_bias - c->pitch_damping * state->damped_gy + speed_accel;
+    float yaw_accel = c->yaw_damping * (c->target_yaw - c->gz) + c->yaw_bias + state->yaw_i;
     // INDI (indi.h): its share of what the model leaves out is taken off; the integrators trim whatever it leaves.
-    if (c->indi_share[0] > 0) roll_torque -= model->roll_inertia * c->indi_share[0] * c->unmodeled[0];
-    if (c->indi_share[1] > 0) pitch_torque -= model->pitch_inertia * c->indi_share[1] * c->unmodeled[1];
-    if (c->indi_share[2] > 0) yaw_torque -= model->yaw_inertia * c->indi_share[2] * c->unmodeled[2];
+    roll_accel -= c->indi_share[0] * c->unmodeled[0];
+    pitch_accel -= c->indi_share[1] * c->unmodeled[1];
+    yaw_accel -= c->indi_share[2] * c->unmodeled[2];
 
     // The motors' vertical thrusts: the collective plus and less the roll differential, each kept from going negative (past the table's top the reverse lookup and the runtime's clamp drop the excess). The collective is never raised to keep the differential (no air mode): near the ground that would lift a drone the hover is setting down.
-    float differential = roll_torque / model->arm;
+    float differential = roll_accel / model->roll;
     float left_vertical = fmaxf(0, (force + differential) / 2);
     float right_vertical = fmaxf(0, (force - differential) / 2);
-    float forward = (pitch_torque - model->com_x * force) / model->pivot_height;
-    yaw_torque -= model->reaction_torque_ratio * (right_vertical - left_vertical);
-    float twist = yaw_torque / model->arm;
+    float forward = pitch_accel / model->pitch;
+    float twist = yaw_accel / model->yaw;
     if (c->indi_share[0] > 0 || c->indi_share[1] > 0 || c->indi_share[2] > 0) fit_tilts(c, upright, left_vertical, right_vertical, &forward, &twist);
     float left_horizontal = (forward - twist) / 2;
     float right_horizontal = (forward + twist) / 2;

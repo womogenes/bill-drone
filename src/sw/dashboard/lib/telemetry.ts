@@ -60,13 +60,9 @@ export type ControlSettings = {
   pitch_trim: number;
   left_trim: number;
   right_trim: number;
-  pivot_height: number;
-  com_x: number;
-  roll_inertia: number;
-  pitch_inertia: number;
-  yaw_inertia: number;
-  reaction_torque_ratio: number;
-  arm: number;
+  roll_authority: number;
+  pitch_authority: number;
+  yaw_authority: number;
   roll_bias: number;
   pitch_bias: number;
   yaw_bias: number;

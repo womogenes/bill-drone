@@ -223,9 +223,9 @@ static Ekf ekf;
 static EkfOutput filtered;
 // The fly-away failsafe and the test pattern's limits (guard.h).
 static Guard guard;
-// The burst (flip.h), started only by flight_runtime_flip, and the authority it and the recovery fly on (flip.h FLIP_*_AUTHORITY, the weight from hover_mass, INDI's shares and unmodeled acceleration on it each tick).
+// The burst (flip.h), started only by flight_runtime_flip, and the authority it and the recovery fly on (flip.h FLIP_ROLL_AUTHORITY and FLIP_PITCH_AUTHORITY, the airframe's yaw, the weight from hover_mass, INDI's shares, unmodeled acceleration and prediction on the airframe's model, set each tick).
 static FlipRun flip;
-static FlipAuthority maneuver = {.roll = FLIP_ROLL_AUTHORITY, .pitch = FLIP_PITCH_AUTHORITY, .yaw = FLIP_YAW_AUTHORITY};
+static FlipAuthority maneuver = {.roll = FLIP_ROLL_AUTHORITY, .pitch = FLIP_PITCH_AUTHORITY};
 // Tumble recovery and the pilot's level-and-hold (recover.h). held: since a recovery or a level-and-hold began, the hover holds whatever mode the laptop streams, until the laptop asks for another mode than held_from, the one it streamed then (the pilot's L, or manual); the laptop's tilt is dropped only while the recovery and its grace run, so the pilot steers the hold again after it.
 static RecoverRun recovery;
 // INDI (indi.h; settings.def indi) and the share of its correction taken now (and of the servos' dead-time predictor, pitch_predict): it fades in to the setting over INDI_FADE_S once the hold (or the flip, or a recovery) flies at least INDI_HEIGHT above where it engaged, and out as fast below that, on landing or in manual flight: on the ground the feet hold the drone against what INDI takes as unmodeled, and asking ever more against it winds up like an integrator (the 2026-11-15 bench run, motors off at collective 817: the servos swung -34 to +20 degrees). The controller's airborne count is no liftoff, since it starts when the collective reaches integrate_throttle, nor is the hold's lifted, which runs out after TAKEOFF_WAIT_S on the floor.
@@ -614,7 +614,7 @@ static void take_imu(const float *body, uint64_t now) {
     for (int i = 0; i < 3; i++) state.gyro[i] -= state.bias[i];
 }
 
-// INDI's tick (indi.h), before the burst, the recovery and the controller, which take its unmodeled acceleration on their own models: the controller's (Model) and the maneuvers' (maneuver, the burst's and the recovery's one authority). Off and reset while disarmed.
+// INDI's tick (indi.h) on the airframe's model, before the burst, the recovery and the controller, which all take its unmodeled acceleration. Off and reset while disarmed.
 static void incremental(float dt) {
     if (!state.enabled) {
         indi_reset(&indi);
@@ -630,16 +630,13 @@ static void incremental(float dt) {
     indi_share[1] = indi_fade * command.indi_pitch;
     const Model *m = &command.model;
     FlipAuthority *a = &maneuver;
+    a->yaw = m->yaw;
     a->weight = command.hover.mass * GRAVITY;
-    IndiModel models[INDI_MODELS] = {
-        [INDI_CONTROLLER] = {m->arm / m->roll_inertia, m->pivot_height / m->pitch_inertia, m->com_x / m->pitch_inertia, m->arm / m->yaw_inertia, m->reaction_torque_ratio / m->yaw_inertia},
-        [INDI_FLIP] = {a->roll, a->pitch, 0, a->yaw, 0},
-    };
-    indi_update(&indi, state.gyro, models, dt);
-    indi_predict(&indi, &models[INDI_CONTROLLER], state.gyro[1], dt, &predicted[1], &predicted[0]);
+    indi_update(&indi, state.gyro, m, dt);
+    indi_predict(&indi, m, state.gyro[1], dt, &predicted[1], &predicted[0]);
     for (int i = 0; i < 2; i++) predicted[i] *= indi_fade * command.pitch_predict;
     memcpy(a->indi, indi_share, sizeof(indi_share));
-    memcpy(a->unmodeled, indi.unmodeled[INDI_FLIP], sizeof(a->unmodeled));
+    memcpy(a->unmodeled, indi.unmodeled, sizeof(a->unmodeled));
     memcpy(a->predicted, predicted, sizeof(a->predicted));
 }
 
@@ -826,7 +823,7 @@ static void fly(Tick *t) {
     // With recover_enable, the barometer's backstop over the ceiling (recover.h RECOVER_CEILING_MARGIN) caps whatever collective is flown: the hold, the burst's arrest, leveling.
     if (command.recover_enable >= 1 && isfinite(t->recovered.cap)) setpoint.base = fminf(setpoint.base, collective_throttle(t->recovered.cap));
     memcpy(setpoint.indi_share, indi_share, sizeof(setpoint.indi_share));
-    memcpy(setpoint.unmodeled, indi.unmodeled[INDI_CONTROLLER], sizeof(setpoint.unmodeled));
+    memcpy(setpoint.unmodeled, indi.unmodeled, sizeof(setpoint.unmodeled));
     memcpy(setpoint.predicted, predicted, sizeof(setpoint.predicted));
     flown = setpoint;
     // Propeller thrust at a fixed throttle goes with the square of battery voltage, so the table's newtons are scaled to the measured voltage: a sagging pack gets more throttle for the same force.

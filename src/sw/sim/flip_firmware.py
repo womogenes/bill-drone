@@ -30,9 +30,9 @@ from sw.sim.outdoor import GPS
 from sw.sim.sweep import BARO
 
 MAIN = Path(__file__).resolve().parents[2] / "fw/drone/main"
+# flip.h's FLIP_ROLL_AUTHORITY and FLIP_PITCH_AUTHORITY, the burst's and the recovery's allocation gains (their yaw is the airframe's; flight_rt.c maneuver).
+AUTHORITY = {axis: float(re.search(rf"#define FLIP_{axis.upper()}_AUTHORITY ([0-9.]+)f", (MAIN / "flip.h").read_text()).group(1)) for axis in ("roll", "pitch")}
 BARO_READINGS = int(re.search(r"#define RECOVER_BARO_READINGS (\d+)", (MAIN / "recover.h").read_text()).group(1))
-# flip.h's FLIP_*_AUTHORITY, the burst's and the recovery's one authority (flight_rt.c maneuver).
-AUTHORITY = {axis: float(re.search(rf"#define FLIP_{axis.upper()}_AUTHORITY ([0-9.]+)f", (MAIN / "flip.h").read_text()).group(1)) for axis in ("roll", "pitch", "yaw")}
 SOURCES = [MAIN / "flip.c", MAIN / "recover.c", MAIN / "flight_math.c"]
 HEADERS = [MAIN / "flip.h", MAIN / "recover.h", MAIN / "flight_math.h", MAIN / "hover.h", MAIN / "guard.h"]
 LIBRARY = Path(__file__).with_name("libflip.so")
@@ -322,7 +322,7 @@ def fly(job):
         recovery = RecoverRun()
         library.recover_reset(ctypes.byref(recovery))
         hover = Hover(flown)
-        lanes.append({"indi": flight.Incremental(flown), "controller": controller, "estimate": flight.Attitude(accel=obs["accel"][i] / R.G), "authority": Authority(AUTHORITY["roll"], AUTHORITY["pitch"], AUTHORITY["yaw"], hover_mass * R.G), "hover": hover, "guard": Guard(flown), "run": run, "sensors": Sensors(seed * 1000 + i),
+        lanes.append({"indi": flight.Incremental(flown), "controller": controller, "estimate": flight.Attitude(accel=obs["accel"][i] / R.G), "authority": Authority(AUTHORITY["roll"], AUTHORITY["pitch"], flight.authorities(flown)[2], hover_mass * R.G), "hover": hover, "guard": Guard(flown), "run": run, "sensors": Sensors(seed * 1000 + i),
                       "integral": ctypes.cast(ctypes.addressof(hover.state) + HoverState.integral.offset, FLOATS), "commanded": (0, 0), "dead": False, "tipped": False, "lifted": None,
                       "started": None, "refusals": [], "asked": None, "touched": False, "lowest": np.inf, "start_height": None, "start_place": None, "back": None, "phase": 0, "target": None,
                       "recovery": recovery, "mode": HOLD, "relanding": None, "cut": 0, "event": None, "stages": [], "recovered_at": None, "event_lowest": np.inf, "event_touched": False})
@@ -406,9 +406,9 @@ def fly(job):
                 # flight_rt.c incremental: INDI's fade and its unmodeled acceleration on each model, before the burst, the recovery and the controller.
                 owned = library.flip_active(ctypes.byref(run)) or library.recover_active(ctypes.byref(recovery))
                 a = lane["authority"]
-                lane["indi"].update(gyro, bool(hover.state.engaged) and not hover.state.landed, hover.state.height, controller.command[BASE], owned, (a.roll, a.pitch, a.yaw), R.DT)
+                lane["indi"].update(gyro, bool(hover.state.engaged) and not hover.state.landed, hover.state.height, controller.command[BASE], owned, R.DT)
                 a.indi[:] = lane["indi"].share()
-                a.unmodeled[:] = lane["indi"].unmodeled(flight.INDI_FLIP)
+                a.unmodeled[:] = lane["indi"].unmodeled()
                 a.predicted[:] = lane["indi"].prediction()
                 library.flip_tick(ctypes.byref(run), ctypes.byref(a), quaternion(estimate), (ctypes.c_float * 3)(*gyro), (ctypes.c_float * 3)(*accel), R.DT, controller.state.buffer_info()[0], lane["integral"], ctypes.byref(out))
             else:

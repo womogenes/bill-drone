@@ -2,25 +2,22 @@
 // TUNE(name, Command member, scale to the member, min, max, default): changed by the T request.
 // STATE(name, min, max, default): set only by IMU calibration (G), servo zeroing (Z), accel correction (Q) and the level reference (L); read-only to T.
 // Every entry is persisted in NVS. Angles are degrees here; RAD converts trims to the controller's radians.
-// The model defaults match sw/sim/flight.py MODEL, which the host simulation uses.
-TUNE(roll_p, roll_p, 1, 0, 1000, 20)
-TUNE(roll_i, roll_i, 1, 0, 1000, 3)
-TUNE(roll_damping, roll_damping, 1, 0, 1000, 6)
-TUNE(pitch_p, pitch_p, 1, 0, 1000, 20)
-TUNE(pitch_i, pitch_i, 1, 0, 1000, 3)
-TUNE(pitch_damping, pitch_damping, 1, 0, 1000, 10)
-TUNE(yaw_damping, yaw_damping, 1, 0, 1000, 4)
+// The model defaults match sw/sim/flight.py MODEL, which the host simulation uses. The gains' defaults are the earlier ones scaled from the model they had (14.5, 11.0 and 16.1 rad/s² per N) to this one.
+TUNE(roll_p, roll_p, 1, 0, 1000, 11)
+TUNE(roll_i, roll_i, 1, 0, 1000, 1.65)
+TUNE(roll_damping, roll_damping, 1, 0, 1000, 3.3)
+TUNE(pitch_p, pitch_p, 1, 0, 1000, 15.8)
+TUNE(pitch_i, pitch_i, 1, 0, 1000, 2.36)
+TUNE(pitch_damping, pitch_damping, 1, 0, 1000, 7.88)
+TUNE(yaw_damping, yaw_damping, 1, 0, 1000, 2.82)
 TUNE(integral_limit, integral_limit, 1, 0, 1000, 3)
 TUNE(pitch_trim, pitch_trim, RAD, -15, 15, 0)
 TUNE(left_trim, left_trim, RAD, -15, 15, 0.9)
 TUNE(right_trim, right_trim, RAD, -15, 15, -0.9)
-TUNE(pivot_height, model.pivot_height, 1, 0.000001, 1, 0.0253692458911615)
-TUNE(com_x, model.com_x, 1, -0.02, 0.02, 0)
-TUNE(roll_inertia, model.roll_inertia, 1, 0.000001, 1, 0.0118483264434811)
-TUNE(pitch_inertia, model.pitch_inertia, 1, 0.000001, 1, 0.0023030647846826)
-TUNE(yaw_inertia, model.yaw_inertia, 1, 0.000001, 1, 0.0106709253540914)
-TUNE(reaction_torque_ratio, model.reaction_torque_ratio, 1, -0.1, 0.1, 0.015)
-TUNE(arm, model.arm, 1, 0.001, 1, 0.172)
+// The airframe's authority, the one model the attitude controller allocates on, INDI and the servos' dead-time predictor estimate on, and the burst and the recovery fly on (flight_math.h Model): angular acceleration (rad/s²) per newton of the left motor's thrust over the right's, per newton of the two's thrust per radian of their common forward tilt, per newton per radian of the right's forward tilt over the left's (newtons of the thrust table). Fitted to foretell drone 1's body rates 50 ms ahead through INDI's actuator estimate on the new ESCs' flights since the pivots were raised (sw/sim/authority.py; held out: 0.66-0.79 of the roll rate's change explained, 0.79-0.89 of pitch's, 0.41-0.66 of yaw's, against 0.23-0.62, 0.05-0.89 and 0.21-0.64 by the four models the controller, the predictor and the burst had before). They replace arm, pivot_height, com_x, the three inertias and reaction_torque_ratio: an older blob's gains are scaled once to them (settings.c), so the controller asks the motors and servos for what it did.
+TUNE(roll_authority, model.roll, 1, 0.1, 100, 8.0)
+TUNE(pitch_authority, model.pitch, 1, 0.1, 100, 8.68)
+TUNE(yaw_authority, model.yaw, 1, 0.1, 100, 11.35)
 TUNE(roll_bias, roll_bias, 1, -20, 20, 0)
 TUNE(pitch_bias, pitch_bias, 1, -20, 20, 0)
 TUNE(yaw_bias, yaw_bias, 1, -10, 10, 0)
@@ -95,11 +92,11 @@ TUNE(flip_angle, flip_angle, RAD, 0, 90, 0)
 TUNE(flip_height, flip_height, 1, 2.5, 5, 3)
 // Tumble recovery (recover.c, fw/FLIP.md): 1 rights and levels a drone past tip_limit in flight, or whose flip fails after its hand-back, or whose gyro reaches its full scale, and hands it to the hold, instead of the tip cut stopping the motors; 0, the default, cuts as before. On the ground, landing below 1 m and after RECOVER_MAX recoveries the tip cut stays.
 TUNE(recover_enable, recover_enable, 1, 0, 1, 0)
-// Incremental nonlinear dynamic inversion (indi.c, flight_rt.c): in roll and yaw (indi_pitch below is pitch's) the share (0-1) of the angular acceleration the gyro measures beyond what the models give for the actuators as estimated (servo dead time and lag, the assemblies' swing, motor lag) that the attitude controller, the burst and the recovery take off what they ask, faded in over half a second once the hold flies 0.3 m above where it engaged (and out below that, on landing and in manual flight); the rotors' gyroscopic feedforwards in the flip give way by the same share, and a servo at its stop gives up yaw before pitch. 0, the default, flies as before. Much over 0.5 rings the motor assemblies' links (about 11 Hz) in the sim.
+// Incremental nonlinear dynamic inversion (indi.c, flight_rt.c): in roll and yaw (indi_pitch below is pitch's) the share (0-1) of the angular acceleration the gyro measures beyond what the model gives for the actuators as estimated (servo dead time and lag, the assemblies' swing, motor lag) that the attitude controller, the burst and the recovery take off what they ask, faded in over half a second once the hold flies 0.3 m above where it engaged (and out below that, on landing and in manual flight); the rotors' gyroscopic feedforwards in the flip give way by the same share, and a servo at its stop gives up yaw before pitch. 0, the default, flies as before. Much over 0.5 rings the motor assemblies' links (about 11 Hz) in the sim.
 TUNE(indi, indi, 1, 0, 1, 0)
 // INDI's share in pitch alone (as indi is in roll and yaw; 0 off), for the hold, the burst and the recovery alike. On 2026-11-15 indi 0.25 and 0.5 on all axes doubled the hover's 2.6-3 Hz pitch shake (pitch rate 7.8 deg/s RMS in 2-4 Hz without, 13.9 and 15.3 with), the mode pitch_damping over 6 drives, while roll steadied (roll 1.2 -> 0.7 degrees RMS at 0.5).
 TUNE(indi_pitch, indi_pitch, 1, 0, 1, 0)
-// The servos' dead-time predictor in pitch (indi.c indi_predict, a Smith predictor), for the hold, the burst and the recovery alike: the share (0 off, 1 the model as fitted) of the pitch and pitch rate change that the servo commands already on their way will make, which the P and damping terms act on as if it had happened; faded in with INDI. The servos' 55-75 ms dead time is most of the 80-95 ms the pitch loop's phase carries at its 2.3-2.5 Hz shake. The sims (sw/sim/models/NOTES.md "Servo dead-time predictor") take 0.5 at pitch_damping 6, or 0.875 at pitch_damping 4.5, which holds on every plant tried.
+// The servos' dead-time predictor in pitch (indi.c indi_predict, a Smith predictor), for the hold, the burst and the recovery alike: the share (0 off, 1 the model as fitted) of the pitch and pitch rate change that the servo commands already on their way will make, which the P and damping terms act on as if it had happened; faded in with INDI. The servos' 55-75 ms dead time is most of the 80-95 ms the pitch loop's phase carries at its 2.3-2.5 Hz shake. On the airframe's fitted model (settings.def roll_authority; no scale on it since 2026-11-15) the prediction is the drone's own size (slope 0.78-1.08 against the gyro's change 50 ms ahead on held-out flights), and the sims (sw/sim/models/NOTES.md "One model") take 1 at pitch_damping 4.5: the hover shake 15 -> 2.4 deg/s on the fitted plant and 10 -> 2.1 with the logs' servo, burst60 clean in 89-91% of runs; at pitch_damping 6 a share of 1 sometimes rings at 2.7 Hz on the fitted plant.
 TUNE(pitch_predict, pitch_predict, 1, 0, 1, 0)
 STATE(servo_offset_left, -60, 60, -3)
 STATE(servo_offset_right, -60, 60, 0)

@@ -21,10 +21,9 @@ typedef struct {
 } FlipParams;
 
 extern const FlipParams flip_defaults;
-// The burst's and the recovery's authority (FlipAuthority, angular acceleration per newton of differential or tilted thrust), measured rather than taken from the settings' model (pivot_height 0.02 m, pitch_inertia 0.0023, which the attitude controller keeps): roll, the arm over the roll inertia on the raised pivots (0.172 / 0.01275, sw/sim/models/airframe_2026-11-12_raised.json); pitch and yaw as the 2026-11-15 bursts measured them (sw/sim/models/airframe_2026-11-15_bursts.json, NOTES.md "The bursts' plant"): the tilt pitches 16.8 per N per radian, 1.9 times the settings' model's 8.7, and the tilted thrust yaws 11.34, the slipstream leaving 74% of it at the arm.
+// The burst's and the recovery's allocation gains in roll and pitch (FlipAuthority; angular acceleration per newton of differential thrust, per newton per radian of common tilt): their laws allocate with no model of the actuators' lags, and these are what they were tuned with (sw/sim/tune_flip.py, recover_firmware.py) on the plant that reproduces the 2026-11-15 bursts (the 07:13 burst30 flown again: nose +26/-12.5 degrees against the log's +33/-18.5, 0.25 m lost). They are not the airframe's authority (settings.def roll_authority), which INDI and the predictor estimate with through the actuators' fitted lags: 8.0 and 8.68 there, and with those as their gains the bursts on that plant were 1-5% clean (100% now) and the tip recovery 23% (57%) (sw/sim/models/NOTES.md "One model"). Their yaw is the airframe's (11.35, as tuned 11.34).
 #define FLIP_ROLL_AUTHORITY 13.5f
 #define FLIP_PITCH_AUTHORITY 16.8f
-#define FLIP_YAW_AUTHORITY 11.34f
 // The least thrust each motor keeps while the burst or a recovery (recover.c) owns the motors, of the weight: recover_defaults' idle, and the floor below which sw/sim/tune_flip.py does not search flip_defaults' own.
 #define FLIP_FLOOR 0.2f
 // The height the burst never takes the drone over (m; the user's fixed cap: only the user changes it), whatever hover_ceiling says, and the margin it keeps under it.
@@ -43,8 +42,8 @@ typedef struct {
     float spread;
 } Flip;
 
-// The airframe's authority: angular acceleration (rad/s²) per newton of differential thrust (roll), per newton of collective per radian of common tilt (pitch), per newton per radian of differential tilt (yaw); and the weight (N).
-// indi and unmodeled: per axis (roll, pitch, yaw) the share INDI takes (0 = off) of the unmodeled angular acceleration it found on this authority (indi.h; rad/s²), which the allocation takes off what it is asked; the rotors' gyroscopic feedforwards (gyro_ff in pitch, yaw_ff in yaw) give way by the same share, as the measured acceleration has them.
+// The authority the burst and the recovery allocate with: angular acceleration (rad/s²) per newton of differential thrust (roll, FLIP_ROLL_AUTHORITY), per newton of collective per radian of common tilt (pitch, FLIP_PITCH_AUTHORITY), per newton per radian of differential tilt (yaw, the airframe's: settings.def yaw_authority); and the weight (N).
+// indi and unmodeled: per axis (roll, pitch, yaw) the share INDI takes (0 = off) of the unmodeled angular acceleration it found on the airframe's model (indi.h; rad/s²), which the allocation takes off what it is asked; the rotors' gyroscopic feedforwards (gyro_ff in pitch, yaw_ff in yaw) give way by the same share, as the measured acceleration has them.
 // predicted: the servos' dead-time predictor's change in pitch (radians) and pitch rate (rad/s) at the share taken now (indi.h indi_predict, settings.def pitch_predict), which the burst's and the recovery's attitude laws act on as the controller's does.
 typedef struct {
     float roll, pitch, yaw, weight, indi[3], unmodeled[3], predicted[2];

@@ -341,7 +341,7 @@ static void randomize_settings(void) {
         {SETTING_thrust_voltage, {0, 16}, 2}, {SETTING_hover_drag, {0, 1}, 2}, {SETTING_integrate_throttle, {580, 350}, 2}, {SETTING_roll_target_rate, {0, 360}, 2},
         {SETTING_hover_climb, {0.3f, 3}, 2}, {SETTING_yaw_i, {0, 2}, 2}, {SETTING_pitch_speed, {0, 2}, 2}, {SETTING_failsafe_speed, {0, 2}, 2},
         {SETTING_hover_gps_calibrate, {0, 5}, 2}, {SETTING_roll_bias, {0, 0.5f, -0.5f}, 3}, {SETTING_hover_mass, {0.9f, 1.05f}, 2}, {SETTING_left_thrust_scale, {1, 1.3f}, 2},
-        {SETTING_right_thrust_scale, {1, 1.3f}, 2}, {SETTING_indi, {0, 0.5f, 1}, 3}, {SETTING_indi_pitch, {0, 0.25f, 1}, 3}, {SETTING_pitch_predict, {0, 0.5f, 1}, 3},
+        {SETTING_right_thrust_scale, {1, 1.3f}, 2}, {SETTING_indi, {0, 0.5f, 1}, 3}, {SETTING_indi_pitch, {0, 0.25f, 1}, 3}, {SETTING_pitch_predict, {0, 0.5f, 1}, 3}, {SETTING_roll_authority, {8, 14.5f}, 2}, {SETTING_yaw_authority, {11.35f, 16}, 2},
     };
     for (size_t i = 0; i < sizeof(choices) / sizeof(choices[0]); i++)
         if (chance(0.5)) set_setting(choices[i].index, choices[i].values[next() % choices[i].count]);

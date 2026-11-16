@@ -7,9 +7,10 @@ import random
 from collections import deque
 
 from fw.controller.log_format import pattern_refusal
+from sw.flight_log import LEGACY_MODEL, migrated
 from sw.sim.airframe import Airframe, model
 from sw.sim.disturbance import Disturbances
-from sw.sim.flight import MODEL, PITCH_SPEED, TUNING_LAYOUT, YAW_I, Attitude, Controller, Incremental, body_quaternion, euler, throttle, thrust
+from sw.sim.flight import MODEL, MODEL_KEYS, PITCH_SPEED, TUNING_LAYOUT, YAW_I, Attitude, Controller, Incremental, body_quaternion, euler, throttle, thrust
 
 MASS = 0.940  # kg, the final assembly with the printed deck and IMU bracket (Bill's estimate, 2026-10-24)
 DT = 0.01
@@ -122,9 +123,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     camera_rng = random.Random(seed + 2000)
     gust_rng = random.Random(seed + 3000)
     wind_rng = random.Random(seed + 4000)
-    settings = MODEL | {"roll": 0, "pitch": 0, "yaw_rate": 0, "pitch_trim": 0, "left_trim": 0, "right_trim": 0,
+    # The controller flies the gains' own model (theirs, or the October model this harness's gains were tuned on, migrated as the firmware reads it), the servos as the drone has them.
+    settings = migrated(LEGACY_MODEL | {key: MODEL[key] for key in MODEL_KEYS[3:]} | {"roll": 0, "pitch": 0, "yaw_rate": 0, "pitch_trim": 0, "left_trim": 0, "right_trim": 0,
                                "roll_bias": 0, "pitch_bias": 0, "yaw_bias": 0, "left_thrust_scale": 1, "right_thrust_scale": 1,
-                               "servo_compensation": 0.75, "integrate_throttle": 580, "target_rate": 360} | gains
+                               "servo_compensation": 0.75, "integrate_throttle": 580, "target_rate": 360} | gains)
     mass = plant.get("mass", MASS)
     weight = mass * 9.81
     k = plant["thrust_k"]
@@ -174,9 +176,10 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
     # INDI (settings indi; flight_rt.c incremental) on the gyro and the actuators as sent.
     incremental = Incremental(settings)
     lifted = None
-    inertia = [MODEL["roll_inertia"] * plant["roll_inertia"], MODEL["pitch_inertia"] * plant["pitch_inertia"], MODEL["yaw_inertia"] * plant["yaw_inertia"]]
-    height = MODEL["pivot_height"] * plant["height"]
-    arm = MODEL["arm"]
+    # The plant's terms are factors on the October model (sw/flight_log.py LEGACY_MODEL).
+    inertia = [LEGACY_MODEL["roll_inertia"] * plant["roll_inertia"], LEGACY_MODEL["pitch_inertia"] * plant["pitch_inertia"], LEGACY_MODEL["yaw_inertia"] * plant["yaw_inertia"]]
+    height = LEGACY_MODEL["pivot_height"] * plant["height"]
+    arm = LEGACY_MODEL["arm"]
     feet = plant.get("feet", BODY_FEET if hover else FEET)
     friction = plant.get("friction", FRICTION)
     ground_k, ground_c = plant.get("ground", (GROUND_K, GROUND_C))
@@ -627,11 +630,11 @@ def run(gains, plant, seconds=10.0, seed=0, log=None, hover=False):
 
 
 # Plant as measured (2026-10-21): pivot 20 mm above the CoM, pitch inertia 0.00161 kg m^2, thrust 1.09x the table at ~16 V.
-NOMINAL = {"thrust_k": 1.09, "height": 0.0234 / MODEL["pivot_height"], "roll_inertia": 1.0, "pitch_inertia": 0.00161 / MODEL["pitch_inertia"], "yaw_inertia": 1.0, "motor_delay": 0.02, "motor_tau": 0.05,
+NOMINAL = {"thrust_k": 1.09, "height": 0.0234 / LEGACY_MODEL["pivot_height"], "roll_inertia": 1.0, "pitch_inertia": 0.00161 / LEGACY_MODEL["pitch_inertia"], "yaw_inertia": 1.0, "motor_delay": 0.02, "motor_tau": 0.05,
            "servo_delay": 0.04, "servo_tau": 0.06, "backlash": 0.5, "deadband": 0.45, "servo_slew": 600, "imbalance": 0.06, "com_x": 0.002, "gyro_noise": 2.0}
 # Rotor drag (0.5 1/s) and accelerometer vibration are from the same flights (sw/fit_drag.py): logged hover vibration is 0.15 g broadband horizontally, but averaged over 0.5-1.5 s (what the drag model sees) it is as low as white noise of about 0.1 g before the 0.7 smoothing here; 0.05 g vertically.
 # Fitted to the 2026-10-25 hover flights (08-52 to 09-15) by closed-loop multi-step pitch prediction from replayed controller states: effectiveness 1.42x the controller's model (pivot_height 0.03, pitch_inertia 0.0023), 70 ms dead time + 10 ms lag at 340°/s, a -10.6 rad/s² tail-heavy push, a weak restoring angle and forward-speed moment, and an unexplained slow pitch disturbance of about 5 rad/s² RMS. Backlash and deadband were not identifiable (fits went to zero), so play here is the bench's "small, left sloppier". It reproduces the 09-01 pitch_damping 14 oscillation (0.38-0.40 s period vs 0.41 s logged) and damping 10 staying clear of it. Fly it with run(..., hover=True) and a recording's settings.
-FITTED = {"thrust_k": 1.03, "mass": 0.86, "height": 1.42 * 0.03 / MODEL["pivot_height"], "roll_inertia": 1.0, "pitch_inertia": 1.0, "yaw_inertia": 1.0,
+FITTED = {"thrust_k": 1.03, "mass": 0.86, "height": 1.42 * 0.03 / LEGACY_MODEL["pivot_height"], "roll_inertia": 1.0, "pitch_inertia": 1.0, "yaw_inertia": 1.0,
           "motor_delay": 0.02, "motor_tau": 0.05, "servo_delay": 0.07, "servo_tau": 0.01, "backlash": 0.3, "left_backlash": 0.5, "right_backlash": 0.3,
           "deadband": 0.1, "servo_slew": 340, "imbalance": 0.03, "com_x": 0.0, "disturbance": -10.6, "angle_moment": -3.9, "velocity_moment": -4.0,
           "gust": 5.0, "gust_tau": 0.7, "gyro_noise": 2.0, "camera": {"tag": (2.3, 0.0, 0.3)}, "rotor_drag": 0.5, "vibration": (0.1, 0.1, 0.05)}

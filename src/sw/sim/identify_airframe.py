@@ -23,7 +23,7 @@ import numpy as np
 from sw.flight_log import read_flight, test_pattern
 from sw.flight_log import settings as recording_settings
 from sw.sim import airframe as A
-from sw.sim.flight import ATTITUDE, MODEL, MODEL_TUNING_KEYS, PITCH_SPEED, THRUST_VOLTAGE, TUNING_LAYOUT, YAW_I, Controller, control_many, thrust_table
+from sw.sim.flight import ATTITUDE, PITCH_SPEED, THRUST_VOLTAGE, TUNING_LAYOUT, YAW_I, Controller, control_many, thrust_table
 
 DT = A.DT
 DEG = A.DEG
@@ -168,8 +168,6 @@ def controller(record):
     """The flight's firmware controller, configured and reset, as the state and command buffers control_many takes."""
     c = Controller()
     s = dict(record["setting"])
-    for key in MODEL_TUNING_KEYS:
-        s.setdefault(key, MODEL[key])
     c.configure(s)
     c.reset()
     c.command[THRUST_VOLTAGE] = 0.0  # applied through the thrust scales (Data.thrust_scales), as the runtime does

@@ -6,6 +6,7 @@ Writes a CSV beside the binary file and reports gaps or an incomplete final pack
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -15,6 +16,11 @@ from fw.controller.log_format import COLUMNS, decode_records
 FIRST_DRONE = "20:50:0d:8b:7e:68"
 IDS_FROM = "2026-11-04"
 RECORDINGS = Path(__file__).with_name("recordings")
+SETTINGS_DEF = (Path(__file__).resolve().parents[1] / "fw/drone/main/settings.def").read_text()
+# The airframe's authorities (settings.def roll_authority, pitch_authority, yaw_authority) and their defaults; the model recordings before them were flown on, with its defaults; the gains in rad/s² each authority scales (settings.c legacy_scale).
+AUTHORITIES = {name: float(re.search(rf"TUNE\({name}, [^)]*, ([0-9.]+)\)", SETTINGS_DEF).group(1)) for name in ("roll_authority", "pitch_authority", "yaw_authority")}
+LEGACY_MODEL = {"arm": 0.172, "pivot_height": 0.0253692458911615, "roll_inertia": 0.0118483264434811, "pitch_inertia": 0.0023030647846826, "yaw_inertia": 0.0106709253540914}
+LEGACY_GAINS = {"roll_authority": ("roll_p", "roll_i", "roll_damping", "roll_bias"), "pitch_authority": ("pitch_p", "pitch_i", "pitch_damping", "pitch_bias", "pitch_speed"), "yaw_authority": ("yaw_damping", "yaw_i", "yaw_bias")}
 
 
 def recording(name):
@@ -40,11 +46,25 @@ def metadata(path):
 
 
 def settings(path):
-    """The settings a recording was flown on: the start's, then every change during it."""
+    """The settings a recording was flown on: the start's, then every change during it, as the firmware now reads them (migrated)."""
     merged = {}
     for event in events(path):
         merged |= event.get("settings", {})
-    return merged
+    return migrated(merged)
+
+
+def migrated(settings):
+    """Settings as the firmware reads a blob from before the airframe's authorities (settings.c legacy_scale): the authorities' defaults, and each gain scaled by its authority over what the older model gave the controller (arm / roll_inertia, pivot_height / pitch_inertia, arm / yaw_inertia), so the controller asks the motors and servos for what it did. Settings without the older model, or with an authority, are as given."""
+    if not any(key in settings for key in LEGACY_MODEL) or any(key in settings for key in AUTHORITIES):
+        return settings
+    m = LEGACY_MODEL | {key: settings[key] for key in LEGACY_MODEL if key in settings}
+    before = {"roll_authority": m["arm"] / m["roll_inertia"], "pitch_authority": m["pivot_height"] / m["pitch_inertia"], "yaw_authority": m["arm"] / m["yaw_inertia"]}
+    out = {key: value for key, value in settings.items() if key not in LEGACY_MODEL and key not in ("com_x", "reaction_torque_ratio")} | AUTHORITIES
+    for authority, names in LEGACY_GAINS.items():
+        for name in names:
+            if name in out:
+                out[name] *= AUTHORITIES[authority] / before[authority]
+    return out
 
 
 def parse_settings(text):

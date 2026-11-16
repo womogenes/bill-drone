@@ -80,15 +80,11 @@ RUNTIME = SOURCE.with_name("runtime.h").read_text()
 GYRO_RANGE = 32768 / float(re.search(r"#define GYRO_COUNTS_PER_DEG_S ([0-9.]+)f", RUNTIME).group(1))
 ACCEL_RANGE = 32768 / float(re.search(r"#define ACCEL_COUNTS_PER_G ([0-9.]+)f", RUNTIME).group(1))
 
-# Geometry and inertia of the current 900 g drone, in meters and kg·m².
+# The airframe's one model (flight_math.h Model; settings.def roll_authority): angular acceleration (rad/s²) per newton of differential thrust, per newton per radian of common tilt, per newton per radian of differential tilt, then the servos' range and directions.
 MODEL = {
-    "arm": 0.172,
-    "pivot_height": 0.0253692458911615,
-    "com_x": 0.0,  # Fitted to 2026-10-20 liftoff data; CAD gave -0.00202.
-    "roll_inertia": 0.0118483264434811,
-    "pitch_inertia": 0.0023030647846826,
-    "yaw_inertia": 0.0106709253540914,
-    "reaction_torque_ratio": 0.015,
+    "roll_authority": 8.0,
+    "pitch_authority": 8.68,
+    "yaw_authority": 11.35,
     "servo_min": math.radians(-60),
     "servo_max": math.radians(60),
     # Positive left tilts forward; positive right tilts backward.
@@ -96,9 +92,14 @@ MODEL = {
     "right_servo_direction": -1.0,
 }
 # This order is the C buffer layout; it must not depend on dictionary iteration.
-MODEL_KEYS = ("arm", "pivot_height", "com_x", "roll_inertia", "pitch_inertia", "yaw_inertia", "reaction_torque_ratio", "servo_min", "servo_max", "left_servo_direction", "right_servo_direction")
-# Model parameters tunable from the dashboard, in SI units.
-MODEL_TUNING_KEYS = ("pivot_height", "com_x", "roll_inertia", "pitch_inertia", "yaw_inertia", "reaction_torque_ratio", "arm")
+MODEL_KEYS = ("roll_authority", "pitch_authority", "yaw_authority", "servo_min", "servo_max", "left_servo_direction", "right_servo_direction")
+AUTHORITY_KEYS = MODEL_KEYS[:3]
+
+
+def authorities(settings):
+    """The roll, pitch and yaw authority settings give (sw/flight_log.py migrated reads older recordings' as the firmware does), the defaults where they have none."""
+    return tuple(settings.get(key, MODEL[key]) for key in AUTHORITY_KEYS)
+
 
 # Equivalent to retaining 0.99 of gyro integration every 10 ms; with the motors spinning, settings.def attitude_tau (default 50 s, the 0.9998 it always was).
 GRAVITY_TAU = -0.01 / math.log(0.99)
@@ -196,8 +197,7 @@ class Controller:
             for key in TUNING_LAYOUT
         ]
         struct.pack_into("<%df" % len(TUNING_LAYOUT), self.command, 24, *values)
-        for key in MODEL_TUNING_KEYS:
-            self.command[MODEL_OFFSET + MODEL_KEYS.index(key)] = settings[key]
+        self.command[MODEL_OFFSET:MODEL_OFFSET + 3] = array("f", authorities(settings))
         self.command[DAMPING_TAU] = settings.get("pitch_damping_tau", 0.0)
         self.command[ROLL_TARGET_RATE] = math.radians(settings.get("roll_target_rate", 0.0))
 
@@ -209,37 +209,36 @@ class Controller:
         return int(self.state[2]), int(self.state[3]), self.state[4], self.state[5]
 
 
-# indi.h's models and Indi (INDI_SERVO_DELAY 6); flight_rt.c's INDI_FADE_S and INDI_HEIGHT.
-INDI_CONTROLLER, INDI_FLIP, INDI_MODELS = 0, 1, 2
+# indi.h's Indi (INDI_SERVO_DELAY 6) on the Model's head (its authorities, servo range and directions); flight_rt.c's INDI_FADE_S and INDI_HEIGHT.
 INDI_FADE_S, INDI_HEIGHT = 0.5, 0.3
 
 
 class IndiModel(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_float) for name in ("roll", "pitch", "lift_pitch", "yaw", "reaction")]
+    _fields_ = [(name, ctypes.c_float) for name in MODEL_KEYS]
 
 
 class Indi(ctypes.Structure):
-    _fields_ = [("sent_tilt", ctypes.c_float * 2 * 6), ("sent_thrust", ctypes.c_float * 2), ("next", ctypes.c_int), ("tilt", ctypes.c_float * 2), ("tilt_rate", ctypes.c_float * 2), ("thrust", ctypes.c_float * 2),
-                ("filter", ctypes.c_float * 2 * (3 + 3 * INDI_MODELS)), ("gyro", ctypes.c_float * 3), ("model", ctypes.c_float * 3 * INDI_MODELS), ("sent", ctypes.c_bool), ("started", ctypes.c_bool),
-                ("unmodeled", ctypes.c_float * 3 * INDI_MODELS), ("beyond", ctypes.c_float)]
+    _fields_ = [("sent_tilt", ctypes.c_float * 2 * 6), ("sent_thrust", ctypes.c_float * 2 * 6), ("next", ctypes.c_int), ("tilt", ctypes.c_float * 2), ("tilt_rate", ctypes.c_float * 2), ("thrust", ctypes.c_float * 2),
+                ("filter", ctypes.c_float * 2 * 6), ("gyro", ctypes.c_float * 3), ("model", ctypes.c_float * 3), ("sent", ctypes.c_bool), ("started", ctypes.c_bool),
+                ("unmodeled", ctypes.c_float * 3), ("beyond", ctypes.c_float)]
 
 
 library.indi_sent.argtypes = [ctypes.POINTER(Indi), ctypes.c_float * 2, ctypes.c_float * 2]
-library.indi_update.argtypes = [ctypes.POINTER(Indi), ctypes.c_float * 3, IndiModel * INDI_MODELS, ctypes.c_float]
+library.indi_update.argtypes = [ctypes.POINTER(Indi), ctypes.c_float * 3, ctypes.POINTER(IndiModel), ctypes.c_float]
 library.indi_predict.argtypes = [ctypes.POINTER(Indi), ctypes.POINTER(IndiModel), ctypes.c_float, ctypes.c_float, ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
 
 
 class Incremental:
     """
-    INDI as flight_rt.c runs it (incremental, fly): settings' indi (roll and yaw) and indi_pitch are the shares of the correction taken (0 = off); each tick update() before the controller (and the burst and the recovery, which take unmodeled[INDI_FLIP] on their one authority, flip.h FLIP_*_AUTHORITY), apply() to the controller's command, and sent() with the actuators as sent update() also runs the servos' dead-time predictor (indi.h indi_predict; settings' pitch_predict its share), whose change in pitch and pitch rate apply() hands the controller and the harness the burst's and the recovery's authority (flip.h FlipAuthority predicted).
+    INDI as flight_rt.c runs it (incremental, fly): settings' indi (roll and yaw) and indi_pitch are the shares of the correction taken (0 = off); each tick update() before the controller (and the burst and the recovery, which take the same unmodeled acceleration on the same model), apply() to the controller's command, and sent() with the actuators as sent update() also runs the servos' dead-time predictor (indi.h indi_predict; settings' pitch_predict its share), whose change in pitch and pitch rate apply() hands the controller and the harness the burst's and the recovery's authority (flip.h FlipAuthority predicted).
     """
 
     def __init__(self, settings, model=MODEL):
         self.shares = (settings.get("indi", 0.0), settings.get("indi_pitch", 0.0), settings.get("indi", 0.0))
 
         self.integrate = settings.get("integrate_throttle", 0.0)
-        m = model | {key: settings[key] for key in MODEL_TUNING_KEYS if key in settings}
-        self.controller = (m["arm"] / m["roll_inertia"], m["pivot_height"] / m["pitch_inertia"], m["com_x"] / m["pitch_inertia"], m["arm"] / m["yaw_inertia"], m["reaction_torque_ratio"] / m["yaw_inertia"])
+        # The airframe's model as the settings give it (flight_math.h Model), which the controller, the burst and the recovery all fly on: authority() hands the harness the roll, pitch and yaw.
+        self.model = IndiModel(*(dict(zip(AUTHORITY_KEYS, authorities(settings))) | {key: model[key] for key in MODEL_KEYS[3:]}).values())
         self.state = Indi()
         self.fade = 0.0
         # The servos' dead-time predictor's share (settings.def pitch_predict) and, each tick, its pitch and pitch rate change (flight_rt.c incremental).
@@ -248,14 +247,13 @@ class Incremental:
         # Whether anything takes INDI's estimate (on the drone it runs whenever armed; off, it changes nothing).
         self.on = max(self.shares) > 0 or self.predict > 0
 
-    def update(self, gyro, holding, height, base, owned=False, flip=(0.0, 0.0, 0.0), dt=0.01):
-        """gyro (rad/s); whether the hold flies (engaged in a hover mode and not landed), its height above where it engaged (m), last tick's collective throttle, whether the burst or a recovery flies the motors, and their authority (roll, pitch, yaw)."""
+    def update(self, gyro, holding, height, base, owned=False, dt=0.01):
+        """gyro (rad/s); whether the hold flies (engaged in a hover mode and not landed), its height above where it engaged (m), last tick's collective throttle, whether the burst or a recovery flies the motors."""
         flying = self.on and (owned or (holding and height >= INDI_HEIGHT and base >= self.integrate))
         self.fade = min(max(self.fade + (dt if flying else -dt) / INDI_FADE_S, 0.0), 1.0)
-        models = (IndiModel * INDI_MODELS)(IndiModel(*self.controller), IndiModel(flip[0], flip[1], 0.0, flip[2], 0.0))
-        library.indi_update(ctypes.byref(self.state), (ctypes.c_float * 3)(*gyro), models, dt)
+        library.indi_update(ctypes.byref(self.state), (ctypes.c_float * 3)(*gyro), ctypes.byref(self.model), dt)
         rate, angle = ctypes.c_float(), ctypes.c_float()
-        library.indi_predict(ctypes.byref(self.state), ctypes.byref(models[INDI_CONTROLLER]), gyro[1], dt, ctypes.byref(rate), ctypes.byref(angle))
+        library.indi_predict(ctypes.byref(self.state), ctypes.byref(self.model), gyro[1], dt, ctypes.byref(rate), ctypes.byref(angle))
         self.predicted = (angle.value, rate.value)
 
     def prediction(self):
@@ -266,8 +264,12 @@ class Incremental:
         """The share taken per axis now (roll, pitch, yaw): the settings faded in (flight_rt.c incremental)."""
         return [self.fade * share for share in self.shares]
 
-    def unmodeled(self, which=INDI_CONTROLLER):
-        return list(self.state.unmodeled[which])
+    def unmodeled(self):
+        return list(self.state.unmodeled)
+
+    def authority(self):
+        """The model's roll, pitch and yaw authority (flight_rt.c maneuver)."""
+        return (self.model.roll_authority, self.model.pitch_authority, self.model.yaw_authority)
 
     def apply(self, controller):
         controller.command[INDI - 1:INDI + 8] = array("f", [self.predict] + self.share() + self.unmodeled() + self.prediction())

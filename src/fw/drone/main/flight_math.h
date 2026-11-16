@@ -16,9 +16,9 @@ typedef struct { float ax, ay, az, gx, gy, gz, dt, gravity_tau; } Motion;
 // yaw_i: the yaw-rate integrator (rad/s²), trimming out steady twist such as the motors' reaction torque at unequal throttles.
 // damped_gy: the pitch rate the pitch damping acts on, low-passed over pitch_damping_tau.
 typedef struct { float roll_i, pitch_i, left, right, left_angle, right_angle, comp_dir[2], comp_ref[2], airborne, setpoint_roll, setpoint_pitch, velocity[2], upright, yaw_i, damped_gy; } Controller;
+// The airframe's authority, the one model the controller, INDI, the servos' dead-time predictor, the burst and the recovery all allocate and estimate on (settings.def roll_authority): angular acceleration (rad/s²) per newton of the left motor's thrust over the right's (roll), per newton of the two's thrust per radian of their common forward tilt (pitch), per newton per radian of the right's forward tilt over the left's (yaw). The servos' range and directions follow.
 typedef struct {
-    float arm, pivot_height, com_x;
-    float roll_inertia, pitch_inertia, yaw_inertia, reaction_torque_ratio;
+    float roll, pitch, yaw;
     float servo_min, servo_max, left_servo_direction, right_servo_direction;
 } Model;
 typedef struct {
