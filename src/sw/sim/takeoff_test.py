@@ -20,7 +20,7 @@ CLEAR = 0.05
 def fly(job):
     rest, seed, recording_name, friction, overrides = job
     from sw.flight_log import recording, settings
-    from sw.sim import flight, sweep
+    from sw.sim import flight, outdoor, sweep
 
     flown = settings(recording(recording_name)) | overrides
     rng = random.Random(seed + 7)
@@ -28,7 +28,7 @@ def fly(job):
     plant = sweep.CURRENT | {"feet": LEG_FEET, "friction": rng.uniform(*friction), "ground_slope": (-math.tan(math.radians(rest)), math.tan(math.radians(rng.uniform(-2, 2)))),
                              "imu_range": (flight.GYRO_RANGE, flight.ACCEL_RANGE), "tumble": 60.0, "guard": False}
     if not flown.get("hover_camera", 1):
-        plant["gps"] = sweep.GPS if hasattr(sweep, "GPS") else plant.get("gps")
+        plant["gps"] = outdoor.GPS | {"heading": 0.0}
         plant["baro"] = sweep.BARO
     log = []
     result = sweep.run(flown, plant, seconds=2.5, seed=seed, log=log, hover=True)

@@ -33,7 +33,7 @@ from pathlib import Path
 import numpy as np
 from scipy.signal import butter, filtfilt
 
-from sw.flight_log import FIRST_DRONE, RECORDINGS, drone, events, parse_settings, read_flight, recording, settings
+from sw.flight_log import FIRST_DRONE, RECORDINGS, drone, events, metadata, parse_settings, read_flight, recording, settings
 from sw.sim import airframe as A
 from sw.sim import flight as F
 from sw.sim import rigid as R
@@ -192,8 +192,8 @@ class Flight:
         self.configuration = configuration
         path = recording(self.name)
         df = read_flight(path)[0].reset_index(drop=True)
-        # The IMU's full scales as the recording was flown (its metadata; ±250 deg/s and ±2 g before it said).
-        meta = json.loads(path.with_suffix(".jsonl").read_text().splitlines()[0])
+        # The IMU's full scales as the recording was flown (its metadata, which can arrive after the start; ±250 deg/s and ±2 g before it said).
+        meta = metadata(path)
         self.gyro_range = 32768 / meta.get("gyro_counts_per_deg_s", 131.0) * A.DEG
         self.accel_range = 32768 / meta.get("accel_counts_per_g", 16384.0)
         self.time = (df["esp_time_us"] - df["esp_time_us"].iloc[0]).to_numpy() / 1e6

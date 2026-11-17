@@ -1,7 +1,7 @@
 """
 A recorded burst flown again on a plant by the firmware that flew it, and set against the log: uv run -m sw.sim.burst_closed prepare FLIGHT PLANT.json OUT.json (in this tree: the plant with the flight's own CoM and yaw push from scorecard.flight_terms baked in), then, in a tree of the firmware to fly (the as-flown commit, or the one that will fly), PYTHONPATH=. python burst_closed.py fly PREPARED.json OUT.json [--harness DIR] [--n 64] [--set k=v,...] [--draws JSON] [--workers 16], and uv run -m sw.sim.burst_closed plot OUT.json ... FIGURE.png here.
 
-fly runs the tree's own firmware through its flip_firmware harness (with the pack's sag and thrust_voltage where it has them, as william/consolidate's does; for older trees --harness DIR's ffsag.py, flip_firmware patched with them as william/burst-repro reproduced the 07:03 burst60), from the ground through the takeoff, the climb to the recording's hold and the flip request: the recording's settings as flown (the GPS hold, the flip_enable it flew), asked for the flip once a second from the time after liftoff the log asked (until it starts), the stand's thrust table with the pack's sag, the firmware's thrust scales and hover_mass as set, the plant as saved with no randomization but the draws (--draws: {term: [low, high]} drawn uniformly per run, the plant's uncertainty), and calm air. Each run's trace from the flip's start (2 s), and its measures: the largest roll and its time, the largest nose excursion either way and when, the largest pitch rate, the hand-back time (the flip's phase 3), the height lost and the highest point, whether it was clean or touched.
+fly runs the tree's own firmware through its flip_firmware harness (with the pack's sag and thrust_voltage where it has them, as william/consolidate's does; for older trees --harness DIR's ffsag.py, flip_firmware patched with them as william/burst-repro reproduced the 07:03 burst60), from the ground through the takeoff, the climb to the recording's hold and the flip request: the recording's settings as flown (the GPS hold, the burst it flew: flip_angle, or flip_enable before it), asked for the flip once a second from the time after liftoff the log asked (until it starts), the stand's thrust table with the pack's sag, the firmware's thrust scales and hover_mass as set, the plant as saved with no randomization but the draws (--draws: {term: [low, high]} drawn uniformly per run, the plant's uncertainty), and calm air. Each run's trace from the flip's start (2 s), and its measures: the largest roll and its time, the largest nose excursion either way and when, the largest pitch rate, the hand-back time (the flip's phase 3), the height lost and the highest point, whether it was clean or touched.
 """
 
 import argparse
@@ -16,6 +16,8 @@ import numpy as np
 COLUMNS = ("t", "p", "q", "r", "left", "right", "left_servo", "right_servo", "phase", "height", "roll", "pitch", "volts", "left_tilt", "right_tilt")
 # The pack's sag (V at no load, V per newton^1.5 summed over the motors) and the thrust_voltage the drone flew (william/burst-repro's harness).
 SAG, THRUST_VOLTAGE = (16.196, 0.0161), 16.1
+# The burst a recording from before flip_angle (a865823) asked for by flip_enable: 2, 3 and 4 were 60, 90 and 30 degrees.
+FLIP_ENABLE_ANGLE = {2: 60.0, 3: 90.0, 4: 30.0}
 
 
 def log_burst(name):
@@ -77,7 +79,10 @@ def fly(prepared, out, harness, n, overrides, draws, workers, seed):
     (FF.R.A.MODELS / name).write_text(json.dumps(data["airframe"]))
     # The plant as saved: its own rotor drag (none where the hubs' aerodynamics carry it), no disturbance terms.
     FF.plant_of = lambda airframe: {"airframe": FF.R.A.model(airframe), "geometry": FF.R.A.geometry_of(FF.R.A.model(airframe)), "disturbances": [], "rotor_drag": tuple(FF.R.A.model(airframe).get("rotor_drag", (0.07, 0.2)))}
-    flown = recording_settings(recording(data["flight"])) | {"hover_camera": 0, "hover_center": 0} | overrides
+    flown = recording_settings(recording(data["flight"])) | {"hover_camera": 0, "hover_center": 0}
+    if "flip_angle" not in flown and flown.get("flip_enable") in FLIP_ENABLE_ANGLE:
+        flown["flip_angle"] = FLIP_ENABLE_ANGLE[flown["flip_enable"]]
+    flown |= overrides
     if options:
         flown["thrust_voltage"] = THRUST_VOLTAGE
     log = data["log"]
