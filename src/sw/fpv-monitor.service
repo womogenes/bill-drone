@@ -1,8 +1,11 @@
-# FPV over the radio through the USB Wi-Fi adapter in monitor mode (src/sw/fpv_monitor.py), as root for monitor mode and raw frames. Install once:
-#   sudo pacman -S --needed iw && sudo install -m644 src/sw/fpv-monitor.service /etc/systemd/system/bill-fpv-monitor.service && sudo systemctl daemon-reload && sudo systemctl enable --now bill-fpv-monitor
+# FPV over the radio through the USB Wi-Fi adapter in monitor mode (src/sw/fpv_monitor.py), as root for monitor mode and raw frames. It runs while the adapter (wlan1) is plugged in: systemd starts it when the interface appears and stops it when it goes. Unbound (WantedBy=multi-user.target) it restarted every 2 s for days without the adapter (135,939 times by 2026-11-17), RestartSec=2 keeping it under systemd's default start limit; the limit below stops a failure with the adapter in after 5 tries a minute. Install once (and again after a change):
+#   sudo pacman -S --needed iw && sudo install -m644 src/sw/fpv-monitor.service /etc/systemd/system/bill-fpv-monitor.service && sudo systemctl daemon-reload && sudo systemctl reenable bill-fpv-monitor
 [Unit]
 Description=bill-drone FPV monitor-mode receiver
-After=network.target
+BindsTo=sys-subsystem-net-devices-wlan1.device
+After=sys-subsystem-net-devices-wlan1.device
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 ExecStart=/usr/bin/python3 /home/willi/coding/ee/bill-drone/src/sw/fpv_monitor.py --interface wlan1 --channel 11
@@ -10,4 +13,4 @@ Restart=on-failure
 RestartSec=2
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sys-subsystem-net-devices-wlan1.device
