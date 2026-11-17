@@ -26,7 +26,7 @@ Each drone and its controller are a line in `../pairs.h` (their station MACs). A
 | Controller radio channel | `native/main/relay.c`: `CHANNEL` |
 | Drone radio channel | `../drone/main/radio.c`: `WIFI_CHANNEL` |
 
-A new or replaced board needs its line in `../pairs.h` and both boards' firmware rebuilt and flashed. A replaced controller needs only itself flashed over USB: its relay beacons to the drone its table names, and a disarmed drone that has heard nothing from its own controller for 5 s takes the beaconing relay as its controller and stores it (`../drone/main/radio.c` adopt; drone firmware from 2026-11-10), after which `make deploy` gives the drone the new table. Keep the channels equal, or let the drone follow (Radio options below). Inspect a board's MAC with `esptool read-mac` while its serial port is free. The bridge finds the controller by listening on each USB serial port for its link report (`find_port.py`), with DTR and RTS released together and nothing written, passing over ports another process holds, and finds it again after a re-plug or 5 s of silence ([HOST.md](HOST.md)).
+A new or replaced board needs its line in `../pairs.h` and both boards' firmware rebuilt and flashed. A replaced controller needs only itself flashed over USB: its relay beacons to the drone its table names, and a disarmed drone that has heard nothing from its own controller for 5 s takes the beaconing relay as its controller and stores it (`../drone/main/radio.c` adopt; drone firmware from 2026-11-10), after which `make deploy` gives the drone the new table. Keep the channels equal. Inspect a board's MAC with `esptool read-mac` while its serial port is free. The bridge finds the controller by listening on each USB serial port for its link report (`find_port.py`), with DTR and RTS released together and nothing written, passing over ports another process holds, and finds it again after a re-plug or 5 s of silence ([HOST.md](HOST.md)).
 
 ## Transport
 
@@ -65,10 +65,8 @@ Until 2026-11-14 each message carried one batch and waited for its acknowledgeme
 
 | Option | Drone | Controller | Default |
 | --- | --- | --- | --- |
-| Sending rate (`../link.h` link_rates: 0 1 Mbps, 1 LR 500 kbps, 2 LR 250 kbps, 3 2 Mbps, 4 5.5 Mbps, 5 11 Mbps, 6 11g 6 Mbps) | setting `radio_rate` | `RATE`, or `POST /radio {"rate": i}` | drone 0, controller 1 |
-| Maximum transmit power (dBm, 0 = the driver's own, 20 dBm) | setting `radio_power` | `POWER`, or `POST /radio {"power": dBm}` | 0 on both |
-| Channel (1, 6 or 11) | follows the controller with setting `radio_follow` 1 | `CHANNEL`, or `POST /radio {"channel": c}` | 6, follow off |
+| Sending rate (`../link.h` link_rates: 0 1 Mbps, 1 LR 500 kbps, 2 LR 250 kbps, 3 2 Mbps, 4 5.5 Mbps, 5 11 Mbps, 6 11g 6 Mbps) | link_rates 0 (11 Mbps during updates) | `RATE`, or `POST /radio {"rate": i}` | drone 0, controller 1 |
+| Maximum transmit power (dBm, 0 = the driver's own, 20 dBm) | the driver's own | `POWER`, or `POST /radio {"power": dBm}` | 0 on both |
+| Channel | `WIFI_CHANNEL` | `CHANNEL` | 6 on both |
 
-Both ends enable 802.11b/g/n and Espressif long range together, so each hears every rate and either can change its own sending rate alone; an LR-only protocol set would gain no sensitivity and would stop hearing the other's 802.11b frames, so neither uses it. A rate or power change on the drone persists (NVS); `POST /radio` changes last until the controller resets, so unplugging it undoes them. The bridge refuses `POST /radio` while the drone is armed, and another channel than 6 unless the drone reports `radio_follow` on: a following drone that is disarmed and has not heard its controller for 2 s tries 6, 1 and 11 for 0.75 s each until it hears the relay's beacon. A drone on 11 shares the camera's FPV channel.
-
-If a mismatch still breaks the link: reset or replug the controller (back to its compiled channel, rate and power), or `POST /radio {"channel": 6}`; a drone that still answers nothing can be set back over USB with `make -C src/fw usb PORT=...` (its settings stay; with `radio_follow` on it finds any of the three channels by itself).
+Both ends enable 802.11b/g/n and Espressif long range together, so each hears every rate and either can change its own sending rate alone; an LR-only protocol set would gain no sensitivity and would stop hearing the other's 802.11b frames, so neither uses it. `POST /radio` changes last until the controller resets, so unplugging it undoes them; the bridge refuses it while the drone is armed.

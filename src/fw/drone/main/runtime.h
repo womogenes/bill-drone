@@ -106,10 +106,8 @@ const char *flight_runtime_calibrate(void);
 // True once per finished calibration: gyro bias (rad/s), pose zero (degrees) and the sensor frame it belongs to.
 bool flight_runtime_take_calibration(float *bias, float *pose_zero, float *sensor_frame);
 const char *flight_runtime_zero_servo(int side, float *offset, char *error, size_t size);
-// Servo bench test, disarmed with zero throttle: start (amp in degrees, cycles), then read progress and per-side results as JSON.
 // After a stop, the self-trimmed roll and pitch biases once (flight_rt.c trim); false if there are none.
 bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias);
-// After a stop, the camera hold's carried-over trim once (flight_rt.c trim); false if there is none.
 // Loads (or with no segments clears) the identification test pattern; NULL and a JSON summary in text, or an error.
 const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *text, size_t size);
 void flight_runtime_status(Status *status);

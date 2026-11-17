@@ -12,6 +12,10 @@
 static inline float clampf(float value, float low, float high) {
     return fmaxf(low, fminf(high, value));
 }
+// A tag unseen this long is lost (us): the range, place and heading holds stop, horizontal velocity is dead-reckoned and damped, and height runs on the IMU alone; the guards (guard.c) go by it too.
+#define LOST_US 250000
+// A GPS fix older than this (us) no longer stands in for the drag model and the speed from the servos (hover.c take_gps; both read airspeed, which outdoors is not the ground speed the hold needs), aids the Kalman filter's horizontal velocity (ekf.c), counts for the fly-away failsafe (guard.c) or lets the burst start (flight_rt.c).
+#define GPS_STALE_US 500000
 
 // Hover and landing: height from the IMU's vertical acceleration, corrected by the camera when it sees the tag (and without it by the barometer or GPS when they are on), which also holds the range and bearing to the tag. No ESP-IDF, so the host can replay recordings through it.
 // The camera's tag rotation is ambiguous and noisy at range (fw/esp32cam/README.md), so the hold flies on the tag centre in the camera frame: turned level by the IMU's roll and pitch, it gives range, bearing and height to the tag; the gyro's yaw separates the drone's own turning from its travel, and tilt dead-reckons the velocity between sightings.

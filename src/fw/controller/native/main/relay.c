@@ -14,7 +14,7 @@
 #include "../../../pairs.h"
 #include "../../../link.h"
 
-// The channel, the rate this relay sends to the drone at (link.h link_rates; 1 is long range 500 kbps) and its maximum transmit power (dBm, 0 = the driver's own) at power-up. The laptop can change all three until the next reset with an RCF1 frame (bridge.py POST /radio), so a mismatch is undone by resetting or replugging this board.
+// The channel, the rate this relay sends to the drone at (link.h link_rates; 1 is long range 500 kbps) and its maximum transmit power (dBm, 0 = the driver's own) at power-up. The laptop can change the rate and power until the next reset with an RCF1 frame (bridge.py POST /radio), so a mismatch is undone by resetting or replugging this board; the channel stays, as the drone's does.
 #define CHANNEL 6
 #define RATE 1
 #define POWER 0
@@ -46,8 +46,8 @@ static volatile int64_t delivered_us;
 static const esp_now_rate_config_t fast_rate = {.phymode = WIFI_PHY_MODE_11B, .rate = WIFI_PHY_RATE_11M_L};
 static bool fast;
 static int64_t fast_until;
-// The radio as set (RATE, POWER, CHANNEL or an RCF1 frame's), power in 0.25 dBm; the driver's power from boot, which power 0 restores.
-static uint8_t usual_rate = RATE, channel_now = CHANNEL;
+// The radio as set (RATE, POWER or an RCF1 frame's), power in 0.25 dBm; the driver's power from boot, which power 0 restores.
+static uint8_t usual_rate = RATE;
 static int8_t power_now, power_boot;
 
 static void set_rate(bool on)
@@ -63,7 +63,7 @@ static LinkCounter link;
 static volatile uint32_t drone_session;
 static uint32_t report_sequence;
 static portMUX_TYPE config_lock = portMUX_INITIALIZER_UNLOCKED;
-static uint8_t requested[3] = {0xff, 0xff, 0xff};
+static uint8_t requested[2] = {0xff, 0xff};
 static volatile bool configured, report_now;
 
 static void set_power(int dbm)
@@ -74,11 +74,11 @@ static void set_power(int dbm)
     }
 }
 
-// An RCF1 change: rate index, power (dBm, 0 the driver's own) and channel, each 0xff to keep. From the radio task, which owns the rate.
+// An RCF1 change: rate index and power (dBm, 0 the driver's own), each 0xff to keep. From the radio task, which owns the rate.
 static void apply_config(void)
 {
     portENTER_CRITICAL(&config_lock);
-    uint8_t rate = requested[0], power = requested[1], channel = requested[2];
+    uint8_t rate = requested[0], power = requested[1];
     memset(requested, 0xff, sizeof(requested));
     configured = false;
     portEXIT_CRITICAL(&config_lock);
@@ -90,9 +90,6 @@ static void apply_config(void)
     }
     if (power <= 21) {
         set_power(power);
-    }
-    if (channel >= 1 && channel <= 11 && channel != channel_now && esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE) == ESP_OK) {
-        channel_now = channel;
     }
     report_now = true;
 }
@@ -161,7 +158,7 @@ static void report_packet(packet_t *packet, const LinkReport *report)
     packet->length = HEADER_SIZE + sizeof(*report);
 }
 
-// The link report once a second to the laptop (and at once after an RCF1 change), and every BEACON_MS to the drone as well: a drone following its controller (radio_follow) stays on the channel where it hears it, even while the laptop sends nothing.
+// The link report once a second to the laptop (and at once after an RCF1 change), and every BEACON_MS to the drone as well: a drone whose own controller is gone takes this relay as its controller by it (fw/drone/main/radio.c adopt), even while the laptop sends nothing.
 #define BEACON_MS 250
 static void report_task(void *argument)
 {
@@ -176,7 +173,7 @@ static void report_task(void *argument)
             report_now = false;
             reported_us = now;
             link_report(&link, now, "RLY1", &report);
-            report.channel = channel_now;
+            report.channel = CHANNEL;
             report.rate = fast ? 5 : usual_rate;
             report.power = power_now;
             have = true;
@@ -290,11 +287,11 @@ static void decode_frame(const uint8_t *pending, size_t length)
         return;
     }
     uint8_t channel = decoded[3];
-    // Channel 7 from the laptop is for this relay: RCF1, then rate, power and channel (0xff keeps one), applied by the radio task.
+    // Channel 7 from the laptop is for this relay: RCF1, then rate and power (0xff keeps one) and a third byte the bridge sends as 0xff, applied by the radio task.
     if (channel == LINK_CHANNEL) {
         if (size >= HEADER_SIZE + 7 && !memcmp(decoded + HEADER_SIZE, "RCF1", 4)) {
             portENTER_CRITICAL(&config_lock);
-            memcpy(requested, decoded + HEADER_SIZE + 4, 3);
+            memcpy(requested, decoded + HEADER_SIZE + 4, 2);
             configured = true;
             portEXIT_CRITICAL(&config_lock);
         }

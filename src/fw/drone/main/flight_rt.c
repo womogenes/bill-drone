@@ -138,8 +138,6 @@ static State state;
 #define GPS_MAX_ACCURACY 8.0f
 #define GPS_MAX_AGE_US 300000
 #define GPS_LATENCY_US 60000
-// The flip asks for a fix the hold took in the last FLIP_FIX_US (hover.c GPS_STALE_US).
-#define FLIP_FIX_US 500000
 #define EARTH_RADIUS 6371000.0
 
 // The newest GPS solution as the Kalman filter and the hover take it (once each): north and east of the first fix taken since boot (m), up above sea level. False without a new, good fix.
@@ -1259,7 +1257,7 @@ const char *flight_runtime_flip(void) {
     FlipCheck check = {
         .enabled = command.flip_angle > 0, .armed = state.enabled, .done = flip.done,
         .holding = hover_mode == HOVER_HOLD && hover.engaged, .camera = command.hover_camera != 0, .gps = command.hover.gps_tau > 0,
-        .aligned = hover.aligned, .located = hover.gps_us && now - hover.gps_us <= FLIP_FIX_US,
+        .aligned = hover.aligned, .located = hover.gps_us && now - hover.gps_us <= GPS_STALE_US,
         .landing = link_landing, .failsafe = guard.failsafe != FAILSAFE_OFF, .pattern = excite.active,
         .airborne = state.controller.airborne, .height = hover.height, .climb_rate = hover.climb_rate, .speed = hypotf(hover.gps_fix[0], hover.gps_fix[1]),
         .roll = pose.roll, .pitch = pose.pitch - command.pitch_trim, .rate = {state.gyro[0], state.gyro[1], state.gyro[2]},

@@ -53,7 +53,7 @@ static int64_t camera_link_report_us = -1;
 static SemaphoreHandle_t answered;
 static uint32_t awaited;
 static CameraUpdateReply answer;
-// camera_update's callers (the request service and the radio's relay mode task) take turns.
+// camera_update and camera_diagnose take turns on the wire.
 static SemaphoreHandle_t update_turn;
 
 // A packet's first start bit: the first falling edge on RX after start_arm. It disarms itself, so the 2 Mbaud bytes that follow cost no interrupts. The edge time is the low 32 bits of esp_timer, compared by unsigned difference. This ISR runs from flash, so during a flash write (only while disarmed) the edge is stamped late and the age reads low.
@@ -187,7 +187,7 @@ static void receive_task(void *arg) {
                 accept(&packet, synced, since_edge_us, now);
             }
         }
-        // Re-armed after each complete frame of any kind (packet, update reply, relay frame), so the edge caught is the next frame's first; or, after noise used the edge up, once it is older than any packet could use and no frame is part way in.
+        // Re-armed after each complete frame of any kind (packet or update reply), so the edge caught is the next frame's first; or, after noise used the edge up, once it is older than any packet could use and no frame is part way in.
         if (!start_armed) {
             portENTER_CRITICAL(&lock);
             uint32_t since = (uint32_t)esp_timer_get_time() - edge_us;
@@ -271,7 +271,7 @@ const char *camera_update(uint8_t op, const uint8_t *body, size_t length, uint32
     static uint32_t next_id;
     static char failure[64];
     if (length > CAMERA_UPDATE_BODY) return "Camera request too long";
-    // The radio's mode task may ask before camera_start has set up the wire.
+    // A request may come before camera_start has set up the wire.
     if (!update_turn) return "The camera link is not started";
     xSemaphoreTake(update_turn, portMAX_DELAY);
     if (!next_id) next_id = esp_random() | 1;

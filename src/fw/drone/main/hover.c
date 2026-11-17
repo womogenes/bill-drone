@@ -3,8 +3,6 @@
 
 #include "hover.h"
 
-// A tag unseen this long is lost: the range, place and heading holds stop, horizontal velocity is dead-reckoned and damped, and height runs on the IMU alone.
-#define LOST_US 250000
 // How fast the camera corrects the velocity (s); sightings further apart than GAP_US restart it.
 #define VELOCITY_TAU 0.4f
 #define GAP_US 200000
@@ -185,8 +183,6 @@
 #define SPEED_LEARN 5.0f
 // After the tag is found again following a loss, the hold's position terms ease in over this long (us): the drift while blind arrives as one jump in the sighting, and at full gain it commanded the tilt limit on both axes at once (2026-11-02 05:13 UTC: 0.5 m after 0.7 s lost, pitch -10 and roll +10, and the overshoot to 17 degrees made the pilot stop it).
 #define REACQUIRE_EASE_US 1000000
-// GPS (take_gps): a fix older than this no longer stands in for the drag model and the speed from the servos (both read airspeed, which outdoors is not the ground speed the hold needs).
-#define GPS_STALE_US 500000
 // The heading's evidence: the GPS velocity and the inertial velocity are averaged over blocks of fixes spanning HEADING_BLOCK_US, and each block's change from the previous one (inertial times the GPS's conjugate) is summed, fading over HEADING_TAU (s; the gyro heading drifts under 10 degrees a minute, gps_truth.py). Fix-to-fix changes (0.1 s) were mostly GPS noise: on 2026-11-09 06:34 UTC the evidence pointed within 10 degrees of the truth from 15 s on, but their magnitudes' agreement stayed at 0.34-0.54, under the 0.6 that gate needed, so the heading never left its first guess (off 49 degrees all flight; 05:45, 05:52, 06:14, 06:33, 06:38 alike, heading_replay.py). A gap longer than HEADING_GAP_US starts the blocks over.
 #define HEADING_BLOCK_US 400000
 #define HEADING_GAP_US 500000

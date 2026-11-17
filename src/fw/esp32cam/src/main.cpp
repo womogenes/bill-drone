@@ -13,7 +13,6 @@
 #include "tag.h"
 #include "flow.h"
 #include "ota.h"
-#include "relay.h"
 #include "clocks.h"
 #include "update.h"
 #include "air_update.h"
@@ -50,7 +49,7 @@ volatile uint32_t linkSent = 0, linkDropped = 0, linkReceived = 0;
 
 void noPrint(char) {}
 
-// Link diagnostics (2026-11-14, the drone's requests not answered): a pulse counter shares the link's RX pin through the GPIO matrix and counts its falling edges, so a silent wire can be told from a receiver fault; each wrap at rxEdgeLimit is counted by its interrupt. linkLate counts packets written behind other bytes (relay mode), whose start bit came after their stamp, and startDelayUs the stamp-to-written time of the others (the start bit begins within it). They, with linkReceived, go to the drone in TAG3 packets without a trusted tag (packet.h altRotation) and answer update op Y.
+// Link diagnostics (2026-11-14, the drone's requests not answered): a pulse counter shares the link's RX pin through the GPIO matrix and counts its falling edges, so a silent wire can be told from a receiver fault; each wrap at rxEdgeLimit is counted by its interrupt. linkLate counted packets written behind other bytes in the drone's radio relay (gone; it stays 0 in the reports), and startDelayUs the stamp-to-written time of the others (the start bit begins within it). They, with linkReceived, go to the drone in TAG3 packets without a trusted tag (packet.h altRotation) and answer update op Y.
 constexpr pcnt_unit_t rxEdgeUnit = PCNT_UNIT_0;
 constexpr int16_t rxEdgeLimit = 30000;
 volatile uint32_t rxEdgeWraps = 0, linkLate = 0;
@@ -192,12 +191,10 @@ void serviceTask(void *) {
         while ((n = uart_read_bytes(linkPort, received, sizeof(received), 0)) > 0) {
             linkReceived = linkReceived + n;
             update::receive(linkPort, received, n);
-            relay::receive(received, n);
         }
         readTestUart();
         update::poll();
         air::poll();
-        relay::poll();
 #endif
         delay(2);
     }
@@ -337,20 +334,12 @@ void setup() {
     digitalWrite(config::flashLedPin, LOW);
     health::countBoot();
     health::watchWifi();
-    // The drone's radio relay (relay.h) takes the radio instead when the drone asked for it.
-#ifdef DEBUG_CONSOLE
-    const bool relayed = false;
-#else
-    const bool relayed = relay::start(linkPort);
-#endif
-    if (!relayed) {
-        startWifi();
-        if (wifiConfigured())
-            fpv::start();
-        // Updates over the FPV receiver's ESP-NOW (air_update.h), wherever the radio is up.
-        if (WiFi.getMode() != WIFI_MODE_NULL)
-            air::start();
-    }
+    startWifi();
+    if (wifiConfigured())
+        fpv::start();
+    // Updates over the FPV receiver's ESP-NOW (air_update.h), wherever the radio is up.
+    if (WiFi.getMode() != WIFI_MODE_NULL)
+        air::start();
     assert(psramFound());
     heap_caps_malloc_extmem_enable(4096);
     // Mounting leaves the sync line low (on the ESP32-CAM, the card's DAT3, held high until the card is up).
@@ -428,7 +417,7 @@ void setup() {
     xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
 }
 
-// Each frame's packet goes out on UART0 at 2 Mbaud, 164 bytes in 0.8 ms. The drone dates it by the falling edge of its first start bit (fw/drone/main/camera.c), so the packet's age is stamped just before it is written to an idle UART: the driver's transmit interrupt (on this core) fills the FIFO at once and the start bit follows the stamp by the time it takes to write (startDelayUs, a few tens of microseconds). The UART is waited for up to linkIdleWaitUs (an update reply is 0.3 ms); if it is still busy the packet is dropped, or in relay mode, where the drone's radio packets share the wire, written behind them and counted late (dated up to the buffer's 5 ms late). Until 2026-11-14 a SYNC pulse on syncPin dated it; the drone's end of that line is now shorted to its TX, so syncPin is never driven (startLink).
+// Each frame's packet goes out on UART0 at 2 Mbaud, 164 bytes in 0.8 ms. The drone dates it by the falling edge of its first start bit (fw/drone/main/camera.c), so the packet's age is stamped just before it is written to an idle UART: the driver's transmit interrupt (on this core) fills the FIFO at once and the start bit follows the stamp by the time it takes to write (startDelayUs, a few tens of microseconds). The UART is waited for up to linkIdleWaitUs (an update reply is 0.3 ms); if it is still busy the packet is dropped. Until 2026-11-14 a SYNC pulse on syncPin dated it; the drone's end of that line is now shorted to its TX, so syncPin is never driven (startLink).
 constexpr uint32_t linkIdleWaitUs = 1000;
 
 bool linkIdle() {
@@ -442,7 +431,7 @@ void publish(PosePacket &packet) {
     bool idle;
     while (!(idle = linkIdle()) && uint32_t(esp_timer_get_time()) - waited < linkIdleWaitUs) {
     }
-    if (!idle && !relay::active) {
+    if (!idle) {
         ++linkDropped;
         return;
     }
@@ -465,10 +454,6 @@ void publish(PosePacket &packet) {
 #endif
     const uint32_t delay = uint32_t(esp_timer_get_time()) - now;
     ++linkSent;
-    if (!idle) {
-        ++linkLate;
-        return;
-    }
     startDelaySumUs = startDelaySumUs + delay;
     startDelayCount = startDelayCount + 1;
     if (delay > startDelayMaxUs)

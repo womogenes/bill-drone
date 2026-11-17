@@ -1,4 +1,4 @@
-// Radio link quality and options shared by the drone (fw/drone/main/radio.c) and the controller's relay (fw/controller/native/main/relay.c): the once-a-second link report each sends on channel 7, the PHY rates either can send at, and the channels the drone may follow its controller to. The laptop decodes the reports in fw/controller/bridge.py (LINK_FORMAT).
+// Radio link quality and options shared by the drone (fw/drone/main/radio.c) and the controller's relay (fw/controller/native/main/relay.c): the once-a-second link report each sends on channel 7 and the PHY rates either can send at. The laptop decodes the reports in fw/controller/bridge.py (LINK_FORMAT).
 #pragma once
 
 #include <stdbool.h>

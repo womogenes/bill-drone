@@ -3,9 +3,6 @@
 
 #include "guard.h"
 
-// hover.c's own limits, repeated here: a tag unseen this long is lost (LOST_US), and a GPS fix older than this no longer corrects the velocity (GPS_STALE_US).
-#define GUARD_LOST_US 250000
-#define GUARD_GPS_US 500000
 // A nudge that moves less than this in a tick (m) is not the pilot's: the laptop streams it in 1-2 cm steps every 50 ms while an arrow is held.
 #define NUDGE_STILL 0.001f
 // A pattern started on the tag stops once the tag has been unseen this long (us), not at the hold's own LOST_US: on 2026-11-02 the hold lost the tag past 250 ms 26 times in 84 s on it (six flights), and 8 times past 1 s, which at 250 ms would have stopped most 8 s patterns while the hold dead-reckoned through them.
@@ -33,8 +30,8 @@ int guard_hover(Guard *guard, const GuardGains *g, HoverState *hover, HoverGains
     // The laptop's horizontal input: a tilt (free flight without the tag) or a hold-point nudge moving (the arrows on the tag, a speed on the GPS hold, a pattern's hold-point channels).
     bool input = gains->stick_pitch || gains->stick_roll || fabsf(gains->nudge_forward - hover->nudge[0]) > NUDGE_STILL || fabsf(gains->nudge_left - hover->nudge[1]) > NUDGE_STILL;
     guard->quiet = input ? 0 : guard->quiet + dt;
-    bool seeing = hover->have_pose && now_us - hover->seen_us <= GUARD_LOST_US;
-    bool located = gains->gps_tau > 0 && hover->gps_us && now_us - hover->gps_us <= GUARD_GPS_US;
+    bool seeing = hover->have_pose && now_us - hover->seen_us <= LOST_US;
+    bool located = gains->gps_tau > 0 && hover->gps_us && now_us - hover->gps_us <= GPS_STALE_US;
     bool flying = hover->engaged && !hover->landed && hover->lifted >= 0;
     // Only the GPS is trusted: the drag model alone read under 0.2 m/s while the drone flew 3 m in 4.5 s (2026-11-02 02:46 UTC). The speed and the distance from the first fix are the GPS's own (hover.h gps_fix), not the hold's estimates, which the GPS corrects only once the hold's heading is pinned: unpinned they read slow and near while the drone flew off (sw/sim/outdoor.py 2026-11-09: 27 and 41 m in 25 s with no failsafe, and one braked to 0.5 m/s by the estimate at 3.5 m/s over the ground).
     bool watching = mode == HOVER_HOLD && flying && located && !seeing;
@@ -98,7 +95,7 @@ void guard_pattern_reset(Guard *guard) {
 
 int guard_pattern(Guard *guard, const GuardGains *g, const HoverState *hover, int64_t now_us, float roll, float pitch, float stick_roll, float stick_pitch, const float *nudge, const float *shift) {
     if (guard->stopped) return guard->stopped;
-    bool engaged = hover && hover->engaged, seeing = engaged && hover->have_pose && now_us - hover->seen_us <= GUARD_LOST_US;
+    bool engaged = hover && hover->engaged, seeing = engaged && hover->have_pose && now_us - hover->seen_us <= LOST_US;
     bool lost = !(engaged && hover->have_pose && now_us - hover->seen_us <= PATTERN_LOST_US);
     // Where the drone is: on the tag the tag relative to it (yaw-turned level frame, m; between sightings moved on by the hover's velocity, as hover.c leads it), else the hover's dead-reckoned (GPS-corrected when it has the GPS) track and height.
     float here[3] = {0, 0, 0};

@@ -7,7 +7,7 @@
 #include "mbedtls/sha256.h"
 #include "update.h"
 
-// Firmware updates over ESP-NOW from the FPV receiver (fw/fpv_rx, on the laptop's USB; fw/tools/camera_air_ota.py, make camera-fast), which needs no network and no wiring: the drone's wired link is about 4 KB a request at its radio's pace, this is the receiver's ESP-NOW on the camera's own channel. Every message starts with "CUE1" and a type. D: one piece of a sector (index u16, offset u16, up to pieceBytes), unanswered. R: a request (id u32, op, body) answered by A (id, status 0 done or 1 failed, text), the same id answered again from the last reply without repeating it. Its ops are update.h's (I, B, X; S and N too), W with the sector index and its hash, which writes the sector its pieces built (or names the pieces missing as a hex bitmap), and H (first sector u16, count u8), which replies with the first hashBytes of each spare-slot sector's SHA-256, so a sector already there is not sent again and an interrupted update resumes. W and B stop the camera and keep update.h's abandon timer running, as over the wire. Not in relay mode, where relay.h owns ESP-NOW.
+// Firmware updates over ESP-NOW from the FPV receiver (fw/fpv_rx, on the laptop's USB; fw/tools/camera_air_ota.py, make camera-fast), which needs no network and no wiring: the drone's wired link is about 4 KB a request at its radio's pace, this is the receiver's ESP-NOW on the camera's own channel. Every message starts with "CUE1" and a type. D: one piece of a sector (index u16, offset u16, up to pieceBytes), unanswered. R: a request (id u32, op, body) answered by A (id, status 0 done or 1 failed, text), the same id answered again from the last reply without repeating it. Its ops are update.h's (I, B, X; S and N too), W with the sector index and its hash, which writes the sector its pieces built (or names the pieces missing as a hex bitmap), and H (first sector u16, count u8), which replies with the first hashBytes of each spare-slot sector's SHA-256, so a sector already there is not sent again and an interrupted update resumes. W and B stop the camera and keep update.h's abandon timer running, as over the wire.
 namespace air {
 constexpr size_t pieceBytes = 232, maxMessage = 250, maxHashes = 28;
 constexpr uint8_t magic[4] = {'C', 'U', 'E', '1'};
@@ -40,7 +40,7 @@ void received(const uint8_t *mac, const uint8_t *data, int length) {
     xQueueSend(inbox, &message, 0);
 }
 
-// After WiFi starts, in its own mode only (not the relay's).
+// After WiFi starts.
 inline void start() {
     inbox = xQueueCreate(24, sizeof(Message));
     started = inbox && esp_now_init() == ESP_OK && esp_now_register_recv_cb(received) == ESP_OK;

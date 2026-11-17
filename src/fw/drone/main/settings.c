@@ -10,7 +10,6 @@ static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 #define LOCK() portENTER_CRITICAL(&lock)
 #define UNLOCK() portEXIT_CRITICAL(&lock)
 
-#define RAD (3.14159265358979323846f / 180.0f)
 // NVS blob: "FS1", a reserved byte, then (name length, name, float32) pairs. Names rather than positions let entries be added or removed without losing the rest.
 // 2048 until 2026-11-14, when attitude_tau did not fit; an older, smaller blob still loads by its names.
 #define BLOB 4096

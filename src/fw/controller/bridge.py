@@ -600,7 +600,7 @@ class Service:
         return self.sequence
 
     def send(self, channel, payload, sequence=None, index=0, count=1, request_id=None):
-        # Channel 7 is for the controller itself (POST /radio), which must work while the drone is not heard: that is how a controller moved off the drone's channel is brought back.
+        # Channel 7 is for the controller itself (POST /radio), which must work while the drone is not heard, so a rate or power that loses the drone can be set back.
         if channel != LINK_CHANNEL and not self.fresh():
             return False
         packet = serial_encode(pack(channel, self.session, sequence or self.next_sequence(), self.token, payload,

@@ -91,7 +91,6 @@ enum { TILT = 0, VELOCITY = 3, POSITION = 6, GYRO_BIAS = 9, ACCEL_BIAS = 12, BAR
 #define REST_KEPT 5.0f
 #define GROUND_TAU 1.0f
 // Without the GPS's horizontal velocity (heading not yet known, no solution for GPS_STALE_US, indoors) the horizontal specific force is taken as zero, which over time it is: the accelerometer's pull on the attitude in flight_math.c. Its standard deviation (m/s²) with the motors off, where only carrying accelerates it, and on, where the drone's own accelerations do. The horizontal velocity, which nothing measures then, is held within EKF_CARRY_SD or EKF_FREE_SD (m/s) of zero once a second so its uncertainty stays finite.
-#define GPS_STALE_US 500000
 #ifndef EKF_LEVEL_SD
 #define EKF_LEVEL_SD 0.6f
 #endif

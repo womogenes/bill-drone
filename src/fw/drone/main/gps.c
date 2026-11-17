@@ -317,19 +317,15 @@ void gps_stats(GpsStats *out) {
     portEXIT_CRITICAL(&lock);
 }
 
-void gps_sky(GpsSky *out) {
-    portENTER_CRITICAL(&lock);
-    *out = sky;
-    portEXIT_CRITICAL(&lock);
-}
-
 static uint32_t age_ms(int64_t at, int64_t now) {
     return at < 0 ? UINT32_MAX : (now - at) / 1000;
 }
 
 size_t gps_report(uint8_t *out, size_t size, int64_t now) {
     static GpsSky copy;
-    gps_sky(&copy);
+    portENTER_CRITICAL(&lock);
+    copy = sky;
+    portEXIT_CRITICAL(&lock);
     // Magic; drone time, NAV-SAT's time of week and age, MON-RF's age (ms); noise, AGC; jamming state, CW indicator, antenna status and power, configuration, satellites listed in all and here.
     size_t header = 31, length = header + copy.count * sizeof(UbxSatellite);
     if (length > size) return 0;

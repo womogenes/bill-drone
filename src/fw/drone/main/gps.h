@@ -38,7 +38,6 @@ void gps_start(void);
 // The newest fix if it is at most max_age_us old.
 bool gps_fix(GpsFix *fix, uint32_t max_age_us);
 void gps_stats(GpsStats *stats);
-void gps_sky(GpsSky *sky);
 // The diagnostics as the radio's GPS report (bridge.py decode_gps_report): "GPD1", then the sky's fields with ages in ms (0xffffffff before the first) and its satellites; returns the length, at most 231 bytes.
 size_t gps_report(uint8_t *out, size_t size, int64_t now);
 // The tunnel for exploring the module from the laptop (the drone's N request): gps_send writes raw bytes to the module (UBX polls and configuration); gps_take copies out the UBX frames other than NAV-PVT received since the last take, whole, as the module sent them, and returns their length (frames that did not fit the 4 KB buffer are dropped and counted in *dropped). Frames are kept only within 5 s of the tunnel's last use, or until gps_tunnel_hold's time runs out, so the drone's own polls do not fill it while nobody takes them.
