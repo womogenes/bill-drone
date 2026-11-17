@@ -23,8 +23,6 @@ library.flight_attitude_start.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 library.flight_attitude_start.restype = None
 library.flight_control.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
 library.flight_control.restype = None
-library.flight_control_many.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
-library.flight_control_many.restype = None
 count = ctypes.c_size_t.in_dll(library, "flight_thrust_count").value
 THRUST_BUFFER = array("f", (ctypes.c_float * (2 * count)).in_dll(library, "flight_thrust"))
 # [throttle, thrust_N] rows, as the drone uses them.
@@ -39,16 +37,6 @@ PRE_RECALIBRATION_TABLE = [[0, 0.0], [200, 0.0], [250, 0.758689175], [300, 1.140
 def thrust_table(recording):
     """The thrust table a recording (its path or name, starting with its UTC time) was flown with: [throttle, thrust_N] rows."""
     return PRE_RECALIBRATION_TABLE if Path(recording).name[:16] < RECALIBRATED else THRUST_TABLE
-
-
-def control_many(states, commands, table=THRUST_TABLE):
-    """
-    Step every lane's controller in place: states and commands are C-contiguous float32 arrays [lane, ...] laid out as Controller.state and Controller.command, with each command's motion filled in, all on one thrust table.
-    """
-    assert states.dtype == commands.dtype == "float32" and states.flags.c_contiguous and commands.flags.c_contiguous
-    # The table as the C controller takes it: flat float32 throttle, thrust pairs.
-    buffer = THRUST_BUFFER if table is THRUST_TABLE else array("f", [value for row in table for value in row])
-    library.flight_control_many(states.ctypes.data, states.shape[1], commands.ctypes.data, commands.shape[1], buffer.buffer_info()[0], len(buffer) // 2, len(states))
 
 
 def interpolate(value, points, input_column=0):

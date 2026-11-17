@@ -63,7 +63,7 @@ def library():
 
 
 def load_plant(airframe="airframe_2026-10-28.json", disturbances="disturbances_2026-10-28_calibrated.json"):
-    """The default plant: the identified airframe at its geometry, its calibrated disturbances and drag (sw/sim/sweep.py IDENTIFIED_ESC)."""
+    """The default plant: the identified airframe at its geometry, its calibrated disturbances and drag (sw/sim/sweep.py IDENTIFIED_ESC_1028)."""
     params = A.model(airframe)
     return {"airframe": params, "geometry": A.geometry_of(params), "disturbances": A.model(disturbances) if disturbances else [], "rotor_drag": (0.58, 0.34)}
 

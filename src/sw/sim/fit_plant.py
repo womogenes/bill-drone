@@ -9,7 +9,6 @@ With --response W the cost adds W times each configuration's frequency-response 
 import argparse
 import json
 import math
-import os
 import time as clock
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -74,10 +73,7 @@ def apply(base, names, values):
 
 def plant_from(entry, params):
     """scorecard.plant_for on parameters held in memory."""
-    f = flight(entry)
-    path = Path(f"/tmp/fit_plant_{os.getpid()}.json")
-    path.write_text(json.dumps(params))
-    return S.plant_for(f, str(path), {})
+    return S.plant_for(flight(entry), params, {})
 
 
 def score(task):
@@ -113,16 +109,7 @@ def terms_task(task):
 
 def find_terms(pool, chosen, params, warmup):
     """Each flight's own terms on these parameters (the nearest flight's in its configuration for one too short)."""
-    found = list(pool.map(terms_task, [(e, params, warmup) for e in chosen]))
-    known = [(e["name"], e["configuration"], t) for e, t in zip(chosen, found) if t is not None]
-    stamp = lambda name: clock.mktime(clock.strptime(name[:19], "%Y-%m-%dT%H-%M-%S"))
-    out = {}
-    for e, t in zip(chosen, found):
-        if t is None:
-            near = sorted((abs(stamp(n) - stamp(e["name"])), n, own) for n, c, own in known if c == e["configuration"])
-            t = near[0][2] if near else np.zeros(3)
-        out[e["name"]] = t
-    return out
+    return S.nearest_terms(chosen, list(pool.map(terms_task, [(e, params, warmup) for e in chosen])))
 
 
 def response_task(task):
@@ -143,13 +130,11 @@ def closed_task(task):
     """One flight's closed-loop misfit for one candidate (scorecard_closed.rerun, one run): (name, the log's measures, parameters)."""
     name, log, params = task
     from sw.sim import scorecard_closed as C
-    path = Path(f"/tmp/fit_plant_closed_{os.getpid()}.json")
-    path.write_text(json.dumps(params))
     # The scorecard's predictions in this worker rest the hull on the flight's feet (scorecard.make_sim sets rigid.HULL); the closed loop flies from rigid.py's own.
     S.R.HULL = S.HULL.copy()
     try:
         with np.errstate(all="ignore"):
-            run = C.rerun((name, str(path), 1, 0, {}))["runs"][0]
+            run = C.rerun((name, params, 1, 0, {}))["runs"][0]
     except Exception:
         return 10.0
     tipped_log = log.get("tip_after_liftoff") is not None
@@ -256,7 +241,7 @@ def main():
     args = parser.parse_args()
     import cma
     initialize(args.list, args.firmware)
-    base = json.loads(Path(args.base).read_text()) if Path(args.base).exists() else A.model(args.base)
+    base = A.model(args.base)
     everything = S.entries(listing)
     held = [e for e in everything if any(e["name"].startswith(p) for p in args.hold)]
     train = [e for e in everything if e not in held and (not args.train or any(e["name"].startswith(p) for p in args.train))]

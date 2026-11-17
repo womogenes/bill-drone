@@ -72,12 +72,6 @@ def parse_settings(text):
     return {name: float(value) for name, value in (item.split("=") for item in text.split(",") if item)}
 
 
-def test_pattern(path):
-    """The last test pattern a recording played (sw/excite.py), or None."""
-    patterns = [event for event in events(path) if event.get("type") == "pattern"]
-    return patterns[-1] if patterns else None
-
-
 def drone(path):
     """The physical drone a recording was flown by (its station MAC), from its start record; None when a later recording does not say."""
     path = Path(path)

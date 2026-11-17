@@ -21,9 +21,7 @@ SAG, THRUST_VOLTAGE = (16.196, 0.0161), 16.1
 def log_burst(name):
     """The recording's burst: the flip's start (s from the recording's start), its liftoff, and the log's trace from 0.5 s before the start to 2.5 s after, in the trace's columns where the log has them."""
     from sw.sim import scorecard as S
-    listing = S.flight_list()
-    entry = next(e for e in S.entries(listing) if e["name"].startswith(name))
-    flight = S.Flight(entry, listing["configurations"][entry["configuration"]])
+    flight = S.named(name)[1]
     start = flight.time[np.flatnonzero(flight.flip > 0)[0]]
     lifted = flight.time[np.flatnonzero(flight.airborne)[0]]
     shown = (flight.time >= start - 0.5) & (flight.time <= start + 2.5)
@@ -35,9 +33,7 @@ def prepare(name, plant_path, out):
     """The plant for this flight's rerun: the airframe with the flight's CoM (forward and left) and yaw push baked in, the trim the closed loop flies (thrust level 1 on the stand's table with the sag, the split the CoM asks for), and the log's burst."""
     from sw.sim import airframe as A
     from sw.sim import scorecard as S
-    listing = S.flight_list()
-    entry = next(e for e in S.entries(listing) if e["name"].startswith(name))
-    flight = S.Flight(entry, listing["configurations"][entry["configuration"]])
+    entry, flight = S.named(name)
     plant = S.plant_for(flight, plant_path, {})
     # The CoM from the plant without its disturbance state, which would take the CoM's steady torque into its estimate: the closed loop has no observer.
     terms = S.flight_terms(flight, plant | {"observer": None}, 100)

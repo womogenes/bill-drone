@@ -74,16 +74,14 @@ def measures(time, pitch_rate, pitch, height, tipped_at):
 
 def log_measures(name):
     """The recording's measures (measures), its tip cut from the stop reason."""
-    listing = S.flight_list()
-    entry = next(e for e in S.entries(listing) if e["name"].startswith(name))
-    flight = S.Flight(entry, listing["configurations"][entry["configuration"]])
+    flight = S.named(name)[1]
     stops = [e.get("reason") for e in S.events(recording(name)) if e["type"] == "stop"]
     tipped = flight.last_on if stops and stops[-1] == "Tilt limit exceeded" else None
     return measures(flight.time, np.degrees(flight.gyro[:, 1]), np.degrees(flight.attitude[:, 1]), np.nan_to_num(flight.height, nan=0.0) * flight.on, tipped)
 
 
 def rerun(task):
-    """One flight's settings flown n times on one plant (only the GPS and barometer noise differ between runs): each run's measures."""
+    """One flight's settings flown n times on one plant (scorecard.airframe_for's; only the GPS and barometer noise differ between runs): each run's measures."""
     name, plant_name, n, seed, overrides, *rest = task
     flown_overrides = rest[0] if rest else {}
     listing = S.flight_list()
@@ -91,13 +89,8 @@ def rerun(task):
     configuration = listing["configurations"][entry["configuration"]]
     path = recording(name)
     flown = recording_settings(path)
-    params = json.loads(Path(plant_name).read_text()) if Path(plant_name).exists() else A.model(plant_name)
     bands = configuration["bands"]
-    own = {"left_band": params.get("left_band", 0.0), "right_band": params.get("right_band", 0.0)}
-    params = params | ((own if any(own.values()) else S.BANDS) if bands is True else {} if bands == "plant" else {"left_band": 0.0, "right_band": 0.0}) | overrides
-    for key, other in (("servo_delay", "right_servo_delay"), ("servo_wn", "right_servo_wn")):
-        if key in overrides and other not in overrides:
-            params[other] = overrides[key]
+    params = S.airframe_for(plant_name, bands, overrides)
     FF.plant_of = lambda airframe: {"airframe": params, "geometry": A.geometry_of(params), "disturbances": [], "rotor_drag": tuple(params.get("rotor_drag", (0.07, 0.2)))}
     FF.R.Sim = Tracing
     # The GPS hold in place of the camera's, the flight's own climb; no flip; the pack's sag is not simulated.
@@ -131,12 +124,10 @@ def plot(results, names, plants, out):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    listing = S.flight_list()
     colors = ("#1f77b4", "#d62728", "#2ca02c", "#9467bd")
     fig, axes = plt.subplots(len(names), 1, figsize=(14, 2.2 * len(names)), squeeze=False)
     for ax, name in zip(axes[:, 0], names):
-        entry = next(e for e in S.entries(listing) if e["name"].startswith(name))
-        flight = S.Flight(entry, listing["configurations"][entry["configuration"]])
+        entry, flight = S.named(name)
         log = log_measures(name)
         if log.get("liftoff") is not None:
             shown = (flight.time >= log["liftoff"] - 0.5) & (flight.time <= log["liftoff"] + SPAN)

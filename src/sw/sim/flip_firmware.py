@@ -36,7 +36,7 @@ BARO_READINGS = int(re.search(r"#define RECOVER_BARO_READINGS (\d+)", (MAIN / "r
 SOURCES = [MAIN / "flip.c", MAIN / "recover.c", MAIN / "flight_math.c"]
 HEADERS = [MAIN / "flip.h", MAIN / "recover.h", MAIN / "flight_math.h", MAIN / "hover.h", MAIN / "guard.h"]
 LIBRARY = Path(__file__).with_name("libflip.so")
-# The GPS hold as the roll-step ladder was cleared with on 2026-11-12 (sw/flight_steps.py ladder), held at 3 m (hover_climb and hover_ceiling as settings.def now allows), the flip allowed from 2.5 m.
+# The GPS hold as the roll-step ladder was cleared with on 2026-11-12 (the ladder), held at 3 m (hover_climb and hover_ceiling as settings.def now allows), the flip allowed from 2.5 m.
 FLIGHT = {"hover_camera": 0, "hover_center": 0, "hover_gps_tau": 0.5, "hover_gps_place_tau": 2.0, "hover_tilt": 10.0, "hover_kd": 1.5, "hover_thrust_direction": 0.8, "pitch_damping": 6.0,
           "hover_gps_calibrate": 5.0, "roll_target_rate": 360.0, "hover_climb": 3.0, "hover_ceiling": 3.5, "flip_angle": 60.0, "flip_height": 2.5, "thrust_voltage": 0.0}
 # A clean burst rolled at least this share of its angle (the share the Euler spin handed back at, 1 less flip_defaults' handoff 1.9648 rad of a whole turn, as every result before 2026-11-15 counted it).
@@ -48,7 +48,7 @@ BELLY = 0.035
 # The motors' load through the flip (from its start until it is done, at most LOST_WINDOW): time at FULL or more of the throttle, and the current, modeled from each motor's thrust as momentum theory has power (I = CURRENT_FULL (T / THRUST_FULL)^1.5) and pinned at SunnySky's X2212 980KV table, about 31 A on a 10x4.7 at full throttle on 14.8 V (the firmware's table's 11.22 N at 1200 times the 1.28 trim). Not measured on this drone.
 FULL = 0.95 * 1200
 CURRENT_FULL, THRUST_FULL = 31.0, 11.22 * 1.28
-# Keep each burst's trace in its row (scorecard_closed.py sets it).
+# Keep each burst's trace in its row (burst_closed.py sets it).
 TRACE = False
 # A fresh pack under load (V), for flip_refusal's battery check.
 BATTERY = 16.0
@@ -248,7 +248,7 @@ def fly(job):
     """
     One batch of runs on the same drawn plants: per run, whether and when the flip started, why it was refused, and the measures.
 
-    job: settings, tilt offset, seed, runs, seconds, gyro and accelerometer range, flip_at, whether to ask for the flip, the airframe, the randomization, and optionally the flip's parameters (a dict on top of flip_defaults, for tuning) and options, what sw/sim/recover_firmware.py tests on top of the plant: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "recover" (recover.c RecoverParams on top of recover_defaults), "airframe" (factors on the drawn airframe's terms), "roll_thrust" (the roll authority's range, as randomization's, in place of the randomization's), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up, for airframes without rotor_momentum), "deadband" (per run, the throttle under which an ESC stops its motor), "set" (airframe terms set outright after the draws), "recover_limit" (whether the recovery's throttles are slewed and capped, in place of RECOVER_LIMIT), "trace" (s of the recovery's trace after the event), "table" (the motors' thrust table, rows of throttle and N, in place of the firmware's), "geometry" (geometry terms set outright), "thrust_scale" (the firmware's thrust scales as set, instead of calibrated to each plant), "hover_mass" (the firmware's hover_mass as set, instead of the plant's mass), "scale" (rigid.Sim scale factors set for every run, in place of the draws), "sag" ((V0, k): the pack sags to V0 - k Σ T^1.5 over the motors' thrusts T in N, the table's thrusts scaled by (V / "table_volts")², the pack voltage each table row was measured at, and the firmware compensates as flight_rt.c does with the setting thrust_voltage).
+    job: settings, tilt offset, seed, runs, seconds, gyro and accelerometer range, flip_at, whether to ask for the flip, the airframe, the randomization, and optionally the flip's parameters (a dict on top of flip_defaults, for tuning) and options, what sw/sim/recover_firmware.py tests on top of the plant: "event" (a function of (rng, n) giving per run the time, attitude, body rates and vertical velocity the drone is put into, and whether level-and-hold is asked for then), "landing" (s after liftoff to start the link-loss landing; the event then comes at its height instead of its time), "recover" (recover.c RecoverParams on top of recover_defaults), "airframe" (factors on the drawn airframe's terms), "roll_thrust" (the roll authority's range, as randomization's, in place of the randomization's), "gyroscopic" (per run, the props' angular momentum per root newton of thrust, N·m·s/√N, + for the left prop spinning so it points up, for airframes without rotor_momentum), "deadband" (per run, the throttle under which an ESC stops its motor), "set" (airframe terms set outright after the draws), "recover_limit" (whether the recovery's throttles are slewed and capped, in place of RECOVER_LIMIT), "table" (the motors' thrust table, rows of throttle and N, in place of the firmware's), "geometry" (geometry terms set outright), "thrust_scale" (the firmware's thrust scales as set, instead of calibrated to each plant), "hover_mass" (the firmware's hover_mass as set, instead of the plant's mass), "sag" ((V0, k): the pack sags to V0 - k Σ T^1.5 over the motors' thrusts T in N, the table's thrusts scaled by (V / "table_volts")², the pack voltage each table row was measured at, and the firmware compensates as flight_rt.c does with the setting thrust_voltage).
     """
     settings, offset, seed, n, seconds, gyro_range, accel_range, flip_at, flipping, airframe, randomize = job[:11]
     # The maneuver's parameters: flip.c's flip_defaults with the job's changes (job[11], a dict, for tuning).
@@ -276,8 +276,6 @@ def fly(job):
         scale = (scale or {}) | {"roll_thrust": np.exp(rng.uniform(*np.log(options["roll_thrust"]), n))}
     gyroscopic = rng.uniform(-1, 1, n) * options.get("gyroscopic", 0.0)
     deadband = rng.uniform(0, 1, n) * options.get("deadband", 0.0)
-    if "scale" in options:
-        scale = {key: np.full(n, value) for key, value in options["scale"].items()}
     sim = R.Sim(n, plant, seed=seed, scale=scale)
     obs = sim.reset(np.tile([0, 0, BELLY], (n, 1)), np.zeros((n, 3)), np.tile([1.0, 0, 0, 0], (n, 1)), np.zeros((n, 3)))
     hover_n = sim.mass * R.G / 2
@@ -390,8 +388,7 @@ def fly(job):
                 sim.vel[i, 2] = event["climb"][i]
                 # The estimate: the drawn attitude's roll and pitch, each about a degree off, at heading zero.
                 q = event["quat"][i]
-                roll = math.atan2(2 * (q[0] * q[1] + q[2] * q[3]), 1 - 2 * (q[1] ** 2 + q[2] ** 2)) + rng.normal(0, 0.017)
-                pitch = math.asin(max(-1.0, min(1.0, 2 * (q[0] * q[2] - q[3] * q[1])))) + rng.normal(0, 0.017)
+                roll, pitch = (angle + rng.normal(0, 0.017) for angle in flight.euler(q))
                 estimate.state[2:6] = array("f", flight.from_euler(roll, pitch))
                 estimate.state[0], estimate.state[1] = flight.euler(estimate.q)
                 if event["abort"][i]:
@@ -509,11 +506,6 @@ def fly(job):
             if TRACE and lane["started"] is not None and now - lane["started"] <= 2.0:
                 lane.setdefault("trace", []).append((now - lane["started"], *np.degrees(gyro), left, right, math.degrees(left_angle), math.degrees(right_angle), library.flip_phase(ctypes.byref(run)), height,
                                                      math.degrees(roll), math.degrees(pitch), float(volts[i]), *np.degrees(sim.tilt[i])))
-            # The recovery after an event: time, stage, the true and the righting's up, height, its vertical speed, throttles, servo angles and the gyro (deg/s).
-            if options.get("trace") and lane["event"] is not None and now - lane["event"] < options["trace"]:
-                q = estimate.q
-                lane.setdefault("event_trace", []).append((round(now - lane["event"], 2), recovery.stage, round(float(sim.up()[i, 2]), 3), round(1 - 2 * (q[1] ** 2 + q[2] ** 2), 3), round(height, 2), round(recovery.vertical, 2),
-                                                           left, right, round(math.degrees(left_angle), 1), round(math.degrees(right_angle), 1), *np.round(np.degrees(gyro), 0)))
         if sag:
             # The motors' thrust at this voltage: the table's at the throttle, scaled by the voltage's square against the row's, sent as the throttle that gives it at the table's own voltage.
             table, table_volts = np.asarray(options["table"], float), np.asarray(options["table_volts"], float)
@@ -578,7 +570,7 @@ def fly(job):
                     "past90": lane.get("past90", 0.0), "after_tilt": lane.get("after_tilt", 0.0), "farthest": lane.get("farthest", 0.0), "end_offset": float(np.hypot(*(sim.pos[i, :2] - lane["start_place"])))}
         if recovering or event is not None:
             row |= {"cut": lane["cut"], "recoveries": [list(r) for r in lane["stages"]], "recovered_at": lane["recovered_at"], "event": lane["event"], "event_height": lane.get("event_height"),
-                    "event_lowest": lane["event_lowest"], "event_touched": lane["event_touched"], "end_height": float(sim.pos[i, 2] - BELLY), "upright": upright, "landed": lane["cut"] == 8, "event_trace": lane.get("event_trace"),
+                    "event_lowest": lane["event_lowest"], "event_touched": lane["event_touched"], "end_height": float(sim.pos[i, 2] - BELLY), "upright": upright, "landed": lane["cut"] == 8,
                     "event_travel": lane.get("event_travel", 0.0), "event_step": lane.get("event_step", 0.0), "event_full": lane.get("event_full", 0.0), "event_current": lane.get("event_current", 0.0)}
         rows.append(row)
     return rows

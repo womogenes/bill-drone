@@ -38,6 +38,7 @@ from sw.sim import airframe as A
 from sw.sim import flight as F
 from sw.sim import rigid as R
 from sw.sim.flip_esc import STAND
+from sw.sim.sweep import FEET
 from sw.sim.takeoff_test import LEG_FEET
 
 FLIGHTS = Path(__file__).with_name("scorecard_flights.json")
@@ -49,7 +50,7 @@ HORIZONS = (0.05, 0.2, 0.5, 1.0)
 CHANNELS = ("roll_rate", "pitch_rate", "yaw_rate", "roll", "pitch", "accel_x", "accel_y", "accel_z", "height")
 UNITS = ("deg/s", "deg/s", "deg/s", "deg", "deg", "g", "g", "g", "m")
 GROUPS = {"rates": (0, 1, 2), "attitude": (3, 4), "accel": (5, 6, 7), "height": (8,)}
-# The bands' accelerometer error (g, body forward) as flip.py and sweep.py have it.
+# The bands' accelerometer error (g, body forward) as flip_firmware.py has it.
 BAND_ACCEL = 0.025
 # Both motors over this throttle: the motors on.
 ON_THROTTLE = 300
@@ -74,7 +75,7 @@ PLOT_EVERY = 0.02
 BLOCK_S, NOISE = 2.0, 2.0
 # What the drone rests on by configuration: rigid.HULL's four belly points become these (relative to the CoM), and the height at rest puts them on the ground. legs: the forward legs since 2026-11-11 (takeoff_test.LEG_FEET); belly: legless, 2026-11-07 to 11-10 (rigid.HULL as it is); feet: the first legs (sweep.FEET).
 HULL = np.array(R.HULL)
-RESTS = {"legs": LEG_FEET[:4], "belly": [tuple(point) for point in HULL[:4]], "feet": [(x, y, -0.087 - 0.0172) for x in (0.055, -0.055) for y in (0.078, -0.078)]}
+RESTS = {"legs": LEG_FEET[:4], "belly": [tuple(point) for point in HULL[:4]], "feet": FEET}
 # Where a flight without a good height flies (m): clear of the ground.
 NO_HEIGHT_Z = 10.0
 # Stops that are landings; any other ending with the motors on is a cut (the pilot's stop, the tilt limit).
@@ -176,6 +177,13 @@ def entries(listing, history=False, path=INVENTORY):
     return out
 
 
+def named(name):
+    """The scored flight whose recording name starts with name: its entry and its Flight."""
+    listing = flight_list()
+    entry = next(e for e in entries(listing) if e["name"].startswith(name))
+    return entry, Flight(entry, listing["configurations"][entry["configuration"]])
+
+
 class Flight:
     """A whole recording as arrays at the log's 100 Hz: commands, the start states the warm-up pins and the targets the predictions are scored against."""
 
@@ -273,22 +281,25 @@ class Flight:
         return np.concatenate([gyro, attitude, accel, height[..., None]], -1)
 
 
-def plant_for(flight, name, overrides):
-    """The rigid.Sim plant for a flight: the airframe (a models/ file or a path) with the configuration's bands and table, the plant's own per-configuration terms, the overrides, and the flight's thrust trim."""
-    if name == "era":
-        name = flight.configuration.get("plant", PLANTS[0])
-    params = json.loads(Path(name).read_text()) if Path(name).exists() else A.model(name)
-    configuration = flight.configuration
-    bands = configuration["bands"]
+def airframe_for(name, bands, overrides, configuration=None):
+    """An airframe (a models/ file, a path or the parameters themselves) with the bands' preload (the plant's own, else BANDS; none with the bands off; as the plant has it for "plant"), the plant's own terms for the named configuration and the overrides, a side-paired term set alone setting both sides."""
+    params = dict(name) if isinstance(name, dict) else A.model(name)
     own = {"left_band": params.get("left_band", 0.0), "right_band": params.get("right_band", 0.0)}
-    preload = (own if any(own.values()) else BANDS) if bands else {"left_band": 0.0, "right_band": 0.0}
-    if bands == "plant":
-        preload = {}
-    params = params | preload | params.get("configurations", {}).get(flight.entry["configuration"], {}) | overrides
-    # A side-paired term set alone sets both sides .
+    preload = {} if bands == "plant" else (own if any(own.values()) else BANDS) if bands else {"left_band": 0.0, "right_band": 0.0}
+    params = params | preload | params.get("configurations", {}).get(configuration, {}) | overrides
     for key, other in (("servo_delay", "right_servo_delay"), ("servo_wn", "right_servo_wn")):
         if key in overrides and other not in overrides:
             params[other] = overrides[key]
+    return params
+
+
+def plant_for(flight, name, overrides):
+    """The rigid.Sim plant for a flight: the airframe (airframe_for) with the configuration's bands and table, the plant's own per-configuration terms, the overrides, and the flight's thrust trim."""
+    if name == "era":
+        name = flight.configuration.get("plant", PLANTS[0])
+    configuration = flight.configuration
+    bands = configuration["bands"]
+    params = airframe_for(name, bands, overrides, flight.entry["configuration"])
     if configuration.get("geometry"):
         params["geometry"] = configuration["geometry"]
     geometry = A.geometry_of(params)
@@ -599,20 +610,24 @@ def terms_of(task):
     return flight_terms(flight, plant_for(flight, plant_name, overrides), round(warmup / A.DT))
 
 
+def nearest_terms(entries, found):
+    """Each entry's own terms by name from flight_terms' results (found, in order), one too short for them (None) taking the nearest flight's in time within its configuration, or none."""
+    known = [(e["name"], e["configuration"], t) for e, t in zip(entries, found) if t is not None]
+    stamp = lambda name: clock.mktime(clock.strptime(name[:19], "%Y-%m-%dT%H-%M-%S"))
+    out = {}
+    for e, t in zip(entries, found):
+        if t is None:
+            near = sorted((abs(stamp(n) - stamp(e["name"])), n, own) for n, c, own in known if c == e["configuration"])
+            t = near[0][2] if near else np.zeros(3)
+        out[e["name"]] = t
+    return out
+
+
 def run(plant, overrides, entries, configurations, every, warmup, own_terms, workers):
     """Every entry scored on the plant: first each flight's own terms (flight_terms; a flight too short for them takes the nearest one's in time within its configuration, or none), then its predictions. Returns the results and the terms by flight."""
     pool = ProcessPoolExecutor(workers) if workers > 1 else None
     mapper = pool.map if pool else map
-    terms = {}
-    if own_terms:
-        found = list(mapper(terms_of, [(e, configurations[e["configuration"]], plant, overrides, warmup) for e in entries]))
-        known = [(e["name"], e["configuration"], t) for e, t in zip(entries, found) if t is not None]
-        stamp = lambda name: clock.mktime(clock.strptime(name[:19], "%Y-%m-%dT%H-%M-%S"))
-        for e, t in zip(entries, found):
-            if t is None:
-                near = sorted((abs(stamp(n) - stamp(e["name"])), n, own) for n, c, own in known if c == e["configuration"])
-                t = near[0][2] if near else np.zeros(3)
-            terms[e["name"]] = t
+    terms = nearest_terms(entries, list(mapper(terms_of, [(e, configurations[e["configuration"]], plant, overrides, warmup) for e in entries]))) if own_terms else {}
     tasks = [(e, configurations[e["configuration"]], plant, overrides, every, warmup, terms.get(e["name"])) for e in entries]
     results = list(mapper(score_flight, tasks))
     if pool:
@@ -724,7 +739,7 @@ def plot(task):
 
 
 def index_page(rows, plants, directory):
-    """models/scorecard/index.html: every scored flight with each plant's score, linking its figure, and contact_sheet.png, the figures' thumbnails in one image."""
+    """The figures' index.html: every scored flight with each plant's score, linking its figure, and contact_sheet.png, the figures' thumbnails in one image."""
     head = "".join(f"<th>{label_of(p)}</th>" for p in plants)
     body = []
     for row in rows:
