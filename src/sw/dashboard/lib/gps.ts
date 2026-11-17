@@ -29,8 +29,3 @@ export function local(origin: Place, point: Place): [number, number] {
     (point.latitude - origin.latitude) * radians * EARTH_RADIUS,
   ];
 }
-
-// Meters between two fixes.
-export function distance(a: Place, b: Place) {
-  return Math.hypot(...local(a, b));
-}

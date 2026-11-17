@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 
 import './globals.css';
 import { ThemeProvider } from '@/components/theme-provider';
-import { cn } from '@/lib/utils';
+import { cn } from 'cn';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 

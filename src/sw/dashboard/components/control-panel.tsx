@@ -78,8 +78,6 @@ function nudgeText([forward, left, up]: [number, number, number]) {
   return `Hold nudge: ${parts.join(', ') || 'none'}`;
 }
 
-// The setpoints the keys stream (the drone's targets).
-type Setpoint = 'roll' | 'pitch' | 'yaw_rate' | 'base_throttle';
 // A drone setting as the bridge's GET /schema gives it (fw/drone/main/settings.def): its name, range and default, and whether the T request may change it.
 type SchemaEntry = {
   name: string;
@@ -157,7 +155,6 @@ export const ControlPanel = memo(function ControlPanel({
               : !recorderReady
                 ? (recorderError ?? 'Flight recorder not ready')
                 : '');
-  const [draft, setDraft] = useState<Partial<Record<Setpoint, number>>>({});
   const [gains, setGains] = useState<Record<string, string>>({});
   // A setting by name, undefined when this drone's firmware has none.
   const setting = (key: string) =>
@@ -197,8 +194,8 @@ export const ControlPanel = memo(function ControlPanel({
   );
 
   useEffect(() => {
-    throttle.current = draft.base_throttle ?? settings.base_throttle;
-  }, [draft.base_throttle, settings.base_throttle]);
+    throttle.current = settings.base_throttle;
+  }, [settings.base_throttle]);
 
   useEffect(() => {
     if (!available || !settings.enabled || open) return;
@@ -229,7 +226,6 @@ export const ControlPanel = memo(function ControlPanel({
       const yaw_rate =
         keySizes.current.yaw *
         (Number(held.has('KeyA')) - Number(held.has('KeyD')));
-      setDraft((previous) => ({ ...previous, yaw_rate }));
       onChange({ yaw_rate });
     }
 
@@ -242,7 +238,6 @@ export const ControlPanel = memo(function ControlPanel({
         0
       );
       const value = keySizes.current.tilt * direction;
-      setDraft((previous) => ({ ...previous, [axis]: value }));
       onChange({ [axis]: value });
     }
 
@@ -397,7 +392,6 @@ export const ControlPanel = memo(function ControlPanel({
       );
       if (!Object.keys(changed).length) return;
       sent = next;
-      setDraft((previous) => ({ ...previous, ...changed }));
       onChange(changed);
     }
 

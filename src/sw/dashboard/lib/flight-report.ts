@@ -1,12 +1,9 @@
-// A recorded flight (src/sw/recordings/<UTC start>_<session>.bin and .jsonl, written by src/fw/controller/bridge.py) summarized for the post-flight report, from its events and its records' columns as the bridge's GET /recordings decodes them (src/fw/controller/log_format.py decode_records).
+// A recorded flight (src/sw/recordings/<UTC start>_<session>.bin and .jsonl, written by src/fw/controller/bridge.py) as the flights page replays it, from its events and its records' columns as the bridge's GET /recordings decodes them (src/fw/controller/log_format.py decode_records).
 
-import { distance } from '@/lib/gps';
-import { rotorTilt } from '@/lib/telemetry';
 import { quaternionOf, type Trajectory } from '@/lib/trajectory';
 
-// The columns the report reads (log_format.py COLUMNS): time, the IMU and attitude, the motors, servos and targets, the hover state, the barometer, the flip's phase and the recovery's stage, and the Kalman filter's heading and position.
+// The columns the report reads (log_format.py COLUMNS): time, the IMU and attitude, the motors, servos and targets, the hover state, the flip's phase and the recovery's stage, and the Kalman filter's heading and position.
 export const RECORD_COLUMNS = [
-  'sequence',
   'esp_time_us',
   'ax_g',
   'ay_g',
@@ -24,13 +21,9 @@ export const RECORD_COLUMNS = [
   'target_roll_deg',
   'target_pitch_deg',
   'base_throttle',
-  'flags',
   'hover_height_m',
   'hover_height_target_m',
   'hover_yaw_deg',
-  'hover_vx_m_s',
-  'hover_vy_m_s',
-  'baro_altitude_m',
   'flip',
   'recovery',
   'ekf_yaw_deg',
@@ -41,7 +34,7 @@ export const RECORD_COLUMNS = [
 type RecordColumn = (typeof RECORD_COLUMNS)[number];
 
 // A recording as the bridge serves it: its events, its records' columns (each record once, in sequence order; null where a record has no value), whether the .bin ends mid-batch, and the flip's phases by number (log_format.py FLIP_PHASES).
-export type Recording = {
+type Recording = {
   events: Event[];
   columns: Record<RecordColumn, (number | null)[]>;
   truncated: boolean;
@@ -50,30 +43,18 @@ export type Recording = {
 
 // The drone's esp_timer microseconds in the start record wrap at 2^32.
 const WRAP_MS = 2 ** 32 / 1000;
-// The control rate; the charts take every CHART_STRIDE-th record (25 Hz), which is plenty for a screen and keeps a 3-minute flight's JSON small.
-const RATE_HZ = 100;
-const CHART_STRIDE = 4;
 // The replay's frame rate (Hz): half the control rate, enough for a flip's 300 deg/s at 6 degrees a frame, which the viewer interpolates.
 const REPLAY_HZ = 50;
 // The firmware's highest throttle (fw/drone/main/flight_rt.c THROTTLE_MAX), the rotors' full thrust in the replay.
 const THROTTLE_MAX = 1200;
 const MODES = ['manual', 'hold', 'land', 'land fast'];
-// Liftoff as sw/sim/identify_airframe.py load finds it: vertical specific force past 1.12 g once the collective reaches 600, plus 3 ticks.
+// Liftoff: vertical specific force past 1.12 g once the collective reaches 600, plus 3 ticks.
 const LIFT_BASE = 600;
 const LIFT_G = 1.12;
-// The shake as sw/sim/pitch_check.py measures it: the pitch rate's RMS in 2.2-3.5 Hz through the same zero-phase band-pass, over the airborne window (its first and last half second left out) and as a moving RMS over SHAKE_WINDOW_S.
-const SHAKE_BAND: [number, number] = [2.2, 3.5];
-const SHAKE_WINDOW_S = 1;
-// Hands-off: hover hold, no tilt setpoint and no command change (a held stick sends one every 50 ms) for HANDS_ON_S, from SPAN_SETTLE_S after liftoff; spans shorter than SPAN_MIN_S are left out.
-const HANDS_ON_S = 1;
-const SPAN_SETTLE_S = 2;
-const SPAN_MIN_S = 3;
 // A fly-away: GPS ground speed past FLYAWAY_MS on FLYAWAY_FIXES fixes in a row without a tilt command in the TILT_COMMAND_S before. While the pilot flies the hold point (a forward or left nudge change in the command events) and while the hold brakes after it (hover_nudge_speed / hover_nudge_accel, at least TILT_COMMAND_S), the limit is FLYAWAY_MS past hover_nudge_speed, the fastest the nudge asks for.
 const FLYAWAY_MS = 2;
 const FLYAWAY_FIXES = 5;
 const TILT_COMMAND_S = 2;
-// The firmware's speed offset comes from this long airborne without the tag (fw/drone/main/hover.c SPEED_TAKEOFF_S).
-const SPEED_TAKEOFF_S = 2;
 // The bridge drops its dashboard after 0.5 s without a status message (bridge.py monitor); GPS events ride the status, so a longer gap between them (with a fix) is a link timeout.
 const LINK_TIMEOUT_MS = 500;
 // A tip-over at landing: pitch or roll past TIP_DEG within TIP_WINDOW_S after the motors stop.
@@ -113,178 +94,21 @@ export type RecordingEntry = {
   seconds: number;
 };
 
-export type FlightWarning = { time: number | null; text: string };
-
-// A hands-off stretch of hover (s from the recording's start) and how still it held: attitude spread (degrees), the fused height's spread and the barometer's range (m), how far the GPS position moved from the span's start (m) and the rough wind (m/s, from the drag model's airspeed).
-export type HandsOffSpan = {
-  start: number;
-  end: number;
-  pitch_sd: number;
-  roll_sd: number;
-  height_sd: number;
-  baro_range: number | null;
-  drift_m: number | null;
-  wander_m: number | null;
-  wind: number | null;
-};
-
-// Chart columns at 25 Hz: seconds from the recording's start; heights in m (fused estimate and target above the engage point, barometer above its takeoff reading); attitude and targets in degrees; the pitch rate's moving shake RMS in deg/s. Null where there is no value.
-export type FlightSeries = {
-  time: number[];
-  height: (number | null)[];
-  height_target: (number | null)[];
-  baro: (number | null)[];
-  roll: number[];
-  pitch: number[];
-  roll_target: number[];
-  pitch_target: number[];
-  shake: (number | null)[];
-};
-
-// GPS fixes in the recording (10 Hz), seconds from its start, ground speed in m/s.
-export type FlightTrackPoint = {
-  time: number;
-  latitude: number;
-  longitude: number;
-  speed: number;
-  horizontal_accuracy: number;
-};
+type FlightWarning = { time: number | null; text: string };
 
 export type FlightReport = {
   name: string;
-  started: string;
-  drone: string | null;
-  duration: number;
-  // Liftoff and motors stopped (s); null when it never lifted.
-  airborne: [number, number] | null;
   // The stop record's reason; null when the recording has none (cut short or still open).
   stop_reason: string | null;
-  samples: number;
-  missing: number;
   max_height: number | null;
-  top_speed: number | null;
-  shake_rms: number | null;
-  wind: number | null;
-  gps_hold: boolean;
-  series: FlightSeries;
-  // The flight for the replay viewer (lib/trajectory.ts), on the same clock as series.
+  // The flight for the replay viewer (lib/trajectory.ts).
   trajectory: Trajectory;
-  track: FlightTrackPoint[];
-  spans: HandsOffSpan[];
-  warnings: FlightWarning[];
 };
 
 function round(value: number, digits: number) {
   if (!Number.isFinite(value)) return null;
   const scale = 10 ** digits;
   return Math.round(value * scale) / scale;
-}
-
-function median(values: number[]) {
-  if (!values.length) return NaN;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
-}
-
-function spread(values: ArrayLike<number>, from: number, to: number) {
-  let sum = 0;
-  let squares = 0;
-  let count = 0;
-  for (let index = from; index < to; index++) {
-    const value = values[index];
-    if (!Number.isFinite(value)) continue;
-    sum += value;
-    squares += value * value;
-    count++;
-  }
-  if (count < 2) return NaN;
-  const mean = sum / count;
-  return Math.sqrt(Math.max(0, squares / count - mean * mean));
-}
-
-// The second-order Butterworth band-pass scipy's butter(2, band, btype="band") designs, as two sections [gain, pole radius², 2 × pole real part], each (1 - z⁻²) over (1 - 2 Re z⁻¹ + |p|² z⁻²): the low-pass prototype's poles moved to the band and through the bilinear transform.
-function bandPass([low, high]: [number, number]) {
-  const warp = (frequency: number) =>
-    2 * RATE_HZ * Math.tan((Math.PI * frequency) / RATE_HZ);
-  const center = Math.sqrt(warp(low) * warp(high));
-  const width = warp(high) - warp(low);
-  // The prototype pole at exp(3πi/4) times the bandwidth gives s = (p ± sqrt(p² - 4w0²)) / 2; each with its conjugate (from the prototype's other pole) is one section.
-  const pr = -Math.SQRT1_2 * width;
-  const pi = Math.SQRT1_2 * width;
-  const dr = pr * pr - pi * pi - 4 * center * center;
-  const di = 2 * pr * pi;
-  const modulus = Math.hypot(dr, di);
-  const rootReal = Math.sqrt((modulus + dr) / 2);
-  const rootImag = Math.sign(di) * Math.sqrt((modulus - dr) / 2);
-  const sections = [1, -1].map((sign) => {
-    const sReal = (pr + sign * rootReal) / 2;
-    const sImag = (pi + sign * rootImag) / 2;
-    // z = (2fs + s) / (2fs - s)
-    const k = 2 * RATE_HZ;
-    const denominator = (k - sReal) ** 2 + sImag ** 2;
-    const zr = ((k + sReal) * (k - sReal) - sImag * sImag) / denominator;
-    const zi = (2 * k * sImag) / denominator;
-    return { re: zr, radius2: zr * zr + zi * zi };
-  });
-  // Unity gain at the band's center, as the Butterworth band-pass has.
-  const omega = 2 * Math.atan(center / (2 * RATE_HZ));
-  let gain = 1;
-  for (const { re, radius2 } of sections) {
-    const [c1, s1, c2, s2] = [
-      Math.cos(omega),
-      Math.sin(omega),
-      Math.cos(2 * omega),
-      Math.sin(2 * omega),
-    ];
-    const numerator = Math.hypot(1 - c2, s2);
-    const denominator = Math.hypot(
-      1 - 2 * re * c1 + radius2 * c2,
-      2 * re * s1 - radius2 * s2
-    );
-    gain *= numerator / denominator;
-  }
-  return sections.map((section, index) => ({
-    ...section,
-    gain: index ? 1 : 1 / gain,
-  }));
-}
-
-const SHAKE_SECTIONS = bandPass(SHAKE_BAND);
-// sosfiltfilt's default pad: odd extension at each end.
-const PAD = 30;
-
-// The pitch rate's shake band, zero phase like sosfiltfilt: from the mean, padded, through both sections forward and then back.
-function shakeBand(rate: Float64Array) {
-  const count = rate.length;
-  let mean = 0;
-  for (const value of rate) mean += value / count;
-  const pad = Math.min(PAD, count - 1);
-  const values = new Float64Array(count + 2 * pad);
-  for (let index = 0; index < count; index++)
-    values[pad + index] = rate[index] - mean;
-  for (let index = 1; index <= pad; index++) {
-    values[pad - index] = 2 * values[pad] - values[pad + index];
-    values[pad + count - 1 + index] =
-      2 * values[pad + count - 1] - values[pad + count - 1 - index];
-  }
-  for (const reverse of [false, true])
-    for (const { gain, re, radius2 } of SHAKE_SECTIONS) {
-      let x1 = 0;
-      let x2 = 0;
-      let y1 = 0;
-      let y2 = 0;
-      for (let step = 0; step < values.length; step++) {
-        const index = reverse ? values.length - 1 - step : step;
-        const x = values[index];
-        const y = gain * (x - x2) + 2 * re * y1 - radius2 * y2;
-        x2 = x1;
-        x1 = x;
-        y2 = y1;
-        y1 = y;
-        values[index] = y;
-      }
-    }
-  return values.subarray(pad, pad + count);
 }
 
 export function analyzeFlight(name: string, recording: Recording): FlightReport {
@@ -303,37 +127,23 @@ export function analyzeFlight(name: string, recording: Recording): FlightReport 
 
   const column = (key: RecordColumn) =>
     Float64Array.from(recording.columns[key], (value) => value ?? NaN);
-  const sequences = column('sequence');
-  const count = sequences.length;
   const time = column('esp_time_us').map((value) => value / 1e6);
+  const count = time.length;
   const az = column('az_g');
   const roll = column('roll_deg');
   const pitch = column('pitch_deg');
   const rollTarget = column('target_roll_deg');
   const pitchTarget = column('target_pitch_deg');
   const base = column('base_throttle');
-  const flags = column('flags');
-  // NaN in records from before the hover state, the barometer or the Kalman filter, and the barometer's without a reading.
+  // NaN in records from before the hover state or the Kalman filter.
   const height = column('hover_height_m');
   const heightTarget = column('hover_height_target_m');
   const yaw = column('hover_yaw_deg');
-  const velocityX = column('hover_vx_m_s');
-  const velocityY = column('hover_vy_m_s');
-  const baro = column('baro_altitude_m');
   // For the replay: the body rates (deg/s), each motor's throttle and each servo's forward tilt from its trim (degrees; the left servo tilts forward with positive angles, the right with negative), the flip's phase and the recovery's stage (0 none), and the Kalman filter's heading (degrees, left from north; the hover's gyro heading before the filter) and position (m north, west and up).
   const rates = [column('gx_deg_s'), column('gy_deg_s'), column('gz_deg_s')];
-  const pitchRate = rates[1];
   const motors = [column('left_throttle'), column('right_throttle')];
   const servos = [column('left_servo_deg'), column('right_servo_deg')];
   const throttle = motors[0].map((value, index) => value + motors[1][index]);
-  const servoTilt = servos[0].map((value, index) =>
-    rotorTilt(
-      value,
-      servos[1][index],
-      settings.left_trim ?? 0,
-      settings.right_trim ?? 0
-    )
-  );
   const tilts = [
     servos[0].map((value) => value - (settings.left_trim ?? 0)),
     servos[1].map((value) => -(value - (settings.right_trim ?? 0))),
@@ -374,9 +184,6 @@ export function analyzeFlight(name: string, recording: Recording): FlightReport 
     }
     longestRepeat = Math.max(longestRepeat, run);
   }
-  let missing = 0;
-  for (let index = 1; index < count; index++)
-    missing += Math.max(0, sequences[index] - sequences[index - 1] - 1);
 
   // Liftoff, then the motors stopping (the collective at zero) after it.
   let lift = -1;
@@ -397,52 +204,6 @@ export function analyzeFlight(name: string, recording: Recording): FlightReport 
   const airborne: [number, number] | null =
     lift >= 0 ? [time[lift], time[Math.min(stopped, count - 1)]] : null;
 
-  // The servo speed balance (hover.h speed_tilt): tilt less speed_pitch times pitch, over speed_tilt degrees per m/s, from its takeoff offset.
-  const speedTilt = settings.hover_speed_tilt ?? 0;
-  const speedRaw = (index: number) =>
-    servoTilt[index] - (settings.hover_speed_pitch ?? 0) * pitch[index];
-  let speedOffset = NaN;
-  if (lift >= 0 && stopped - lift > SPEED_TAKEOFF_S * RATE_HZ) {
-    let sum = 0;
-    for (let index = lift; index < lift + SPEED_TAKEOFF_S * RATE_HZ; index++)
-      sum += speedRaw(index);
-    speedOffset =
-      sum / (SPEED_TAKEOFF_S * RATE_HZ) + (settings.hover_speed_takeoff ?? 0);
-  }
-
-  // The barometer from its reading at liftoff (the last second before it), else its first.
-  let baroZero = NaN;
-  if (lift >= 0) {
-    const before: number[] = [];
-    for (let index = Math.max(0, lift - RATE_HZ); index <= lift; index++)
-      if (Number.isFinite(baro[index])) before.push(baro[index]);
-    baroZero = median(before);
-  }
-  if (!Number.isFinite(baroZero))
-    baroZero = baro.find((value) => Number.isFinite(value)) ?? NaN;
-
-  // The shake over the airborne window, leaving out half a second at each end where the filter starts up.
-  const shake = new Float64Array(count).fill(NaN);
-  let shakeRms: number | null = null;
-  if (lift >= 0 && stopped - lift > 2 * RATE_HZ) {
-    const band = shakeBand(pitchRate.subarray(lift, stopped));
-    const edge = RATE_HZ / 2;
-    let sum = 0;
-    for (let index = edge; index < band.length - edge; index++)
-      sum += band[index] ** 2;
-    shakeRms = Math.sqrt(sum / (band.length - 2 * edge));
-    const window = SHAKE_WINDOW_S * RATE_HZ;
-    let moving = 0;
-    for (let index = 0; index < band.length; index++) {
-      moving += band[index] ** 2;
-      if (index >= window) moving -= band[index - window] ** 2;
-      if (index >= window - 1)
-        shake[lift + index - Math.floor(window / 2)] = Math.sqrt(
-          Math.max(0, moving) / window
-        );
-    }
-  }
-
   // Event times on the recording's clock: GPS events carry the drone's clock (drone_ms, on started_ticks_us's esp_timer); commands only the laptop's, so they are placed by the smallest laptop-minus-drone offset among the GPS events' statuses (the least delayed one).
   const startedMs = Number(metadata.started_ticks_us ?? 0) / 1000;
   const startedAt = Date.parse(String(start.received_at));
@@ -461,14 +222,12 @@ export function analyzeFlight(name: string, recording: Recording): FlightReport 
   const laptopTime = (receivedAt: string) =>
     (Date.parse(receivedAt) - offset) / 1000;
 
-  const track: FlightTrackPoint[] = gpsEvents
+  // GPS fixes (10 Hz), seconds from the recording's start, ground speed in m/s.
+  const track = gpsEvents
     .filter((gps) => gps.ok && gps.fix >= 2 && gps.fix <= 4)
     .map((gps) => ({
       time: sinceStart(gps.drone_ms),
-      latitude: gps.latitude,
-      longitude: gps.longitude,
       speed: Math.hypot(gps.velocity[0], gps.velocity[1]),
-      horizontal_accuracy: gps.horizontal_accuracy,
     }));
 
   // The pilot's commands as they changed, on the recording's clock.
@@ -480,7 +239,6 @@ export function analyzeFlight(name: string, recording: Recording): FlightReport 
   const tilted = commands
     .filter((command) => command.roll || command.pitch)
     .map((command) => command.time);
-  const changed = commands.map((command) => command.time);
   const nudged: number[] = [];
   let lastNudge: number[] = [];
   for (const command of commands) {
@@ -511,84 +269,6 @@ export function analyzeFlight(name: string, recording: Recording): FlightReport 
   );
   const before = (times: number[], at: number, within: number) =>
     times.some((value) => value <= at && value > at - within);
-  // A command held: the last one at or before a time (manual and level before the first).
-  const heldAt = (at: number) => {
-    let held: (typeof commands)[number] | undefined;
-    for (const command of commands)
-      if (command.time <= at && !command.stop) held = command;
-      else if (command.time > at) break;
-    return held;
-  };
-
-  // Hands-off spans: airborne in hover hold (flags bits 1-2), no tilt or yaw setpoint and no command change for HANDS_ON_S.
-  const spans: HandsOffSpan[] = [];
-  if (lift >= 0) {
-    let from = -1;
-    const close = (to: number) => {
-      if (from >= 0 && time[to - 1] - time[from] >= SPAN_MIN_S)
-        spans.push(spanStats(from, to));
-      from = -1;
-    };
-    for (let index = lift; index < stopped; index++) {
-      const at = time[index];
-      const held = heldAt(at);
-      const off =
-        at - time[lift] >= SPAN_SETTLE_S &&
-        ((flags[index] >> 1) & 3) === 1 &&
-        !held?.roll &&
-        !held?.pitch &&
-        !held?.yaw_rate &&
-        !before(changed, at, HANDS_ON_S);
-      if (off && from < 0) from = index;
-      if (!off) close(index);
-    }
-    close(stopped);
-  }
-
-  function spanStats(from: number, to: number): HandsOffSpan {
-    let low = Infinity;
-    let high = -Infinity;
-    for (let index = from; index < to; index++)
-      if (Number.isFinite(baro[index])) {
-        low = Math.min(low, baro[index]);
-        high = Math.max(high, baro[index]);
-      }
-    const fixes = track.filter(
-      (point) => point.time >= time[from] && point.time <= time[to - 1]
-    );
-    return {
-      start: time[from],
-      end: time[to - 1],
-      pitch_sd: spread(pitch, from, to),
-      roll_sd: spread(roll, from, to),
-      height_sd: spread(height, from, to),
-      baro_range: high >= low ? high - low : null,
-      drift_m: fixes.length > 1 ? distance(fixes[0], fixes.at(-1)!) : null,
-      wander_m:
-        fixes.length > 1
-          ? Math.max(...fixes.map((point) => distance(fixes[0], point)))
-          : null,
-      wind: windEstimate(from, to),
-    };
-  }
-
-  // A rough wind along the drone's heading (m/s, positive from behind): the forward ground speed (the hover velocity, GPS-corrected with the GPS hold, turned to body axes by the gyro heading) less the forward airspeed the servos' tilt explains by the firmware's speed balance (fw/drone/main/hover.h speed_tilt), with its offset taken as the firmware does without the tag: the first SPEED_TAKEOFF_S airborne plus speed_takeoff. Only the fore-aft component, and any wind at takeoff is in the offset; replace with a better airspeed model when there is one.
-  function windEstimate(from: number, to: number) {
-    if (!speedTilt || !Number.isFinite(speedOffset)) return null;
-    let sum = 0;
-    let used = 0;
-    for (let index = from; index < to; index++) {
-      if (!Number.isFinite(yaw[index]) || !Number.isFinite(velocityX[index]))
-        continue;
-      const heading = (yaw[index] * Math.PI) / 180;
-      const ground =
-        velocityX[index] * Math.cos(heading) +
-        velocityY[index] * Math.sin(heading);
-      sum += ground - (speedRaw(index) - speedOffset) / speedTilt;
-      used++;
-    }
-    return used > (to - from) / 2 ? sum / used : null;
-  }
 
   const warnings: FlightWarning[] = [];
   // Fly-aways: fast fixes in a row with no tilt asked for, while airborne (a drone carried or tumbling after the motors stop is not one).
@@ -597,7 +277,7 @@ export function analyzeFlight(name: string, recording: Recording): FlightReport 
         (point) => point.time >= airborne[0] && point.time <= airborne[1]
       )
     : [];
-  const uncommanded = (point: FlightTrackPoint) =>
+  const uncommanded = (point: (typeof track)[number]) =>
     !before(tilted, point.time, TILT_COMMAND_S) &&
     point.speed >
       FLYAWAY_MS + (before(nudged, point.time, nudgeBrake) ? nudgeSpeed : 0);
@@ -698,32 +378,6 @@ export function analyzeFlight(name: string, recording: Recording): FlightReport 
   for (let index = Math.max(0, lift); index < stopped; index++)
     if (lift >= 0 && Number.isFinite(height[index]))
       maxHeight = Math.max(maxHeight, height[index]);
-  const winds = spans
-    .map((span) => span.wind)
-    .filter((value): value is number => value !== null);
-
-  const series: FlightSeries = {
-    time: [],
-    height: [],
-    height_target: [],
-    baro: [],
-    roll: [],
-    pitch: [],
-    roll_target: [],
-    pitch_target: [],
-    shake: [],
-  };
-  for (let index = 0; index < count; index += CHART_STRIDE) {
-    series.time.push(round(time[index], 2)!);
-    series.height.push(round(height[index], 3));
-    series.height_target.push(round(heightTarget[index], 3));
-    series.baro.push(round(baro[index] - baroZero, 2));
-    series.roll.push(round(roll[index], 2)!);
-    series.pitch.push(round(pitch[index], 2)!);
-    series.roll_target.push(round(rollTarget[index], 2)!);
-    series.pitch_target.push(round(pitchTarget[index], 2)!);
-    series.shake.push(round(shake[index], 1));
-  }
 
   const trajectory = replayOf(
     { time, roll, pitch, rollTarget, pitchTarget, height, heightTarget, heading, flip, recovery, rates, motors, tilts, place },
@@ -734,25 +388,9 @@ export function analyzeFlight(name: string, recording: Recording): FlightReport 
 
   return {
     name,
-    started: String(start.received_at),
-    drone: (start.drone as string | null | undefined) ?? null,
-    duration: stop ? stop.time_us / 1e6 : count ? time[count - 1] : 0,
-    airborne,
     stop_reason: stop?.reason ?? null,
-    samples: count,
-    missing,
     max_height: Number.isFinite(maxHeight) ? maxHeight : null,
-    top_speed: flown.length
-      ? Math.max(...flown.map((point) => point.speed))
-      : null,
-    shake_rms: shakeRms,
-    wind: winds.length ? winds.reduce((a, b) => a + b) / winds.length : null,
-    gps_hold: (settings.hover_gps_tau ?? 0) > 0,
-    series,
     trajectory,
-    track,
-    spans,
-    warnings,
   };
 }
 

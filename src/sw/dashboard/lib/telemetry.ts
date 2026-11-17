@@ -123,7 +123,7 @@ export type ControlSettings = {
 };
 
 // The drone service's recorder (src/fw/controller/bridge.py).
-export type RecorderStatus = {
+type RecorderStatus = {
   file: string | null;
   error: string | null;
   bytes: number;
@@ -215,7 +215,7 @@ export type GpsReport = {
 };
 
 // One end's link report over its last second (src/fw/controller/bridge.py decode_link, src/fw/link.h): the partner's packets heard, rejected and missed (sequence gaps), the longest silence, their RSSI (dBm; null with none heard), the sends acknowledged, failed and refused, and the radio's channel, rate and power. Absent from firmware before 2026-11-09.
-export type LinkReport = {
+type LinkReport = {
   source: 'drone' | 'controller';
   interval_ms: number;
   rx: number;
@@ -237,14 +237,14 @@ export type LinkReport = {
 };
 
 // The drone service's own view of the last second: status messages received (20 expected), the longest gap between them, packets it dropped as late, and link timeouts.
-export type BridgeLink = {
+type BridgeLink = {
   statuses: number;
   longest_gap_ms: number;
   late: number;
   timeouts: number;
 };
 
-export type LinkReading = {
+type LinkReading = {
   drone: LinkReport | null;
   controller: LinkReport | null;
   bridge: BridgeLink | null;

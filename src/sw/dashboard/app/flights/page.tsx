@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { paletteStyle, usePalette } from '@/components/replay/palette';
 import { Replay } from '@/components/replay/replay';
 import {
   Select,
@@ -40,9 +39,8 @@ function Flights() {
     label: `${startTime(entry.started)} · ${clock(entry.seconds)}`,
   }));
   const problem = listError || error;
-  const palette = usePalette();
   return (
-    <div className="flex h-dvh flex-col bg-background text-foreground" style={paletteStyle(palette)}>
+    <div className="flex h-dvh flex-col bg-background text-foreground">
       <header className="flex h-12 shrink-0 items-center gap-4 border-b border-border px-4">
         <Select
           value={shown}

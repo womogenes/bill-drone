@@ -7,7 +7,7 @@ export type DroneRequest =
   | { type: 'tune'; settings: Record<string, number> }
   | { type: 'esc'; stage: 0 | 1 | 2 };
 
-export type ServiceMessage =
+type ServiceMessage =
   | ({ type: 'reading' } & Record<string, unknown>)
   | ({ type: 'hover' } & HoverState)
   | {
@@ -18,7 +18,7 @@ export type ServiceMessage =
   | { type: 'result'; request: 'zero'; side: Side; error: string | null };
 
 export type EspWorkerMessage =
-  | { type: 'open' | 'close' | 'error' }
+  | { type: 'open' | 'close' }
   | { type: 'message'; message: ServiceMessage };
 
 export type EspWorkerCommand =

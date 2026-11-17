@@ -109,23 +109,12 @@ export const GpsMap = memo(function GpsMap({
   home,
   history,
   hover,
-  title = 'Position',
-  fill = false,
-  minSpan = MIN_SPAN,
-  heading = true,
 }: {
   gps: GpsReading | null | undefined;
   latest: GpsSample | undefined;
   home: GpsFix | undefined;
   history: (start: number, end: number) => GpsSample[];
   hover: HoverSample | null;
-  title?: string;
-  // Take the height it is given instead of a 4:3 box, so a report fits one screen.
-  fill?: boolean;
-  // The smallest view around the start (m): a report zooms to a hop's few meters.
-  minSpan?: number;
-  // The title and the distance and height readings; a report shows its own.
-  heading?: boolean;
 }) {
   // Rebuilt per fix (10 Hz), not per status (20 Hz).
   const trail = useMemo(
@@ -251,7 +240,7 @@ export const GpsMap = memo(function GpsMap({
     else map.home.remove();
     if (!origin || !container.current?.clientWidth) return;
     const bounds = L.latLng(origin.latitude, origin.longitude).toBounds(
-      minSpan
+      MIN_SPAN
     );
     if (fix)
       bounds.extend(
@@ -279,7 +268,7 @@ export const GpsMap = memo(function GpsMap({
       });
       map.placed = true;
     }
-  }, [trail, pieces, fix, home, origin, minSpan]);
+  }, [trail, pieces, fix, home, origin]);
 
   // The local plot: meters from the takeoff point, north up, equal scale.
   const points = origin
@@ -289,8 +278,8 @@ export const GpsMap = memo(function GpsMap({
       }))
     : [];
   const extent: [number, number][] = [
-    [-minSpan / 2, -minSpan / 2],
-    [minSpan / 2, minSpan / 2],
+    [-MIN_SPAN / 2, -MIN_SPAN / 2],
+    [MIN_SPAN / 2, MIN_SPAN / 2],
   ];
   for (const piece of points) extent.push(...piece.points);
   if (offset && fix) {
@@ -330,16 +319,21 @@ export const GpsMap = memo(function GpsMap({
     return values;
   };
 
-  const map = (
-    <>
-      <div
-        ref={box}
-        className={
-          fill
-            ? 'relative isolate min-h-48 flex-1'
-            : 'relative isolate aspect-4/3'
-        }
-      >
+  return (
+    <Panel title="Position">
+      <Stats>
+        <Stat label="From takeoff">
+          {distance === null || bearing === null
+            ? '—'
+            : `${distance.toFixed(1)} m ${COMPASS[Math.round((bearing * 4) / Math.PI + 8) % 8]}`}
+        </Stat>
+        <Stat label="Height">
+          {hover
+            ? `${hover.height.toFixed(2)} / ${hover.height_target.toFixed(2)} m`
+            : '—'}
+        </Stat>
+      </Stats>
+      <div ref={box} className="relative isolate aspect-4/3">
         <div ref={container} className="absolute inset-0 z-0 bg-muted!" />
         {!tiles && (
           <svg
@@ -453,37 +447,6 @@ export const GpsMap = memo(function GpsMap({
           </span>
         ))}
       </div>
-    </>
-  );
-  // A report shows its own title and the distance and height readings.
-  if (!heading)
-    return (
-      <section
-        aria-label={title}
-        className={
-          fill
-            ? 'flex min-h-0 flex-1 flex-col gap-2 px-4 py-3'
-            : 'space-y-2 px-4 py-3'
-        }
-      >
-        {map}
-      </section>
-    );
-  return (
-    <Panel title={title}>
-      <Stats>
-        <Stat label="From takeoff">
-          {distance === null || bearing === null
-            ? '—'
-            : `${distance.toFixed(1)} m ${COMPASS[Math.round((bearing * 4) / Math.PI + 8) % 8]}`}
-        </Stat>
-        <Stat label="Height">
-          {hover
-            ? `${hover.height.toFixed(2)} / ${hover.height_target.toFixed(2)} m`
-            : '—'}
-        </Stat>
-      </Stats>
-      {map}
     </Panel>
   );
 });

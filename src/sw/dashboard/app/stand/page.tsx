@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { CircleAlert, CircleCheck } from 'lucide-react';
 import {
   FastChart,
+  sampleTime,
   useChartEnd,
   type ChartSeries,
 } from '@/components/fast-chart';
@@ -42,7 +43,6 @@ const SPAN_MS = 60_000;
 
 type Point = { time: number; value: number };
 const gap = (previous: Point, next: Point) => next.time - previous.time > 1500;
-const pointTime = (point: Point) => point.time;
 const within = (points: Point[], start: number, end: number) =>
   points.filter((point) => point.time >= start && point.time <= end);
 const mean = (values: number[]) =>
@@ -358,7 +358,7 @@ function Live() {
           <FastChart
             history={(start, stop) => within(thrust, start, stop)}
             series={thrustSeries}
-            time={pointTime}
+            time={sampleTime}
             start={end - SPAN_MS}
             end={end}
             gap={gap}
@@ -373,7 +373,7 @@ function Live() {
           <FastChart
             history={(start, stop) => within(voltPoints, start, stop)}
             series={voltSeries}
-            time={pointTime}
+            time={sampleTime}
             start={end - SPAN_MS}
             end={end}
             gap={gap}
@@ -389,7 +389,7 @@ function Live() {
           <FastChart
             history={(start, stop) => within(throttle, start, stop)}
             series={throttleSeries}
-            time={pointTime}
+            time={sampleTime}
             start={end - SPAN_MS}
             end={end}
             range={[0, 1200]}

@@ -1,14 +1,12 @@
 'use client';
 
-import { THROTTLE_MAX } from '@/lib/telemetry';
-
 import { memo, useState } from 'react';
 import { RotateCcw, Square } from 'lucide-react';
 import { Panel } from '@/components/panel';
 import { Stat, Stats } from '@/components/stat';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import type { Side } from '@/lib/telemetry';
+import { THROTTLE_MAX, type Side } from '@/lib/telemetry';
 
 const SERVO_LIMIT = 60;
 

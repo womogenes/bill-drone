@@ -23,8 +23,8 @@ const PROBES = {
 
 const FALLBACK: Palette = { paper: '#ffffff', ink: '#0a0a0a', gray: '#737373', hairline: '#e5e5e5', signal: '#ea580c', shades: ['#0a0a0a', '#737373', '#a3a3a3'] };
 
-function hex(red: number, green: number, blue: number) {
-  return `#${[red, green, blue].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
+function hex(rgb: number[]) {
+  return `#${rgb.map((value) => value.toString(16).padStart(2, '0')).join('')}`;
 }
 
 // Each probe's computed color painted over the background on a one-pixel canvas and read back, which flattens oklch and alpha into a hex three.js takes.
@@ -45,17 +45,17 @@ function resolve(): Palette {
     return [red, green, blue];
   };
   const paper = read(PROBES.paper, '#ffffff');
-  const under = hex(paper[0], paper[1], paper[2]);
+  const under = hex(paper);
   const [ink, gray, hairline, signal] = [PROBES.ink, PROBES.gray, PROBES.hairline, PROBES.signal].map((className) => read(className, under));
   span.remove();
-  const mix = (a: number[], b: number[], share: number) => hex(...(a.map((value, index) => Math.round(value * share + b[index] * (1 - share))) as [number, number, number]));
+  const mix = (a: number[], b: number[], share: number) => hex(a.map((value, index) => Math.round(value * share + b[index] * (1 - share))));
   return {
     paper: under,
-    ink: mix(ink, ink, 1),
-    gray: mix(gray, gray, 1),
-    hairline: mix(hairline, hairline, 1),
-    signal: mix(signal, signal, 1),
-    shades: [mix(ink, ink, 1), mix(ink, gray, 0.25), mix(gray, paper, 0.55)],
+    ink: hex(ink),
+    gray: hex(gray),
+    hairline: hex(hairline),
+    signal: hex(signal),
+    shades: [hex(ink), mix(ink, gray, 0.25), mix(gray, paper, 0.55)],
   };
 }
 

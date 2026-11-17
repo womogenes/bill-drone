@@ -24,4 +24,4 @@ why not the attractors: the old page was the generic dark devtool (graphite, blu
 ## modules (reusable, nothing knows where data came from)
 - `lib/trajectory.ts`: the format every producer emits (time, position, attitude quaternion, rotor thrust and tilt, named channels, events).
 - `components/replay/`: `scene` (three.js: ground, trail, drone), `drone` (the bicopter drawn from its geometry), `timeline` (scrubber, events, play, speed), `strips` (canvas small multiples with the shared cursor), `use-playback` (the clock), `replay` (puts them together).
-- producers: `lib/flight-report.ts` turns a recording into a trajectory; sims and rollouts write the same JSON.
+- producers: `lib/flight-report.ts` turns a recording into a trajectory; a sim or rollout would write the same JSON.
