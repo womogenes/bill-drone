@@ -1,12 +1,12 @@
 'use client';
 
-import { THROTTLE_MAX } from '@/lib/telemetry';
-
 import { memo, useState } from 'react';
 import { RotateCcw, Square } from 'lucide-react';
+import { Panel } from '@/components/panel';
+import { Stat, Stats } from '@/components/stat';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import type { Side } from '@/lib/telemetry';
+import { THROTTLE_MAX, type Side } from '@/lib/telemetry';
 
 const SERVO_LIMIT = 60;
 
@@ -31,7 +31,6 @@ export const ActuatorPanel = memo(function ActuatorPanel({
 }) {
   const isServo = kind === 'servo';
   const title = `${side === 'left' ? 'Left' : 'Right'} ${isServo ? 'servo' : 'ESC'}`;
-  const heading = `${side}-${kind}-heading`;
   const min = isServo ? -SERVO_LIMIT : 0;
   const max = isServo ? SERVO_LIMIT : THROTTLE_MAX;
   const suffix = isServo ? '°' : '';
@@ -52,20 +51,13 @@ export const ActuatorPanel = memo(function ActuatorPanel({
   const disabled = !connected || angle === undefined;
 
   return (
-    <section
-      aria-labelledby={heading}
-      className="space-y-4 px-4 py-4"
-    >
-      <div className="flex items-center gap-4">
-        <h2 id={heading} className="font-semibold">
-          {title}
-        </h2>
+    <Panel
+      title={title}
+      header={
         <div className="ml-auto flex items-center gap-2">
           {isServo && (
             <Button
               variant="outline"
-              size="sm"
-              className="cursor-pointer"
               aria-label={`Set ${title} zero`}
               disabled={disabled || locked || zeroDisabled || dragging}
               onClick={() => {
@@ -77,7 +69,6 @@ export const ActuatorPanel = memo(function ActuatorPanel({
             </Button>
           )}
           <Button
-            className="cursor-pointer"
             variant="ghost"
             size="icon"
             aria-label={isServo ? `Reset ${title}` : `Stop ${title}`}
@@ -88,16 +79,14 @@ export const ActuatorPanel = memo(function ActuatorPanel({
             <ResetIcon />
           </Button>
         </div>
-      </div>
-      <div>
-        <p className="text-sm text-muted-foreground">
-          {isServo ? 'Angle' : 'Throttle'}
-        </p>
-        <p className="mt-1 text-3xl font-medium tabular-nums">
+      }
+    >
+      <Stats>
+        <Stat label={isServo ? 'Angle' : 'Throttle'}>
           {disabled ? '—' : `${draft ?? angle}${suffix}`}
-        </p>
-      </div>
-      <div className="space-y-3">
+        </Stat>
+      </Stats>
+      <div className="space-y-2">
         <Slider
           aria-label={title}
           min={min}
@@ -125,6 +114,6 @@ export const ActuatorPanel = memo(function ActuatorPanel({
           </span>
         </div>
       </div>
-    </section>
+    </Panel>
   );
 });

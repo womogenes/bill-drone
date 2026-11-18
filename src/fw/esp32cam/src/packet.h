@@ -7,7 +7,7 @@ struct __attribute__((packed)) PosePacket {
     char magic[4] = {'T', 'A', 'G', '3'};
     uint32_t sequence = 0;
     uint32_t captureUs = 0; // CAM clock (wraps every ~72 minutes): readout of the tag's centre row, else the frame's.
-    uint32_t ageUs = 0;     // Capture-to-ready time; no clock sync required.
+    uint32_t ageUs = 0;     // Capture to this packet's first start bit on the wire (stamped just before it is written to an idle UART); no clock sync required.
     uint16_t tagId = 0;
     uint16_t valid = 0;     // 0 none, 1 unambiguous, 2 ambiguous tilt resolved by continuity.
     float position[3] = {}; // Camera origin in tag frame, metres.
@@ -21,7 +21,7 @@ struct __attribute__((packed)) PosePacket {
     int16_t flowOffsetUs = 0;     // This frame's centre-row readout minus captureUs.
     float tagPosition[3] = {};    // Tag centre in the camera frame, metres: well determined even when the tilt is not.
     float altPosition[3] = {};    // The other planar solution, as position and rotation.
-    float altRotation[9] = {};
+    float altRotation[9] = {};    // Without a trusted tag (the pose fields all zero) its first five hold the link diagnostics as uint32 bits instead (main.cpp publish): bytes received on the link, falling edges on its RX pin, packets queued late, and the test receiver's bytes and 0x55 bytes.
     float altReprojectionPx = 0;
     uint16_t trusted = 0;         // 1: the pose fields hold both solutions, though valid may be 0 (ambiguous tilt).
     uint16_t checksum = 0;

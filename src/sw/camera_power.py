@@ -1,5 +1,5 @@
 """
-The camera off or on from the laptop, through the drone (its J 4 and J 5 requests: the camera's EN line held low, or released to boot): uv run -m sw.camera_power off|on. Only with the drone disarmed. Off stops the camera's chip, radio and image sensor until on or a drone restart, for example to see whether it is what disturbs the GPS (uv run -m sw.gps_remote watch).
+The camera off or on from the laptop, through the drone (its J 4 and J 5 requests: the camera's EN line held low, or released to boot): uv run -m sw.camera_power off|on. Only with the drone disarmed. Off stops the camera's chip, radio and image sensor until on or a drone restart, for example to see whether it is what disturbs the GPS.
 """
 
 import argparse

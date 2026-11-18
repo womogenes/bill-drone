@@ -2,12 +2,12 @@ import type { HoverState, Side, Targets } from './telemetry';
 
 // Requests the drone service (src/fw/controller/bridge.py) forwards; stop repeats until the drone confirms it.
 export type DroneRequest =
-  | { type: 'stop' | 'arm' | 'calibrate' }
+  | { type: 'stop' | 'arm' | 'calibrate' | 'flip' | 'level' }
   | { type: 'zero'; side: 'left' | 'right' }
   | { type: 'tune'; settings: Record<string, number> }
   | { type: 'esc'; stage: 0 | 1 | 2 };
 
-export type ServiceMessage =
+type ServiceMessage =
   | ({ type: 'reading' } & Record<string, unknown>)
   | ({ type: 'hover' } & HoverState)
   | {
@@ -18,7 +18,7 @@ export type ServiceMessage =
   | { type: 'result'; request: 'zero'; side: Side; error: string | null };
 
 export type EspWorkerMessage =
-  | { type: 'open' | 'close' | 'error' }
+  | { type: 'open' | 'close' }
   | { type: 'message'; message: ServiceMessage };
 
 export type EspWorkerCommand =
@@ -31,7 +31,8 @@ export class EspConnection {
   private worker: Worker;
 
   constructor(
-    address: string,
+    // ws://…/ws flies the drone; /view only watches.
+    url: string,
     targets: Targets,
     onOpen: () => void,
     onMessage: (message: ServiceMessage) => void,
@@ -57,7 +58,7 @@ export class EspConnection {
     };
     this.worker.postMessage({
       type: 'connect',
-      url: `ws://${address}/ws`,
+      url,
       targets,
     } satisfies EspWorkerCommand);
   }

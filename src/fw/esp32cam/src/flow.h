@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Global image motion between consecutive frames, for the drone to turn into velocity after removing rotation with its gyro. Each frame is reduced to a quarter-size image; the most textured blocks of the previous one are found in the current one by sum of absolute differences, refined by two Lucas-Kanade steps, and the shift is the mean of the blocks within one small pixel of the median. The tag's area can be excluded.
+// Global image motion between consecutive frames, sent in each TAG3 packet and taken by the tag's rolling-shutter correction when the tracker has no velocity (tag.h). Each frame is reduced to a quarter-size image; the most textured blocks of the previous one are found in the current one by sum of absolute differences, refined by two Lucas-Kanade steps, and the shift is the mean of the blocks within one small pixel of the median. The tag's area can be excluded.
 
 namespace flow {
 constexpr int scale = 4, width = 80, height = 60;

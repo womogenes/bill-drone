@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export type ChartSeries<T> = {
   label: string;
@@ -9,6 +9,30 @@ export type ChartSeries<T> = {
   dash?: number[];
   value: (point: T) => number | null;
 };
+
+// The dash of a target's line, in the hue of the value it is the target of.
+export const DASH = [4, 3];
+
+export const sampleTime = (point: { time: number }) => point.time;
+
+// A live trace breaks where the drone link was made again (a new session) or samples stopped for longer than maxGap (ms).
+export function sessionGap(maxGap = 1000) {
+  return (
+    previous: { time: number; session: number },
+    next: { time: number; session: number }
+  ) => previous.session !== next.session || next.time - previous.time > maxGap;
+}
+
+// A live chart's right edge: the latest sample, or this laptop's clock once the link is down, so the trace scrolls away instead of standing still.
+export function useChartEnd(connected: boolean, latest: number) {
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    if (connected) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [connected]);
+  return Math.max(now, latest);
+}
 
 export function FastChart<T>({
   history,
@@ -22,6 +46,7 @@ export function FastChart<T>({
   range,
   minSpan,
   label,
+  gutter: shared,
   className = 'h-40',
 }: {
   history: (start: number, end: number) => readonly T[];
@@ -36,6 +61,8 @@ export function FastChart<T>({
   // The smallest span of the value axis, so sensor noise on a still drone stays flat instead of filling the chart.
   minSpan?: number;
   label: string;
+  // The width of the value axis's labels, shared by the charts given the same one: stacked charts' plots then start at the same x.
+  gutter?: { current: number };
   // Sets the chart's height.
   className?: string;
 }) {
@@ -66,6 +93,8 @@ export function FastChart<T>({
     let frame = 0;
     let colors: string[] = [];
     let font = '';
+    // The plot's left edge only moves out, so changing tick labels don't shift the trace back and forth.
+    const gutter = shared ?? { current: 48 };
     let styleDirty = true;
 
     function draw() {
@@ -140,12 +169,13 @@ export function FastChart<T>({
         { length: count },
         (_, index) => low + ((high - low) * index) / (count - 1)
       );
-      const left = Math.max(
-        48,
+      gutter.current = Math.max(
+        gutter.current,
         ...ticks.map(
           (value) => context.measureText(formatValue(value)).width + 12
         )
       );
+      const left = gutter.current;
       const right = width - 12;
       const top = 8;
       const bottom = height - 36;
@@ -280,7 +310,7 @@ export function FastChart<T>({
       surface.removeEventListener('pointermove', move);
       surface.removeEventListener('pointerleave', leave);
     };
-  }, []);
+  }, [shared]);
 
   useEffect(() => {
     current.current = {

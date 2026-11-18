@@ -1,4 +1,0 @@
-exec('"""\nESP-side timing measurement; both ESCs stay at zero throttle.\n"""\nimport time\nfrom machine import WDT\nfrom drivers import actuators, control\ncontrol.stop()\nwatchdog = WDT(timeout=2000)\nfor name, call in (\n    (\'PID math\', lambda: control.calculate(0, time.ticks_us(), 200)),\n    (\'left PWM\', lambda: actuators.set_throttle(\'left\', 0)),\n    (\'right PWM\', lambda: actuators.set_throttle(\'right\', 0)),\n):\n    started = time.ticks_us()\n    for _ in range(20):\n        call()\n    print(name, time.ticks_diff(time.ticks_us(), started)/20, \'us/call\')\n    watchdog.feed()\ncontrol.stop()\n'); import machine; machine.reset()
-PID math 461.5 us/call
-left PWM 38408.2 us/call
-right PWM 37604.5 us/call

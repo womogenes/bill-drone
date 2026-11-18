@@ -44,7 +44,7 @@ def decode(record):
     return {
         "sequence": v[1], "capture_us": v[2], "age_us": v[3], "valid": v[5],
         "position": v[6:9], "rotation": v[9:18], "margin": v[18], "reprojection_px": v[19],
-        "flow": v[20:22], "flow_interval_us": v[22], "flow_residual_px": v[23], "flow_inliers": v[24],
+        "flow": v[20:22], "flow_interval_us": v[22], "flow_residual_px": v[23], "flow_inliers": v[24], "flow_offset_us": v[25],
         "tag_position": v[26:29], "alt_reprojection_px": v[41], "trusted": v[42],
         "corners": v[44:52], "frame_start_us": v[52], "process_us": v[53], "flow_wait_us": v[54],
         "found": v[55], "preview": v[56], "short_frames": v[57],
@@ -166,16 +166,16 @@ def analyze(path):
     skipped = np.round(gaps / FRAME_US).astype(int) - 1
     found, valid = d["found"] > 0, d["valid"] > 0
     corners = d["corners"].reshape(-1, 4, 2)
-    centre = corners.mean(axis=1)
+    center = corners.mean(axis=1)
     both = found[1:] & found[:-1]
-    speed = np.linalg.norm(np.diff(centre, axis=0), axis=1)[both]  # px per frame
+    speed = np.linalg.norm(np.diff(center, axis=0), axis=1)[both]  # px per frame
     # Tag losses: found then not found, with the corner speed just before.
     losses = np.flatnonzero(found[:-1] & ~found[1:])
-    pre = [np.linalg.norm(centre[i] - centre[i - 1]) if i > 0 and found[i - 1] else np.nan for i in losses]
+    pre = [np.linalg.norm(center[i] - center[i - 1]) if i > 0 and found[i - 1] else np.nan for i in losses]
     position = d["position"][valid]
     step = np.linalg.norm(np.diff(position, axis=0), axis=1) if len(position) > 1 else np.array([0.0])
     flow = d["flow"][1:][both & (d["flow_interval_us"][1:] > 0)]
-    motion = np.diff(centre, axis=0)[both & (d["flow_interval_us"][1:] > 0)]
+    motion = np.diff(center, axis=0)[both & (d["flow_interval_us"][1:] > 0)]
     print(json.dumps({
         "frames": n, "seconds": round(seconds, 1), "rate_hz": round(n / seconds, 1) if seconds else None,
         "records_lost": int(d["sequence"][-1] - d["sequence"][0] + 1 - n),

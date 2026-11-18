@@ -12,12 +12,12 @@ let timer: ReturnType<typeof setInterval>;
 let closed = false;
 let targets: Targets;
 
-function close(type: 'close' | 'error' = 'close') {
+function close() {
   if (closed) return;
   closed = true;
   clearInterval(timer);
   socket.close();
-  worker.postMessage({ type });
+  worker.postMessage({ type: 'close' });
 }
 
 function stream(beforeRequest = false) {
@@ -66,6 +66,6 @@ worker.onmessage = ({ data }) => {
     deadline = performance.now() + 3000;
     worker.postMessage({ type: 'message', message: JSON.parse(text) });
   };
-  socket.onerror = () => close('error');
-  socket.onclose = () => close();
+  socket.onerror = close;
+  socket.onclose = close;
 };

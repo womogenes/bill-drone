@@ -8,6 +8,8 @@ import struct
 HEADER = "<3sBIIIBB"
 HEADER_SIZE = 18
 PAYLOAD_SIZE = 232
+# Link reports and the controller's radio settings (fw/link.h); firmware and services before 2026-11-09 knew channels 0-6 only.
+LINK_CHANNEL = 7
 
 
 def pack(channel, session, sequence, token, payload, index=0, count=1):
@@ -18,7 +20,7 @@ def unpack(packet):
     if len(packet) < HEADER_SIZE or len(packet) > 250:
         raise ValueError("Invalid direct packet size")
     magic, channel, session, sequence, token, index, count = struct.unpack_from(HEADER, packet)
-    if magic != b"DC1" or not 0 <= channel <= 6 or not 0 <= index < count <= 32:
+    if magic != b"DC1" or not 0 <= channel <= LINK_CHANNEL or not 0 <= index < count <= 32:
         raise ValueError("Invalid direct packet header")
     return channel, session, sequence, token, index, count, packet[HEADER_SIZE:]
 

@@ -86,11 +86,14 @@ static inline bool camera_parse(CameraParser *parser, const uint8_t **data, size
     return false;
 }
 
-// The camera raises SYNC as it queues each packet, then sends it: a packet completed within CAMERA_SYNC_WINDOW_US of the newest unused rising edge belongs to that edge (the 0.8 ms transfer plus this drone's UART and task latency; packets are about 34 ms apart). edges counts rising edges, edge_us is the newest one's time and used_edges the count already matched; all times are the low 32 bits of esp_timer. Returns whether the packet is dated, and how long before now its edge was.
+// Each packet is dated by the falling edge of its first start bit on the drone's RX pin (camera.c): the camera stamps the packet's age and writes it to an idle UART at once, so that edge is the instant the age refers to. The drone catches only the first falling edge after it re-arms (after each complete frame of any kind), so an edge belongs to a packet only if the packet's whole time on the wire lies between them: at least CAMERA_PACKET_WIRE_US (less a margin for the two clocks) and at most CAMERA_SYNC_WINDOW_US (the wire plus this drone's UART and task latency; packets are about 40 ms apart). edges counts the edges caught, edge_us is the newest one's time and used_edges the count already matched; all times are the low 32 bits of esp_timer. Returns whether the packet is dated, and how long before now its edge was. (Until 2026-11-14 the edge was the camera's SYNC pulse on GPIO13; that pin is now shorted to the drone's TX.)
 #define CAMERA_SYNC_WINDOW_US 10000
+// 164 bytes of 10 bits at 2 Mbaud.
+#define CAMERA_PACKET_WIRE_US (sizeof(CameraPacket) * 10 / 2)
+#define CAMERA_WIRE_MARGIN_US 20
 static inline bool camera_sync(uint32_t now_us, uint32_t edges, uint32_t edge_us, uint32_t *used_edges, uint32_t *since_edge_us) {
     *since_edge_us = now_us - edge_us;
-    if (edges == *used_edges || *since_edge_us > CAMERA_SYNC_WINDOW_US) return false;
+    if (edges == *used_edges || *since_edge_us > CAMERA_SYNC_WINDOW_US || *since_edge_us + CAMERA_WIRE_MARGIN_US < CAMERA_PACKET_WIRE_US) return false;
     *used_edges = edges;
     return true;
 }

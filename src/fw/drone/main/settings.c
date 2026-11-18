@@ -10,9 +10,11 @@ static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 #define LOCK() portENTER_CRITICAL(&lock)
 #define UNLOCK() portEXIT_CRITICAL(&lock)
 
-#define RAD (3.14159265358979323846f / 180.0f)
 // NVS blob: "FS1", a reserved byte, then (name length, name, float32) pairs. Names rather than positions let entries be added or removed without losing the rest.
-#define BLOB 2048
+// 2048 until 2026-11-14, when attitude_tau did not fit; an older, smaller blob still loads by its names.
+#define BLOB 4096
+// Every entry must fit: settings_encode returns 0 for a list that does not, and nothing would be saved.
+_Static_assert(4 + SETTINGS_NAMES + 5 * SETTINGS <= BLOB, "Settings outgrow the NVS blob");
 
 static const char *const names[SETTINGS] = {
 #define TUNE(name, member, scale, min, max, value) #name,
@@ -84,11 +86,35 @@ static int settings_index(const char *name, size_t length) {
     return -1;
 }
 
+// The model before the airframe's authorities (settings.def roll_authority, 2026-11-15) with its defaults: a blob that has any of it and none of the authorities was flown on roll arm / roll_inertia, pitch pivot_height / pitch_inertia and yaw arm / yaw_inertia, and its gains in rad/s² are scaled once by the authority over that, so the controller asks the motors and servos for what it did. Removable once no drone holds such a blob.
+enum { LEGACY_ARM, LEGACY_PIVOT, LEGACY_ROLL, LEGACY_PITCH, LEGACY_YAW, LEGACY };
+static const char *const legacy_names[LEGACY] = {"arm", "pivot_height", "roll_inertia", "pitch_inertia", "yaw_inertia"};
+static const float legacy_defaults[LEGACY] = {0.172f, 0.0253692458911615f, 0.0118483264434811f, 0.0023030647846826f, 0.0106709253540914f};
+static const int legacy_gains[3][5] = {
+    {SETTING_roll_p, SETTING_roll_i, SETTING_roll_damping, SETTING_roll_bias, -1},
+    {SETTING_pitch_p, SETTING_pitch_i, SETTING_pitch_damping, SETTING_pitch_bias, SETTING_pitch_speed},
+    {SETTING_yaw_damping, SETTING_yaw_i, SETTING_yaw_bias, -1, -1},
+};
+
+static void legacy_scale(float *loaded, const float *legacy) {
+    float before[3] = {legacy[LEGACY_ARM] / legacy[LEGACY_ROLL], legacy[LEGACY_PIVOT] / legacy[LEGACY_PITCH], legacy[LEGACY_ARM] / legacy[LEGACY_YAW]};
+    float now[3] = {loaded[SETTING_roll_authority], loaded[SETTING_pitch_authority], loaded[SETTING_yaw_authority]};
+    for (int axis = 0; axis < 3; axis++) {
+        for (int i = 0; i < 5 && legacy_gains[axis][i] >= 0; i++) {
+            int index = legacy_gains[axis][i];
+            float scaled = loaded[index] * now[axis] / before[axis];
+            if (settings_valid(index, scaled)) loaded[index] = scaled;
+        }
+    }
+    printf("Settings: gains scaled to the airframe's authorities (roll x%.3f, pitch x%.3f, yaw x%.3f)\n", now[0] / before[0], now[1] / before[1], now[2] / before[2]);
+}
+
 // Applies a parsed blob; anything missing, unknown, out of range or truncated keeps its default, and a calibration that is not complete and in range is not calibrated.
 static void settings_decode(const uint8_t *data, size_t size) {
-    float loaded[SETTINGS];
-    bool present[SETTINGS] = {false};
+    float loaded[SETTINGS], legacy[LEGACY];
+    bool present[SETTINGS] = {false}, had_legacy = false;
     memcpy(loaded, defaults, sizeof(loaded));
+    memcpy(legacy, legacy_defaults, sizeof(legacy));
     if (size >= 4 && !memcmp(data, "FS1", 3)) {
         for (size_t at = 4; at < size;) {
             size_t length = data[at];
@@ -100,6 +126,12 @@ static void settings_decode(const uint8_t *data, size_t size) {
                 loaded[index] = value;
                 present[index] = true;
             }
+            for (int i = 0; index < 0 && i < LEGACY; i++) {
+                if (strlen(legacy_names[i]) == length && !memcmp(legacy_names[i], data + at + 1, length) && isfinite(value) && value > 0) {
+                    legacy[i] = value;
+                    had_legacy = true;
+                }
+            }
             at += 1 + length + 4;
         }
     }
@@ -108,9 +140,14 @@ static void settings_decode(const uint8_t *data, size_t size) {
     if (!complete || loaded[SETTING_calibrated] != 1) {
         for (size_t i = 0; i < sizeof(calibration) / sizeof(calibration[0]); i++) loaded[calibration[i]] = defaults[calibration[i]];
     }
+    bool migrated = had_legacy && !present[SETTING_roll_authority] && !present[SETTING_pitch_authority] && !present[SETTING_yaw_authority];
+    if (migrated) legacy_scale(loaded, legacy);
     LOCK();
     memcpy(values, loaded, sizeof(values));
-    dirty = calibration_unsaved = false;
+    calibration_unsaved = false;
+    // A migrated blob is saved back as soon as the drone is disarmed (settings_save_due), without the old names.
+    dirty = migrated;
+    changed_us = 0;
     version++;
     UNLOCK();
 }

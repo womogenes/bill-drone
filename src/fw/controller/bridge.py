@@ -5,12 +5,17 @@
 """
 The laptop's drone service. It owns the controller's USB port and serves, on 127.0.0.1 only:
 
+- GET /status: {"online", "state", ...}. state says which part of the chain is missing: "controller_missing" (no controller heard on USB; the service keeps looking), "drone_silent" (the controller is there, the drone's status is not arriving) or "online". The dashboard shows it while it cannot connect. port is the controller's device and rescans how often it was lost (unplugged, failing or silent for SILENT_S) and looked for again on every USB device; usb has its physical port and why the last search passed devices over.
 - /ws: the dashboard. The drone's status as JSON readings; the browser streams targets (including the manual/hover/land mode) every 50 ms and sends stop, arm, calibrate, zero and tune requests.
+- /view: a dashboard that only watches (a second tab while the first has /ws): the same readings; what it sends is ignored.
 - /update: raw id-tagged requests (tools/ota_direct.py, the dashboard's camera requests), from any number of clients at once; each reply goes to the client that sent its id.
 - GET /status, GET /settings, POST /settings {"settings": {...}}, GET /schema: status, tuning and the settings' names, ranges and defaults for local tools.
+- GET /recordings: the recordings for the dashboard's flights page, newest first; ?name=<recording>&columns=<name>,... one recording's events and its records' columns as log_format.py decode_records gives them (each record once, in sequence order; null for NaN), with the flip's phases by number.
+- POST /radio {"rate": i, "power": dBm}: the controller's sending rate (fw/link.h link_rates index) and maximum transmit power (0 = the driver's own) until it resets, each optional; only while the drone is disarmed (the drone stays on channel 6). Replies with the controller's next link report.
+- POST /log_test {"drop": fraction, "ack_drop": fraction, "ack_delay_ms": n}: induced flight-log loss for testing the log's repair (drop arriving log fragments, drop or delay the acknowledgements); off until set, cleared by a restart.
 - POST /pattern {"after": s, "repeat": n, "segments": [{"ticks": n, "<channel>": value, ...}, ...]}: load the identification test pattern (log_format.py PATTERN_CHANNELS; drone/main/flight_rt.c excite), or clear it with no segments. It lasts until the drone restarts, and every recording from then on starts with it as a "pattern" event. sw/excite.py builds and sends them.
 
-It records every armed session into src/sw/recordings/<time>_<session>.bin (FLG1 batches) and .jsonl (start, metadata, gap, error, stop and closed events; sw/flight_log.py decodes both).
+It records every armed session into src/sw/recordings/<time>_<session>.bin (FLG1 batches) and .jsonl (start, metadata, gap, error, stop, log_stats, closed, gps, command, link and dropout events; sw/flight_log.py decodes both).
 """
 
 import argparse
@@ -18,7 +23,10 @@ import asyncio
 from collections import deque
 from datetime import datetime, timezone
 import json
+import math
 import os
+import random
+import re
 from pathlib import Path
 import struct
 import sys
@@ -27,27 +35,60 @@ import time
 from aiohttp import WSMsgType, web
 import serial
 
-from log_format import HEADER_FORMAT, HEADER_SIZE, PATTERN_CHANNELS, RECORD_SIZE, SAMPLE_FORMAT, STOP_REASONS
-from wire import PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
+from find_port import LISTEN_S, by_path, candidates, holder, listen
+from log_format import COLUMNS, FLIP_PHASES, FORMATS, HEADER_FORMAT, HEADER_SIZE, HOVER_SIZE, RECORD_SIZE, batches, decode_records, PATTERN_CHANNELS, STOP_REASONS, decode_reason, guard_state, pattern_refusal
+from wire import LINK_CHANNEL, PAYLOAD_SIZE, SerialDecoder, pack, serial_encode, unpack
 
 # Messages of more fragments than this go out twice (send_message).
 COPY_ABOVE = 4
 
 RECORDINGS = Path(__file__).resolve().parents[2] / "sw/recordings"
+# A recording's name (Recorder.begin): its UTC start, then its session.
+RECORDING_NAME = re.compile(r"(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z_\d+", re.ASCII)
+# Recordings shorter than this (s, by size) are arm-and-disarm checks, not flights.
+SHORTEST_S = 1
+# The drone's control rate (records/s: flight_rt.c's 10 ms tick), for a recording's length from its size.
+CONTROL_HZ = 100
 
 # drone/main/runtime.h Status, then its camera link fields (absent from firmware before the camera link).
 STATUS_FORMAT = "<4sIIHB3f3f3f2f2H4f2IiIIHHf"
 CAMERA_FORMAT = "<15I2B"
 # Then the GPS's (absent before the GPS driver): counters, the newest NAV-PVT and its age (ms, 0xffffffff before the first).
 GPS_FORMAT = "<5I4B6i3I"
+# Then the barometer's (absent before the barometer driver): the newest reading's pressure altitude (dm) and its flags (1 the chip answered, 2 a reading in the last 200 ms, 4 at address 0x77).
+BARO_FORMAT = "<hB"
 STATUS_SIZE = struct.calcsize(STATUS_FORMAT)
 CAMERA_SIZE = struct.calcsize(CAMERA_FORMAT)
+GPS_SIZE = struct.calcsize(GPS_FORMAT)
 CAMERA_KEYS = (
     "packets", "frames", "poses", "flows", "corrupt", "repeats", "stale",
     "unsynced", "skipped_bytes", "overflows", "line_errors", "sync_edges", "rx_edges",
     "sequence", "age_ms", "valid", "trusted",
 )
-REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T", "esc": b"E"}
+# The drone's GPS report (drone/main/gps.c gps_report), on the status channel once a second while the recorder subscription asks for it: drone time, NAV-SAT's time of week and age, MON-RF's age (ms); noise, AGC; jamming state, CW indicator, antenna status and power, configuration, satellites listed and sent; then 5 bytes per satellite.
+GPS_REPORT_FORMAT = "<4s4I2H7B"
+GPS_REPORT_SIZE = struct.calcsize(GPS_REPORT_FORMAT)
+GPS_SYSTEMS = {0: "GPS", 1: "SBAS", 2: "Galileo", 3: "BeiDou", 5: "QZSS", 6: "GLONASS"}
+GPS_JAMMING = ("unknown", "ok", "warning", "critical")
+GPS_ANTENNA = ("init", "unknown", "ok", "short", "open")
+# gps.c's configuration groups, in order, and how each went (gps.h GPS_PENDING...).
+GPS_GROUPS = ("signals", "sbas", "interference", "output")
+GPS_CONFIG = ("pending", "set", "refused", "unanswered")
+# The link reports on channel 7 (fw/link.h LinkReport): LNK1 from the drone about the controller's packets, RLY1 from the controller about the drone's; firmware before 2026-11-09 sends neither.
+LINK_FORMAT = "<4s5H3b4H2BbB"
+LINK_KEYS = (
+    "interval_ms", "rx", "rejected", "gaps", "silence_ms", "rssi", "rssi_min", "noise_floor",
+    "tx_ok", "tx_fail", "refused", "latency_ms", "channel", "rate", "power", "flags",
+)
+LINK_SOURCES = {b"LNK1": "drone", b"RLY1": "controller"}
+# fw/link.h link_rates by index.
+LINK_RATES = ("1 Mbps", "LR 500 kbps", "LR 250 kbps", "2 Mbps", "5.5 Mbps", "11 Mbps", "11g 6 Mbps")
+# A status gap at least this long (s) goes into the open recording as a dropout event with its length.
+DROPOUT_S = 0.3
+# level: the pilot's level-and-hold (drone/main/recover.h), from any mode; STOP stays the motor cut.
+REQUESTS = {"arm": b"A", "calibrate": b"G", "zero": b"Z", "tune": b"T", "esc": b"E", "flip": b"f", "level": b"h"}
+# The flip request is tried this long (s) instead of the 6 every other request gets: a flip that starts seconds after the click is not the one asked for (the drone checks its conditions on arrival either way).
+FLIP_TIMEOUT = 1.0
 # Schema entries per D reply (drone/main/settings.h SCHEMA_PAGE).
 SCHEMA_PAGE = 12
 
@@ -57,14 +98,20 @@ def decode_status(payload, settings):
     The dashboard's reading (sw/dashboard/lib/telemetry.ts Reading) from a status message.
     """
     magic, time_ms, target_sequence, flags, reason, *values = struct.unpack_from(STATUS_FORMAT, payload)
-    camera = gps = None
+    reason, recovering = decode_reason(reason)
+    camera = gps = baro = None
     if len(payload) >= STATUS_SIZE + CAMERA_SIZE:
         camera = dict(zip(CAMERA_KEYS, struct.unpack_from(CAMERA_FORMAT, payload, STATUS_SIZE)))
         # No frame yet: the age is meaningless.
         if camera["age_ms"] == 0xFFFFFFFF:
             camera["age_ms"] = None
-    if len(payload) == STATUS_SIZE + CAMERA_SIZE + struct.calcsize(GPS_FORMAT):
+    if len(payload) >= STATUS_SIZE + CAMERA_SIZE + GPS_SIZE:
         gps = decode_gps(struct.unpack_from(GPS_FORMAT, payload, STATUS_SIZE + CAMERA_SIZE))
+    if len(payload) >= STATUS_SIZE + CAMERA_SIZE + GPS_SIZE + struct.calcsize(BARO_FORMAT):
+        altitude, baro_flags = struct.unpack_from(BARO_FORMAT, payload, STATUS_SIZE + CAMERA_SIZE + GPS_SIZE)
+        # The pressure altitude in the standard atmosphere (m), None without a fresh reading; address 0x76 (SDO low) or 0x77, None while not found. Its own flags: the status's flags (IMU, arming, recording) stay as read.
+        baro = {"found": bool(baro_flags & 1), "fresh": bool(baro_flags & 2), "address": (0x77 if baro_flags & 4 else 0x76) if baro_flags & 1 else None,
+                "altitude": altitude / 10 if baro_flags & 2 else None}
     accel, gyro = values[0:3], values[3:6]
     roll, pitch, temperature, left_servo, right_servo, left_throttle, right_throttle = values[6:13]
     target_roll, target_pitch, target_yaw, base = values[13:17]
@@ -100,6 +147,8 @@ def decode_status(payload, settings):
         },
         "control_status": {
             "reason": STOP_REASONS[reason],
+            # The fly-away failsafe's phase, the test pattern's stop (drone/main/guard.h) and the flip's phase (drone/main/flip.h), from flags bits 8-15; a recovery's stage and cause (drone/main/recover.h) from the reason's top bits.
+            **guard_state(flags >> 8 | recovering),
             "throttle_latched": bool(flags & 64),
             "target_sequence": target_sequence,
         },
@@ -111,23 +160,72 @@ def decode_status(payload, settings):
         },
         "camera": camera,
         "gps": gps,
+        "baro": baro,
     }
+
+
+def decode_link(payload):
+    """
+    A link report (fw/link.h LinkReport) as {"source": "drone" or "controller", ...}: per interval the partner's packets heard (rx), rejected, sequence gaps, the longest silence, their RSSI (mean and lowest, dBm; None with none heard) and the noise floor, the sends acknowledged, failed and refused, the longest send-to-callback time, then the radio's channel, rate, transmit power (dBm) and flags; None for anything else.
+    """
+    if len(payload) < struct.calcsize(LINK_FORMAT) or payload[:4] not in LINK_SOURCES:
+        return None
+    magic, *values = struct.unpack_from(LINK_FORMAT, payload)
+    report = dict(zip(LINK_KEYS, values))
+    if not report["rx"]:
+        report["rssi"] = report["rssi_min"] = None
+    report["rate_name"] = LINK_RATES[report["rate"]] if report["rate"] < len(LINK_RATES) else None
+    report["power"] /= 4
+    return {"source": LINK_SOURCES[magic], **report}
 
 
 def decode_gps(fields):
     """
-    The status message's GPS fields (drone/main/runtime.h Status) in SI units: degrees, metres above sea level, m/s north, east and down.
+    The status message's GPS fields (drone/main/runtime.h Status) in SI units: degrees, meters above sea level, m/s north, east and down.
     """
     messages, corrupt, skipped, age, itow, fix, flags, satellites, configured, lat, lon, height, *rest = fields
     velocity, (horizontal, vertical, speed) = rest[:3], rest[3:]
     return {
         "messages": messages, "corrupt": corrupt, "skipped": skipped, "configured": bool(configured),
         "age_ms": None if age == 0xFFFFFFFF else age, "itow_ms": itow,
-        # 0 none, 2 2D, 3 3D; ok is the module's gnssFixOK, inside its accuracy masks.
-        "fix": fix, "ok": bool(flags & 1), "satellites": satellites,
+        # 0 none, 2 2D, 3 3D; ok is the module's gnssFixOK, inside its accuracy masks; differential: SBAS corrections applied (diffSoln).
+        "fix": fix, "ok": bool(flags & 1), "differential": bool(flags & 2), "satellites": satellites,
         "latitude": lat / 1e7, "longitude": lon / 1e7, "height": height / 1000,
         "velocity": [v / 1000 for v in velocity],
         "horizontal_accuracy": horizontal / 1000, "vertical_accuracy": vertical / 1000, "speed_accuracy": speed / 1000,
+    }
+
+
+def decode_gps_report(payload):
+    """
+    The drone's GPS report: the module's satellites heard or used (UBX-NAV-SAT; C/N0 in dB-Hz, elevation in degrees or None, quality 4 code locked and 5-7 carrier locked, health 1 healthy and 2 not), its RF health (UBX-MON-RF; jam_indicator is the CW indicator, 0-255; agc a fraction of full scale) and how each configuration group went, with a summary: the mean C/N0 of the strongest four, the satellites used per system and the SBAS PRNs heard. Ages are None before the first reply.
+    """
+    _, time_ms, itow, sat_age, rf_age, noise, agc, jamming, cw, antenna, power, config, listed, count = struct.unpack_from(GPS_REPORT_FORMAT, payload)
+    satellites = []
+    for index in range(min(count, (len(payload) - GPS_REPORT_SIZE) // 5)):
+        gnss, sv, cno, elevation, flags = struct.unpack_from("<3BbB", payload, GPS_REPORT_SIZE + 5 * index)
+        satellites.append({
+            "system": GPS_SYSTEMS.get(gnss, str(gnss)), "sv": sv, "cno": cno, "elevation": elevation if -90 <= elevation <= 90 else None,
+            "quality": flags & 7, "used": bool(flags & 8), "health": flags >> 4 & 3, "sbas_corrected": bool(flags & 128),
+        })
+    strongest = sorted((satellite["cno"] for satellite in satellites if satellite["cno"]), reverse=True)[:4]
+    used = {}
+    for satellite in satellites:
+        if satellite["used"]:
+            used[satellite["system"]] = used.get(satellite["system"], 0) + 1
+    return {
+        "time": time_ms,
+        "satellites_age_ms": None if sat_age == 0xFFFFFFFF else sat_age, "satellites_itow_ms": itow,
+        "rf_age_ms": None if rf_age == 0xFFFFFFFF else rf_age,
+        "jamming": GPS_JAMMING[jamming], "jam_indicator": cw, "noise_per_ms": noise, "agc": agc / 8191,
+        "antenna": GPS_ANTENNA[antenna] if antenna < len(GPS_ANTENNA) else str(antenna), "antenna_power": ("off", "on", "unknown", "unknown")[power & 3],
+        "config": {group: GPS_CONFIG[config >> 2 * index & 3] for index, group in enumerate(GPS_GROUPS)},
+        "listed": listed, "heard": sum(1 for satellite in satellites if satellite["cno"]),
+        "top4_cno": sum(strongest) / len(strongest) if strongest else None,
+        "used": used,
+        "sbas_heard": sorted(satellite["sv"] for satellite in satellites if satellite["system"] == "SBAS" and satellite["cno"]),
+        "sbas_corrected": any(satellite["sbas_corrected"] for satellite in satellites),
+        "satellites": satellites,
     }
 
 
@@ -141,6 +239,9 @@ def encode_pattern(pattern):
     unknown = {key for segment in segments for key in segment} - {"ticks", *PATTERN_CHANNELS}
     if unknown:
         raise ValueError(f"Unknown pattern channels {sorted(unknown)}")
+    refusal = pattern_refusal(pattern)
+    if refusal:
+        raise ValueError(refusal)
     used = [name for name in PATTERN_CHANNELS if any(segment.get(name) for segment in segments)]
     mask = sum(1 << PATTERN_CHANNELS.index(name) for name in used)
     after, repeat = float(pattern.get("after", 2.0)), int(pattern.get("repeat", 0))
@@ -151,6 +252,78 @@ def encode_pattern(pattern):
         body += struct.pack(f"<H{len(used)}h", ticks, *values)
         recorded.append({"ticks": ticks, **{name: value / 100 for name, value in zip(used, values)}})
     return body, {"after": after, "repeat": repeat, "segments": recorded}
+
+
+def log_counts():
+    """
+    One recording's flight-log delivery counts (Recorder.counts; /status reading.recorder.log, and the recording's "log_stats" event when it closes): log messages, FLG1 batches and samples written; gaps in the samples' sequence and the samples in them, which the drone dropped at capture and no resend can bring back; repair requests (the fragments this service had of a message whose last fragment came with others missing, which a newer drone answers by resending only those), the messages completed after one, and messages that came again after they were written (their acknowledgement lost or slow) and were acknowledged again; and what the induced-loss test (POST /log_test) dropped.
+    """
+    return {"messages": 0, "batches": 0, "samples": 0, "gaps": 0, "missing": 0, "repair_requests": 0, "repaired": 0, "duplicates": 0, "test_dropped": 0}
+
+
+def recording_start(name):
+    """The UTC start in a recording's name as an ISO time, or None for another file."""
+    match = RECORDING_NAME.fullmatch(name)
+    return match and f"{match[1]}T{match[2]}:{match[3]}:{match[4]}.{match[5]}Z"
+
+
+def recording_list(directory):
+    """
+    The recordings with both files and at least SHORTEST_S long, newest first, as {name, started, seconds}; the length from the size and the first batch's record size (batches run about 4 records).
+    """
+    files = sorted(os.listdir(directory))
+    stems = {file[:-6] for file in files if file.endswith(".jsonl")}
+    entries = []
+    for file in files:
+        stem = file[:-4]
+        started = recording_start(stem)
+        if not file.endswith(".bin") or not started or stem not in stems:
+            continue
+        with open(directory / file, "rb") as data:
+            header = data.read(HEADER_SIZE)
+            size = os.fstat(data.fileno()).st_size
+        record = struct.unpack(HEADER_FORMAT, header)[3] if len(header) == HEADER_SIZE else 0
+        seconds = size / (((record or RECORD_SIZE) + HEADER_SIZE / 4) * CONTROL_HZ)
+        if seconds >= SHORTEST_S:
+            entries.append({"name": stem, "started": started, "seconds": seconds})
+    return sorted(entries, key=lambda entry: entry["started"], reverse=True)
+
+
+def refuse_constant(name):
+    raise ValueError(f"{name} is not JSON")
+
+
+def read_recording(directory, name, columns):
+    """
+    A recording for the dashboard's report (sw/dashboard/lib/flight-report.ts): its events (the .jsonl's lines, less one cut off mid-write), the columns asked for (log_format COLUMNS, decoded by decode_records), each record once in sequence order (the drone resends unacknowledged batches) with None for NaN, whether the .bin ends mid-batch, and the flip's phases by number (log_format FLIP_PHASES). Raises FileNotFoundError for an unknown recording, KeyError for an unknown column and ValueError for a recording that does not decode.
+    """
+    if not recording_start(name):
+        raise FileNotFoundError(f"No recording {name}")
+    unknown = [column for column in columns if column not in COLUMNS]
+    if unknown:
+        raise KeyError(f"No column {', '.join(unknown)}")
+    events = []
+    for line in (directory / f"{name}.jsonl").read_text(encoding="utf-8", errors="replace").split("\n"):
+        if line.strip():
+            try:
+                events.append(json.loads(line, parse_constant=refuse_constant))
+            except ValueError:
+                pass
+    if not any(event.get("type") == "start" for event in events):
+        raise ValueError("The recording has no start record")
+    # The start record wins over later metadata (sw/flight_log.py metadata); the calibration's defaults are those of recordings from before it was written.
+    meta = {}
+    for event in events:
+        if event.get("type") in ("start", "metadata"):
+            meta = event | meta
+    bias = [math.degrees(value) for value in meta.get("gyro_bias_rad_s", (0, 0, 0))]
+    rows, truncated = decode_records((directory / f"{name}.bin").read_bytes(), meta.get("session"), meta.get("sensor_to_body", (1, 1, 1)), bias, meta.get("gyro_counts_per_deg_s", 131), meta.get("accel_counts_per_g", 16384))
+    first, sequence = {}, COLUMNS.index("sequence")
+    for row in rows:
+        first.setdefault(row[sequence], row)
+    ordered = [first[key] for key in sorted(first)]
+    picked = {column: [None if value != value else value for value in (row[COLUMNS.index(column)] for row in ordered)] for column in columns}
+    return {"events": events, "columns": picked, "truncated": truncated, "flip_phases": FLIP_PHASES}
 
 
 class Recorder:
@@ -175,16 +348,24 @@ class Recorder:
         self.firmware = None
         # The physical drone, its station MAC (fw/pairs.h; the I reply's "drone"), from the same reply into the same start record.
         self.drone = None
+        self.counts = log_counts()
 
     def status(self):
-        return {"file": self.file, "bytes": self.bytes, "writing": self.data is not None, "error": self.error}
+        return {"file": self.file, "bytes": self.bytes, "writing": self.data is not None, "error": self.error, "log": dict(self.counts)}
 
     def event(self, message):
         self.events.write(json.dumps({**message, "received_at": now()}) + "\n")
 
     def gps(self, message):
         """
-        Each new GPS solution while a recording is open: {"type": "gps", "drone_ms": its arrival on the drone's esp_timer clock (the start record's started_ticks_us is on the same clock), ...}. They ride the status messages, which are not acknowledged, so one can be missing.
+        Each new GPS solution while a recording is open: {"type": "gps", "drone_ms": its arrival on the drone's esp_timer clock (the start record's started_ticks_us is on the same clock), ...}; and each GPS report (decode_gps_report, once a second from firmware of 2026-11-09 on): {"type": "gps_report", "drone_ms": when the drone sent it, ...}. They ride the status channel, which is not acknowledged, so one can be missing.
+        """
+        if self.events is not None:
+            self.event(message)
+
+    def link(self, message):
+        """
+        Link quality while a recording is open: each link report as it arrives ({"type": "link", "source": "drone" or "controller", ...}, decode_link), this service's own once a second ({"type": "link", "source": "bridge", ...}, Service.monitor), and each status gap of DROPOUT_S or more once it ends ({"type": "dropout", "seconds": ...}).
         """
         if self.events is not None:
             self.event(message)
@@ -216,14 +397,22 @@ class Recorder:
                                 "pose_zero_deg": list(pose), "calibrated": bool(payload[32])})
             self.next_sequence = 0
         elif magic == b"FLG1":
-            _, session, count, size = struct.unpack_from(HEADER_FORMAT, payload)
+            found = batches(payload)
+            session = found[0][1]
             if session != self.session or self.data is None:
                 # This service started during the session and missed its start record.
                 self.begin(session, {"resumed": True})
-            first = struct.unpack_from("<I", payload, HEADER_SIZE + 4)[0]
-            if self.next_sequence is not None and first != self.next_sequence:
-                self.event({"type": "gap", "after": self.next_sequence - 1, "missing": first - self.next_sequence})
-            self.next_sequence = first + count
+            for offset, _, count, _ in found:
+                first = struct.unpack_from("<I", payload, offset + 4)[0]
+                if self.next_sequence is not None and first != self.next_sequence:
+                    # Messages arrive in order and each is resent until acknowledged, so a gap is samples the drone never sent: its ring was full (counted in the stop record's dropped).
+                    self.event({"type": "gap", "after": self.next_sequence - 1, "missing": first - self.next_sequence})
+                    self.counts["gaps"] += 1
+                    self.counts["missing"] += max(0, first - self.next_sequence)
+                self.next_sequence = first + count
+                self.counts["batches"] += 1
+                self.counts["samples"] += count
+            self.counts["messages"] += 1
             self.data.write(payload)
             self.bytes += len(payload)
         elif magic == b"LGE1":
@@ -241,6 +430,7 @@ class Recorder:
         stem = self.directory / f"{now().replace(':', '-').replace('.', '-')}_{session}"
         self.data, self.events = open(f"{stem}.bin", "xb"), open(f"{stem}.jsonl", "x")
         self.file, self.bytes, self.session, self.next_sequence, self.error = f"{stem.name}.bin", 0, session, None, None
+        self.counts = log_counts()
         # The first line describes the whole recording.
         self.event({**(self.metadata or {}), "type": "start", "session": session, "drone": self.drone, "firmware": self.firmware, **start})
         if self.pattern:
@@ -266,6 +456,7 @@ class Recorder:
     def close(self, reason):
         if self.data is None:
             return
+        self.event({"type": "log_stats", **self.counts})
         if reason is not None:
             self.event({"type": "closed", "reason": reason})
         self.sync()
@@ -338,8 +529,16 @@ class ClientSender:
 
 
 class Service:
-    def __init__(self, port, recordings):
-        self.port = port
+    def __init__(self, recordings):
+        # The controller's open USB device, None while there is none (main's search attaches it).
+        self.port = None
+        # The controller's USB port as search() last found it: its physical port names (find_port.by_path), looked at first when it is lost; when it last sent a whole packet (monotonic), and the losses and searches since the service started. A controller silent for SILENT_S is taken as lost: the relay sends its link report once a second with or without a drone.
+        self.port_names = []
+        self.heard_at = 0.0
+        self.usb = {"losses": 0, "last_loss": None, "lost_at": None, "searches": 0, "skipped": {}}
+        # Packets this service could not take (read), since it started.
+        self.errors = 0
+        self.error_at = 0
         self.decoder = SerialDecoder()
         self.outgoing = deque()
         self.target = None
@@ -350,9 +549,17 @@ class Service:
         self.link_generation = 0
         self.token = 0
         self.last_status = 0
+        # The link's quality: the newest report from each end (decode_link) and this service's own counts over the last second; status_at is the last status's arrival, kept through a timeout, and timed_out says the timeout was announced.
+        self.link = {"drone": None, "controller": None, "bridge": None}
+        self.link_window = {"statuses": 0, "longest_gap_ms": 0, "late": 0, "timeouts": 0, "errors": 0}
+        self.status_at = None
+        self.timed_out = False
+        self.radio_waiters = []
         self.reading = None
         # The newest GPS solution recorded (its time of week), so each goes into the recording once.
         self.gps_itow = None
+        # The newest GPS report without its satellite list, for the dashboard's readings (None until one comes from this drone boot).
+        self.gps_report = None
         self.settings = None
         self.settings_version = None
         self.sequence = int(time.time() * 1000) & 0xFFFFFFFF
@@ -361,6 +568,7 @@ class Service:
         self.dashboard = None
         # Update clients (tools/ota_direct.py, the dashboard's camera requests), any number at once; each drone reply goes to the client that sent its id.
         self.updaters = set()
+        self.viewers = set()
         self.update_owner = {}
         self.recorder = Recorder(recordings)
         # The dashboard's last targets as recorded (Recorder.command).
@@ -377,8 +585,12 @@ class Service:
         self.firmware_task = None
         self.firmware_retry = 0
         self.delivered = {}
+        # Induced loss for testing the log's repair (POST /log_test): the fraction of arriving log fragments and of outgoing log acknowledgements (and repair requests) to drop, and a delay before each acknowledgement, which stands in for a busy channel's slow sends. Off until set; a restart clears it.
+        self.log_test = {"drop": 0.0, "ack_drop": 0.0, "ack_delay_ms": 0}
         self.stopping = None
         self.stop_reply = None
+        # Dashboards closed by disconnect() (a lost link or a drone restart), whose close must not stop the drone.
+        self.dropped = set()
 
     def fresh(self):
         return self.session != 0 and time.monotonic() - self.last_status < 0.25
@@ -388,7 +600,8 @@ class Service:
         return self.sequence
 
     def send(self, channel, payload, sequence=None, index=0, count=1, request_id=None):
-        if not self.fresh():
+        # Channel 7 is for the controller itself (POST /radio), which must work while the drone is not heard, so a rate or power that loses the drone can be set back.
+        if channel != LINK_CHANNEL and not self.fresh():
             return False
         packet = serial_encode(pack(channel, self.session, sequence or self.next_sequence(), self.token, payload,
                                     index, count))
@@ -434,7 +647,7 @@ class Service:
         try:
             while time.monotonic() < deadline:
                 if generation != self.link_generation or session != self.session:
-                    raise RuntimeError("Drone link changed; request cancelled")
+                    raise RuntimeError("Drone link changed; request canceled")
                 await self.send_message(6, identifier + op + body, identifier)
                 try:
                     data = await asyncio.wait_for(asyncio.shield(reply), 0.2)
@@ -506,19 +719,30 @@ class Service:
         """
         The newest flight record's hover state, for the dashboard's tag chart: {"type": "hover", ...} in the hover loop's yaw-turned level frame (m; forward, left, up), with the tag relative to the drone (None without a sighting), the range and arc targets as nudged (None before they are set), and the mode and tracking flags.
         """
-        _, _, count, size = struct.unpack_from(HEADER_FORMAT, payload)
-        if size != RECORD_SIZE or not count:
+        try:
+            offset, _, count, size = batches(payload)[-1]
+        except ValueError:
             return
-        fields = struct.unpack_from(SAMPLE_FORMAT, payload, HEADER_SIZE + (count - 1) * size)
+        if size < HOVER_SIZE:
+            return
+        fields = struct.unpack_from(FORMATS[size], payload, offset + (count - 1) * size)
         flags = fields[20]
         x, y, z, age = fields[22:26]
         targeted = flags >> 7 & 1
-        self.push(self.dashboard, {
+        self.show({
             "type": "hover", "elapsed_us": fields[0], "mode": flags >> 1 & 3, "tracking": bool(flags >> 6 & 1),
             "tag": [x / 1000, y / 1000, z / 1000] if age != 65535 else None, "tag_age_ms": age if age != 65535 else None,
             "velocity": [fields[26] / 1000, fields[27] / 1000], "height": fields[28] / 1000, "height_target": fields[30] / 1000,
             "range_target": fields[31] / 1000 if targeted else None, "arc_deg": fields[32] / 100 if targeted else None,
+            **(guard_state(fields[39]) if len(fields) > 39 else {}),
         })
+
+    def show(self, data):
+        """
+        To the dashboard in control and every one watching.
+        """
+        for ws in (self.dashboard, *self.viewers):
+            self.push(ws, data)
 
     def push(self, ws, data, binary=False):
         sender = self.senders.get(ws)
@@ -546,7 +770,7 @@ class Service:
                     self.record_pending.discard((session, channel, sequence))
                     if session == self.session:
                         self.delivered[channel] = sequence
-                        self.send(5, bytes([channel]), sequence)
+                        self.send_log_ack(bytes([channel]), sequence)
                 else:
                     await asyncio.to_thread(getattr(self.recorder, operation), *arguments)
             except (OSError, ValueError, struct.error) as error:
@@ -569,35 +793,110 @@ class Service:
             # Stop is intentionally retried after reconnect; ordinary requests are bound to this link.
             if not reply.done() and reply is not self.stop_reply:
                 reply.set_exception(RuntimeError(reason))
-        for client in (self.dashboard, *self.updaters):
+        if self.dashboard is not None:
+            self.dropped.add(self.dashboard)
+        for client in (self.dashboard, *self.updaters, *self.viewers):
             if client is not None:
                 asyncio.create_task(client.close(code=1012, message=reason.encode()))
+
+    def attach(self, port):
+        self.port = port
+        self.port_names = by_path(port.port) or self.port_names
+        self.heard_at = time.monotonic()
+        self.decoder = SerialDecoder()
+        asyncio.get_running_loop().add_reader(port.fileno(), self.read)
+        print(f"Controller on {port.port}" + (f" ({self.port_names[0]})" if self.port_names else "") + "; waiting for drone", flush=True)
+
+    def detach(self, reason):
+        """
+        The controller's device failed (unplugged, mostly): close it and leave main's search to find the controller again. The clients close as for any lost link (monitor). The service used to exit here, and each restart reset every board on USB.
+        """
+        if self.port is None:
+            return
+        print(f"Controller lost: {reason}", flush=True)
+        self.usb["losses"] += 1
+        self.usb["last_loss"] = reason
+        self.usb["lost_at"] = time.monotonic()
+        asyncio.get_running_loop().remove_reader(self.port.fileno())
+        self.port.close()
+        self.port = None
+        self.link["controller"] = None
+
+    def state(self):
+        """Which part of the chain to the drone is missing, for GET /status."""
+        if self.port is None:
+            return "controller_missing"
+        return "online" if self.fresh() else "drone_silent"
 
     def read(self):
         try:
             data = self.port.read(max(1, self.port.in_waiting))
         except (OSError, serial.SerialException) as error:
-            self.fail(str(error))
+            self.detach(str(error))
             return
-        for packet in self.decoder.feed(data):
-            self.receive(packet)
+        packets = self.decoder.feed(data)
+        if packets:
+            self.heard_at = time.monotonic()
+        for packet in packets:
+            # A packet this service cannot take is counted and passed over, whatever the error, so it costs neither the packets behind it in this read nor the service: 2026-11-10 each GPS report, decoded as a status message by mistake, raised from here once a second, and only the journal showed it.
+            try:
+                self.receive(packet)
+            except Exception as error:
+                self.errors += 1
+                self.link_window["errors"] += 1
+                if time.monotonic() - self.error_at > 10:
+                    self.error_at = time.monotonic()
+                    print(f"Packet not taken ({self.errors} so far): {type(error).__name__}: {error}", flush=True)
 
     def receive(self, packet):
         channel, session, sequence, token, index, count, payload = unpack(packet)
+        if channel == 0 and payload[:4] == b"GPD1":
+            if session == self.session and len(payload) >= GPS_REPORT_SIZE:
+                report = decode_gps_report(payload)
+                self.gps_report = {key: value for key, value in report.items() if key != "satellites"}
+                self.queue_record("gps", {"type": "gps_report", "drone_ms": report["time"], **report})
+            return
+        if channel == LINK_CHANNEL:
+            report = decode_link(payload)
+            if report is not None:
+                self.link[report["source"]] = report
+                self.queue_record("link", {"type": "link", **report})
+                if report["source"] == "controller":
+                    for waiter in self.radio_waiters:
+                        if not waiter.done():
+                            waiter.set_result(report)
+                    self.radio_waiters.clear()
+            return
         if channel == 0:
+            arrived = time.monotonic()
+            if self.status_at is not None and session == self.session:
+                gap = arrived - self.status_at
+                window = self.link_window
+                window["longest_gap_ms"] = max(window["longest_gap_ms"], round(gap * 1000))
+                if gap >= DROPOUT_S:
+                    self.queue_record("link", {"type": "dropout", "seconds": round(gap, 3)})
+                if self.timed_out:
+                    # The journal then says how long each timeout lasted (2026-11-08 it said only when they began).
+                    print(f"Direct radio link back after {gap:.2f} s", flush=True)
+            self.timed_out = False
+            self.status_at = arrived
+            self.link_window["statuses"] += 1
             if self.session and session != self.session:
                 self.disconnect("Drone restarted")
                 self.delivered.clear()
                 self.queue_record("close", "Drone restarted")
                 self.settings_version = None
                 self.recorder.firmware = None
+                self.gps_report = None
             self.session, self.token, self.last_status = session, token, time.monotonic()
             version, self.reading = decode_status(payload, self.settings)
+            self.reading["gps_report"] = self.gps_report
             gps = self.reading["gps"]
             if gps and gps["age_ms"] is not None and gps["itow_ms"] != self.gps_itow:
                 self.gps_itow = gps["itow_ms"]
                 self.queue_record("gps", {"type": "gps", "drone_ms": self.reading["time"] - gps["age_ms"], **gps})
             self.reading["recorder"] = self.recorder.status()
+            self.reading["link"] = self.link
             if (version != self.settings_version
                     and time.monotonic() >= self.settings_retry
                     and (self.settings_task is None or self.settings_task.done())):
@@ -606,24 +905,40 @@ class Service:
                     and time.monotonic() >= self.firmware_retry
                     and (self.firmware_task is None or self.firmware_task.done())):
                 self.firmware_task = asyncio.create_task(self.refresh_firmware(session))
-            self.push(self.dashboard, {"type": "reading", **self.reading})
+            self.show({"type": "reading", **self.reading})
             return
         if session != self.session or channel not in (2, 3, 6):
             return
+        if channel != 6 and self.log_test["drop"] and random.random() < self.log_test["drop"]:
+            self.recorder.counts["test_dropped"] += 1
+            return
         if channel != 6 and self.delivered.get(channel) == sequence:
             # The acknowledgement was lost; the recorder already has this message.
-            self.send(5, bytes([channel]), sequence)
+            self.recorder.counts["duplicates"] += 1
+            self.send_log_ack(bytes([channel]), sequence)
             return
+        repaired = False
         if count > 1:
             entry = self.fragments.get(channel)
-            if entry is None or entry[0] != sequence or len(entry[1]) != count:
-                entry = (sequence, [None] * count)
+            if entry is None or entry["sequence"] != sequence or len(entry["parts"]) != count:
+                entry = {"sequence": sequence, "parts": [None] * count, "requested": False, "reported": set()}
                 self.fragments[channel] = entry
-            entry[1][index] = payload
-            if None in entry[1]:
+            entry["parts"][index] = payload
+            if None in entry["parts"]:
+                lost = {number for number in range(index) if entry["parts"][number] is None} - entry["reported"]
+                if channel != 6 and (lost or index == count - 1):
+                    # The drone sends a message's fragments in order and its repairs end with the last one, so a fragment arriving after a missing one, or the last with any missing, means they were lost: say which fragments are here, and a newer drone resends only the missing ones at once, while still sending the rest, instead of all of them after a timeout (an older one ignores this longer acknowledgement). Each loss is reported once, and again with each last fragment.
+                    have = sum(1 << number for number, part in enumerate(entry["parts"]) if part is not None)
+                    self.send_log_ack(bytes([channel]) + have.to_bytes((count + 7) // 8, "little"), sequence)
+                    entry["requested"] = True
+                    entry["reported"] |= lost
+                    self.recorder.counts["repair_requests"] += 1
                 return
-            payload = b"".join(entry[1])
+            payload = b"".join(entry["parts"])
+            repaired = entry["requested"]
             del self.fragments[channel]
+        if repaired:
+            self.recorder.counts["repaired"] += 1
         if channel == 6:
             reply = self.waiting.get(payload[:4])
             if reply is not None:
@@ -638,6 +953,31 @@ class Service:
             key = (session, channel, sequence)
             if key not in self.record_pending and self.queue_record("receive", session, channel, sequence, payload):
                 self.record_pending.add(key)
+
+    def send_log_ack(self, payload, sequence):
+        """
+        A log acknowledgement or repair request (channel 5), through the induced-loss test's drop and delay when they are set.
+        """
+        if self.log_test["ack_drop"] and random.random() < self.log_test["ack_drop"]:
+            self.recorder.counts["test_dropped"] += 1
+            return
+        if self.log_test["ack_delay_ms"]:
+            asyncio.get_running_loop().call_later(self.log_test["ack_delay_ms"] / 1000, self.send, 5, payload, sequence)
+            return
+        self.send(5, payload, sequence)
+
+    async def post_log_test(self, request):
+        """
+        POST /log_test {"drop": fraction, "ack_drop": fraction, "ack_delay_ms": n}, each optional: induced flight-log loss for testing (Service.log_test). Replies with the settings now in force.
+        """
+        body = await request.json()
+        for key, limit in (("drop", 0.9), ("ack_drop", 0.9), ("ack_delay_ms", 1000)):
+            if key in body:
+                value = body[key]
+                if not isinstance(value, (int, float)) or not 0 <= value <= limit:
+                    return web.json_response({"error": f"{key} must be between 0 and {limit}"}, status=400)
+                self.log_test[key] = value
+        return web.json_response({"log_test": self.log_test})
 
     async def write(self):
         while True:
@@ -655,36 +995,51 @@ class Service:
                 # A late packet is dropped, not fatal: targets are superseded, requests and stops repeat, and the drone resends unacknowledged records.
                 started = time.monotonic()
                 if started - created > 0.1:
+                    self.link_window["late"] += 1
                     continue
                 offset = 0
-                while offset < len(packet):
+                # A packet the controller's device does not take is dropped with the device (detach), like a late one.
+                while self.port is not None and offset < len(packet):
                     try:
                         offset += self.port.write(packet[offset:])
                     except (OSError, serial.SerialException) as error:
-                        self.fail(str(error))
-                        return
+                        self.detach(str(error))
+                        break
                     if offset < len(packet):
                         if time.monotonic() - started > 2:
-                            self.fail("USB write stalled for 2 s")
-                            return
+                            self.detach("USB write stalled for 2 s")
+                            break
                         await asyncio.sleep(0.001)
 
     async def monitor(self):
         ticks = 0
         while True:
             await asyncio.sleep(0.05)
-            if self.session and time.monotonic() - self.last_status > 0.5 and (self.dashboard or self.updaters):
+            # A port that stays open but carries no packets is not the controller any more (a stalled board, or one that stopped sending): close it and let search() look again, its own physical port first.
+            if self.port is not None and time.monotonic() - self.heard_at > SILENT_S:
+                self.detach(f"No packets for {SILENT_S:g} s")
+            if self.session and time.monotonic() - self.last_status > 0.5 and (self.dashboard or self.updaters or self.viewers):
                 self.disconnect("Direct radio link timed out; waiting for drone")
                 self.last_status = 0
+                self.timed_out = True
+                self.link_window["timeouts"] += 1
             ticks += 1
             if ticks % 20 == 0:
-                # The recorder subscription; the drone arms only while it is fresh.
-                self.send(4, b"\x01")
+                # This service's view of the last second: status messages received (the drone sends 20), the longest gap between them, including one still running, packets dropped here for waiting over 0.1 s, link timeouts, and packets this service could not take (read).
+                window = self.link_window
+                if self.status_at is not None:
+                    window["longest_gap_ms"] = max(window["longest_gap_ms"], round((time.monotonic() - self.status_at) * 1000))
+                self.link["bridge"] = {"source": "bridge", **window}
+                self.link_window = {"statuses": 0, "longest_gap_ms": 0, "late": 0, "timeouts": 0, "errors": 0}
+                if self.session:
+                    self.queue_record("link", {"type": "link", **self.link["bridge"]})
+                # The recorder subscription; the drone arms only while it is fresh. The G asks for its GPS report (decode_gps_report), which older drones ignore.
+                self.send(4, b"\x01G")
                 self.queue_record("check", bool(self.reading and self.reading["logging"]["active"]))
 
     async def connect(self, request, slot=None):
         if (slot and getattr(self, slot) is not None) or not self.fresh() or self.failed.is_set():
-            raise web.HTTPServiceUnavailable(text="Drone link unavailable or endpoint in use")
+            raise web.HTTPServiceUnavailable(text="Endpoint in use" if self.fresh() else f"Drone link unavailable ({self.state()})")
         ws = web.WebSocketResponse(max_msg_size=8192, compress=False)
         if slot:
             setattr(self, slot, ws)
@@ -712,8 +1067,26 @@ class Service:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
-            # A closed dashboard can no longer stop the drone.
-            self.stop()
+            # A dashboard the pilot closed can no longer stop the drone, so it stops now. One closed because the link timed out does not: the stop, repeated until acknowledged, reached the drone as soon as the link came back and cut the motors in the air (2026-11-09 06:52:39 UTC, level at 1.57 m, after 0.5 s without status), where the drone's own link-loss handling lands it (fw/drone/main/flight_rt.c LINK_LAND_RATE) or, still on the ground, stops it.
+            if ws in self.dropped:
+                self.dropped.discard(ws)
+            else:
+                self.stop()
+            await self.senders.pop(ws).close()
+        return ws
+
+    async def view_socket(self, request):
+        """
+        A dashboard that only watches, as a second tab does while the first has control: it gets the readings and the hover state, and nothing it sends is taken.
+        """
+        ws = await self.connect(request)
+        self.viewers.add(ws)
+        try:
+            async for message in ws:
+                pass
+        finally:
+            self.viewers.discard(ws)
+            del self.transactions[ws]
             await self.senders.pop(ws).close()
         return ws
 
@@ -758,7 +1131,7 @@ class Service:
             elif kind == "esc":
                 # ESC calibration stage: 0 off, 1 the top of the range, 2 the bottom (drone/main/flight_rt.c).
                 body = bytes([int(message["stage"])])
-            data = await self.request(REQUESTS[kind], body)
+            data = await self.request(REQUESTS[kind], body, **({"timeout": FLIP_TIMEOUT} if kind == "flip" else {}))
             if kind == "tune":
                 self.settings = json.loads(data)
         except (RuntimeError, TimeoutError) as failure:
@@ -784,8 +1157,40 @@ class Service:
             await self.senders.pop(ws).close()
         return ws
 
+    async def post_radio(self, request):
+        """
+        The controller's rate and power until it resets (RCF1, fw/controller/native/main/relay.c apply_config); see the module docstring.
+        """
+        try:
+            body = await request.json()
+            rate, power = (body.get(key) for key in ("rate", "power"))
+            if rate is not None and not 0 <= int(rate) < len(LINK_RATES):
+                raise ValueError(f"rate is an index 0-{len(LINK_RATES) - 1}: {', '.join(LINK_RATES)}")
+            if power is not None and not 0 <= int(power) <= 20:
+                raise ValueError("power is 0 (the driver's own) or 2-20 dBm")
+        except (ValueError, TypeError, AttributeError) as error:
+            return web.json_response({"error": str(error)}, status=400)
+        if self.reading and self.reading["control"]["enabled"]:
+            return web.json_response({"error": "Disarm first: the radio changes only on the ground"}, status=409)
+        payload = b"RCF1" + bytes(0xFF if value is None else int(value) for value in (rate, power, None))
+        waiter = asyncio.get_running_loop().create_future()
+        self.radio_waiters.append(waiter)
+        if not self.send(LINK_CHANNEL, payload):
+            return web.json_response({"error": "USB queue full"}, status=503)
+        try:
+            report = await asyncio.wait_for(waiter, 2)
+        except TimeoutError:
+            return web.json_response({"error": "No link report from the controller: its firmware may be from before 2026-11-09"}, status=504)
+        return web.json_response({"controller": report})
+
     async def status(self, request):
-        return web.json_response({"online": self.fresh(), "reading": self.reading})
+        # heard_s: since the drone's last status (None before the first); controller: its newest link report, whose rx and rejected counts say whether it hears a drone at all, or one that is not its own; in_use: a dashboard holds /ws; port: the controller's device (None while missing) and rescans: how often it was lost and looked for again; usb: its physical port (by_path), the seconds since its last packet, the last loss's reason and age, and the devices the last search passed over because another process held them (find_port.holder).
+        now = time.monotonic()
+        heard = None if self.status_at is None else round(now - self.status_at, 1)
+        usb = {"by_path": self.port_names[0] if self.port_names else None, "silent_s": round(now - self.heard_at, 1) if self.port is not None else None,
+               "last_loss": self.usb["last_loss"], "lost_s": None if self.usb["lost_at"] is None else round(now - self.usb["lost_at"], 1), "searches": self.usb["searches"], "skipped": self.usb["skipped"]}
+        return web.json_response({"online": self.fresh(), "state": self.state(), "port": self.port and self.port.port, "rescans": self.usb["losses"], "usb": usb, "heard_s": heard,
+                                  "controller": self.link["controller"], "in_use": self.dashboard is not None, "errors": self.errors, "reading": self.reading})
 
     async def get_settings(self, request):
         return web.json_response({"settings": self.settings})
@@ -811,6 +1216,26 @@ class Service:
         self.recorder.pattern = recorded if recorded["segments"] else None
         return web.json_response(summary)
 
+    async def recordings(self, request):
+        """
+        GET /recordings: recording_list; ?name=<recording>&columns=<name>,...: read_recording. Both off the event loop, which a long flight's decoding would hold up.
+        """
+        name = request.query.get("name")
+        try:
+            if name is None:
+                body = await asyncio.to_thread(recording_list, self.recorder.directory)
+            else:
+                columns = [column for column in request.query.get("columns", "").split(",") if column]
+                body = await asyncio.to_thread(read_recording, self.recorder.directory, name, columns)
+            text = await asyncio.to_thread(json.dumps, body, allow_nan=False)
+        except FileNotFoundError as error:
+            return web.json_response({"error": str(error)}, status=404)
+        except KeyError as error:
+            return web.json_response({"error": error.args[0]}, status=404)
+        except ValueError as error:
+            return web.json_response({"error": str(error)}, status=422)
+        return web.Response(text=text, content_type="application/json")
+
     async def schema(self, request):
         """
         Every setting as {name, min, max, default, tunable}, collected page by page (drone/main/settings.c).
@@ -830,52 +1255,103 @@ class Service:
         return web.json_response({"settings": [dict(zip(keys, entry)) for entry in entries]})
 
 
+# A silent device is listened to again this often (s) after its first three tries.
+RETRY_S = 15.0
+# A search looks through the devices this often (s) while there is no controller.
+SCAN_S = 1.0
+# The controller is taken as lost after this long (s) without a whole packet: its relay sends a link report every second, a drone's status 20 times a second.
+SILENT_S = 5.0
+
+
+def search_order(paths, names, hint):
+    """The devices to listen to, first the one at the controller's last physical port (its by-path names now point at whatever is plugged in there, the controller again after a re-plug into the same socket), then the device --port named, then the rest."""
+    first = [os.path.realpath(name) for name in names if os.path.exists(name)]
+    if hint:
+        first.append(os.path.realpath(hint))
+    rank = {path: index for index, path in reversed(list(enumerate(first)))}
+    return sorted(paths, key=lambda path: (rank.get(path, len(first)), path))
+
+
+async def search(service, hint, baud, ports=candidates):
+    """
+    Attach the controller whenever the service has none: listen on each USB serial device (find_port.py) once a SCAN_S, first the controller's last physical port and then the one --port named, so the device's name never matters (on 2026-11-14 re-plugging four boards moved the controller from /dev/ttyUSB0 to ttyUSB3). A device another process holds (find_port.holder: the dashboard's FPV receivers or its look at a new port, a serial monitor, an upload) is passed over unopened and does not count as tried. A device that is silent is listened to three times and then once every RETRY_S, so a drone on USB is nearly always free for flashing; one that cannot be opened yet (just plugged in) does not count as heard. On 2026-11-11 the controller, plugged in again, failed its three tries within seconds and was then left alone for good. The device is locked from the moment it is opened to listen (find_port.open_port), so the dashboard never opens the controller's port.
+    """
+    tried = {}
+    while True:
+        if service.port is None:
+            paths = ports()
+            skipped = {}
+            for path in search_order(paths, service.port_names, hint):
+                try:
+                    plugged = os.stat(path).st_ctime
+                except OSError:
+                    continue
+                reason = holder(path)
+                if reason is not None:
+                    skipped[path] = reason
+                    continue
+                if tried.get(path, (None, 0, 0.0))[0] != plugged:
+                    tried[path] = (plugged, 0, 0.0)
+                count, last = tried[path][1:]
+                if count >= 3 and time.monotonic() - last < RETRY_S:
+                    continue
+                try:
+                    port = await asyncio.to_thread(listen, path, LISTEN_S, baud, True)
+                except (OSError, serial.SerialException):
+                    continue
+                if port is not None:
+                    del tried[path]
+                    service.attach(port)
+                    break
+                tried[path] = (plugged, count + 1, time.monotonic())
+            for path in set(tried) - set(paths):
+                del tried[path]
+            service.usb["searches"] += 1
+            service.usb["skipped"] = skipped
+        await asyncio.sleep(SCAN_S)
+
+
 async def main(args):
-    port = serial.Serial()
-    port.port, port.baudrate = args.port, args.baud
-    port.timeout = port.write_timeout = 0
-    port.exclusive = True
-    port.dtr = port.rts = False
-    port.open()
-    service = Service(port, args.recordings)
-    loop = asyncio.get_running_loop()
-    loop.add_reader(port.fileno(), service.read)
+    service = Service(args.recordings)
     app = web.Application()
     app.add_routes([
         web.get("/ws", service.dashboard_socket),
+        web.get("/view", service.view_socket),
         web.get("/update", service.update_socket),
         web.get("/status", service.status),
         web.get("/settings", service.get_settings),
         web.post("/settings", service.post_settings),
         web.post("/pattern", service.post_pattern),
+        web.post("/radio", service.post_radio),
+        web.post("/log_test", service.post_log_test),
         web.get("/schema", service.schema),
+        web.get("/recordings", service.recordings),
     ])
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", args.listen).start()
     record_task = asyncio.create_task(service.record())
-    tasks = [asyncio.create_task(service.write()), asyncio.create_task(service.monitor())]
-    print(f"USB {args.port} → http://127.0.0.1:{args.listen}; waiting for drone", flush=True)
+    tasks = [asyncio.create_task(service.write()), asyncio.create_task(service.monitor()), asyncio.create_task(search(service, args.port, args.baud))]
+    print(f"http://127.0.0.1:{args.listen}; looking for the controller on USB", flush=True)
     try:
         await service.failed.wait()
     finally:
         service.failed.set()
         await asyncio.gather(*(sender.close() for sender in tuple(service.senders.values())))
-        loop.remove_reader(port.fileno())
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        service.detach("Service stopped")
         await runner.cleanup()
         await service.record_queue.put(("close", ("Service stopped",)))
         await service.record_queue.join()
         record_task.cancel()
         await asyncio.gather(record_task, return_exceptions=True)
-        port.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--port", required=True, help="Controller USB serial device")
+    parser.add_argument("--port", default="", help="Optional: a USB serial device to try first; the controller is found by its packets on any device (find_port.py) and found again wherever it is re-plugged")
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument("--listen", type=int, default=8765)
     parser.add_argument("--recordings", type=Path, default=RECORDINGS)

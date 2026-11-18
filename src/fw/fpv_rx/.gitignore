@@ -1,3 +1,6 @@
 build/
 sdkconfig
 sdkconfig.old
+build-s3/
+sdkconfig.s3
+sdkconfig.s3.old

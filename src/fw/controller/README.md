@@ -26,7 +26,7 @@ Each drone and its controller are a line in `../pairs.h` (their station MACs). A
 | Controller radio channel | `native/main/relay.c`: `CHANNEL` |
 | Drone radio channel | `../drone/main/radio.c`: `WIFI_CHANNEL` |
 
-A new or replaced board needs its line in `../pairs.h` and both boards' firmware rebuilt and flashed. Keep the channels equal. Inspect a board's MAC with `esptool read-mac` while its serial port is free. `find_port.py` finds any listed controller.
+A new or replaced board needs its line in `../pairs.h` and both boards' firmware rebuilt and flashed. A replaced controller needs only itself flashed over USB: its relay beacons to the drone its table names, and a disarmed drone that has heard nothing from its own controller for 5 s takes the beaconing relay as its controller and stores it (`../drone/main/radio.c` adopt; drone firmware from 2026-11-10), after which `make deploy` gives the drone the new table. Keep the channels equal. Inspect a board's MAC with `esptool read-mac` while its serial port is free. The bridge finds the controller by listening on each USB serial port for its link report (`find_port.py`), with DTR and RTS released together and nothing written, passing over ports another process holds, and finds it again after a re-plug or 5 s of silence ([HOST.md](HOST.md)).
 
 ## Transport
 
@@ -39,9 +39,34 @@ ESP-NOW packets are at most 250 bytes. The envelope `<3sBIIIBB>` contains `DC1`,
 | 2 | Binary recording |
 | 3 | Recording metadata |
 | 4 | Recorder subscription |
-| 5 | Recording acknowledgement |
+| 5 | Recording acknowledgement, or the fragments held of an incomplete message (Flight log delivery below) |
 | 6 | Requests and replies, including arm, stop, settings and updates |
+| 7 | Link reports (`../link.h`): LNK1 from the drone once a second, RLY1 from the relay once a second over USB and every 250 ms to the drone as its beacon; RCF1 from the laptop sets the relay's radio and is not forwarded |
 
 The relay bounds its outgoing queue to eight packets and permits four sends awaiting callbacks. It does not generate targets, refresh their timestamps, or arm the drone.
 
 Firmware updates verify written chunks only. Skip firmware backups and whole-image verification.
+
+## Link quality
+
+Each end counts, per second, the other's packets it heard, their RSSI and the noise floor, the other's sequence numbers that never arrived, the longest silence, and its own sends acknowledged, failed (no acknowledgement after the MAC's retries) and refused, with the slowest send-to-callback time (`../link.h` LinkReport). The bridge adds the status messages it received of the drone's 20, the longest gap between them and its link timeouts, shows all three as `reading.link` (`GET /status`, the dashboard's radio item) and writes them into each recording as `link` events, with a `dropout` event for every status gap of 0.3 s or more. Firmware and bridges from before 2026-11-09 ignore channel 7, so either side can be updated first; the report is then missing from the other.
+
+On 2026-11-08 PST outdoors the status stream (drone to laptop) lost 0.1-0.3% of its 10 Hz GPS solutions within 10 m of the laptop and 25-77% beyond 15 m, camera on or off; 30 dropouts of 0.4 s or more (median 1.0 s, longest 8.3 s), all but three at 14-50 m (the camera on for 21 of them, when the flights also went farther). The drone and both ESP32s have PCB antennas.
+
+## Flight log delivery
+
+The drone keeps its 100 Hz samples in a 5 s ring (`../drone/main/flight_rt.c` LOG_CAPACITY) and sends one log message at a time, resent until the bridge acknowledges it after writing it. A drone that keeps up sends one FLG1 batch (4 samples) per message; with a backlog, a message carries up to 12 batches laid end to end, as the recording stores them (`../drone/main/radio.c` LOG_BATCHES). When a fragment arrives after a missing one, or the last arrives with any missing, the bridge answers on channel 5 with the fragments it holds (channel byte, then a little-endian bit mask), and the drone resends only the missing ones below the highest held, even while still sending the rest; otherwise the drone repairs after its measured round trip (100 ms to 1 s, doubling while nothing answers), first with the last fragment alone, then with every unconfirmed one. Older drones ignore the longer answer and older bridges write multi-batch messages unchanged, so either side can be updated first.
+
+Messages arrive in order, so a gap in the recorded samples is samples the drone dropped at capture with its ring full, which the stop record's `dropped` also counts; nothing resends those. `GET /status` shows `reading.recorder.log` for the open recording (messages, batches, samples, gaps, missing, repair_requests, repaired, duplicates, test_dropped) and each recording closes with them as a `log_stats` event. The drone's `I` reply adds its internal RAM (`heap`) and the streamer's counts and round trip (`log`). `POST /log_test {"drop": f, "ack_drop": f, "ack_delay_ms": n}` induces loss for testing until set back or the bridge restarts.
+
+Until 2026-11-14 each message carried one batch and waited for its acknowledgement; on a busy channel the round trip ran 50-180 ms against 40 ms of samples per batch, and the 2 s ring overflowed (16.5% of samples in a hand-held session that day, 12.6% in a flight of 2026-11-12, every one counted in the drone's `dropped`).
+
+## Radio options
+
+| Option | Drone | Controller | Default |
+| --- | --- | --- | --- |
+| Sending rate (`../link.h` link_rates: 0 1 Mbps, 1 LR 500 kbps, 2 LR 250 kbps, 3 2 Mbps, 4 5.5 Mbps, 5 11 Mbps, 6 11g 6 Mbps) | link_rates 0 (11 Mbps during updates) | `RATE`, or `POST /radio {"rate": i}` | drone 0, controller 1 |
+| Maximum transmit power (dBm, 0 = the driver's own, 20 dBm) | the driver's own | `POWER`, or `POST /radio {"power": dBm}` | 0 on both |
+| Channel | `WIFI_CHANNEL` | `CHANNEL` | 6 on both |
+
+Both ends enable 802.11b/g/n and Espressif long range together, so each hears every rate and either can change its own sending rate alone; an LR-only protocol set would gain no sensitivity and would stop hearing the other's 802.11b frames, so neither uses it. `POST /radio` changes last until the controller resets, so unplugging it undoes them; the bridge refuses it while the drone is armed.

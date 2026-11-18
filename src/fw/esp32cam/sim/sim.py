@@ -53,27 +53,27 @@ def build():
 
 @cache
 def texture():
-    """Wall texture in grey levels, TEXTURE_MM per pixel, origin at the tag centre, y down: blotchy background, white paper, the tag."""
-    n = 2 * int(WALL_M * 1000 / TEXTURE_MM)  # even, so the tag centre falls on a texture pixel boundary
+    """Wall texture in gray levels, TEXTURE_MM per pixel, origin at the tag center, y down: blotchy background, white paper, the tag."""
+    n = 2 * int(WALL_M * 1000 / TEXTURE_MM)  # even, so the tag center falls on a texture pixel boundary
     rng = np.random.default_rng(1)
     wall = np.zeros((n, n), np.float32)
     for scale, weight in ((120, 40), (30, 30), (8, 18)):
         wall += weight * ndimage.gaussian_filter(rng.standard_normal((n, n)).astype(np.float32), scale / TEXTURE_MM) * scale ** 0.5
     wall = 125 + wall / wall.std() * 35
-    centre = n / 2
+    center = n / 2
     cell = TAG_M * 1000 / 6 / TEXTURE_MM  # 6 cells across the black square
     paper = 6 / 2 * cell + cell + 30 / TEXTURE_MM  # white border cell plus 30 mm of paper
     y, x = np.mgrid[0:n, 0:n]
-    wall[(abs(x - centre) < paper) & (abs(y - centre) < paper)] = 205
+    wall[(abs(x - center) < paper) & (abs(y - center) < paper)] = 205
     black = 35
     for cy in range(6):
         for cx in range(6):
-            x0, y0 = centre + (cx - 3) * cell, centre + (cy - 3) * cell
+            x0, y0 = center + (cx - 3) * cell, center + (cy - 3) * cell
             wall[int(round(y0)):int(round(y0 + cell)), int(round(x0)):int(round(x0 + cell))] = black
     # tag16h5's data bits in the library's order (bit_x, bit_y in cells of the black square), most significant first.
     for i, (cx, cy) in enumerate(BITS):
         if CODE >> (15 - i) & 1:
-            x0, y0 = centre + (cx - 3) * cell, centre + (cy - 3) * cell
+            x0, y0 = center + (cx - 3) * cell, center + (cy - 3) * cell
             wall[int(round(y0)):int(round(y0 + cell)), int(round(x0)):int(round(x0 + cell))] = 205
     return np.clip(wall, 0, 255)
 
@@ -122,7 +122,7 @@ def render(motion, frames, exposure_us=10000, noise=2.5, seed=0):
         image += rng.normal(0, noise, image.shape)
         images.append(np.clip(np.round(image), 0, 255).astype(np.uint8))
         starts.append(int(start))
-        # Truth at the middle of the exposure of the tag's centre row.
+        # Truth at the middle of the exposure of the tag's center row.
         r, c = motion((start + CY * ROW_US - exposure_us / 2) * 1e-6)
         for _ in range(2):
             corners, centre_row = project_corners(r, c)
@@ -172,7 +172,7 @@ def score(result, truth, name):
             run = 0
     good = valid & ~wrong
     trusted = result["trusted"] > 0
-    true_tag = np.stack([-t["position"] @ t["rotation"] for t in truth])  # tag centre in the camera frame
+    true_tag = np.stack([-t["position"] @ t["rotation"] for t in truth])  # tag center in the camera frame
     tag_error = np.linalg.norm(result["tag_position"] - true_tag, axis=1)
     speed = np.r_[0, np.linalg.norm(np.diff(true_corners.mean(axis=1), axis=0), axis=1)]
     return {
@@ -189,7 +189,7 @@ def score(result, truth, name):
     }
 
 
-# Scenarios: camera 1.7 m from the wall, tag slightly off-centre, viewed with a small tilt like the real setup.
+# Scenarios: camera 1.7 m from the wall, tag slightly off-center, viewed with a small tilt like the real setup.
 DISTANCE = 1.7
 BASE = np.array([0.18, 0.37, -DISTANCE])
 
@@ -203,7 +203,7 @@ def facing(yaw=0.0, pitch=0.0, roll=0.0, offset=(0.0, 0.0, 0.0), base=None):
 
 
 def hand(seed, rate_dps, base=None, aim=(0.0, 0.0)):
-    """Hand-held: angular velocity a smoothed random process with rms about rate_dps, around a view whose centre is
+    """Hand-held: angular velocity a smoothed random process with rms about rate_dps, around a view whose center is
     aim (yaw, pitch degrees) away from the tag, from base."""
     rng = np.random.default_rng(seed)
     t = np.arange(0, 12, 0.001)

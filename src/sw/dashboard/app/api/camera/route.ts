@@ -1,9 +1,26 @@
-import { execFile, execFileSync } from 'node:child_process';
+import {
+  execFile,
+  execFileSync,
+  spawn,
+  type ChildProcess,
+} from 'node:child_process';
 import dgram from 'node:dgram';
-import { constants, existsSync, openSync } from 'node:fs';
-import tty from 'node:tty';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { resolve } from 'node:path';
 import { decode } from '@/lib/fec';
+import { fpvRecording, recordFpvFrame } from '@/lib/fpv-recorder';
+import { indexOf } from '@/lib/multipart';
 
 export const runtime = 'nodejs';
 
@@ -15,15 +32,6 @@ function cameraUrl(host: string, path: string) {
   return url;
 }
 
-function indexOf(bytes: Uint8Array, pattern: number[], from = 0) {
-  outer: for (let i = from; i <= bytes.length - pattern.length; i++) {
-    for (let j = 0; j < pattern.length; j++)
-      if (bytes[i + j] !== pattern[j]) continue outer;
-    return i;
-  }
-  return -1;
-}
-
 // The camera's stream server handles one connection at a time, so every viewer of a host shares one upstream stream, which reconnects whenever it goes quiet. Viewers get whole parts, so they can join at any time.
 type Hub = {
   key: string;
@@ -31,8 +39,11 @@ type Hub = {
   viewers: Set<ReadableStreamDefaultController<Uint8Array>>;
   closed: AbortController;
   idle?: ReturnType<typeof setTimeout>;
-  // FPV frames delivered, for the status.
+  // FPV frames delivered, for the status, and where the others went: frames begun (a shard heard), those a newer frame overtook short of shards, and those with enough shards that did not decode.
   received?: number;
+  started?: number;
+  short?: number;
+  undecoded?: number;
 };
 const hubs: Map<string, Hub> = ((
   globalThis as { cameraHubs?: Map<string, Hub> }
@@ -47,6 +58,15 @@ function closeHub(hub: Hub) {
     try {
       viewer.close();
     } catch {}
+}
+
+// A viewer that falls behind skips parts rather than queueing them.
+function send(hub: Hub, part: Uint8Array) {
+  for (const viewer of hub.viewers)
+    if ((viewer.desiredSize ?? 1) > 0)
+      try {
+        viewer.enqueue(part);
+      } catch {}
 }
 
 async function runHub(hub: Hub, url: URL) {
@@ -89,12 +109,7 @@ async function runHub(hub: Hub, url: URL) {
           const part = buffer.slice(0, end);
           buffer = buffer.slice(end);
           backoff = 250;
-          // A viewer that falls behind skips parts rather than queueing them.
-          for (const viewer of hub.viewers)
-            if ((viewer.desiredSize ?? 1) > 0)
-              try {
-                viewer.enqueue(part);
-              } catch {}
+          send(hub, part);
         }
       }
     } catch {}
@@ -106,7 +121,7 @@ async function runHub(hub: Hub, url: URL) {
 
 // FPV shards (fw/esp32cam/src/fpv.h) carry a 20-byte header (FPV2, frame number, shard index, shard count, data shards, the JPEG's length, capture and send times); any data of a frame's shards rebuild it (lib/fec.ts). With the receiver plugged in they arrive on its port as [length u16][rssi i8][chunk] at 1 Mbaud, or from the monitor-mode adapter as UDP datagrams, while a K V request every 500 ms keeps the camera sending over the radio; otherwise over UDP, kept coming by "FPVW" to the camera's port 5601. A frame still short of shards when a newer one starts is dropped.
 // op: V for FPV, P for tag mode's preview over the radio (tracking on).
-// A tag-mode preview frame ends in its tag (fw/esp32cam/src/web.h PreviewTag, 52 bytes: "TAGP", the state, three spare bytes, the four corners in 320x240 pixels and the tag centre in the camera frame in metres, little-endian floats), passed on as the X-Tag header the camera's own stream uses ("none", or "valid"/"tracked", the corners as x,y and the position as x,y,z).
+// A tag-mode preview frame ends in its tag (fw/esp32cam/src/web.h PreviewTag, 52 bytes: "TAGP", the state, three spare bytes, the four corners in 320x240 pixels and the tag center in the camera frame in meters, little-endian floats), passed on as the X-Tag header the camera's own stream uses ("none", or "valid"/"tracked", the corners as x,y and the position as x,y,z).
 const PREVIEW_TAG_BYTES = 52;
 function splitTag(frame: Buffer) {
   const at = frame.length - PREVIEW_TAG_BYTES;
@@ -130,7 +145,7 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
   let current = -1;
   let shards = new Map<number, Buffer>();
   let done = false;
-  hub.received = 0;
+  hub.received = hub.started = hub.short = hub.undecoded = 0;
   const chunk = (message: Buffer) => {
     if (message.length < 20 || message.toString('latin1', 0, 4) !== 'FPV2')
       return;
@@ -141,6 +156,8 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
     if (frame !== current) {
       // A late chunk of a frame a few back; a frame far behind is a restarted camera counting from 0 again, whose frames were all dropped as late until the count caught up (2026-10-30).
       if (current >= 0 && ((current - frame) & 0xffff) < 64) return;
+      if (current >= 0 && !done) hub.short!++;
+      hub.started!++;
       current = frame;
       shards = new Map();
       done = false;
@@ -150,23 +167,23 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
     if (shards.size < data) return;
     done = true;
     const frameBytes = decode(shards, data, length);
-    if (!frameBytes) return;
+    if (!frameBytes) {
+      hub.undecoded!++;
+      return;
+    }
     hub.received!++;
     const { jpeg, tag } = splitTag(frameBytes);
+    recordFpvFrame(jpeg, message.readUInt32LE(12), frame);
     const part = new Uint8Array(
       Buffer.concat([
         Buffer.from(
-          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(12)} ${message.readUInt32LE(16)}\r\n${tag ? `X-Tag: ${tag}\r\n` : ''}\r\n`
+          `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\nX-Time: ${message.readUInt32LE(12)} ${message.readUInt32LE(16)} ${message.readUInt16LE(4)}\r\n${tag ? `X-Tag: ${tag}\r\n` : ''}\r\n`
         ),
         jpeg,
         Buffer.from('\r\n'),
       ])
     );
-    for (const viewer of hub.viewers)
-      if ((viewer.desiredSize ?? 1) > 0)
-        try {
-          viewer.enqueue(part);
-        } catch {}
+    send(hub, part);
   };
   let keepalive: () => void;
   let close: () => void;
@@ -174,13 +191,22 @@ async function runFpv(hub: Hub, op: 'V' | 'P') {
   if (radioUp()) {
     radio.listeners.add(chunk);
     let asking = false;
+    let ticks = 0;
     keepalive = () => {
       if (asking) return;
       asking = true;
-      cameraRequest(op, op === 'V' ? radioBudget() : [])
+      // The camera's MAC, asked for at the start, every 10 s (a camera swapped) and at every keepalive until one answers; one request at a time, as the drone holds a single slot. A camera without the N request (before 2026-11-06) is not told apart.
+      (ticks++ % 20 === 0 || !radio.camera
+        ? cameraRequest('N')
+            .then((text) => radio.choose(text.split(' ')[0]))
+            .catch(() => {})
+        : Promise.resolve()
+      )
+        .then(() => cameraRequest(op, op === 'V' ? radioBudget() : []))
         .catch(() => {})
         .finally(() => (asking = false));
     };
+    keepalive();
     close = () => radio.listeners.delete(chunk);
   } else {
     const socket = dgram.createSocket('udp4');
@@ -231,8 +257,29 @@ function joinHub(host: string, path: string, signal: AbortSignal) {
   });
 }
 
-// Requests to the camera through the drone's wire to it, over the bridge's update socket, one short connection each so tools/ota_direct.py can still take the socket: K S reports the camera's network, address, channel and state ("joined miso 192.168.86.248 ch6 running ...", "ap bill-fpv 192.168.4.1 ch11 ...", "radio - 0.0.0.0 ch11 fpv ..."), K V asks for FPV over the radio (with the receiver's byte budget).
+// Requests to the camera through the drone's wire to it, over the bridge's update socket, one short connection each so fw/tools/ota_direct.py can still take the socket: K S reports the camera's network, address, channel and state ("joined miso 192.168.86.248 ch6 running ...", "ap bill-fpv 192.168.4.1 ch11 ...", "radio - 0.0.0.0 ch11 fpv ..."), K V asks for FPV over the radio (with the receiver's byte budget).
+// A drone without a camera (or with one off) holds its single request slot for 2 s on each camera request, and drops every request that arrives meanwhile: the FPV view's keepalive every 500 ms left drone 2 without a camera answering "No reply" to arming and tuning (2026-11-07). So after the drone answers that its camera did not, camera requests fail at once for CAMERA_BACKOFF_MS.
+const CAMERA_BACKOFF_MS = 10000;
+let cameraFailed: { error: Error; time: number } | undefined;
+
 function cameraRequest(op: string, body: number[] = []): Promise<string> {
+  if (cameraFailed && Date.now() - cameraFailed.time < CAMERA_BACKOFF_MS)
+    return Promise.reject(cameraFailed.error);
+  return askCamera(op, body).then(
+    (text) => {
+      cameraFailed = undefined;
+      return text;
+    },
+    (error: Error) => {
+      // Only the drone's own answer that its camera is silent: a lost radio packet is retried at the next call as usual.
+      if (error.message === 'The camera did not answer')
+        cameraFailed = { error, time: Date.now() };
+      throw error;
+    }
+  );
+}
+
+function askCamera(op: string, body: number[]): Promise<string> {
   return new Promise((done, fail) => {
     const socket = new WebSocket('ws://127.0.0.1:8765/update');
     socket.binaryType = 'arraybuffer';
@@ -268,9 +315,48 @@ async function reportedHost() {
   return host;
 }
 
-// FPV over the radio, needing no network, comes from the monitor-mode Wi-Fi adapter's reader (sw/fpv_monitor.py) as UDP datagrams to 127.0.0.1:5602, with FPVM every 500 ms while it runs, or from the ESP32 receiver (fw/fpv_rx) on one of the serial ports FPV_RX names (space separated, the first present one the bridge has not locked). Those ports are never guessed: the receiver's CP2102 has the same USB serial number as the drone's and the controller's, and a port path once picked the controller after the boards moved; the bridge holds the controller's port with an exclusive lock, which rules it out even if the boards swap places. Both are opened once and kept for as long as the server runs, their chunks going to whichever FPV stream is running: closing the serial port after each stream left it open in the process, and the stale readers took a share of the bytes.
+// FPV over the radio, needing no network, comes from the monitor-mode Wi-Fi adapter's reader (sw/fpv_monitor.py) as UDP datagrams to 127.0.0.1:5602, with FPVM every 500 ms while it runs, or from FPV receivers (fw/fpv_rx) on USB serial ports, every one plugged in at once: ports FPV_RX names (space separated) and any other /dev/ttyUSB* or ttyACM*. USB cannot tell the boards apart (the receiver's CP2102 has the same serial number as the drone's and the controller's), so a port is a receiver's once it sends what a receiver sends, video or the FPVR it sends twice a second without any (firmware from 2026-11-10): every port not yet known is opened for 5 s, each again 15 s after it was last found silent (opening a drone's port this way does not reset it). A port another process holds locked (the bridge's controller, a camera update) is passed over by /proc/locks without being opened. Receivers are kept open for as long as the server runs, their chunks going to whichever FPV stream is running: closing the serial port after each stream left it open in the process, and the stale readers took a share of the bytes.
 const RECEIVERS = (process.env.FPV_RX ?? '').split(/\s+/).filter(Boolean);
-// The receiver's port raw at 1 Mbaud: input and output flushed, output resumed, settings applied now (TCSANOW). Exits with 3, touching nothing, if another process (the bridge, on the controller) holds the port's lock.
+// The USB serial ports present, FPV_RX's first, each once.
+function serialPorts() {
+  const ports = new Map<string, string>();
+  for (const path of [
+    ...RECEIVERS,
+    ...readdirSync('/dev')
+      .filter((name) => name.startsWith('ttyUSB') || name.startsWith('ttyACM'))
+      .map((name) => `/dev/${name}`),
+  ]) {
+    if (!existsSync(path)) continue;
+    const device = realpathSync(path);
+    if (!ports.has(device)) ports.set(device, path);
+  }
+  return [...ports.values()];
+}
+// A port another process holds a flock on, which /proc/locks names by its device and inode (major:minor:inode), so the controller's port is never opened: every receiver is looked for all the time now, not only until one is found.
+function locked(path: string) {
+  try {
+    const { dev, ino } = statSync(path);
+    const major = ((dev >> 8) & 0xfff).toString(16);
+    const minor = ((dev & 0xff) | ((dev >> 12) & 0xfff00)).toString(16);
+    return readFileSync('/proc/locks', 'latin1')
+      .split('\n')
+      .some((line) => {
+        const at = /\bFLOCK\b.*\s([0-9a-f]+):([0-9a-f]+):(\d+)\s/.exec(line);
+        return (
+          at !== null &&
+          Number(at[3]) === ino &&
+          parseInt(at[1], 16) === parseInt(major, 16) &&
+          parseInt(at[2], 16) === parseInt(minor, 16)
+        );
+      });
+  } catch {
+    return false;
+  }
+}
+// When each port was last opened and found silent. A silent port is opened again every RETRY_MS: one try per plug-in left the receiver unread for good when its try came while it was restarting or before the camera sent (2026-11-11).
+const RETRY_MS = 15000;
+const tried = new Map<string, number>();
+// A receiver's port raw at 1 Mbaud: input and output flushed, output resumed, settings applied now (TCSANOW). Exits with 3, touching nothing, if another process holds the port's lock.
 const TERMIOS = `import fcntl, os, sys, termios
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
 try:
@@ -284,106 +370,315 @@ a[6][termios.VMIN], a[6][termios.VTIME] = 1, 0
 termios.tcflush(fd, termios.TCIOFLUSH)
 termios.tcsetattr(fd, termios.TCSANOW, a)
 termios.tcflow(fd, termios.TCOON)`;
-// chunks: every one heard, for the status.
-// copies: every chunk copy heard, chunks: the first of each, signal: the monitor's last (dBm), for the status.
+// A receiver's port read in blocks as they come, to stdout (TERMIOS has set it raw).
+const READER = `import os, sys
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOCTTY)
+out = sys.stdout.buffer
+while True:
+    data = os.read(fd, 65536)
+    if not data:
+        break
+    out.write(data)
+    out.flush()`;
+// The S3 receiver's FPVT report (fw/fpv_rx), since its boot: frames heard, declined for buffer room, short of shards (the air), shards its buffer refused, its longest USB write in the last second (us) and bytes written, and the heard frames' shards sent and heard (receiver firmware from 2026-11-14 on; 28 bytes before, 36 now).
+type ReceiverStats = {
+  heard: number;
+  declined: number;
+  short: number;
+  refused: number;
+  usbLongestUs: number;
+  usbBytes: number;
+  shardsSent: number;
+  shardsHeard: number;
+};
+// One receiver's port. serial: when it last sent a beacon, report or shard (a receiver once it has), video: when it last sent a shard; fast: an S3 (its beacon is FPVS, fw/fpv_rx make s3), whose own USB carries far more than the ESP32's 1 Mbaud; skipped: bytes the parser passed over to find a shard (beacons, reports, and any stream that lost bytes); shards: those it passed on, new to the stream or not; share: the shards it was told to pass (FPVK's first, count and modulus) and taken: those it acknowledged (FPVA, firmware from 2026-11-14); rssi: each shard's RSSI (dBm) with when it came, for the last second's in the status.
+type Port = {
+  path: string;
+  reader: ChildProcess;
+  opened: number;
+  serial: number;
+  video: number;
+  fast: boolean;
+  skipped: number;
+  shards: number;
+  fresh: number;
+  stats?: ReceiverStats;
+  share?: string;
+  taken?: string;
+  // The share of the camera's shards it heard over its last report (FPVT's shards heard against sent), smoothed.
+  air?: number;
+  rssi: [number, number][];
+};
+// heard: when the monitor last said anything, signal: its last RSSI (dBm); copies: every chunk copy heard, chunks: the first of each; camera: the camera whose shards go on, as K N names it, kept on disk across restarts and drone-link outages (sw/recordings/fpv-camera.json).
+// choose: takes only this camera's shards from now on (its MAC, as K N reports it).
 type Receiver = {
   listeners: Set<(chunk: Buffer) => void>;
+  choose: (mac: string) => void;
+  ports: Map<string, Port>;
+  camera?: Buffer;
   heard: number;
+  signal?: number;
   copies: number;
   chunks: number;
-  signal?: number;
+  // The receivers split each frame's shards between them (FPVK) rather than each passing the first it hears.
+  split: boolean;
 };
 const store = globalThis as { fpvReceiver?: Receiver };
+const REPORT_BYTES = 36;
+const CAMERA_FILE = resolve(process.cwd(), '../recordings/fpv-camera.json');
+const LIVE_MS = 2000;
+
+function live(port: Port) {
+  return Date.now() - port.serial < LIVE_MS;
+}
+
+// Bytes to a receiver: its commands (fw/fpv_rx commands), FPVF and FPVK.
+function tell(port: Port, bytes: Buffer) {
+  try {
+    const fd = openSync(
+      port.path,
+      constants.O_WRONLY | constants.O_NOCTTY | constants.O_NONBLOCK
+    );
+    try {
+      writeSync(fd, bytes);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    console.error(`FPV receiver ${port.path}: ${error}`);
+  }
+}
 
 function receiver() {
   if (store.fpvReceiver) return store.fpvReceiver;
+  // Every camera sends with the same BSSID and its own MAC as the sender (fw/esp32cam/src/fpv.h), so with two drones about each dashboard takes its own drone's camera's. The monitor passes each shard's sender and they are dropped here; the receivers are told (FPVF and the MAC) and drop them themselves. The MAC is kept on disk: with the drone link down K N cannot answer, and the receivers, forgetting their camera when they restart, passed another camera's frames (2026-11-14, a second, damaged camera board's frames, upside down). Until a camera has ever answered, every camera's shards go on.
+  let saved: { camera?: string } = {};
+  try {
+    saved = JSON.parse(readFileSync(CAMERA_FILE, 'utf8'));
+  } catch {}
   const opened: Receiver = {
+    choose: (mac) => {
+      const chosen = Buffer.from(mac.replace(/:/g, ''), 'hex');
+      if (chosen.length !== 6 || opened.camera?.equals(chosen)) return;
+      opened.camera = chosen;
+      try {
+        writeFileSync(
+          CAMERA_FILE,
+          JSON.stringify({ camera: chosen.toString('hex') })
+        );
+      } catch {}
+    },
     listeners: new Set(),
+    ports: new Map(),
+    camera: saved.camera ? Buffer.from(saved.camera, 'hex') : undefined,
     heard: 0,
     copies: 0,
     chunks: 0,
+    split: true,
   };
-  // The monitor passes every shard it hears; the first of each goes on. The capture time tells a restarted camera's frame numbers from the same numbers before it.
+  // Each receiver's shards and the monitor's go into one stream, the first of each shard going on: several receivers hear the same shards, and pass the same ones whenever they fill in for each other. The capture time tells a restarted camera's frame numbers from the same numbers before it.
   const recent = new Set<string>();
   const deliver = (chunk: Buffer) => {
     opened.copies++;
     const key = `${chunk.readUInt16LE(4)}:${chunk[6]}:${chunk.readUInt32LE(12)}`;
-    if (recent.has(key)) return;
+    if (recent.has(key)) return false;
     recent.add(key);
-    if (recent.size > 512) recent.delete(recent.values().next().value!);
+    if (recent.size > 1024) recent.delete(recent.values().next().value!);
     opened.chunks++;
     for (const listener of opened.listeners) listener(chunk);
+    return true;
   };
   const monitor = dgram.createSocket('udp4');
   monitor.on('message', (message) => {
     opened.heard = Date.now();
     if (message.toString('latin1', 0, 4) !== 'FPVC') return;
+    if (opened.camera && !message.subarray(5, 11).equals(opened.camera)) return;
     opened.signal = message.readInt8(4);
-    deliver(message.subarray(5));
+    deliver(message.subarray(11));
   });
   monitor.on('error', () => {});
   monitor.bind(5602, '127.0.0.1');
-  // The port is opened again, with its settings, after an error or 5 s without a whole shard: the bridge's service finds the controller by asking each USB board for its MAC (fw/controller/find_port.py), which resets the receiver and leaves its port at the bootloader's baud, and an error ended the old stream for good.
-  let port: tty.ReadStream | undefined;
-  let heard = 0;
-  const open = () => {
-    port?.destroy();
-    port = undefined;
-    for (const path of RECEIVERS.filter((path) => existsSync(path))) {
-      try {
-        // Not stty: it applies settings only once the output has drained, and a port left at its defaults echoes the receiver's bytes back while a 0x13 among them (XOFF) holds the output, so it waited forever and froze the server (2026-10-31). This flushes and applies at once, and the timeout bounds it anyway.
-        execFileSync('python3', ['-c', TERMIOS, path], { timeout: 3000 });
-        port = new tty.ReadStream(
-          openSync(path, constants.O_RDONLY | constants.O_NOCTTY)
-        );
-        break;
-      } catch (error) {
+  const open = (path: string) => {
+    try {
+      // Not stty: it applies settings only once the output has drained, and a port left at its defaults echoes the receiver's bytes back while a 0x13 among them (XOFF) holds the output, so it waited forever and froze the server (2026-10-31). This flushes and applies at once, and the timeout bounds it anyway.
+      execFileSync('python3', ['-c', TERMIOS, path], { timeout: 3000 });
+    } catch (error) {
+      // 3: another process has it.
+      if ((error as { status?: number }).status !== 3)
         console.error(`FPV receiver ${path}: ${error}`);
-      }
+      tried.set(path, Date.now());
+      return;
     }
-    if (!port) return;
-    heard = Date.now();
+    // Read by its own process, whose blocking reads keep up with the S3 receiver's 400 KB/s whatever this server is doing: read here, on the event loop, 8% of the bytes were lost while it was busy (2026-11-14), and torn shards cost a quarter of the VGA frames. Should this server fall behind, the pipe fills and the reader waits, holding the bytes back instead.
+    const reader = spawn('python3', ['-c', READER, path], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const port: Port = {
+      path,
+      reader,
+      opened: Date.now(),
+      serial: 0,
+      video: 0,
+      fast: false,
+      skipped: 0,
+      shards: 0,
+      fresh: 0,
+      rssi: [],
+    };
+    opened.ports.set(path, port);
     let buffer = Buffer.alloc(0);
-    port.on('data', (data: Buffer) => {
+    reader.stdout!.on('data', (data: Buffer) => {
       buffer = Buffer.concat([buffer, data]);
+      if (buffer.includes('FPVR')) port.serial = Date.now();
+      if (buffer.includes('FPVS')) {
+        port.serial = Date.now();
+        port.fast = true;
+      }
       for (;;) {
+        // A report, or the acknowledgment of its share (FPVA), ahead of the next shard is taken out whole once all of it has come.
         const at = buffer.indexOf('FPV2', 3);
+        const report = buffer.indexOf('FPVT');
+        if (report >= 0 && (at < 0 || report < at - 3)) {
+          if (buffer.length < report + REPORT_BYTES) break;
+          const value = (index: number) =>
+            buffer.readUInt32LE(report + 4 + 4 * index);
+          const sent = value(6) - (port.stats?.shardsSent ?? value(6));
+          const heard = value(7) - (port.stats?.shardsHeard ?? value(7));
+          if (sent >= 20)
+            port.air = (port.air ?? heard / sent) * 0.7 + (0.3 * heard) / sent;
+          port.stats = {
+            heard: value(0),
+            declined: value(1),
+            short: value(2),
+            refused: value(3),
+            usbLongestUs: value(4),
+            usbBytes: value(5),
+            shardsSent: value(6),
+            shardsHeard: value(7),
+          };
+          port.serial = Date.now();
+          port.skipped += report;
+          buffer = buffer.subarray(report + REPORT_BYTES);
+          continue;
+        }
+        const ack = buffer.indexOf('FPVA');
+        if (ack >= 0 && (at < 0 || ack < at - 3)) {
+          if (buffer.length < ack + 7) break;
+          port.taken = [...buffer.subarray(ack + 4, ack + 7)].join(' ');
+          port.skipped += ack;
+          buffer = buffer.subarray(ack + 7);
+          continue;
+        }
+        // No shard's start yet: the last 6 bytes stay, which may be the next shard's length and RSSI and the first three of its FPV2. Keeping only 3 tore the shard whenever a read ended inside its marker, about 2% of the S3 receiver's shards, a quarter of the VGA frames (2026-11-14).
         if (at < 0) {
-          buffer = buffer.subarray(Math.max(0, buffer.length - 3));
+          port.skipped += Math.max(0, buffer.length - 6);
+          buffer = buffer.subarray(Math.max(0, buffer.length - 6));
           break;
         }
+        port.skipped += at - 3;
         const length = buffer.readUInt16LE(at - 3);
         if (length < 20 || length > 1500) {
+          port.skipped += 4;
           buffer = buffer.subarray(at + 1);
           continue;
         }
         if (buffer.length < at + length) break;
-        heard = Date.now();
-        deliver(buffer.subarray(at, at + length));
+        port.serial = port.video = Date.now();
+        port.rssi.push([port.video, buffer.readInt8(at - 1)]);
+        if (port.rssi.length > 4096) port.rssi.splice(0, 2048);
+        port.shards++;
+        if (deliver(buffer.subarray(at, at + length))) port.fresh++;
         buffer = buffer.subarray(at + length);
       }
     });
-    port.on('error', () => port?.destroy());
+    reader.on('exit', () => {
+      if (opened.ports.get(path) === port) opened.ports.delete(path);
+    });
   };
-  if (RECEIVERS.length) {
-    open();
-    setInterval(() => {
-      if (Date.now() - heard > 5000) open();
-    }, 5000);
-  }
+  // Every 500 ms: each receiver is told its camera and its share, which it forgets when it restarts. Every 5 s: a port silent for 5 s is closed (another program opening it, a flash or a serial monitor, can reset the receiver or leave the port at another baud), and every port not open, not locked and not tried in the last RETRY_MS is opened.
+  setInterval(() => {
+    const receivers = [...opened.ports.values()].filter(live);
+    // Each receiver's share in proportion to its USB link (an S3's about 9 ESP32s'), so the links add up: shards whose index modulo the weights' sum falls in its range are its own (fw/fpv_rx FPVK). That needs each receiver to hear over half of its own shards (a frame's are about half parity): at 61% heard by both (2026-11-14, the drone far off) 37% of frames were lost. So the shares split only while every receiver hears at least 80% of the shards, and below 70% each passes the first data shards it hears as one alone does, the union of the receivers' covering what each misses (receiver diversity), at one link's budget.
+    if (receivers.every((port) => (port.air ?? 1) >= 0.8)) opened.split = true;
+    if (receivers.some((port) => (port.air ?? 1) < 0.7)) opened.split = false;
+    const weigh = (port: Port) => (opened.split ? weight(port) : 1);
+    const modulus = opened.split
+      ? receivers.reduce((sum, port) => sum + weigh(port), 0)
+      : 1;
+    let first = 0;
+    for (const port of receivers) {
+      const share = opened.split ? [first, weigh(port), modulus] : [0, 1, 1];
+      port.share = share.join(' ');
+      tell(
+        port,
+        Buffer.concat([
+          opened.camera
+            ? Buffer.concat([Buffer.from('FPVF'), opened.camera])
+            : Buffer.alloc(0),
+          Buffer.from([...Buffer.from('FPVK'), ...share]),
+        ])
+      );
+      first += weigh(port);
+    }
+  }, 500);
+  const scan = () => {
+    for (const port of opened.ports.values())
+      if (Date.now() - Math.max(port.serial, port.opened) > 5000) {
+        tried.set(port.path, Date.now());
+        port.reader.kill();
+        opened.ports.delete(port.path);
+      }
+    for (const path of serialPorts())
+      if (
+        !opened.ports.has(path) &&
+        Date.now() - (tried.get(path) ?? 0) > RETRY_MS &&
+        !locked(path)
+      )
+        open(path);
+  };
+  scan();
+  setInterval(scan, 5000);
   return (store.fpvReceiver = opened);
 }
 
-// The camera's byte budget for the receiver, KB/s little-endian in its K V request: the ESP32 receiver's USB link carries about 98 KB/s; the monitor-mode adapter takes in about 210 shards/s whatever is sent (2026-10-31: 12 KB frames, 15 shards each at 32 fps, reached the dashboard at 16 fps, where 190 KB/s, about 5 KB frames, gave 28 fps), so frames stay near 5 KB (the camera aims at 85%).
+// The camera's byte budget for the receivers, KB/s little-endian in its K V request: an ESP32 receiver's USB link carries about 98 KB/s; the monitor-mode adapter takes in about 210 shards/s whatever is sent (2026-10-31: 12 KB frames, 15 shards each at 32 fps, reached the dashboard at 16 fps, where 190 KB/s, about 5 KB frames, gave 28 fps), so frames stay near 5 KB (the camera aims at 85%). The S3 receiver gets FAST_BUDGET and, after it, a shard budget (shards/s, little-endian; camera firmware from 2026-11-14, which takes the monitor's 190 when none comes), so the camera's frames grow toward its fpvRadioMaxBytes.
+// Several receivers that took their shares carry the sum of their links, each its share of every frame; one that has not acknowledged its share (older firmware) passes the first shards as before and caps the budget at what one link carries. Every receiver hears every shard, so the shard budget is the smallest receiver's: SLOW_SHARDS for an ESP32 once several share (alone it is sent none, as before).
+const FAST_BUDGET = { kilobytes: 800, shards: 2000 };
+const SLOW_BUDGET = 90;
+const SLOW_SHARDS = 1000;
+function weight(port: Port) {
+  return port.fast ? 9 : 1;
+}
 function radioBudget() {
-  const kilobytes = Date.now() - receiver().heard < 2000 ? 190 : 90;
-  return [kilobytes & 0xff, kilobytes >> 8];
+  const receivers = [...receiver().ports.values()].filter(live);
+  if (!receivers.length) {
+    const kilobytes = Date.now() - receiver().heard < 2000 ? 190 : SLOW_BUDGET;
+    return [kilobytes & 0xff, kilobytes >> 8];
+  }
+  const each = receivers.map((port) =>
+    port.fast ? FAST_BUDGET.kilobytes : SLOW_BUDGET
+  );
+  const shared =
+    receivers.length > 1 &&
+    receiver().split &&
+    receivers.every((port) => port.taken === port.share);
+  const kilobytes = shared
+    ? each.reduce((a, b) => a + b, 0)
+    : Math.max(...each);
+  const shards = Math.min(
+    ...receivers.map((port) => (port.fast ? FAST_BUDGET.shards : SLOW_SHARDS))
+  );
+  const budget = [kilobytes & 0xff, kilobytes >> 8];
+  return shared || receivers.some((port) => port.fast)
+    ? [...budget, shards & 0xff, shards >> 8]
+    : budget;
 }
 
-// A receiver is there: the monitor heard from lately, or the ESP32 receiver's port.
+// A receiver is there: the monitor or a serial receiver heard from lately, or a port a receiver has been on (one from before FPVR is silent until video comes).
 function radioUp() {
   return (
     Date.now() - receiver().heard < 2000 ||
+    [...receiver().ports.values()].some(live) ||
     RECEIVERS.some((path) => existsSync(path))
   );
 }
@@ -421,17 +716,53 @@ export async function GET(request: Request) {
         }
       );
     // The camera's state through the drone, and the FPV frames delivered when FPV runs.
-    const received = [...hubs.values()].find(
-      (hub) => hub.received !== undefined
-    )?.received;
+    const fpvHub = [...hubs.values()].find((hub) => hub.received !== undefined);
+    const received = fpvHub?.received;
+    const now = Date.now();
     const state = (await cameraRequest('S')).split(' ')[4];
     return Response.json(
       {
         camera: state,
         received,
+        started: fpvHub?.started,
+        short: fpvHub?.short,
+        undecoded: fpvHub?.undecoded,
         copies: store.fpvReceiver?.copies,
         chunks: store.fpvReceiver?.chunks,
         signal: store.fpvReceiver?.signal,
+        camera_mac: store.fpvReceiver?.camera?.toString('hex'),
+        budget: store.fpvReceiver ? radioBudget() : undefined,
+        split: store.fpvReceiver?.split,
+        recording: fpvRecording(),
+        // Each serial receiver: its share and whether it took it, shards passed (all, and new to the stream) and their RSSI (dBm) over the last second, and its own report.
+        receivers: [...(store.fpvReceiver?.ports.values() ?? [])].map(
+          (port) => {
+            const rssi = port.rssi
+              .filter(([time]) => now - time < 1000)
+              .map(([, value]) => value);
+            return {
+              path: port.path,
+              fast: port.fast,
+              live: live(port),
+              air: port.air,
+              share: port.share,
+              taken: port.taken,
+              shards: port.shards,
+              fresh: port.fresh,
+              skipped: port.skipped,
+              rssi: rssi.length
+                ? {
+                    shards: rssi.length,
+                    mean: Math.round(
+                      rssi.reduce((a, b) => a + b, 0) / rssi.length
+                    ),
+                    min: Math.min(...rssi),
+                  }
+                : undefined,
+              report: port.stats,
+            };
+          }
+        ),
       },
       { headers: { 'Cache-Control': 'no-store' } }
     );

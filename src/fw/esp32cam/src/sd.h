@@ -24,6 +24,8 @@ Ring ring;
 uint8_t *staging = nullptr;
 // Writer-owned while a file is open; the detector queues entries only while active.
 volatile bool active = false, wantRecording = true;
+// Set to close this file and open the next (camera request D), cleared by the writer once it has closed.
+volatile bool newFile = false;
 volatile uint16_t fullEvery = config::blackBoxFullEvery;
 // This file: frames queued, frames dropped because the ring was full, bytes written; and the card's size and free space.
 volatile uint32_t framesQueued = 0, framesDropped = 0, fileNumber = 0, ringLowest = 0, writeLongestUs = 0;
@@ -68,10 +70,14 @@ esp_err_t mountCard() {
 }
 
 void mount() {
-    pinMode(config::syncPin, OUTPUT);
-    digitalWrite(config::syncPin, config::sdDat3IsSync);
+    // On the ESP32-CAM the sync line is the card's DAT3, held high while the card is first addressed; on the S3 board the sync pin is never driven (main.cpp startLink).
+    if (config::sdDat3IsSync) {
+        pinMode(config::syncPin, OUTPUT);
+        digitalWrite(config::syncPin, HIGH);
+    }
     const esp_err_t result = mountCard();
-    digitalWrite(config::syncPin, LOW);
+    if (config::sdDat3IsSync)
+        digitalWrite(config::syncPin, LOW);
     if (result != ESP_OK) {
         // No answer at all is no card; anything else is a card that would not initialize or mount.
         cardState = result == ESP_ERR_TIMEOUT ? cardNone : cardFailed;
@@ -165,7 +171,7 @@ void writerLoop(void *) {
             active = true;
             cardState = cardRecording;
         }
-        const bool closing = !wantRecording || fileBytes + chunk > config::blackBoxFileBytes;
+        const bool closing = !wantRecording || newFile || fileBytes + chunk > config::blackBoxFileBytes;
         if (closing && active) {
             // An entry the detector started before this sees active cleared is committed well within a frame.
             active = false;
@@ -192,6 +198,7 @@ void writerLoop(void *) {
         if (closing) {
             close(file);
             file = -1;
+            newFile = false;
             updateFree();
             continue;
         }
@@ -300,6 +307,25 @@ void start() {
     startServer();
     if (card)
         xTaskCreatePinnedToCore(writerLoop, "blackbox", 4096, nullptr, 1, nullptr, 0);
+}
+
+// Camera request D (update.h): fullEvery (0 none, 0xffff unchanged), then 0 stops recording, 1 records (into the open file if there is one), 2 starts a new file and 0xff changes nothing; the reply is the card's state, file, frames queued and dropped, fullEvery and free space.
+const char *control(uint16_t every, uint8_t mode, char *text, size_t size) {
+    if (mode > 2 && mode != 0xff)
+        return "Mode 0 stop, 1 record, 2 new file, 0xff status";
+    if (!card)
+        return cardState == cardFailed ? "Card failed to mount" : "No card";
+    if (every != 0xffff)
+        fullEvery = every;
+    if (mode != 0xff)
+        wantRecording = mode != 0;
+    if (mode == 2 && cardState == cardRecording)
+        newFile = true;
+    if (wantRecording && cardState == cardError)
+        cardState = cardIdle;
+    snprintf(text, size, "%s %u q%u d%u full%u free%uMB", cardStateNames[cardState], unsigned(fileNumber), unsigned(framesQueued),
+             unsigned(framesDropped), unsigned(fullEvery), unsigned(freeBytes >> 20));
+    return nullptr;
 }
 
 // The black box's part of /status.

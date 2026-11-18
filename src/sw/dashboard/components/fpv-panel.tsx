@@ -1,14 +1,15 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { Panel } from '@/components/panel';
 import { Button } from '@/components/ui/button';
-import { typing } from '@/components/control-panel';
 import { Input } from '@/components/ui/input';
-import { readParts } from '@/lib/multipart';
+import { typing } from '@/lib/keys';
+import { parseTag, readParts, type PreviewTag } from '@/lib/multipart';
 
 const HOST_KEY = 'camera-host';
-// FPV frames go on screen this long after the earliest any frame could have, by their capture time, so the link's jitter up to it does not show.
-const PLAYOUT_MS = 80;
+// FPV frames go on screen this long after the earliest any frame could have, by their capture time, so the link's jitter up to it does not show. 50 from 2026-11-14: through the S3 receiver frames arrived within 16 ms of the fastest at p90 and 46-56 ms at p99 (80 before, for the ESP32 receiver and the monitor).
+const PLAYOUT_MS = 50;
 type Mode = 'tag' | 'fpv';
 
 function saved(key: string) {
@@ -25,31 +26,18 @@ function save(key: string, value: string) {
   } catch {}
 }
 
-// Rendered in the browser only (the page loads it without server rendering), so the saved address is there from the start. Always streams, by the drone's hover_camera setting: the tracking preview (the flow's 80x60 reduction, tracking undisturbed, over the camera's network) or FPV, the camera's own 480x320 video over the radio to the FPV receiver or over its network, during which it does not track the tag, so camera hover has no sightings; it resumes tracking 3 s after FPV ends.
-// A preview frame's tag (X-Tag): the corners in the camera's 320x240 pixels and the tag centre in the camera frame (m; right, down, forward).
-export type PreviewTag = {
-  valid: boolean;
-  corners: [number, number][];
-  position: [number, number, number];
+// The camera's own state through the drone (running, fpv, stalled or stopped), or null while it does not answer.
+type CameraStatus = { state: string } | null;
+// The FPV video over the last second as this page got it: picture size, frames, average JPEG size and the share of the camera's numbered frames that never arrived.
+type VideoStats = {
+  width: number;
+  height: number;
+  fps: number;
+  kilobytes: number;
+  lost: number;
 };
 
-function parseTag(header: string): PreviewTag | null {
-  const match = /X-Tag: *(valid|tracked) ([^\r\n]+)/i.exec(header);
-  if (!match) return null;
-  const parts = match[2].trim().split(/\s+/);
-  const corners = parts
-    .slice(0, 4)
-    .map((pair) => pair.split(',').map(Number) as [number, number]);
-  const position = (parts[4] ?? '').split(',').map(Number);
-  if (corners.some((c) => c.some(Number.isNaN)) || position.length !== 3)
-    return null;
-  return {
-    valid: match[1].toLowerCase() === 'valid',
-    corners,
-    position: position as [number, number, number],
-  };
-}
-
+// Rendered in the browser only (the page loads it without server rendering), so the saved address is there from the start. Always streams, by the drone's hover_camera setting: the tracking preview (the flow's 80x60 reduction, tracking undisturbed, over the camera's network) or FPV, the camera's own 480x320 video over the radio to the FPV receiver or over its network, during which it does not track the tag, so camera hover has no sightings; it resumes tracking 3 s after FPV ends.
 export function FpvPanel({
   free,
   onFree,
@@ -76,34 +64,42 @@ export function FpvPanel({
   useEffect(() => {
     rollRef.current = roll;
   }, [roll]);
-  const [status, setStatus] = useState<{
-    state: string;
-    fps?: number;
-  } | null>(null);
+  const [status, setStatus] = useState<CameraStatus>(null);
+  const [video, setVideo] = useState<VideoStats | null>(null);
+  // Each FPV frame this second: when it came, its JPEG bytes and its number (X-Time's third field).
+  const arrivals = useRef<{ time: number; bytes: number; number: number }[]>(
+    []
+  );
+  const size = useRef({ width: 0, height: 0 });
   const where = host ? `&host=${encodeURIComponent(host)}` : '';
 
   useEffect(() => {
     const controller = new AbortController();
-    let previous: { count: number; time: number } | undefined;
     const timer = setInterval(async () => {
+      const now = performance.now();
+      const recent = (arrivals.current = arrivals.current.filter(
+        (arrival) => now - arrival.time < 1000
+      ));
+      if (recent.length < 2) setVideo(null);
+      else {
+        const span = ((recent.at(-1)!.number - recent[0].number) & 0xffff) + 1;
+        setVideo({
+          ...size.current,
+          fps: recent.length,
+          kilobytes:
+            recent.reduce((sum, arrival) => sum + arrival.bytes, 0) /
+            recent.length /
+            1000,
+          lost: Math.max(0, 1 - recent.length / span),
+        });
+      }
       try {
         const response = await fetch(`/api/camera?mode=status${where}`, {
           signal: controller.signal,
         });
         const value = await response.json();
         if (!response.ok) throw new Error(value.error);
-        const time = performance.now();
-        // FPV frames the dashboard received; the camera's own state otherwise.
-        const fps =
-          previous && value.received >= previous.count
-            ? ((value.received - previous.count) * 1000) /
-              (time - previous.time)
-            : undefined;
-        previous =
-          value.received === undefined
-            ? undefined
-            : { count: value.received, time };
-        setStatus({ state: value.camera, fps });
+        setStatus({ state: value.camera });
       } catch {
         if (!controller.signal.aborted) setStatus(null);
       }
@@ -137,13 +133,21 @@ export function FpvPanel({
       if (shown && target) {
         // The picture turned back by the mount's roll, drawn into a canvas sized to the turned picture, so a quarter-turned camera's portrait picture fits the panel (object-contain) instead of overflowing it.
         const turn = (-rollRef.current * Math.PI) / 180;
-        const cos = Math.abs(Math.cos(turn)), sin = Math.abs(Math.sin(turn));
-        target.width = Math.round(shown.width * cos + shown.height * sin);
-        target.height = Math.round(shown.width * sin + shown.height * cos);
+        const cos = Math.abs(Math.cos(turn)),
+          sin = Math.abs(Math.sin(turn));
+        const width = shown.width * cos + shown.height * sin;
+        const height = shown.width * sin + shown.height * cos;
         // The element takes the turned picture's shape across the panel's width, so it fills it without bars (up to max-h).
-        target.style.aspectRatio = `${target.width} / ${target.height}`;
+        target.style.aspectRatio = `${Math.round(width)} / ${Math.round(height)}`;
+        // The canvas holds exactly the element's device pixels and the picture is scaled into it here without smoothing, so each camera pixel shows as a crisp square; a buffer of another size would be resampled (blurred) again by the browser.
+        const box = target.getBoundingClientRect();
+        target.width = Math.max(1, Math.round(box.width * devicePixelRatio));
+        target.height = Math.max(1, Math.round(box.height * devicePixelRatio));
+        const zoom = Math.min(target.width / width, target.height / height);
         const context = target.getContext('2d')!;
+        context.imageSmoothingEnabled = false;
         context.translate(target.width / 2, target.height / 2);
+        context.scale(zoom, zoom);
         context.rotate(turn);
         context.translate(-shown.width / 2, -shown.height / 2);
         context.drawImage(shown, 0, 0);
@@ -169,7 +173,13 @@ export function FpvPanel({
     frame = requestAnimationFrame(render);
     const show = async (jpeg: Uint8Array, header: string) => {
       const arrived = performance.now();
-      const stamp = /X-Time: *(\d+)/i.exec(header);
+      const stamp = /X-Time: *(\d+) +\d+ +(\d+)/i.exec(header);
+      if (stamp)
+        arrivals.current.push({
+          time: arrived,
+          bytes: jpeg.length,
+          number: Number(stamp[2]),
+        });
       let at = arrived;
       if (stamp) {
         const us = Number(stamp[1]);
@@ -185,6 +195,7 @@ export function FpvPanel({
         new Blob([jpeg as BlobPart], { type: 'image/jpeg' })
       ).catch(() => undefined);
       if (!bitmap || closed.signal.aborted) return bitmap?.close();
+      size.current = { width: bitmap.width, height: bitmap.height };
       const index = queue.findIndex((queued) => queued.at > at);
       queue.splice(index < 0 ? queue.length : index, 0, {
         at,
@@ -223,56 +234,53 @@ export function FpvPanel({
   }, [free, onFree]);
 
   return (
-    <section
-      aria-labelledby="camera-heading"
-      className="space-y-2 px-4 py-3"
+    <Panel
+      title="Camera"
+      header={
+        <>
+          <span
+            className={`text-sm tabular-nums ${status ? 'text-muted-foreground' : 'text-red-700'}`}
+          >
+            {status
+              ? video
+                ? `${video.width}×${video.height} · ${video.fps} fps · ${Math.round(video.kilobytes)} KB · ${Math.round(video.lost * 100)}% lost`
+                : status.state
+              : 'Offline'}
+          </span>
+          <Input
+            aria-label="Camera address"
+            className="ml-auto w-28"
+            placeholder="auto"
+            value={host}
+            onChange={(event) => {
+              setHost(event.target.value);
+              save(HOST_KEY, event.target.value);
+            }}
+          />
+          <div className="flex gap-1" role="group" aria-label="Camera mode (F)">
+            {(['tag', 'fpv'] as const).map((choice) => (
+              <Button
+                key={choice}
+                variant={
+                  free !== undefined && mode === choice ? 'default' : 'outline'
+                }
+                aria-pressed={free !== undefined && mode === choice}
+                disabled={free === undefined}
+                title="F"
+                onClick={() => onFree(choice === 'fpv')}
+              >
+                {choice === 'tag' ? 'Tag' : 'Free'}
+              </Button>
+            ))}
+          </div>
+        </>
+      }
     >
-      <div className="flex items-center gap-2">
-        <h2 id="camera-heading" className="font-semibold">
-          Camera
-        </h2>
-        <span
-          className={`text-sm tabular-nums ${status ? 'text-muted-foreground' : 'text-red-700'}`}
-        >
-          {status
-            ? status.fps === undefined
-              ? status.state
-              : `${status.state} · ${Math.round(status.fps)} fps`
-            : 'Offline'}
-        </span>
-        <Input
-          aria-label="Camera address"
-          className="ml-auto h-8 w-28"
-          placeholder="auto"
-          value={host}
-          onChange={(event) => {
-            setHost(event.target.value);
-            save(HOST_KEY, event.target.value);
-          }}
-        />
-        <div className="flex gap-1" role="group" aria-label="Camera mode (F)">
-          {(['tag', 'fpv'] as const).map((choice) => (
-            <Button
-              key={choice}
-              size="sm"
-              variant={
-                free !== undefined && mode === choice ? 'default' : 'outline'
-              }
-              aria-pressed={free !== undefined && mode === choice}
-              disabled={free === undefined}
-              title="F"
-              onClick={() => onFree(choice === 'fpv')}
-            >
-              {choice === 'tag' ? 'Tag' : 'Free'}
-            </Button>
-          ))}
-        </div>
-      </div>
       <canvas
         ref={canvas}
         aria-label={mode === 'fpv' ? 'Live camera video' : 'Tracking preview'}
         className="aspect-[3/2] max-h-[calc(100dvh-10rem)] w-full bg-black object-contain"
       />
-    </section>
+    </Panel>
   );
 }

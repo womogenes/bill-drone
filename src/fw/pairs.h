@@ -1,4 +1,4 @@
-// Which drone talks to which controller (fw/drone/main/radio.c, fw/controller/native/main/relay.c): each board finds its own station MAC here and answers only its partner, so one image serves every drone and every controller. The drone's MAC is also its ID in the recordings. A new drone or controller is a new line; a board that is not listed stops at boot and prints its MAC.
+// Which drone talks to which controller (fw/drone/main/radio.c, fw/controller/native/main/relay.c): each board finds its own station MAC here and answers only its partner, so one image serves every drone and every controller. The drone's MAC is also its ID in the recordings. A new drone or controller is a new line; a board that is not listed stops at boot and prints its MAC. A replaced controller is flashed with its line over USB and the drone then takes it by itself (fw/drone/main/radio.c adopt), so the drone gets the new table by a normal update.
 #pragma once
 
 #include <stdbool.h>
@@ -14,7 +14,7 @@ typedef struct {
 } pair_t;
 
 static const pair_t pairs[] = {
-    {{0x20, 0x50, 0x0d, 0x8b, 0x7e, 0x68}, {0x04, 0xb2, 0x47, 0x54, 0x80, 0x4c}},
+    {{0x20, 0x50, 0x0d, 0x8b, 0x7e, 0x68}, {0x20, 0x50, 0x0d, 0x2a, 0x3d, 0xcc}},
     {{0x20, 0x50, 0x0d, 0x29, 0x78, 0xa8}, {0x20, 0x50, 0x0d, 0x29, 0x7a, 0xec}},
 };
 

@@ -1,0 +1,622 @@
+{
+ "about": "The flights sw/sim/scorecard.py scores, found in sw/recordings by its inventory (scorecard.py --inventory writes models/scorecard/inventory.json): every drone 1 recording inside a configuration's from-until (recording-name prefixes, until exclusive) whose motors ran and that left the ground, unless excluded below with its reason. A configuration is what changed physically between sessions and what the scorecard sets per flight from it: bands (true: the rubber bands pulling both assemblies forward, the plant's own preload or burst_replay.BANDS, the tilt 2.5 degrees behind its command and the accelerometer reading 0.025 g forward, as flip.py and sweep.py have them; false: left_band and right_band 0; \"plant\": the plant's own band terms and no offset), table (the motors' thrust against throttle: firmware is the firmware's own table, which the old ESCs flew to 2026-11-12; stand is the 2026-11-14 thrust stand's on the Nuofany 40A ESCs fitted for 2026-11-14 on, flip_esc.STAND), hull (what it rests on: legs, the forward legs since 2026-11-11, takeoff_test.LEG_FEET; belly, legless 2026-11-07 to 11-10, rigid.HULL; feet, the first legs, sweep.FEET) and, for the drone before its pivots were raised on 2026-11-11 (history: scored apart from the total), geometry (the plant's coefficients at that geometry, as airframe.py means a chassis change to work) and plant (the model fitted then, --plant era). excluded (a reason) leaves a whole configuration out. kind is the configuration's unless flights gives another; flights also gives windows (s from the recording's first sample: only the start points inside are scored) and notes. Each flight's thrust trim, its steady pushes and its mass's share of the thrust are the flight's own (scorecard.py). Times are UTC (the recordings' names); Pacific is 8 h behind. training lists the recordings each plant was fitted on (its own and its parents' fits, by name prefix), for the held-out totals.",
+ "training": {
+  "airframe_2026-11-12_raised": [
+   "2026-11-11",
+   "2026-11-12"
+  ],
+  "airframe_2026-11-15_bursts": [
+   "2026-11-11",
+   "2026-11-12",
+   "2026-11-15T05-29-38",
+   "2026-11-15T07-02-48",
+   "2026-11-15T07-13-32"
+  ],
+  "airframe_2026-11-15_bandsoff": [
+   "2026-11-11",
+   "2026-11-12",
+   "2026-11-15T06-29-06",
+   "2026-11-15T06-32-31",
+   "2026-11-15T06-47-14",
+   "2026-11-15T06-48-18",
+   "2026-11-15T06-49-27"
+  ],
+  "airframe_2026-11-15_plant": [
+   "2026-11-11T22-57-35",
+   "2026-11-11T22-59-37",
+   "2026-11-11T23-01-15",
+   "2026-11-11T23-17-39",
+   "2026-11-11T23-33-57",
+   "2026-11-11T23-34-37",
+   "2026-11-11T23-35-53",
+   "2026-11-12T00-46-42",
+   "2026-11-12T00-49-44",
+   "2026-11-12T00-53-56",
+   "2026-11-12T01-01-13",
+   "2026-11-12T01-05-26",
+   "2026-11-12T01-07-43",
+   "2026-11-12T01-09-39",
+   "2026-11-12T01-11-39",
+   "2026-11-12T01-15-40",
+   "2026-11-12T01-18-33",
+   "2026-11-12T01-30-23",
+   "2026-11-12T01-38-41",
+   "2026-11-12T01-40-05",
+   "2026-11-12T01-54-10",
+   "2026-11-12T02-09-16",
+   "2026-11-12T02-14-11",
+   "2026-11-12T02-21-10",
+   "2026-11-12T02-22-28",
+   "2026-11-12T02-23-06",
+   "2026-11-12T02-23-24",
+   "2026-11-15T00-18-53",
+   "2026-11-15T00-19-08",
+   "2026-11-15T00-20-29",
+   "2026-11-15T00-27-51",
+   "2026-11-15T00-28-51",
+   "2026-11-15T00-39-45",
+   "2026-11-15T00-50-42",
+   "2026-11-15T00-51-18",
+   "2026-11-15T03-48-40",
+   "2026-11-15T03-50-40",
+   "2026-11-15T03-51-47",
+   "2026-11-15T03-58-06",
+   "2026-11-15T03-59-55",
+   "2026-11-15T04-06-48",
+   "2026-11-15T04-07-05",
+   "2026-11-15T04-09-59",
+   "2026-11-15T04-12-31",
+   "2026-11-15T04-22-30",
+   "2026-11-15T05-13-28",
+   "2026-11-15T05-15-19",
+   "2026-11-15T06-29-06",
+   "2026-11-15T06-30-27",
+   "2026-11-15T06-32-31",
+   "2026-11-15T06-34-15",
+   "2026-11-15T06-42-27",
+   "2026-11-15T06-46-01",
+   "2026-11-15T06-47-14",
+   "2026-11-15T06-48-18",
+   "2026-11-15T06-49-27"
+  ],
+  "airframe_2026-11-16_plant": [
+   "2026-11-11T22-57-35",
+   "2026-11-11T22-59-37",
+   "2026-11-11T23-01-15",
+   "2026-11-11T23-17-39",
+   "2026-11-11T23-33-57",
+   "2026-11-11T23-34-37",
+   "2026-11-11T23-35-53",
+   "2026-11-12T00-46-42",
+   "2026-11-12T00-49-44",
+   "2026-11-12T00-53-56",
+   "2026-11-12T01-01-13",
+   "2026-11-12T01-05-26",
+   "2026-11-12T01-07-43",
+   "2026-11-12T01-09-39",
+   "2026-11-12T01-11-39",
+   "2026-11-12T01-15-40",
+   "2026-11-12T01-18-33",
+   "2026-11-12T01-30-23",
+   "2026-11-12T01-38-41",
+   "2026-11-12T01-40-05",
+   "2026-11-12T01-54-10",
+   "2026-11-12T02-09-16",
+   "2026-11-12T02-14-11",
+   "2026-11-12T02-21-10",
+   "2026-11-12T02-22-28",
+   "2026-11-12T02-23-06",
+   "2026-11-12T02-23-24",
+   "2026-11-15T00-18-53",
+   "2026-11-15T00-19-08",
+   "2026-11-15T00-20-29",
+   "2026-11-15T00-27-51",
+   "2026-11-15T00-28-51",
+   "2026-11-15T00-39-45",
+   "2026-11-15T00-50-42",
+   "2026-11-15T00-51-18",
+   "2026-11-15T03-48-40",
+   "2026-11-15T03-50-40",
+   "2026-11-15T03-51-47",
+   "2026-11-15T03-58-06",
+   "2026-11-15T03-59-55",
+   "2026-11-15T04-06-48",
+   "2026-11-15T04-07-05",
+   "2026-11-15T04-09-59",
+   "2026-11-15T04-12-31",
+   "2026-11-15T04-22-30",
+   "2026-11-15T05-13-28",
+   "2026-11-15T05-15-19",
+   "2026-11-15T06-29-06",
+   "2026-11-15T06-30-27",
+   "2026-11-15T06-32-31",
+   "2026-11-15T06-34-15",
+   "2026-11-15T06-42-27",
+   "2026-11-15T06-46-01",
+   "2026-11-15T06-47-14",
+   "2026-11-15T06-48-18",
+   "2026-11-15T06-49-27"
+  ],
+  "airframe_2026-11-16b_plant": [
+   "2026-11-11T22-57-35",
+   "2026-11-11T22-59-37",
+   "2026-11-11T23-01-15",
+   "2026-11-11T23-17-39",
+   "2026-11-11T23-33-57",
+   "2026-11-11T23-34-37",
+   "2026-11-11T23-35-53",
+   "2026-11-12T00-46-42",
+   "2026-11-12T00-49-44",
+   "2026-11-12T00-53-56",
+   "2026-11-12T01-01-13",
+   "2026-11-12T01-05-26",
+   "2026-11-12T01-07-43",
+   "2026-11-12T01-09-39",
+   "2026-11-12T01-11-39",
+   "2026-11-12T01-15-40",
+   "2026-11-12T01-18-33",
+   "2026-11-12T01-30-23",
+   "2026-11-12T01-38-41",
+   "2026-11-12T01-40-05",
+   "2026-11-12T01-54-10",
+   "2026-11-12T02-09-16",
+   "2026-11-12T02-14-11",
+   "2026-11-12T02-21-10",
+   "2026-11-12T02-22-28",
+   "2026-11-12T02-23-06",
+   "2026-11-12T02-23-24",
+   "2026-11-15T00-18-53",
+   "2026-11-15T00-19-08",
+   "2026-11-15T00-20-29",
+   "2026-11-15T00-27-51",
+   "2026-11-15T00-28-51",
+   "2026-11-15T00-39-45",
+   "2026-11-15T00-50-42",
+   "2026-11-15T00-51-18",
+   "2026-11-15T03-48-40",
+   "2026-11-15T03-50-40",
+   "2026-11-15T03-51-47",
+   "2026-11-15T03-58-06",
+   "2026-11-15T03-59-55",
+   "2026-11-15T04-06-48",
+   "2026-11-15T04-07-05",
+   "2026-11-15T04-09-59",
+   "2026-11-15T04-12-31",
+   "2026-11-15T04-22-30",
+   "2026-11-15T05-13-28",
+   "2026-11-15T05-15-19",
+   "2026-11-15T06-29-06",
+   "2026-11-15T06-30-27",
+   "2026-11-15T06-32-31",
+   "2026-11-15T06-34-15",
+   "2026-11-15T06-42-27",
+   "2026-11-15T06-46-01",
+   "2026-11-15T06-47-14",
+   "2026-11-15T06-48-18",
+   "2026-11-15T06-49-27"
+  ]
+ },
+ "configurations": {
+  "indoor_nobands": {
+   "from": "2026-11-11T22-50",
+   "until": "2026-11-11T23-10",
+   "bands": false,
+   "table": "firmware",
+   "hull": "legs",
+   "kind": "hover_indoor",
+   "note": "2026-11-11 22:57-23:07 UTC: indoor tag hops right after the raise (forward legs, 10-inch props), the old ESCs, no bands."
+  },
+  "indoor_bands": {
+   "from": "2026-11-11T23-10",
+   "until": "2026-11-12",
+   "bands": true,
+   "table": "firmware",
+   "hull": "legs",
+   "kind": "hover_indoor",
+   "note": "2026-11-11 23:17-23:35 UTC: indoor tag hops with the bands on (from 3:17 PM Pacific), the old ESCs."
+  },
+  "bands_old_esc": {
+   "from": "2026-11-12",
+   "until": "2026-11-13",
+   "bands": true,
+   "table": "firmware",
+   "hull": "legs",
+   "kind": "hover_calm",
+   "note": "2026-11-12 00:46-02:27 UTC (11-11 evening Pacific): calm outdoor GPS hovers, the roll-step ladders and the first flip, the bands on, the old ESCs."
+  },
+  "boat": {
+   "from": "2026-11-14",
+   "until": "2026-11-15T01",
+   "bands": true,
+   "table": "stand",
+   "hull": "legs",
+   "kind": "hover_wind",
+   "note": "2026-11-15 00:18-00:51 UTC (11-14 4:18-4:51 PM Pacific): hovers from a docked boat on the SF waterfront in Bay wind, the new Nuofany ESCs, the bands on."
+  },
+  "bands_new_esc": {
+   "from": "2026-11-15T01",
+   "until": "2026-11-15T06-15",
+   "bands": true,
+   "table": "stand",
+   "hull": "legs",
+   "kind": "hover_bands",
+   "note": "2026-11-15 03:48-05:29 UTC: the new ESCs with the bands; short hops at 0.5 m that tipped, hovers 3-5 m up, roll and yaw doublet patterns, the 05:29 burst90."
+  },
+  "nobands_new_esc": {
+   "from": "2026-11-15T06-15",
+   "until": "2026-11-16",
+   "bands": false,
+   "table": "stand",
+   "hull": "legs",
+   "kind": "hover_nobands",
+   "note": "2026-11-15 from about 06:20 UTC: the bands off, the new ESCs; tonight's hovers, doublets, the 06:53 takeoff divergence and the quaternion bursts."
+  },
+  "h_oct_early": {
+   "history": true,
+   "from": "2026-10-20",
+   "until": "2026-10-25",
+   "bands": false,
+   "table": "firmware",
+   "hull": "feet",
+   "kind": "history_oct20",
+   "geometry": "geometry_2026-10-28.json",
+   "plant": "airframe_2026-10-27.json",
+   "note": "2026-10-20 to 10-24: the first hops, before the bands (drone1-hardware-timeline: bands on since 10-25); 9-inch props.",
+   "excluded": "the first tests (2026-10-20/21): their specific force misses every plant's by 0.1-0.4 g already 0.05 s ahead and one (10-21 06:45) scores 49, which a free-flying airframe cannot do; a rig or tether is likely (not checked against the notes of the time)"
+  },
+  "h_oct_bands": {
+   "history": true,
+   "from": "2026-10-25",
+   "until": "2026-10-29T08",
+   "bands": true,
+   "table": "firmware",
+   "hull": "feet",
+   "kind": "history_oct25",
+   "geometry": "geometry_2026-10-28.json",
+   "plant": "airframe_2026-10-29b.json",
+   "note": "2026-10-25 to 10-29 08:00: the bands on, 9-inch props, the camera hovers."
+  },
+  "h_oct_10in": {
+   "history": true,
+   "from": "2026-10-29T08",
+   "until": "2026-11-01",
+   "bands": true,
+   "table": "firmware",
+   "hull": "feet",
+   "kind": "history_oct29",
+   "geometry": "geometry_2026-10-29_10in.json",
+   "plant": "airframe_2026-10-29_10in.json",
+   "note": "2026-10-29 08:15 to 10-31: 10-inch props, the bands on, 0.94-0.95 kg; 10-31 22:17 crash broke a servo mount."
+  },
+  "h_nov_bandsoff": {
+   "history": true,
+   "from": "2026-11-01",
+   "until": "2026-11-02T04-43",
+   "bands": false,
+   "table": "firmware",
+   "hull": "feet",
+   "kind": "history_nov01",
+   "geometry": "geometry_2026-10-29_10in.json",
+   "plant": "airframe_2026-11-02.json",
+   "note": "2026-11-01 23:29 to 11-02 04:36: 1.02 kg, bands off since the crash, CoM moves mid-session."
+  },
+  "h_nov_weakbands": {
+   "history": true,
+   "from": "2026-11-02T04-43",
+   "until": "2026-11-02T07-45",
+   "bands": true,
+   "table": "firmware",
+   "hull": "feet",
+   "kind": "history_nov02",
+   "geometry": "geometry_2026-10-29_10in.json",
+   "plant": "airframe_2026-11-02.json",
+   "note": "2026-11-02 04:47-07:39: weak rubber bands, 10-inch props, new pack about 05:30."
+  },
+  "h_nov_9in": {
+   "history": true,
+   "from": "2026-11-02T07-45",
+   "until": "2026-11-07T12",
+   "bands": true,
+   "table": "firmware",
+   "hull": "feet",
+   "kind": "history_nov02_9in",
+   "geometry": "geometry_2026-10-29_10in.json",
+   "plant": "airframe_2026-11-02_9in_calibrated.json",
+   "note": "2026-11-02 07:48 to 11-07: 9x4.5-inch props."
+  },
+  "h_nov_legless": {
+   "history": true,
+   "from": "2026-11-07T12",
+   "until": "2026-11-11T22-50",
+   "bands": "plant",
+   "table": "firmware",
+   "hull": "belly",
+   "kind": "history_nov08",
+   "geometry": "geometry_2026-11-08b.json",
+   "plant": "airframe_2026-11-09.json",
+   "note": "2026-11-07 evening to 11-11: 10-inch props again, legless (rests 3-8 degrees off level), camera and GPS, about 1.05 kg; the 11-08/09 outdoor sessions; bands unknown (the era plant's own terms)."
+  }
+ },
+ "kinds": {
+  "hover_calm": "calm outdoor GPS hovers (2026-11-11 evening Pacific, bands on, old ESCs)",
+  "hover_indoor": "indoor tag hops (2026-11-11 afternoon Pacific)",
+  "hover_wind": "the 2026-11-14 afternoon (Pacific) hovers from a docked boat on the SF waterfront: Bay wind and gusts",
+  "hover_bands": "2026-11-15 UTC hovers on the new ESCs with the bands, 3-5 m up some of them, and their small patterns (roll 3-degree doublets, yaw doublets)",
+  "hover_nobands": "tonight's hovers with the bands off (06:20-07:13 UTC)",
+  "ladder": "the 2026-11-12 roll-step ladders (roll steps to 40-55 degrees from the GPS hold, bands on)",
+  "doublet": "tonight's pitch and roll doublet patterns (bands off): 06:46 and 06:47 at target_rate 30, 06:48, 06:49 and 06:50 (target_rate 180: a pitch doublet overshot to +30/-42 and swung free at about 0.75 Hz)",
+  "divergence": "closed-loop divergences: the 2026-11-15 06:53 takeoffs at pitch_damping 9 with pitch_damping_tau 0.03 (grew at about 2.3 Hz until the tip cut) and the 2026-11-11 23:07 hop at pivot_height 0.04 (pitch diverged at about 1 Hz)",
+  "burst": "the flips and bursts, windowed: the 2026-11-12 02:27 first flip (Euler, bands), the 2026-11-15 05:29 burst90 (Euler, bands), 07:03 burst60 (quaternion, failed) and 07:13 burst30 (quaternion)",
+  "takeoff": "every whole-flight entry's first 2.5 s airborne, pooled",
+  "landing": "every whole-flight entry's last 2.5 s with the motors on when it landed (the touchdown and any tip-over in the horizon), pooled",
+  "hop": "short flights (under 5 s airborne) that the configuration's hover kind would otherwise get: the 2026-11-15 03:48-04:09 hops at 0.5 m that tipped, hops cut at the tilt limit",
+  "cut": "every whole-flight entry's last 2.5 s with the motors on when it did not land (stopped by the pilot or the tilt limit: the tip-overs), pooled",
+  "history_oct20": "drone 1 before the pivots were raised (history, apart from the total): 2026-10-20 to 10-24: the first hops, before the bands (drone1-hardware-timeline: bands on since 10-25); 9-inch props.",
+  "history_oct25": "drone 1 before the pivots were raised (history, apart from the total): 2026-10-25 to 10-29 08:00: the bands on, 9-inch props, the camera hovers.",
+  "history_oct29": "drone 1 before the pivots were raised (history, apart from the total): 2026-10-29 08:15 to 10-31: 10-inch props, the bands on, 0.94-0.95 kg; 10-31 22:17 crash broke a servo mount.",
+  "history_nov01": "drone 1 before the pivots were raised (history, apart from the total): 2026-11-01 23:29 to 11-02 04:36: 1.02 kg, bands off since the crash, CoM moves mid-session.",
+  "history_nov02": "drone 1 before the pivots were raised (history, apart from the total): 2026-11-02 04:47-07:39: weak rubber bands, 10-inch props, new pack about 05:30.",
+  "history_nov02_9in": "drone 1 before the pivots were raised (history, apart from the total): 2026-11-02 07:48 to 11-07: 9x4.5-inch props.",
+  "history_nov08": "drone 1 before the pivots were raised (history, apart from the total): 2026-11-07 evening to 11-11: 10-inch props again, legless (rests 3-8 degrees off level), camera and GPS, about 1.05 kg; the 11-08/09 outdoor sessions; bands unknown (the era plant's own terms)."
+ },
+ "excluded": {
+  "2026-11-15T06-20-30": "motors on 45 s but airborne about 2 s of it (the filter's height under 0.1 m otherwise): a ground run with the thrust split at 780/510",
+  "2026-11-15T06-23-01": "motors on 23 s, never more than 0.15 m up: a ground run",
+  "2026-11-12T01-33-43": "the Kalman filter's height runs to -33 m: its height and velocity are not the drone's (the hold flew on the tag-free hover height)"
+ },
+ "flights": [
+  {
+   "name": "2026-11-11T22-57-35",
+   "kind": "hover_indoor",
+   "note": "the 2.4 Hz pitch shake at pitch_damping 6.5"
+  },
+  {
+   "name": "2026-11-11T23-01-15",
+   "kind": "hover_indoor"
+  },
+  {
+   "name": "2026-11-11T23-07-11",
+   "kind": "divergence",
+   "note": "pivot_height 0.04: pitch diverged at about 1 Hz within 2 s of liftoff; the gyro at +-250 deg/s clips"
+  },
+  {
+   "name": "2026-11-11T23-35-53",
+   "kind": "hover_indoor"
+  },
+  {
+   "name": "2026-11-12T00-46-42",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T00-49-44",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T00-53-56",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T01-07-43",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T01-09-39",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T01-11-39",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T01-30-23",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T01-38-41",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T01-54-10",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T02-21-10",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T02-23-24",
+   "kind": "hover_calm"
+  },
+  {
+   "name": "2026-11-12T01-15-40",
+   "kind": "ladder"
+  },
+  {
+   "name": "2026-11-12T01-18-33",
+   "kind": "ladder"
+  },
+  {
+   "name": "2026-11-12T01-55-51",
+   "kind": "ladder"
+  },
+  {
+   "name": "2026-11-12T01-59-36",
+   "kind": "ladder"
+  },
+  {
+   "name": "2026-11-12T02-27-04",
+   "kind": "burst",
+   "window": [
+    9.5,
+    11.3
+   ],
+   "note": "the first flip (Euler), its ESC failing in the crash"
+  },
+  {
+   "name": "2026-11-15T00-19-08",
+   "kind": "hover_wind"
+  },
+  {
+   "name": "2026-11-15T00-20-29",
+   "kind": "hover_wind"
+  },
+  {
+   "name": "2026-11-15T00-27-51",
+   "kind": "hover_wind"
+  },
+  {
+   "name": "2026-11-15T00-28-51",
+   "kind": "hover_wind"
+  },
+  {
+   "name": "2026-11-15T00-43-25",
+   "kind": "hover_wind"
+  },
+  {
+   "name": "2026-11-15T00-44-07",
+   "kind": "hover_wind"
+  },
+  {
+   "name": "2026-11-15T00-47-21",
+   "kind": "hover_wind"
+  },
+  {
+   "name": "2026-11-15T00-48-02",
+   "kind": "hover_wind"
+  },
+  {
+   "name": "2026-11-15T00-49-49",
+   "kind": "hover_wind"
+  },
+  {
+   "name": "2026-11-15T00-51-18",
+   "kind": "hover_wind"
+  },
+  {
+   "name": "2026-11-15T04-07-05",
+   "kind": "hover_bands"
+  },
+  {
+   "name": "2026-11-15T04-12-31",
+   "kind": "hover_bands"
+  },
+  {
+   "name": "2026-11-15T04-22-30",
+   "kind": "hover_bands",
+   "note": "roll doublets of 3 degrees; ended at the tilt limit"
+  },
+  {
+   "name": "2026-11-15T05-13-28",
+   "kind": "hover_bands"
+  },
+  {
+   "name": "2026-11-15T05-15-19",
+   "kind": "hover_bands",
+   "note": "yaw-rate doublets of 60 deg/s"
+  },
+  {
+   "name": "2026-11-15T05-18-14",
+   "kind": "hover_bands",
+   "note": "5 m up"
+  },
+  {
+   "name": "2026-11-15T05-28-22",
+   "kind": "hover_bands",
+   "note": "5 m up, flip_enable 2 armed, no burst flown"
+  },
+  {
+   "name": "2026-11-15T05-29-38",
+   "kind": "burst",
+   "window": [
+    17.0,
+    20.0
+   ],
+   "note": "burst90, the Euler flip, bands on"
+  },
+  {
+   "name": "2026-11-15T06-20-30",
+   "kind": "hover_nobands"
+  },
+  {
+   "name": "2026-11-15T06-29-06",
+   "kind": "hover_nobands"
+  },
+  {
+   "name": "2026-11-15T06-30-27",
+   "kind": "hover_nobands"
+  },
+  {
+   "name": "2026-11-15T06-32-31",
+   "kind": "hover_nobands"
+  },
+  {
+   "name": "2026-11-15T06-34-15",
+   "kind": "hover_nobands"
+  },
+  {
+   "name": "2026-11-15T06-42-27",
+   "kind": "hover_nobands"
+  },
+  {
+   "name": "2026-11-15T06-58-00",
+   "kind": "hover_nobands",
+   "note": "quaternion 1"
+  },
+  {
+   "name": "2026-11-15T07-12-25",
+   "kind": "hover_nobands",
+   "note": "quaternion 1"
+  },
+  {
+   "name": "2026-11-15T06-46-01",
+   "kind": "doublet",
+   "note": "pitch and roll doublets 20-35 degrees, target_rate 30"
+  },
+  {
+   "name": "2026-11-15T06-47-14",
+   "kind": "doublet",
+   "note": "target_rate 30"
+  },
+  {
+   "name": "2026-11-15T06-48-18",
+   "kind": "doublet"
+  },
+  {
+   "name": "2026-11-15T06-49-27",
+   "kind": "doublet"
+  },
+  {
+   "name": "2026-11-15T06-50-46",
+   "kind": "doublet",
+   "note": "target_rate 180: a pitch doublet overshot to +30/-42 degrees and swung free at about 0.75 Hz"
+  },
+  {
+   "name": "2026-11-15T06-53-00",
+   "kind": "divergence",
+   "note": "pitch_damping 9, pitch_damping_tau 0.03: the first takeoff"
+  },
+  {
+   "name": "2026-11-15T06-53-20",
+   "kind": "divergence",
+   "note": "pitch_damping 9, pitch_damping_tau 0.03: grew at about 2.3 Hz until the tip cut"
+  },
+  {
+   "name": "2026-11-15T07-02-48",
+   "kind": "burst",
+   "window": [
+    11.8,
+    13.7
+   ],
+   "note": "quaternion burst60, failed: the nose up at 380 deg/s at the roll's brake, then down at 585"
+  },
+  {
+   "name": "2026-11-15T07-13-32",
+   "kind": "burst",
+   "window": [
+    12.8,
+    15.6
+   ],
+   "note": "quaternion burst30"
+  }
+ ]
+}

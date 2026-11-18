@@ -148,8 +148,11 @@ static void test_sync(void) {
     assert(!camera_sync(44900, 1, 10000, &used, &since));
     // An edge too long ago is somebody else's (a missed packet, or the camera's boot) and is not used.
     assert(!camera_sync(100000, 2, 50000, &used, &since));
+    // One too recent for the packet's 820 us on the wire came from inside it (re-armed mid-packet) and is not used either.
+    assert(!camera_sync(200500, 4, 200000, &used, &since) && used == 1);
+    assert(camera_sync(300810, 5, 300000, &used, &since) && since == 810 && used == 5);
     // Across the 32-bit wrap.
-    assert(camera_sync(500, 3, 0xffffff00u, &used, &since) && since == 756);
+    assert(camera_sync(1500, 3, 0xffffff00u, &used, &since) && since == 1756);
     printf("sync: ok\n");
 }
 

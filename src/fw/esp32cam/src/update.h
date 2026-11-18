@@ -5,6 +5,7 @@
 #include "esp_partition.h"
 #include "mbedtls/sha256.h"
 #include "packet.h"
+#include "clocks.h"
 extern bool cameraReady, cameraStalled;
 extern int exposureLines, maxExposureLines;
 extern float exposureGain;
@@ -14,17 +15,27 @@ extern volatile uint32_t fpvRadioMs;
 namespace fpv {
 extern esp_err_t rawError;
 extern uint32_t rawSent;
-extern float radioBudget;
+extern float radioBudget, radioShardBudget;
 extern volatile uint32_t previewRadioMs;
 extern wifi_phy_rate_t rateOverride;
-extern int nativeLines, frameLines;
+extern int nativeLines, frameLines, windowRegisters[7], gapOverrideUs, parityOverride, parityCapacity;
+extern int qualityEvery;
+extern uint32_t qualityChanges;
+extern uint32_t rawFailed, rawRetries, framesSkipped, sendLongestUs, sendTotalUs, sendFrames;
+extern float measuredPeriodUs;
 }
 extern char logRing[2048];
+extern volatile uint32_t linkReceived, linkLate, testBytes, testPattern, startDelaySumUs, startDelayCount, startDelayMaxUs;
+uint32_t rxEdges();
+void setTestBaud(uint32_t baud);
 extern size_t logHead;
 extern esp_err_t startError;
 extern volatile bool cameraStopRequested;
+namespace blackbox {
+const char *control(uint16_t every, uint8_t mode, char *text, size_t size);
+}
 
-// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. S reports the Wi-Fi network, address and camera state; V asks for FPV over raw 802.11 (fpv.h) for another few seconds, optionally with the receiver's byte budget; P for tag mode's preview over it (web.h), tracking on; L reads the log 50 characters at a time; A starts the access point (ota.h) until the camera restarts; I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts. The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
+// Firmware updates through the drone's radio link, for when the camera cannot reach Wi-Fi (fw/tools/ota_direct.py camera): the drone forwards each request on the link's receive side and returns the reply. S reports the Wi-Fi network, address and camera state; N the camera's MAC and name; V asks for FPV over raw 802.11 (fpv.h) for another few seconds, optionally with the receiver's byte budget; P for tag mode's preview over it (web.h), tracking on; L reads the log 50 characters at a time; A starts the access point (ota.h) until the camera restarts; I describes the slots (running label, spare label and size, and the first 8 bytes of the running image's SHA-256, which the build appends to the image); W writes one 4 KB sector of the spare slot and reads it back, after checking its hash; B selects the spare slot, which checks the whole image, and restarts into it; X abandons the update and restarts; J restarts joined to the update network for one boot (ota.h), for a Wi-Fi update; D controls the black box on the microSD (sd.h); F reports FPV's sending (frames skipped, failed sends, send time) and G the sensor's readout for the rolling shutter; Q overrides FPV's PHY rate, shard gap and parity for tests; C overrides the image sensor's clocks and drives (clocks.h) until restart; Y reports the link diagnostics (main.cpp rxEdges, publish). The first W or B stops the camera, as a Wi-Fi update does, and a camera left stopped with no request for abandonUs restarts. Requests come one at a time, each after the last reply, so nothing arrives while the flash is being written.
 namespace update {
 // Requests answered, and ones that failed their checksum or length, for K S.
 uint32_t goodRequests = 0, badRequests = 0;
@@ -63,6 +74,25 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
         snprintf(text + used, size - used, " %s 0x%x %u %u/%u exp %d/%d gain %.0f", cameraStalled ? "stalled" : !cameraReady ? "stopped" : fpvActive ? "fpv" : "running", unsigned(startError), unsigned(fpv::rawSent), unsigned(goodRequests), unsigned(badRequests), exposureLines, maxExposureLines, exposureGain);
         return nullptr;
     }
+    if (op == 'F') {
+        // FPV's sending: frames sent, those the driver captured that were never sent, raw sends failed after retries, retries for a full queue, the average and longest send of a frame since the last F (ms), the parity shards it has room for, the internal RAM free (KB) and the JPEG quality changes.
+        snprintf(text, size, "f%u sk%u x%u r%u s%.1f/%.1f p%d i%u q%u", unsigned(fpv::sendFrames), unsigned(fpv::framesSkipped), unsigned(fpv::rawFailed), unsigned(fpv::rawRetries),
+                 fpv::sendFrames ? fpv::sendTotalUs / 1000.0f / fpv::sendFrames : 0.0f, fpv::sendLongestUs / 1000.0f, fpv::parityCapacity,
+                 unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024), unsigned(fpv::qualityChanges));
+        fpv::sendTotalUs = fpv::sendLongestUs = fpv::sendFrames = 0;
+        return nullptr;
+    }
+    if (op == 'G') {
+        // The sensor's FPV readout (fpv.h windowRegisters), for the rolling shutter: window rows, row increments, binning, output rows, HTS, VTS at FPV's start and now, and the frame period measured (us); the first row to the last takes (rows read) x period / VTS.
+        const int *w = fpv::windowRegisters;
+        snprintf(text, size, "y%d-%d i%02x b%02x%02x o%d h%d v%d/%d p%.0f", w[0], w[1], w[2], w[3], w[4], w[5], w[6], fpv::nativeLines, fpv::frameLines, fpv::measuredPeriodUs);
+        return nullptr;
+    }
+    if (op == 'N') {
+        // The camera's MAC and name (ota.h cameraNames): the dashboard takes only its own drone's camera's FPV, by that MAC.
+        snprintf(text, size, "%02x:%02x:%02x:%02x:%02x:%02x %s", cameraMac[0], cameraMac[1], cameraMac[2], cameraMac[3], cameraMac[4], cameraMac[5], cameraName);
+        return nullptr;
+    }
     if (op == 'L') {
         // 50 characters of the log ring (web.h /log), the page counted back from the end by the body's byte.
         const size_t end = logHead - min(logHead, size_t(length ? body[0] : 0) * 50), start = end - min(end, size_t(50));
@@ -78,6 +108,12 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
         setExposureCap(body[0] | body[1] << 8);
         snprintf(text, size, "%d", maxExposureLines);
         return nullptr;
+    }
+    if (op == 'D') {
+        // The black box on the microSD (sd.h control): every Nth frame's whole image (u16, 0 none), then 0 stop, 1 record or 2 a new file; for visual-inertial datasets (sw/vio/camera_sd.py).
+        if (length < 3)
+            return "Expected full_every (u16) and mode";
+        return blackbox::control(body[0] | body[1] << 8, body[2], text, size);
     }
     if (op == 'H') {
         // Radio channel for FPV's raw frames (1-13), kept across restarts (ota.h saveRadio); the receiver (sw/fpv_monitor.py) searches for it.
@@ -102,15 +138,62 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
         snprintf(text, size, "%.2f dBm", power / 4.0);
         return error ? esp_err_to_name(error) : nullptr;
     }
+    if (op == 'Y') {
+        // Link diagnostics: an optional u32 baud for the test receiver on the RX pin (setTestBaud). Answers bytes received on the link, falling edges on its RX pin, packets queued late, the stamp-to-written time of the others (mean/max us; the max is reset), requests answered and refused, the RX and old SYNC pins' levels now, and the test receiver's 0x55 bytes and bytes.
+        if (length >= 4)
+            setTestBaud(body[0] | body[1] << 8 | body[2] << 16 | uint32_t(body[3]) << 24);
+        const uint32_t count = startDelayCount;
+        snprintf(text, size, "rx%u e%u late%u d%u/%u g%u b%u l%d%d t%u/%u", unsigned(linkReceived), unsigned(rxEdges()), unsigned(linkLate), unsigned(count ? startDelaySumUs / count : 0),
+                 unsigned(startDelayMaxUs), unsigned(goodRequests), unsigned(badRequests), gpio_get_level(gpio_num_t(config::linkRxPin)), gpio_get_level(gpio_num_t(config::syncPin)),
+                 unsigned(testPattern), unsigned(testBytes));
+        startDelayMaxUs = 0;
+        return nullptr;
+    }
     if (op == 'A') {
         startAp();
         return nullptr;
     }
     if (op == 'Q') {
         // A PHY rate (wifi_phy_rate_t) for every raw frame until the camera restarts, or 0xff for each frame's own; replies with the rate, frames sent and the last send's error.
+        // Then optionally the gap between a frame's shards (us, u16, 0xffff for the frame's own), the parity shards (0xff for the frame's own) and how many frames apart the JPEG quality may change, also until the camera restarts.
         if (length < 1 || (body[0] != 0xff && body[0] >= WIFI_PHY_RATE_MAX)) return "Rate: a wifi_phy_rate_t, or 0xff for none";
         fpv::rateOverride = body[0] == 0xff ? WIFI_PHY_RATE_MAX : wifi_phy_rate_t(body[0]);
+        if (length >= 3)
+            fpv::gapOverrideUs = (body[1] | body[2] << 8) == 0xffff ? -1 : body[1] | body[2] << 8;
+        if (length >= 4)
+            fpv::parityOverride = body[3] == 0xff ? -1 : body[3];
+        if (length >= 5)
+            fpv::qualityEvery = max(1, int(body[4]));
         snprintf(text, size, "rate 0x%02x sent %u error %s", unsigned(fpv::rateOverride), unsigned(fpv::rawSent), esp_err_to_name(fpv::rawError));
+        return nullptr;
+    }
+    if (op == 'C') {
+        // The sensor's clocks (clocks.h): mode (0 tag, 1 FPV), then XCLK (Hz, u32, 0 for the mode's default), flags (bit 0 allows a fractional divider), the XCLK pin's drive and the sensor pads' (0-3, 0xff config.h's), then optionally the PLL multiplier (0 keeps the mode's PLLCLK), prediv index and PCLK divider (0 the mode's own). Kept until restart; the camera restarts now to take them in its current mode, the other mode at its next start. With only the mode it describes that mode's clocks (clocks::describe), with nothing the current mode's.
+        const bool jpeg = length ? body[0] != 0 : fpvActive;
+        if (length > 1) {
+            if (length < 8)
+                return "Expected mode, xclk u32, flags, pin and pad drive";
+            const uint32_t hz = body[1] | body[2] << 8 | body[3] << 16 | uint32_t(body[4]) << 24;
+            if (hz && (hz < 6000000 || hz > 27000000))
+                return "XCLK 6-27 MHz, or 0";
+            if ((body[6] != 0xff && body[6] > 3) || (body[7] != 0xff && body[7] > 3))
+                return "Drives 0-3, or 0xff";
+            if (length >= 10 && body[8] && (body[8] > 31 || body[9] > 3))
+                return "Multiplier 1-31, prediv 0-3";
+            if (length >= 11 && body[10] > 31)
+                return "PCLK divider 0-31";
+            clocks::Setting &setting = clocks::settings[jpeg];
+            setting.xclkHz = hz;
+            setting.fractional = body[5] & 1;
+            setting.pinDrive = body[6] == 0xff ? config::xclkPinDrive : body[6];
+            setting.padDrive = body[7] == 0xff ? config::sensorPadDrive : body[7];
+            setting.multiplier = length >= 10 ? body[8] : 0;
+            setting.prediv = length >= 10 ? body[9] : 0;
+            setting.pclkDivider = length >= 11 ? body[10] : 0;
+            clocks::appliedValid[jpeg] = false;
+            clocks::restartWanted = jpeg == fpvActive;
+        }
+        clocks::describe(jpeg, text, size);
         return nullptr;
     }
     if (op == 'P') {
@@ -119,12 +202,21 @@ const char *handle(uint8_t op, const uint8_t *body, size_t length, char *text, s
     }
     if (op == 'V') {
         fpvRadioMs = millis();
-        // The receiver's byte budget (KB/s, little-endian), when the request carries one.
+        // The receiver's byte budget (KB/s, little-endian), when the request carries one, then its shard budget (shards/s), when it carries that too.
         if (length >= 2)
             fpv::radioBudget = max(20, body[0] | body[1] << 8) * 1000.0f;
+        fpv::radioShardBudget = length >= 4 ? max(20, body[2] | body[3] << 8) : config::fpvRadioShardsPerSecond;
         return nullptr;
     }
     if (op == 'X') {
+        restarting = true;
+        return nullptr;
+    }
+    if (op == 'J') {
+        // Restart joined to the update network for one boot (ota.h updateNetwork), for make camera-fast-wifi.
+        if (!updateNetwork.ssid[0])
+            return "No update network built in";
+        requestUpdateJoin();
         restarting = true;
         return nullptr;
     }

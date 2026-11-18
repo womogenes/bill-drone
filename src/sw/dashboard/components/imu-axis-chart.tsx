@@ -2,7 +2,12 @@
 
 import { memo } from 'react';
 import { relativeTime, signed } from '@/lib/format';
-import { FastChart, type ChartSeries } from '@/components/fast-chart';
+import {
+  FastChart,
+  sampleTime,
+  sessionGap,
+  type ChartSeries,
+} from '@/components/fast-chart';
 import type { ImuSample } from '@/lib/telemetry';
 
 const axes = [
@@ -10,21 +15,14 @@ const axes = [
   ['Y', 'var(--color-green-700)'],
   ['Z', 'var(--color-blue-700)'],
 ] as const;
-const series: Record<'accel' | 'gyro', ChartSeries<ImuSample>[]> = {
-  accel: axes.map(([label, color], index) => ({
+const lines = (field: 'accel' | 'gyro'): ChartSeries<ImuSample>[] =>
+  axes.map(([label, color], index) => ({
     label,
     color,
-    value: (point) => point.accel[index],
-  })),
-  gyro: axes.map(([label, color], index) => ({
-    label,
-    color,
-    value: (point) => point.gyro[index],
-  })),
-};
-const time = (point: ImuSample) => point.time;
-const gap = (previous: ImuSample, next: ImuSample) =>
-  previous.session !== next.session || next.time - previous.time > 1000;
+    value: (point) => point[field][index],
+  }));
+const series = { accel: lines('accel'), gyro: lines('gyro') };
+const gap = sessionGap();
 const formats = [0, 1, 2, 3].map(
   (digits) => (value: number) => signed(value, digits)
 );
@@ -35,6 +33,7 @@ export const ImuAxisChart = memo(function ImuAxisChart({
   start,
   end,
   digits,
+  gutter,
   className,
 }: {
   history: (start: number, end: number) => ImuSample[];
@@ -42,13 +41,14 @@ export const ImuAxisChart = memo(function ImuAxisChart({
   start: number;
   end: number;
   digits: number;
+  gutter?: { current: number };
   className?: string;
 }) {
   return (
     <FastChart
       history={history}
       series={series[field]}
-      time={time}
+      time={sampleTime}
       start={start}
       end={end}
       gap={gap}
@@ -56,6 +56,7 @@ export const ImuAxisChart = memo(function ImuAxisChart({
       formatValue={formats[digits]}
       // A still drone's noise stays flat: 0.2 g and 4 degrees/s at least.
       minSpan={field === 'accel' ? 0.2 : 4}
+      gutter={gutter}
       className={className}
       label={
         field === 'accel'

@@ -1,15 +1,23 @@
 'use client';
 
-import { memo, useEffect, useState } from 'react';
+import { memo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { relativeTime } from '@/lib/format';
-import { FastChart, type ChartSeries } from '@/components/fast-chart';
+import {
+  FastChart,
+  sampleTime,
+  sessionGap,
+  useChartEnd,
+  type ChartSeries,
+} from '@/components/fast-chart';
+import { Panel } from '@/components/panel';
+import { Stat, Stats } from '@/components/stat';
 import type { VoltageSample } from '@/lib/telemetry';
 
 // The minute view shows every reading; the hour view one a second, to watch discharge over a session.
 const SPANS = {
-  minute: { label: '1 min', range: 60_000, maxGap: 1000 },
-  hour: { label: '1 hour', range: 3_600_000, maxGap: 5000 },
+  minute: { label: '1 min', range: 60_000, gap: sessionGap(1000) },
+  hour: { label: '1 hour', range: 3_600_000, gap: sessionGap(5000) },
 } as const;
 type Span = keyof typeof SPANS;
 // Nominal 4S LiPo span, 3.0 to 4.2 V per cell.
@@ -29,7 +37,6 @@ const series: ChartSeries<VoltageSample>[] = [
     value: (point) => point.ema,
   },
 ];
-const time = (point: VoltageSample) => point.time;
 const formatValue = (value: number) => value.toFixed(2);
 
 export const ADCPanel = memo(function ADCPanel({
@@ -49,36 +56,22 @@ export const ADCPanel = memo(function ADCPanel({
   time: number;
   connected: boolean;
 }) {
-  const [now, setNow] = useState(0);
-  useEffect(() => {
-    if (connected) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [connected]);
-  const end = Math.max(now, latest);
+  const end = useChartEnd(connected, latest);
   const [span, setSpan] = useState<Span>('minute');
-  const { range, maxGap } = SPANS[span];
-  const gap = (previous: VoltageSample, next: VoltageSample) =>
-    previous.session !== next.session || next.time - previous.time > maxGap;
+  const { range, gap } = SPANS[span];
 
   return (
-    <section
-      aria-labelledby="adc-heading"
-      className="space-y-2 px-4 py-3"
-    >
-      <div className="flex items-center gap-2">
-        <h2 id="adc-heading" className="font-semibold">
-          ADC
-        </h2>
+    <Panel
+      title="ADC"
+      header={
         <div
-          className="ml-auto flex gap-2"
+          className="ml-auto flex gap-1"
           role="group"
           aria-label="Chart span"
         >
           {(Object.keys(SPANS) as Span[]).map((key) => (
             <Button
               key={key}
-              size="sm"
               variant={span === key ? 'default' : 'outline'}
               aria-pressed={span === key}
               onClick={() => setSpan(key)}
@@ -87,33 +80,23 @@ export const ADCPanel = memo(function ADCPanel({
             </Button>
           ))}
         </div>
-      </div>
-      <dl className="grid grid-cols-3 gap-4 tabular-nums">
-        <div>
-          <dt className="text-sm text-muted-foreground">Voltage</dt>
-          <dd className="text-xl font-medium">
-            {connected && ema !== undefined ? `${ema.toFixed(2)} V` : '—'}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-sm text-muted-foreground">Raw voltage</dt>
-          <dd className="text-lg">
-            {connected && voltage !== undefined
-              ? `${voltage.toFixed(2)} V`
-              : '—'}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-sm text-muted-foreground">Raw ADC</dt>
-          <dd className="text-lg">
-            {connected && raw !== undefined ? raw.toLocaleString() : '—'}
-          </dd>
-        </div>
-      </dl>
+      }
+    >
+      <Stats>
+        <Stat label="Voltage">
+          {connected && ema !== undefined ? `${ema.toFixed(2)} V` : '—'}
+        </Stat>
+        <Stat label="Raw voltage">
+          {connected && voltage !== undefined ? `${voltage.toFixed(2)} V` : '—'}
+        </Stat>
+        <Stat label="Raw ADC">
+          {connected && raw !== undefined ? raw.toLocaleString() : '—'}
+        </Stat>
+      </Stats>
       <FastChart
         history={span === 'minute' ? history : hourHistory}
         series={series}
-        time={time}
+        time={sampleTime}
         start={end - range}
         end={end}
         gap={gap}
@@ -123,6 +106,6 @@ export const ADCPanel = memo(function ADCPanel({
         label={`Battery voltage over the last ${span}, raw and smoothed, in volts`}
         className="h-24"
       />
-    </section>
+    </Panel>
   );
 });

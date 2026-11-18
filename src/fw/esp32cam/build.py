@@ -45,3 +45,12 @@ def optimize_own(build_env, node):
 
 # Our per-frame tracking and flow loops too.
 env.AddBuildMiddleware(optimize_own, "*/src/main.cpp")
+
+
+# The update network (src/ota.h updateNetwork, the drone's K J request): the repository's .env WIFI_SSID and WIFI_PASSWORD, as the thrust stand takes them.
+env_file = Path(env.subst("$PROJECT_DIR")).parents[2] / ".env"
+if env_file.exists():
+    values = dict(line.split("=", 1) for line in env_file.read_text().splitlines() if "=" in line and not line.lstrip().startswith("#"))
+    ssid, password = (values.get(key, "").strip().strip("\"'") for key in ("WIFI_SSID", "WIFI_PASSWORD"))
+    if ssid:
+        env.Append(CPPDEFINES=[("UPDATE_SSID", env.StringifyMacro(ssid)), ("UPDATE_PASSWORD", env.StringifyMacro(password))])

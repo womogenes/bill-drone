@@ -4,6 +4,7 @@
 #include "esp_timer.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include "driver/pcnt.h"
 #include "esp_rom_sys.h"
 #include "soc/gpio_reg.h"
 #include "tag16h5.h"
@@ -12,7 +13,9 @@
 #include "tag.h"
 #include "flow.h"
 #include "ota.h"
+#include "clocks.h"
 #include "update.h"
+#include "air_update.h"
 
 #include "web.h"
 #include "record.h"
@@ -42,10 +45,93 @@ uint32_t lastCrumbs[3];
 // The drone link on UART0 (config::linkTxPin and linkRxPin). The receive side carries firmware updates from the drone (update.h); its buffer holds a whole sector's request. The transmit buffer holds a few packets; publish() never queues behind an unsent one.
 constexpr uart_port_t linkPort = UART_NUM_0;
 constexpr int linkTxBytes = 1024, linkRxBytes = 6144;
-portMUX_TYPE syncLock = portMUX_INITIALIZER_UNLOCKED;
 volatile uint32_t linkSent = 0, linkDropped = 0, linkReceived = 0;
 
 void noPrint(char) {}
+
+// Link diagnostics (2026-11-14, the drone's requests not answered): a pulse counter shares the link's RX pin through the GPIO matrix and counts its falling edges, so a silent wire can be told from a receiver fault; each wrap at rxEdgeLimit is counted by its interrupt. linkLate counted packets written behind other bytes in the drone's radio relay (gone; it stays 0 in the reports), and startDelayUs the stamp-to-written time of the others (the start bit begins within it). They, with linkReceived, go to the drone in TAG3 packets without a trusted tag (packet.h altRotation) and answer update op Y.
+constexpr pcnt_unit_t rxEdgeUnit = PCNT_UNIT_0;
+constexpr int16_t rxEdgeLimit = 30000;
+volatile uint32_t rxEdgeWraps = 0, linkLate = 0;
+volatile uint32_t startDelaySumUs = 0, startDelayCount = 0, startDelayMaxUs = 0;
+
+void IRAM_ATTR rxEdgeWrap(void *) {
+    rxEdgeWraps = rxEdgeWraps + 1;
+}
+
+uint32_t rxEdges() {
+    uint32_t wraps;
+    int16_t count = 0;
+    do {
+        wraps = rxEdgeWraps;
+        pcnt_get_counter_value(rxEdgeUnit, &count);
+    } while (wraps != rxEdgeWraps);
+    return wraps * uint32_t(rxEdgeLimit) + uint16_t(count);
+}
+
+void countRxEdges() {
+    pcnt_config_t unit = {};
+    unit.pulse_gpio_num = config::linkRxPin;
+    unit.ctrl_gpio_num = PCNT_PIN_NOT_USED;
+    unit.lctrl_mode = PCNT_MODE_KEEP;
+    unit.hctrl_mode = PCNT_MODE_KEEP;
+    unit.pos_mode = PCNT_COUNT_DIS;
+    unit.neg_mode = PCNT_COUNT_INC;
+    unit.counter_h_lim = rxEdgeLimit;
+    unit.counter_l_lim = -1;
+    unit.unit = rxEdgeUnit;
+    unit.channel = PCNT_CHANNEL_0;
+    if (pcnt_unit_config(&unit) != ESP_OK)
+        return;
+    pcnt_filter_disable(rxEdgeUnit);
+    pcnt_event_enable(rxEdgeUnit, PCNT_EVT_H_LIM);
+    pcnt_isr_service_install(0);
+    pcnt_isr_handler_add(rxEdgeUnit, rxEdgeWrap, nullptr);
+    pcnt_counter_pause(rxEdgeUnit);
+    pcnt_counter_clear(rxEdgeUnit);
+    pcnt_counter_resume(rxEdgeUnit);
+}
+
+// A second receiver on the link's RX pin at a test baud (UART1 through the GPIO matrix, receive only), so the drone's bytes can be tried at rates below the link's 2 Mbaud while UART0 keeps sending at 2 Mbaud; counts bytes and those that are 0x55 (the drone's H burst).
+constexpr uart_port_t testPort = UART_NUM_1;
+bool testUart = false;
+volatile uint32_t testBytes = 0, testPattern = 0;
+
+void setTestBaud(uint32_t baud) {
+    if (!baud)
+        return;
+    if (!testUart) {
+        uart_config_t test = {};
+        test.baud_rate = int(baud);
+        test.data_bits = UART_DATA_8_BITS;
+        test.parity = UART_PARITY_DISABLE;
+        test.stop_bits = UART_STOP_BITS_1;
+        test.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+        test.source_clk = UART_SCLK_APB;
+        if (uart_driver_install(testPort, 2048, 0, 0, nullptr, 0) != ESP_OK || uart_param_config(testPort, &test) != ESP_OK)
+            return;
+        uart_set_pin(testPort, UART_PIN_NO_CHANGE, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+        // As for the edge counter: the link's own pin setup again gives the pad back to UART0.
+        uart_set_pin(linkPort, config::linkTxPin, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+        testUart = true;
+    }
+    uart_set_baudrate(testPort, baud);
+    uart_flush_input(testPort);
+}
+
+void readTestUart() {
+    if (!testUart)
+        return;
+    uint8_t bytes[256];
+    int n;
+    while ((n = uart_read_bytes(testPort, bytes, sizeof(bytes), 0)) > 0) {
+        uint32_t pattern = 0;
+        for (int i = 0; i < n; ++i)
+            pattern += bytes[i] == 0x55;
+        testBytes = testBytes + n;
+        testPattern = testPattern + pattern;
+    }
+}
 
 // DEBUG_CONSOLE (the debug build environment): UART0 is a 115200 console with ESP logs and a status line instead of the drone link; no packets are sent.
 void startLink() {
@@ -65,6 +151,12 @@ void startLink() {
     link.source_clk = UART_SCLK_APB;
     ESP_ERROR_CHECK(uart_driver_install(linkPort, linkRxBytes, linkTxBytes, 0, nullptr, 0));
     ESP_ERROR_CHECK(uart_param_config(linkPort, &link));
+    ESP_ERROR_CHECK(uart_set_pin(linkPort, config::linkTxPin, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    // The old SYNC pin is never driven: on the drone its line is shorted to the drone's TX (2026-11-14), so driving it fought the drone's requests.
+    if (!config::sdDat3IsSync)
+        pinMode(config::syncPin, INPUT);
+    // The counter's setup selects the pad's GPIO function; the UART's pin setup again afterwards gives the pad back to UART0 (its IO_MUX function where the driver uses it), while the counter keeps the pad's input through the matrix.
+    countRxEdges();
     ESP_ERROR_CHECK(uart_set_pin(linkPort, config::linkTxPin, config::linkRxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 }
 
@@ -100,7 +192,9 @@ void serviceTask(void *) {
             linkReceived = linkReceived + n;
             update::receive(linkPort, received, n);
         }
+        readTestUart();
         update::poll();
+        air::poll();
 #endif
         delay(2);
     }
@@ -141,11 +235,14 @@ void flowLoop(void *) {
     }
 }
 
-// Starts the camera: the driver, then mirror and flip, and on the OV3660 the PLL and window of config.h. The driver's raw-QVGA clock (20 MHz SYSCLK, 11 fps) becomes its small-frame one, 40 MHz SYSCLK with the same 10 MHz PCLK; a faster line rate panicked within minutes. FPV takes the driver's JPEG mode as it comes.
+// Starts the camera: the driver, then mirror and flip, the clocks (clocks.h), and on the OV3660 the window of config.h. The driver's raw-QVGA clock (20 MHz SYSCLK, 11 fps) becomes its small-frame one, 40 MHz SYSCLK with the same 10 MHz PCLK; a faster line rate panicked within minutes. FPV takes the driver's JPEG mode as it comes, its PLL kept whatever the XCLK.
 bool startCamera(bool jpeg) {
     cameraConfig.pixel_format = jpeg ? PIXFORMAT_JPEG : PIXFORMAT_GRAYSCALE;
-    cameraConfig.frame_size = jpeg ? config::fpvFrameSize : FRAMESIZE_QVGA;
-    cameraConfig.xclk_freq_hz = jpeg ? config::fpvXclkHz : 20000000;
+    fpv::large = jpeg && fpv::radioWanted() && fpv::radioBudget >= config::fpvLargeBudget;
+    cameraConfig.frame_size = !jpeg ? FRAMESIZE_QVGA : fpv::large ? config::fpvLargeFrameSize : config::fpvFrameSize;
+    // XCLK, the sensor's PLL and the pad drives come from clocks.h (the drone's K C may override them until restart).
+    const clocks::Plan clock = clocks::plan(jpeg);
+    cameraConfig.xclk_freq_hz = int(clock.integerHz);
     cameraConfig.jpeg_quality = fpvQuality;
     startError = esp_camera_init(&cameraConfig);
     if (startError != ESP_OK)
@@ -153,9 +250,9 @@ bool startCamera(bool jpeg) {
     sensor_t *sensor = esp_camera_sensor_get();
     const bool configured =
         sensor->set_hmirror(sensor, 0) == 0 && sensor->set_vflip(sensor, 1) == 0 &&
+        clocks::apply(clock, jpeg, sensor, cameraConfig.pin_xclk) &&
         (jpeg || sensor->id.PID != OV3660_PID ||
-         (sensor->set_pll(sensor, 0, 8, 1, 0, 0, 0, 1, 8) == 0 &&
-          sensor->set_res_raw(sensor, (2048 - config::windowW) / 2, (1536 - config::windowH) / 2,
+         (sensor->set_res_raw(sensor, (2048 - config::windowW) / 2, (1536 - config::windowH) / 2,
                               (2048 + config::windowW) / 2 + 31, (1536 + config::windowH) / 2 + 11, 8, 2, config::hts,
                               config::vts, config::outW, config::outH, true, true) == 0 &&
           (config::rowSkip == 1 || sensor->set_reg(sensor, 0x3815, 0xff, 0x71) == 0)));
@@ -163,6 +260,7 @@ bool startCamera(bool jpeg) {
         esp_camera_deinit();
         return false;
     }
+    clocks::readBack(jpeg, sensor, cameraConfig.pin_xclk);
     // The driver's task must empty a 12-line DMA block every 0.7 ms or lose the frame. It is created at the same priority as the Wi-Fi task on core 0, so Wi-Fi traffic (the preview, /status, records) cost frames; above it, its short copies only delay Wi-Fi.
     if (TaskHandle_t driver = xTaskGetHandle("cam_task")) {
         driverPriority = uxTaskPriorityGet(driver);
@@ -239,6 +337,9 @@ void setup() {
     startWifi();
     if (wifiConfigured())
         fpv::start();
+    // Updates over the FPV receiver's ESP-NOW (air_update.h), wherever the radio is up.
+    if (WiFi.getMode() != WIFI_MODE_NULL)
+        air::start();
     assert(psramFound());
     heap_caps_malloc_extmem_enable(4096);
     // Mounting leaves the sync line low (on the ESP32-CAM, the card's DAT3, held high until the card is up).
@@ -285,7 +386,7 @@ void setup() {
     camera.pin_href = 23;
     camera.pin_pclk = 22;
 #endif
-    camera.xclk_freq_hz = 20000000;
+    camera.xclk_freq_hz = int(config::tagXclkHz);
     camera.ledc_timer = LEDC_TIMER_0;
     camera.ledc_channel = LEDC_CHANNEL_0;
     // Tracking takes raw Y8 (startCamera): no JPEG decode on the detector and no compression artefacts on tag edges.
@@ -316,39 +417,47 @@ void setup() {
     xTaskCreatePinnedToCore(serviceTask, "service", 8192, nullptr, 1, nullptr, 0);
 }
 
-// Each frame's packet goes out on UART0 at 2 Mbaud, 164 bytes in 0.8 ms, from the driver's transmit buffer, so the detector never waits for the wire. The sync line rises at the moment the packet's age is measured, just before it is queued: the drone dates the capture as that edge minus ageUs, whatever its own UART latency. A packet is dropped, with no pulse, if the previous one has not left the buffer (which at this rate means the link is broken).
-void publish(PosePacket &packet) {
+// Each frame's packet goes out on UART0 at 2 Mbaud, 164 bytes in 0.8 ms. The drone dates it by the falling edge of its first start bit (fw/drone/main/camera.c), so the packet's age is stamped just before it is written to an idle UART: the driver's transmit interrupt (on this core) fills the FIFO at once and the start bit follows the stamp by the time it takes to write (startDelayUs, a few tens of microseconds). The UART is waited for up to linkIdleWaitUs (an update reply is 0.3 ms); if it is still busy the packet is dropped. Until 2026-11-14 a SYNC pulse on syncPin dated it; the drone's end of that line is now shorted to its TX, so syncPin is never driven (startLink).
+constexpr uint32_t linkIdleWaitUs = 1000;
+
+bool linkIdle() {
     size_t room = 0;
     uart_get_tx_buffer_free_size(linkPort, &room);
-    const bool clear = room >= linkTxBytes;
-    portENTER_CRITICAL(&syncLock);
-    const uint32_t now = uint32_t(esp_timer_get_time());
-    if (clear)
-        REG_WRITE(GPIO_OUT_W1TS_REG, 1u << config::syncPin);
-    portEXIT_CRITICAL(&syncLock);
-    packet.ageUs = now - packet.captureUs;
-    if (packet.ageUs > config::maxAgeUs)
+    return room >= size_t(linkTxBytes) && uart_wait_tx_done(linkPort, 0) == ESP_OK;
+}
+
+void publish(PosePacket &packet) {
+    const uint32_t waited = uint32_t(esp_timer_get_time());
+    bool idle;
+    while (!(idle = linkIdle()) && uint32_t(esp_timer_get_time()) - waited < linkIdleWaitUs) {
+    }
+    if (!idle) {
+        ++linkDropped;
+        return;
+    }
+    if (!packet.trusted || uint32_t(esp_timer_get_time()) - packet.captureUs > config::maxAgeUs) {
         packet.valid = packet.trusted = 0;
-    if (!packet.trusted) {
-        packet.valid = 0;
         memset(packet.position, 0, sizeof(packet.position));
         memset(packet.rotation, 0, sizeof(packet.rotation));
         memset(packet.tagPosition, 0, sizeof(packet.tagPosition));
         memset(packet.altPosition, 0, sizeof(packet.altPosition));
         memset(packet.altRotation, 0, sizeof(packet.altRotation));
+        // The link diagnostics, where a frame without a trusted tag has no alternative pose (packet.h).
+        const uint32_t report[5] = {linkReceived, rxEdges(), linkLate, testBytes, testPattern};
+        memcpy(packet.altRotation, report, sizeof(report));
     }
+    const uint32_t now = uint32_t(esp_timer_get_time());
+    packet.ageUs = now - packet.captureUs;
     packet.checksum = crc16(reinterpret_cast<const uint8_t *>(&packet), offsetof(PosePacket, checksum));
-    if (!clear) {
-        ++linkDropped;
-        return;
-    }
 #ifndef DEBUG_CONSOLE
     uart_write_bytes(linkPort, &packet, sizeof(packet));
 #endif
+    const uint32_t delay = uint32_t(esp_timer_get_time()) - now;
     ++linkSent;
-    while (uint32_t(esp_timer_get_time()) - now < config::syncPulseUs) {
-    }
-    REG_WRITE(GPIO_OUT_W1TC_REG, 1u << config::syncPin);
+    startDelaySumUs = startDelaySumUs + delay;
+    startDelayCount = startDelayCount + 1;
+    if (delay > startDelayMaxUs)
+        startDelayMaxUs = delay;
 }
 
 // Restarts the camera in the mode wanted (fpvActive).
@@ -386,6 +495,14 @@ void loop() {
     }
     // A camera that failed to start (in either mode) is tried again every second.
     const bool retry = !cameraReady && millis() - lastStartMs >= 1000;
+    // K C (update.h) restarts the camera in its mode for new clocks.
+    if (clocks::restartWanted && cameraReady && !cameraStopRequested) {
+        clocks::restartWanted = false;
+        restartCamera();
+        fpv::nativeLines = 0;
+        fpv::lastCaptureUs = 0;
+        return;
+    }
     if (!cameraStopRequested && (retry || (cameraReady && fpv::wanted() != fpvActive))) {
         fpvActive = fpv::wanted();
         esp_camera_deinit();
@@ -394,6 +511,7 @@ void loop() {
             delay(300);
         restartCamera();
         fpv::nativeLines = 0;
+        fpv::lastCaptureUs = 0;
         recoveries += retry && cameraReady;
         return;
     }

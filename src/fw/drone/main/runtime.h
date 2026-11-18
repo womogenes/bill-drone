@@ -6,11 +6,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Control and log rate; must divide the 100 Hz FreeRTOS tick. Records per FLG1 batch: one batch every 40 ms.
+// Control and log rate; must divide the 100 Hz FreeRTOS tick. Records per FLG1 batch (radio.c LOG_MAX): one batch every 30 ms.
 #define SAMPLE_HZ 100
-#define LOG_BATCH 4
+#define LOG_BATCH 3
 // MPU6050 DLPF_CFG: 3 is 42 Hz gyro bandwidth with 4.8 ms delay, 2 is 98 Hz with 2.8 ms. Each tick averages the FIFO's 1 kHz samples (flight_rt.c read_fifo), which removes the aliasing a single sample had, so 2: the mean's own 4.5 ms plus 2.8 ms is about 2 ms more delay than one sample through 3.
 #define IMU_DLPF 2
+// MPU6050 gyro full scale: FS_SEL 3 is ±2000 deg/s at 16.4 counts per deg/s (0 was ±250 at 131 until 2026-11-12). A roll flip spins at about 950 deg/s, which at ±250 the gyro clipped: in sw/sim/flip_firmware.py every flip then hit the ground. The recording's metadata carries the scale (gyro_counts_per_deg_s; sw/flight_log.py takes 131 without it).
+#define GYRO_FS_SEL 3
+#define GYRO_COUNTS_PER_DEG_S 16.4f
+// MPU6050 accelerometer full scale: AFS_SEL 2 is ±8 g at 4096 counts per g (0 was ±2 g at 16384 until 2026-11-15). At ±2 g it clipped in the bursts and tumbles (righting at full throttle asks up to 2.9 g along the thrust axis, a ground strike more), which left the recovery's integrated vertical speed wrong; at ±8 g a count is 0.24 mg, far under the rotors' vibration (about 0.08 g). The recording's metadata carries the scale (accel_counts_per_g; sw/flight_log.py takes 16384 without it).
+#define ACCEL_AFS_SEL 2
+#define ACCEL_COUNTS_PER_G 4096.0f
+#define ACCEL_FULL_SCALE_G (32768 / ACCEL_COUNTS_PER_G)
 // Servo (MG995, analog) and ESC refresh rates, independent of each other; the ESCs take 1000–2200 us pulses at 50 or 400 Hz alike.
 #define SERVO_HZ 100
 #define ESC_HZ 400
@@ -22,9 +29,9 @@ static const int sensor_to_body[3] = {1, -1, 1};
 typedef struct __attribute__((packed)) {
     char magic[4];
     uint32_t time_ms, target_sequence;
-    // 1 IMU online, 2 calibrating, 4 calibrated, 8 armed, 16 recording, 32 recorder subscribed, 64 throttle latched, 128 force valid.
+    // 1 IMU online, 2 calibrating, 4 calibrated, 8 armed, 16 recording, 32 recorder subscribed, 64 throttle latched, 128 force valid; bits 8-15 the guards and the flip's phase as the flight record's guard field holds them (flight_rt.c Record).
     uint16_t flags;
-    // Native stop reason (controller/log_format.py STOP_REASONS).
+    // Native stop reason (controller/log_format.py STOP_REASONS) in bits 0-3; while a recovery runs (recover.h), its stage in bits 6-7 and its cause less one in bits 4-5.
     uint8_t reason;
     float accel[3], gyro[3], roll, pitch, temperature, servo[2];
     uint16_t throttle[2];
@@ -47,8 +54,11 @@ typedef struct __attribute__((packed)) {
     uint8_t gps_fix, gps_flags, gps_satellites, gps_configured;
     int32_t gps_latitude, gps_longitude, gps_height_mm, gps_velocity[3];
     uint32_t gps_horizontal_accuracy_mm, gps_vertical_accuracy_mm, gps_speed_accuracy;
+    // The barometer (baro.h BaroStats), in the one payload's last three bytes: the newest reading's pressure altitude in the standard atmosphere (dm), and flags: 1 the chip answered, 2 a reading in the last 200 ms, 4 at address 0x77 (SDO high).
+    int16_t baro_altitude_dm;
+    uint8_t baro_flags;
 } Status;
-_Static_assert(sizeof(Status) == 229, "Status layout");
+_Static_assert(sizeof(Status) == 232, "Status layout");
 
 typedef struct {
     uint32_t session, started_us, samples, dropped, elapsed_us, pending;
@@ -58,15 +68,16 @@ typedef struct {
 } LogState;
 
 // One binary flight-log record (controller/log_format.py SAMPLE_FORMAT), and the longest metadata JSON: the settings plus 1 KB for the header and thrust table.
-#define RECORD_SIZE 80
+#define RECORD_SIZE 120
 #define META (SETTINGS_JSON_SIZE + 1024)
 
-// Outputs at zero throttle and servos at their offsets; before the radio, so a stop always has outputs to stop.
+// Outputs at zero throttle and servos at their offsets, and the control task's lock; before the radio, so a stop always has outputs to stop. First of all flight_runtime_* calls.
 void flight_runtime_outputs(void);
 // The IMU and the control task on core 1.
 void flight_runtime_start(void);
 void flight_runtime_set_voltage(uint16_t millivolts);
 bool flight_runtime_idle(void);
+bool flight_runtime_camera_hold(void);
 // ESC calibration, disarmed only: stage 0 off, 1 both ESCs at the top of their range (2200 us), 2 at the bottom (1000 us); it ends by itself after 2 minutes. NULL or an error.
 const char *flight_runtime_esc_calibration(int stage);
 // Returns why arming was refused (arming.h), or NULL once armed and recording. expected_generation is flight_runtime_stop_generation() from when the request arrived. arm_sequence is the arm packet's laptop sequence.
@@ -79,27 +90,31 @@ const char *flight_runtime_record(bool on, bool recorder);
 bool flight_runtime_begin_maintenance(void);
 void flight_runtime_end_maintenance(void);
 void flight_runtime_log(LogState *log);
-size_t flight_runtime_read_log(uint8_t *output, size_t count);
+size_t flight_runtime_read_log(uint8_t *output, size_t skip, size_t count);
 void flight_runtime_consume_log(size_t count);
 // Collective, roll, pitch, yaw rate, then servo angles and throttles applied while disarmed. False if rejected.
 bool flight_runtime_targets(const float *targets);
 // sequence: the STOP packet's laptop sequence.
 void flight_runtime_command_stop(uint32_t sequence);
+// The laptop's flip request (flip.h): NULL once the flip has started, or why it is refused.
+const char *flight_runtime_flip(void);
+// The laptop's level-and-hold (recover.h): NULL once taken, or why it is refused.
+const char *flight_runtime_level(void);
 // Copies the settings store's tunable values into the controller.
 void flight_runtime_apply_settings(void);
 const char *flight_runtime_calibrate(void);
 // True once per finished calibration: gyro bias (rad/s), pose zero (degrees) and the sensor frame it belongs to.
 bool flight_runtime_take_calibration(float *bias, float *pose_zero, float *sensor_frame);
 const char *flight_runtime_zero_servo(int side, float *offset, char *error, size_t size);
-// Servo bench test, disarmed with zero throttle: start (amp in degrees, cycles), then read progress and per-side results as JSON.
-const char *flight_runtime_servo_test(float amp, int cycles);
-size_t flight_runtime_servo_result(char *text, size_t size);
 // After a stop, the self-trimmed roll and pitch biases once (flight_rt.c trim); false if there are none.
 bool flight_runtime_take_trim(float *roll_bias, float *pitch_bias);
-// After a stop, the camera hold's carried-over trim once (flight_rt.c trim); false if there is none.
 // Loads (or with no segments clears) the identification test pattern; NULL and a JSON summary in text, or an error.
 const char *flight_runtime_pattern(const uint8_t *body, size_t length, char *text, size_t size);
 void flight_runtime_status(Status *status);
+#ifdef BENCH
+// The compute and scheduling benchmark's request (test build only, make bench: bench_flight.c); the reply's text and its length in written.
+const char *flight_runtime_bench(const uint8_t *body, size_t length, char *text, size_t size, size_t *written);
+#endif
 
 // The ESP-NOW link and request service (radio.c).
 void radio_start(void);

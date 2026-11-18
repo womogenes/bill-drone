@@ -1,11 +1,35 @@
 // Reads the camera's multipart streams (app/api/camera): each part a JPEG and its headers, X-Tag on the preview, X-Time on FPV.
-function indexOf(bytes: Uint8Array, pattern: number[], from = 0) {
+export function indexOf(bytes: Uint8Array, pattern: number[], from = 0) {
   outer: for (let i = from; i <= bytes.length - pattern.length; i++) {
     for (let j = 0; j < pattern.length; j++)
       if (bytes[i + j] !== pattern[j]) continue outer;
     return i;
   }
   return -1;
+}
+
+// A preview frame's tag (X-Tag): the corners in the camera's 320x240 pixels and the tag center in the camera frame (m; right, down, forward).
+export type PreviewTag = {
+  valid: boolean;
+  corners: [number, number][];
+  position: [number, number, number];
+};
+
+export function parseTag(header: string): PreviewTag | null {
+  const match = /X-Tag: *(valid|tracked) ([^\r\n]+)/i.exec(header);
+  if (!match) return null;
+  const parts = match[2].trim().split(/\s+/);
+  const corners = parts
+    .slice(0, 4)
+    .map((pair) => pair.split(',').map(Number) as [number, number]);
+  const position = (parts[4] ?? '').split(',').map(Number);
+  if (corners.some((c) => c.some(Number.isNaN)) || position.length !== 3)
+    return null;
+  return {
+    valid: match[1].toLowerCase() === 'valid',
+    corners,
+    position: position as [number, number, number],
+  };
 }
 
 export async function readParts(

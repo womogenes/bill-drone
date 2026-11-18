@@ -1,12 +1,13 @@
 """
-The airframe's attitude dynamics as identified from flight logs (sw/sim/identify_airframe.py), shared by the identification (vectorised over many prediction lanes), the hover simulation (sw/sim/sweep.py, one lane through Airframe) and the full-attitude sim (sw/sim/rigid.py, ported to rigid_step.c).
+The airframe's attitude dynamics as fitted to flight logs (sw/sim/fit_plant.py), shared by the scorecard (vectorized over many prediction lanes), the hover simulation (sw/sim/sweep.py, one lane through Airframe) and the full-attitude sim (sw/sim/rigid.py, ported to rigid_step.c).
 
-The geometry is an explicit input (models/geometry_<day>.json; metres from the tube midpoint, body x forward, y left, z up; kg and kg·m²): mass, com, arm (the motor axes' |y|), pivot_z (the tilt axes), rotor_z (the prop plane at zero tilt), the body's roll, pitch and yaw inertia about the CoM, and each motor assembly's mass, CoM distance above its pivot and inertia about its tilt axis. Every body term is a torque from a fitted coefficient and the geometry, divided by the geometry's inertia, so a chassis change (battery, CoM, arm, pivot height, motor mass, legs) reaches the dynamics through the geometry alone: derive_geometry builds one from a parts list, cad_geometry from bicopter.xml's parts, and shifted applies CAD differences to a reference. The fitted coefficients are meant not to change with the geometry:
+The geometry is an explicit input (models/geometry_<day>.json; meters from the tube midpoint, body x forward, y left, z up; kg and kg·m²): mass, com, arm (the motor axes' |y|), pivot_z (the tilt axes), rotor_z (the prop plane at zero tilt), the body's roll, pitch and yaw inertia about the CoM, and each motor assembly's mass, CoM distance above its pivot and inertia about its tilt axis. Every body term is a torque from a fitted coefficient and the geometry, divided by the geometry's inertia, so a chassis change (battery, CoM, arm, pivot height, motor mass, legs) reaches the dynamics through the geometry alone: derive_geometry builds one from a parts list, cad_geometry from bicopter.xml's parts, and shifted applies CAD differences to a reference. The fitted coefficients are meant not to change with the geometry:
 - motors: dead time, then a first-order lag on the thrust (the thrust table, times battery voltage over thrust_voltage to voltage_power; the right motor can differ in dead time, lag and gain). The "right" terms are the right motor's. A motor started from standstill makes no thrust for motor_start after its throttle turns positive (the ESC's start-up; the takeoffs show it, the airborne fit cannot). The level is pinned to the weight (each flight's trim: its airborne median table thrust times thrust level carries mass × g), and differential_slope is the share of a differential throttle step's table thrust the motors deliver (roll authority; the common part follows the table; from 2026-10-29b it is held at 1, which the ±1.5-3° PRBS flights measure, instead of fitted);
-- servos: dead time, then a second-order position loop (servo_wn, servo_zeta) whose horn speed is limited to servo_slew; the horn drives the motor assembly through a link with play, as torques on the assembly's effective inertia (its CAD inertia about the tilt axis, its mass × CoM offset × pivot height, and servo_inertia, the servo's reflected rotor): link_k (N·m/rad), link_c (N·m·s/rad), a forward band preload (N·m) less band_k per radian of tilt. What the link does to the assembly it does the other way to the body;
+- servos: dead time, then a second-order position loop (servo_wn, servo_zeta) whose horn speed is limited to servo_slew and which yields to the link's load by servo_compliance (rad per N·m: the horn's static deflection under load, the servo's finite stiffness; 0 is a horn that holds its position whatever the load, as every model before 2026-11-08); the horn drives the motor assembly through a link with play, as torques on the assembly's effective inertia (its CAD inertia about the tilt axis, its mass × CoM offset × pivot height, and servo_inertia, the servo's reflected rotor): link_k (N·m/rad), link_c (N·m·s/rad), a forward band preload (N·m) less band_k per radian of tilt. What the link does to the assembly it does the other way to the body;
 - props: prop_torque (m: reaction torque per newton along each tilted shaft, opposite spins, so it acts in yaw and, tilted, in roll), prop_momentum (N·m·s per √N, for the gyroscopic roll torque of the props as they tilt);
+- the flip's terms (2026-11-12, fitted to the first flip; optional, off in older models): rotor_momentum (N·m·s per √N: the rotors' spin angular momentum along their shafts, -ω × H as the body turns and -dH/dt as they speed up or slow down), motor_coast and coast_below (a motor asked for coast_below or less coasts down on its prop's drag, halving from 5 N in motor_coast s), and, for robustness draws only, motor_tau_down (a separate lag for a falling thrust), motor_idle (the ESC stops the motor at or below this throttle), motor_floor (N: a running motor's least thrust) and motor_ceiling (N: the most a motor gives). The ESC-dependent ones (motor_coast, coast_below, motor_idle, motor_floor, motor_ceiling, with motor_tau and motor_start) are separate from the airframe's, so new ESCs need only those refitted;
 - rotors: inflow_damping (s/m: roll damping as thrust lost per newton per m/s of axial inflow at the arm), edgewise_damping (s/m: the H-force per newton per m/s, for pitch at the rotors' height above the CoM and yaw at the arm);
-- the slipstream: a share wash of the tilted thrust's horizontal force is cancelled by its slipstream on the airframe, acting at wash_z above the tube, so yaw tilt authority is 1 - wash of the geometric, the pitch tilt torque is (pivot height - wash × (wash_z - CoM height)) × T sin(tilt), and a tilt pushes the drone forward tilt_push as hard as the same body pitch (1 - wash in models saved without it; the camera measures about 0.66); a share pitch_wake of that torque builds up with lag wake_tau (the tilt is less effective held than swung);
+- the slipstream: a share wash of the tilted thrust's horizontal force is canceled by its slipstream on the airframe, acting at wash_z above the tube, so yaw tilt authority is 1 - wash of the geometric, the pitch tilt torque is (pivot height - wash × (wash_z - CoM height)) × T sin(tilt), and a tilt pushes the drone forward tilt_push as hard as the same body pitch (1 - wash in models saved without it; the camera measures about 0.66); a share pitch_wake of that torque builds up with lag wake_tau (the tilt is less effective held than swung);
 - lumped terms, as torques so they scale with the geometry: roll_pendulum and pitch_pendulum (m: the attitude stiffness as an effective length times the thrust; free flight has no attitude spring, so this stands for something unmodelled), drag_z_x and drag_z_y (m above the tube: where the horizontal drag acts, so the speed moments follow the CoM height; from 2026-10-29b roll_pendulum is held at 0, and drag_z_y is set by the hovers' closed-loop statistics, where it damps the hover loop's sideways swing: the camera sees no sideways drag force, so its roll moment is better read as the downwind rotor losing thrust in the upwind one's wake), roll_from_yaw and yaw_from_roll (N·m per rad/s), and a constant push per flight;
 - com_x is geometry the hovers calibrate (the hang test is its prior): the pushes absorb any steady torque, so only the thrust's variation sees it.
 Angles are radians; servo commands, horn and tilt are degrees, positive forward (the right servo mirrored, as in the logs); velocity is forward and left in m/s.
@@ -18,7 +19,6 @@ from pathlib import Path
 
 import numpy as np
 
-from sw.flight_log import FIRST_DRONE, drone
 from sw.sim.flight import THRUST_TABLE
 
 DT = 0.01
@@ -32,41 +32,35 @@ GEOMETRY_FILE = "geometry_2026-10-28.json"
 # Every parameter with its search bounds and starting value.
 PARAMS = {
     "motor_delay": (0.0, 0.12, 0.07), "right_motor_delay": (0.0, 0.12, 0.07), "motor_tau": (0.002, 0.15, 0.005), "right_motor_tau": (0.002, 0.15, 0.005),
-    "right_thrust_gain": (0.5, 1.5, 1.0), "voltage_power": (0.0, 3.0, 0.5), "differential_slope": (0.05, 3.0, 1.0), "motor_start": (0.0, 0.5, 0.0),
+    "right_thrust_gain": (0.5, 1.5, 1.0), "voltage_power": (0.0, 3.0, 0.5), "differential_slope": (0.05, 3.0, 1.0), "motor_start": (0.0, 0.5, 0.0), "motor_tau_down": (0.0, 0.5, 0.0), "motor_idle": (0.0, 300.0, 0.0), "motor_floor": (0.0, 5.0, 0.0), "motor_coast": (0.0, 1.0, 0.0), "coast_below": (0.0, 1200.0, 1200.0), "motor_ceiling": (0.0, 20.0, 0.0),
     "servo_delay": (0.0, 0.1, 0.02), "right_servo_delay": (0.0, 0.1, 0.02), "servo_wn": (8.0, 150.0, 31.0), "right_servo_wn": (8.0, 150.0, 31.0), "servo_zeta": (0.1, 2.0, 0.85), "servo_slew": (100.0, 3000.0, 300.0),
-    "link_k": (0.01, 50.0, 2.0), "link_c": (0.0, 0.5, 0.03), "servo_inertia": (0.0, 0.005, 0.0004),
+    "link_k": (0.01, 50.0, 2.0), "link_c": (0.0, 0.5, 0.03), "servo_inertia": (0.0, 0.005, 0.0004), "servo_compliance": (0.0, 2.0, 0.0),
     "left_play": (0.0, 3.0, 0.6), "right_play": (0.0, 3.0, 0.6), "left_band": (-0.3, 0.3, 0.015), "right_band": (-0.3, 0.3, 0.015), "band_k": (-0.05, 0.05, 0.0), "right_gain": (0.6, 1.4, 1.0),
-    "prop_torque": (-0.05, 0.05, -0.015), "prop_momentum": (-0.05, 0.05, 0.003),
+    "prop_torque": (-0.05, 0.05, -0.015), "prop_momentum": (-0.05, 0.05, 0.003), "rotor_momentum": (0.0, 0.1, 0.0),
+    # The bursts' terms (2026-11-15, fitted to the bursts open loop): the tilt's pitch authority over the geometry's (resolve's tilt_arm times it) and the thrust lost per newton per m/s of climb along the shafts (axial inflow, as inflow_damping has it for the roll).
+    "tilt_authority": (0.2, 5.0, 1.0), "climb_inflow": (0.0, 0.3, 0.0),
+    # And the speed the speed terms see (m/s): the body-plane speed clipped to it and not faded with the tilt, where rigid.py otherwise clips to SPEED_RANGE and fades (0: as before). The bursts move at 4-6 m/s.
+    "speed_range": (0.0, 20.0, 0.0),
+    # The rotors' aerodynamics at their hubs (2026-11-15, william/plant; 0 in older models, which carry the same physics as the separate lumped terms below): each rotor's in-plane force (the H-force, rotor drag) is rotor_drag_h (s/m) times the geometric mean of its thrust and the hover thrust per rotor, √(T T₀), times the air's in-plane speed at its hub, and its thrust falls by rotor_inflow (s/m) times √(T T₀) times the axial speed at the hub (blade-element inflow: both scale with the rotor's speed, √T). The hub's speed is the body's velocity, plus the body's rates about the CoM, plus the assembly's own swing about its pivot; so one pair of coefficients is the roll, pitch and yaw rate damping, the speed moments and the translational rotor drag, at any attitude and speed (no clip, no fade). momentum_tilt 1 makes rotor_momentum's -dH/dt include the shafts' turning with the tilt (the props' gyroscopic torque, prop_momentum in older models).
+    "rotor_drag_h": (0.0, 1.0, 0.0), "rotor_inflow": (0.0, 1.0, 0.0), "momentum_tilt": (0.0, 1.0, 0.0),
+    # And the rigid prop's flapping: its disk tilts away from the in-plane air, a hub moment that acts as the H-force flap_lever (m) further up the shaft.
+    "flap_lever": (-0.1, 0.5, 0.0),
+    # The inflow's thrust loss is the blade element's at the rotor's speed; a rotor climbing steadily is unloaded and its motor speeds up and wins most of it back. inflow_recovery (s): how fast (0: never, as before); inflow_steady: the share of the loss that stays in a steady climb. So the 2-3 Hz roll sees all of rotor_inflow and a steady climb inflow_steady of it.
+    "inflow_recovery": (0.0, 1.0, 0.0), "inflow_steady": (0.0, 1.0, 1.0),
+    # The servo's own deadband (degrees, 2026-11-16; 0 in older models): its controller drives the horn on the position error less half this either side, so it does not answer errors inside it. Upstream of the link, so the bands' preload does not take it up as it does the play.
+    "servo_deadband": (0.0, 3.0, 0.0),
     "inflow_damping": (-2.0, 5.0, 0.2), "edgewise_damping": (-2.0, 5.0, 0.05),
     "wash": (-1.0, 1.5, 0.0), "wash_z": (-0.2, 0.3, 0.02), "pitch_wake": (-1.5, 1.5, 0.0), "wake_tau": (0.01, 2.0, 0.15), "pitch_ground": (-1, 3, 0.0), "ground_scale": (0.01, 2.0, 0.1),
-    "roll_pendulum": (-0.2, 0.2, 0.0), "pitch_pendulum": (-0.2, 0.2, 0.0), "drag_z_x": (-0.5, 0.5, 0.017), "drag_z_y": (-0.5, 0.5, 0.06),
+    "roll_pendulum": (-0.2, 0.2, 0.0), "pitch_pendulum": (-0.2, 0.2, 0.0), "drag_z_x": (-0.5, 0.5, 0.017), "drag_z_y": (-0.5, 0.5, 0.06), "speed_moment2": (-0.05, 0.05, 0.0), "tilt_speed": (-0.3, 0.3, 0.0), "tilt_push_speed": (0.0, 0.2, 0.0),
     "roll_from_yaw": (-0.5, 0.5, 0.0), "yaw_from_roll": (-0.5, 0.5, 0.0), "com_x": (-0.01, 0.01, -0.0021),
     # Horizontal speed (only for prediction from logs; the simulation moves the vehicle itself): forward from pitch and the motors' mean tilt (1 - wash as strong), left from roll, each with linear drag.
     "vx_pitch": (-40, 40, 7.7), "vx_drag": (0, 5, 0.1), "vy_roll": (-20, 20, -9.0), "vy_drag": (0, 5, 0.2), "tilt_push": (0.0, 1.5, 0.66),
 }
 KEYS = list(PARAMS)
 # Terms a parameter set may leave out (they then stay off).
-OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start")
+OPTIONAL = ("pitch_ground", "pitch_wake", "motor_start", "servo_compliance", "speed_moment2", "tilt_speed", "tilt_push_speed", "rotor_momentum", "motor_tau_down", "motor_idle", "motor_floor", "motor_coast", "motor_ceiling", "coast_below", "climb_inflow", "speed_range", "rotor_drag_h", "rotor_inflow", "momentum_tilt", "flap_lever", "inflow_recovery", "servo_deadband")
 # The running time (s) of a motor that has long been spinning.
 RUNNING = 10.0
-def flown_by(recordings):
-    """The one physical drone that flew all of the recordings (sw/flight_log.py drone); stops with what is wrong when they are from several or one does not say."""
-    drones = {}
-    for path in recordings:
-        drones.setdefault(drone(path), []).append(Path(path).name[:19])
-    if None in drones:
-        raise SystemExit(f"Recordings without a drone ID: {', '.join(drones[None])}")
-    if len(drones) > 1:
-        raise SystemExit("Recordings from several drones, fit them separately: " + "; ".join(f"{key}: {len(names)}" for key, names in drones.items()))
-    return next(iter(drones), FIRST_DRONE)
-
-
-def newest_model(of_drone):
-    """The newest saved airframe model (models/airframe_<day>*.json) of a drone (its "drone"; models saved without one are the first drone's), or None."""
-    for path in sorted(MODELS.glob("airframe_2*.json"), reverse=True):
-        if json.loads(path.read_text()).get("drone", FIRST_DRONE) == of_drone:
-            return path
-    return None
 
 
 def motor_terms(p, n):
@@ -77,74 +71,18 @@ def motor_terms(p, n):
     return tuple(np.tile(v, (n, 1)) for v in (delay, tau, gain))
 
 
+def model(name):
+    """A saved model file, by its name in sw/sim/models or a path: an airframe's parameters, a geometry or a list of disturbances."""
+    return json.loads((Path(name) if Path(name).exists() else MODELS / name).read_text())
+
+
 def load_geometry(name=GEOMETRY_FILE):
-    geometry = json.loads((MODELS / name).read_text())
+    geometry = model(name)
     geometry["com"] = tuple(geometry["com"])
     return geometry
 
 
 GEOMETRY = load_geometry()
-
-
-def derive_geometry(parts, assembly, arm, pivot_z, rotor_z):
-    """
-    A geometry from parts (each {"mass", "pos": (x, y, z), optional "inertia": (Ixx, Iyy, Izz) about its own centre}) rigidly fixed to the body, both motor assemblies at zero tilt among them, and one assembly's {"mass", "com" (above its pivot), "inertia" (about its tilt axis)}.
-    """
-    mass = sum(p["mass"] for p in parts)
-    com = np.sum([p["mass"] * np.asarray(p["pos"], float) for p in parts], 0) / mass
-    inertia = np.zeros(3)
-    for p in parts:
-        d = np.asarray(p["pos"], float) - com
-        inertia += np.asarray(p.get("inertia", (0.0, 0.0, 0.0)), float) + p["mass"] * np.array([d[1] ** 2 + d[2] ** 2, d[0] ** 2 + d[2] ** 2, d[0] ** 2 + d[1] ** 2])
-    return {"mass": float(mass), "com": tuple(map(float, com)), "arm": arm, "pivot_z": pivot_z, "rotor_z": rotor_z, "roll_inertia": float(inertia[0]), "pitch_inertia": float(inertia[1]), "yaw_inertia": float(inertia[2]),
-            "assembly_mass": assembly["mass"], "assembly_com": assembly["com"], "assembly_inertia": assembly["inertia"]}
-
-
-def cad_geometry(without=(), masses=None):
-    """
-    The geometry of bicopter.xml's parts (their assigned masses, CAD mesh inertia) without its fitted inertial, leaving out the named geoms (e.g. ("front_legs", "rear_legs")) and with masses {geom: kg} overriding; needs mujoco. Compare two of these, and apply the difference to a measured geometry with shifted.
-    """
-    import re
-
-    import mujoco
-    xml = MODELS / "bicopter.xml"
-    text = re.sub(r"<inertial pos=[^>]*/>", "", xml.read_text())
-    text = text.replace('file="meshes/', f'file="{xml.parent.resolve()}/meshes/').replace('file="../../../', f'file="{xml.parent.resolve().parents[2]}/')
-    for name, mass in {**{name: 0.0 for name in without}, **(masses or {})}.items():
-        text = re.sub(rf'(<geom name="{name}"[^>]*?) mass="[0-9.]+"', rf'\1 mass="{mass}"', text)
-    model = mujoco.MjModel.from_xml_string(text)
-    data = mujoco.MjData(model)
-    mujoco.mj_forward(model, data)
-    drone = model.body("drone").id
-    bodies = [i for i in range(1, model.nbody) if model.body_rootid[i] == drone]
-    origin = data.xpos[drone]
-    parts = []
-    for i in bodies:
-        rotation = data.ximat[i].reshape(3, 3)
-        inertia = rotation @ np.diag(model.body_inertia[i]) @ rotation.T
-        parts.append({"mass": float(model.body_mass[i]), "pos": data.xipos[i] - origin, "inertia": np.diag(inertia)})
-    motor = model.body("left_motor").id
-    pivot = data.xpos[motor]
-    offset = data.xipos[motor] - pivot
-    rotation = data.ximat[motor].reshape(3, 3)
-    own = (rotation @ np.diag(model.body_inertia[motor]) @ rotation.T)[1, 1]
-    assembly = {"mass": float(model.body_mass[motor]), "com": float(offset[2]), "inertia": float(own + model.body_mass[motor] * (offset[0] ** 2 + offset[2] ** 2))}
-    return derive_geometry(parts, assembly, float(pivot[1] - origin[1]), float(pivot[2] - origin[2]), float(data.site("left_thrust").xpos[2] - origin[2]))
-
-
-def shifted(reference, before, after):
-    """reference (a measured geometry) changed by what changes from geometry before to after (e.g. two cad_geometry results): mass, CoM and inertias add the difference, the rest take after's values."""
-    out = dict(reference)
-    for key in after:
-        if key == "com":
-            out["com"] = tuple(r + a - b for r, a, b in zip(reference["com"], after["com"], before["com"]))
-        elif key in ("mass", "roll_inertia", "pitch_inertia", "yaw_inertia", "com_x_shift"):
-            out[key] = reference.get(key, 0.0) + after[key] - before.get(key, 0.0)
-        elif after[key] != before.get(key):
-            out[key] = after[key]
-    # The fore/aft CoM is calibrated by the fit (com_x): a change carries over as a shift on the fitted value.
-    out["com_x_shift"] = reference.get("com_x_shift", 0.0) + after["com"][0] - before["com"][0]
-    return out
 
 
 def resolve(p, geometry=GEOMETRY):
@@ -153,8 +91,9 @@ def resolve(p, geometry=GEOMETRY):
     dz = geometry["pivot_z"] - cz
     return {
         "Ixx": geometry["roll_inertia"], "Iyy": geometry["pitch_inertia"], "Izz": geometry["yaw_inertia"], "arm": geometry["arm"], "cx": p["com_x"] + geometry.get("com_x_shift", 0.0), "cy": geometry["com"][1],
-        "tilt_arm": dz - p["wash"] * (p["wash_z"] - cz), "hr": geometry["rotor_z"] - cz, "hx": p["drag_z_x"] - cz, "hy": p["drag_z_y"] - cz, "mass": geometry["mass"],
+        "tilt_arm": (dz - p["wash"] * (p["wash_z"] - cz)) * p.get("tilt_authority", 1.0), "hr": geometry["rotor_z"] - cz, "hx": p["drag_z_x"] - cz, "hy": p["drag_z_y"] - cz, "mass": geometry["mass"],
         "J": geometry["assembly_inertia"] + geometry["assembly_mass"] * geometry["assembly_com"] * dz + p["servo_inertia"],
+        "dz": dz, "lever": geometry["rotor_z"] - geometry["pivot_z"],
     }
 
 
@@ -194,10 +133,10 @@ def table_for(p, thrusts, trim):
 
 
 class State:
-    """Every lane's state: body rates, roll and pitch, horizontal velocity, then each side's motor thrust, horn angle and speed, and assembly tilt and speed, the lagged tilted thrust (N, summed over the sides) for pitch_wake, and each motor's running time since its throttle last turned positive (s, for motor_start; starts as long running)."""
+    """Every lane's state: body rates, roll and pitch, horizontal velocity, then each side's motor thrust, horn angle and speed, and assembly tilt and speed, the lagged tilted thrust (N, summed over the sides) for pitch_wake, the climb speed along the shafts (m/s, for climb_inflow; set by the full-attitude sim, zero in the identification), each motor's running time since its throttle last turned positive (s, for motor_start; starts as long running), the body's velocity in its own axes unclipped (m/s, forward, left, up; for the hub aerodynamics, set by the full-attitude sim) and the rotors' in-plane forces on the body that step leaves for the full-attitude sim's translation (N, body axes), and each rotor's axial speed its motor has caught up with (m/s, inflow_recovery)."""
 
     def __init__(self, n):
-        for name, width in (("rate", 3), ("att", 2), ("vel", 2), ("motor", 2), ("horn", 2), ("hvel", 2), ("tilt", 2), ("tvel", 2), ("wake", 1)):
+        for name, width in (("rate", 3), ("att", 2), ("vel", 2), ("motor", 2), ("horn", 2), ("hvel", 2), ("tilt", 2), ("tvel", 2), ("wake", 1), ("axial", 1), ("free", 3), ("hforce", 3), ("recovered", 2)):
             setattr(self, name, np.zeros((n, width)))
         self.spin = np.full((n, 2), RUNNING)
 
@@ -216,6 +155,36 @@ def delayed(buffer, k, delay):
     return buffer[lane, first, side] * (1 - fraction) + buffer[lane, second, side] * fraction
 
 
+def hub_aero(p, c, motor, tilt, tvel, rate, velocity, recovered=None):
+    """
+    The rotors' aerodynamics at their hubs (rotor_drag_h, rotor_inflow): each motor's thrust [lane, side] (N) less what its axial inflow takes, and the in-plane forces' torque about the CoM and their sum (N·m and N, body axes [lane, 3]), for each assembly's physical tilt and tilt rate (rad, rad/s, positive forward), the body's rates (rad/s), its velocity in its own axes (m/s) and each rotor's axial speed its motor has caught up with ([lane, side], updated in place: with inflow_recovery the loss is rotor_inflow on the axial speed less what was caught up plus inflow_steady of what was). The hub sits lever above the pivot along the shaft, the pivot dz above the CoM at the arm; the air's speed at the hub is the body's velocity plus its rates crossed with the hub's place plus the assembly's swing about the pivot.
+    """
+    n = len(motor)
+    drag, inflow = p.get("rotor_drag_h", 0.0), p.get("rotor_inflow", 0.0)
+    hover = c["mass"] * G / 2
+    thrust = motor.copy()
+    torque, force = np.zeros((n, 3)), np.zeros((n, 3))
+    for side, y in ((0, c["arm"]), (1, -c["arm"])):
+        s, co = np.sin(tilt[:, side]), np.cos(tilt[:, side])
+        hub = np.column_stack([c["lever"] * s - c["cx"], np.full(n, y - c["cy"]), c["dz"] + c["lever"] * co])
+        swing = np.column_stack([tvel[:, side] * c["lever"] * co, np.zeros(n), -tvel[:, side] * c["lever"] * s])
+        air = velocity + np.cross(rate, hub) + swing
+        shaft = np.column_stack([s, np.zeros(n), co])
+        axial = (air * shaft).sum(1)
+        plane = air - axial[:, None] * shaft
+        root = np.sqrt(np.maximum(motor[:, side], 0.0) * hover)
+        # A rotor's thrust does not reverse (a fixed-pitch prop climbing faster than its own inflow makes none).
+        seen = axial
+        if recovered is not None and p.get("inflow_recovery", 0.0):
+            seen = axial - (1 - p.get("inflow_steady", 1.0)) * recovered[:, side]
+            recovered[:, side] = axial + (recovered[:, side] - axial) * math.exp(-DT / p["inflow_recovery"])
+        thrust[:, side] = np.maximum(motor[:, side] - inflow * root * seen, 0.0)
+        h_force = -drag * root[:, None] * plane
+        force += h_force
+        torque += np.cross(hub, h_force) + p.get("flap_lever", 0.0) * np.cross(shaft, h_force)
+    return thrust, torque, force
+
+
 def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, near=None, geometry=GEOMETRY, table=TABLE):
     """
     Advance every lane one control tick from sample k: throttles and commands are [lane, sample, side] buffers holding each lane's inputs up to k, voltage [lane] the battery over thrust_voltage, push [lane, axis] the constant angular accelerations (rad/s²), trim each lane's thrust trim (see actual_thrust). Lanes with airborne below 1 (default all airborne) scale the attitude and speed terms and the push by it. near [lane] is how far each lane is from the floor (default far): the tilt's pitch torque grows by 1 + pitch_ground × exp(-near / ground_scale). p may hold "tilt_gain" (per lane, default 1) scaling the tilt's pitch torque, and differential_slope per lane, to randomize the plant.
@@ -228,17 +197,51 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
     gain = np.array([1.0, p["right_gain"]])
     motor_delay, motor_tau, thrust_gain = motor_terms(p, n)
     commanded = delayed(throttles, k, motor_delay)
-    state.spin = np.where(commanded > 0, np.minimum(state.spin + DT, RUNNING), 0.0)
-    target = actual_thrust(p, table_thrust(p, commanded, voltage, table, thrust_gain), trim) * (state.spin > p.get("motor_start", 0.0))
-    state.motor = target + (state.motor - target) * np.exp(-DT / motor_tau)
+    # At or below motor_idle (throttle; 0 in models without it) the ESC stops the motor, and it starts again from standstill.
+    state.spin = np.where(commanded > p.get("motor_idle", 0.0), np.minimum(state.spin + DT, RUNNING), 0.0)
+    # A running motor makes at least motor_floor (N; 0 in models without it): the ESC's lowest speed, whatever the table says of the throttle.
+    target = np.maximum(actual_thrust(p, table_thrust(p, commanded, voltage, table, thrust_gain), trim), p.get("motor_floor", 0.0)) * (state.spin > p.get("motor_start", 0.0))
+    # At most motor_ceiling (N) where a model has it: the table's top (full throttle on the ESCs' current limit, a sagging pack) was never flown.
+    if p.get("motor_ceiling", 0.0):
+        target = np.minimum(target, p["motor_ceiling"])
+    before = np.sqrt(np.maximum(state.motor, 0.0))
+    # A falling thrust follows with motor_tau_down where a model has it (the ESC no longer drives the prop down as hard as up), else motor_tau.
+    tau = np.where(target < state.motor, p.get("motor_tau_down") or motor_tau, motor_tau)
+    lagged = target + (state.motor - target) * np.exp(-DT / tau)
+    # Or, where a model has motor_coast (s: how long a prop cut at 5 N takes to halve its thrust), a motor asked for coast_below or less (throttle; the ESC no longer drives or brakes it) coasts down as a prop slowed by its own drag (dΩ/dt ∝ -Ω², so d√T/dt ∝ -T: a long tail) until it meets the target.
+    coast = p.get("motor_coast", 0.0)
+    if coast:
+        kappa = coast * math.sqrt(5.0) / (math.sqrt(2.0) - 1)
+        coasted = 1 / (1 / np.maximum(before, 1e-6) + DT / kappa) ** 2
+        lagged = np.where((target < state.motor) & (commanded <= p.get("coast_below", PARAMS["coast_below"][2])), np.maximum(target, coasted), lagged)
+    state.motor = lagged
     goal = delayed(commands, k, (p["servo_delay"], p["right_servo_delay"]))
-    left, right = state.motor[:, 0], state.motor[:, 1]
+    # The rotors climbing along their shafts lose climb_inflow of their thrust per m/s (axial inflow; 0 in models without it), within 0.5-1.5 of it: the thrust every torque and force below sees, while the rotors' speed (their momentum) stays the motors'.
+    inflow = np.clip(1 - p.get("climb_inflow", 0.0) * state.axial[:, 0], 0.5, 1.5)
+    left, right = state.motor[:, 0] * inflow, state.motor[:, 1] * inflow
     tilt = state.tilt * gain * DEG
     cl, cr, sl, sr = np.cos(tilt[:, 0]), np.cos(tilt[:, 1]), np.sin(tilt[:, 0]), np.sin(tilt[:, 1])
     rate, att, vel = state.rate, state.att, state.vel
+    hub_torque = np.zeros((n, 3))
+    if p.get("rotor_drag_h", 0.0) or p.get("rotor_inflow", 0.0):
+        thrusts, hub_torque, state.hforce = hub_aero(p, c, np.column_stack([left, right]), tilt, state.tvel * gain * DEG, rate, state.free, state.recovered)
+        left, right = thrusts[:, 0], thrusts[:, 1]
+    # The thrusts every torque and force sees, for the full-attitude sim's translation.
+    state.effective = np.column_stack([left, right])
     a, cy = c["arm"], c["cy"]
     total = left + right
     root = np.sqrt(np.maximum(state.motor, 0.0))
+    # The rotors' spin angular momentum (rotor_momentum, N·m·s per √N of thrust; left along -z, right along +z, as prop_momentum and prop_torque have the spins) along each tilted shaft: the body feels -ω × H as its rates turn it (in roll and pitch when the rotors spin unequally, as in a flip) and -dH/dt as the rotors speed up and slow down.
+    momentum = p.get("rotor_momentum", 0.0)
+    hx = momentum * (root[:, 1] * sr - root[:, 0] * sl)
+    hz = momentum * (root[:, 1] * cr - root[:, 0] * cl)
+    dhx = momentum * ((root[:, 1] - before[:, 1]) * sr - (root[:, 0] - before[:, 0]) * sl) / DT
+    dhz = momentum * ((root[:, 1] - before[:, 1]) * cr - (root[:, 0] - before[:, 0]) * cl) / DT
+    # With momentum_tilt the shafts' turning too: dH/dt of √T (sin δ, 0, cos δ) has √T δ̇ (cos δ, 0, -sin δ).
+    if p.get("momentum_tilt", 0.0):
+        swing = state.tvel * gain * DEG
+        dhx = dhx + momentum * (root[:, 1] * swing[:, 1] * cr - root[:, 0] * swing[:, 0] * cl)
+        dhz = dhz - momentum * (root[:, 1] * swing[:, 1] * sr - root[:, 0] * swing[:, 0] * sl)
     # Roll: the thrusts at the arms (about the CoM's sideways offset), the props' tilted reaction torque, their gyroscopic torque as they tilt, inflow damping at the arm, the attitude term, the sideways drag at its height, cross-coupling.
     roll_torque = (
         (a - cy) * left * cl - (a + cy) * right * cr
@@ -248,12 +251,14 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
         - flying * p["roll_pendulum"] * total * att[:, 0]
         + flying * c["hy"] * p["vy_drag"] * c["mass"] * vel[:, 1]
         + p["roll_from_yaw"] * rate[:, 2]
+        - rate[:, 1] * hz - dhx
+        + hub_torque[:, 0]
     )
     roll = roll_torque / c["Ixx"] + push[:, 0]
     tilted = left * sl + right * sr
     state.wake = tilted[:, None] + (state.wake - tilted[:, None]) * math.exp(-DT / p["wake_tau"])
     ground = 1.0 if near is None else 1 + p["pitch_ground"] * np.exp(-np.asarray(near, float) / p["ground_scale"])
-    arm_tilt = c["tilt_arm"] * p.get("tilt_gain", 1.0)
+    arm_tilt = c["tilt_arm"] * p.get("tilt_gain", 1.0) * (1 + flying * p["tilt_speed"] * np.abs(vel[:, 0]))
     # Pitch: the tilted thrusts at their effective height above the CoM and its lagged share, the CoM's fore/aft offset under the thrust, edgewise damping at the rotors' height, the attitude term, the forward drag at its height.
     pitch_torque = (
         arm_tilt * ground * tilted
@@ -262,6 +267,9 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
         - p["edgewise_damping"] * c["hr"] ** 2 * total * rate[:, 1]
         - flying * p["pitch_pendulum"] * total * att[:, 1]
         - flying * c["hx"] * p["vx_drag"] * c["mass"] * vel[:, 0]
+        - flying * p["speed_moment2"] * vel[:, 0] * np.abs(vel[:, 0])
+        + rate[:, 0] * hz - rate[:, 2] * hx
+        + hub_torque[:, 1]
     )
     pitch_other = pitch_torque / c["Iyy"] + push[:, 1]
     # Yaw: the tilted thrusts at the arms (1 - wash of it), the props' reaction torque, edgewise damping at the arm, cross-coupling.
@@ -270,6 +278,8 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
         + p["prop_torque"] * (right * cr - left * cl)
         - p["edgewise_damping"] * a * a * total * rate[:, 2]
         + p["yaw_from_roll"] * rate[:, 0]
+        + rate[:, 1] * hx - dhz
+        + hub_torque[:, 2]
     )
     yaw = yaw_torque / c["Izz"] + push[:, 2]
     h = DT / SUB
@@ -284,8 +294,16 @@ def step(p, state, throttles, commands, k, voltage, push, trim, airborne=None, n
     q = rate[:, 1].copy()
     pitch = att[:, 1].copy()
     pitch_sum = np.zeros(n)
+    # The servo's own stiffness (2026-11-08): the horn's loop sees the link's spring and damper torque as a load, so under the assembly's inertia and the body's swing it deflects by servo_compliance per N·m. On the 2026-11-02 chirps the real servo-to-pitch response rises to 1.3x the geometric at 2-3 Hz, which a horn that holds its position whatever the load cannot do.
+    give = w2 * p.get("servo_compliance", 0.0) * J
+    dead = p["servo_deadband"] / 2
     for _ in range(SUB):
-        state.hvel = np.clip(state.hvel + (w2 * (goal - state.horn) - z2 * state.hvel) * h, -p["servo_slew"], p["servo_slew"])
+        error = goal - state.horn
+        error = np.sign(error) * np.maximum(np.abs(error) - dead, 0)
+        gap = state.horn - state.tilt
+        gap = np.sign(gap) * np.maximum(np.abs(gap) - half, 0)
+        load = c2 * gap + cz * (state.hvel - state.tvel) * (gap != 0)
+        state.hvel = np.clip(state.hvel + (w2 * error - z2 * state.hvel - give * load) * h, -p["servo_slew"], p["servo_slew"])
         state.horn = state.horn + state.hvel * h
         gap = state.horn - state.tilt
         gap = np.sign(gap) * np.maximum(np.abs(gap) - half, 0)
@@ -313,8 +331,19 @@ def complete(params):
 
 
 def geometry_of(params):
-    """The geometry a saved parameter set was fitted at (its "geometry" file, default GEOMETRY)."""
-    return load_geometry(params["geometry"]) if params.get("geometry") else GEOMETRY
+    """The geometry a saved parameter set was fitted at (its "geometry" file, default GEOMETRY), with any of its values the parameter set measured instead (its "geometry_terms", e.g. the pitch inertia from flight: {"pitch_inertia": 0.004}; the CoM's left offset "com_y" and height "com_z")."""
+    geometry = load_geometry(params["geometry"]) if params.get("geometry") else GEOMETRY
+    terms = params.get("geometry_terms")
+    if terms:
+        geometry = dict(geometry)
+        for key, value in terms.items():
+            if key in ("com_y", "com_z"):
+                com = list(geometry["com"])
+                com[1 if key == "com_y" else 2] = value
+                geometry["com"] = tuple(com)
+            else:
+                geometry[key] = value
+    return geometry
 
 
 def hover_trim(params, geometry=GEOMETRY):

@@ -2,6 +2,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <ArduinoOTA.h>
+#include "esp_mac.h"
 #include "esp_wifi.h"
 #include "esp_camera.h"
 extern bool cameraReady;
@@ -41,6 +42,26 @@ bool apStarted = false, parked = false;
 
 inline bool wifiConfigured() { return wifiNetworks[0].ssid[0] || apSsid[0]; }
 
+// Each camera's name, by its station MAC: its host name on Wi-Fi (NAME.local, and for OTA), so two drones' cameras on one network are told apart. An unlisted camera is esp32cam- and its MAC's last three bytes. Its FPV raw frames carry the same MAC as their sender (fpv.h), which the receivers filter on.
+struct CameraName {
+    uint8_t mac[6];
+    const char *name;
+};
+constexpr CameraName cameraNames[] = {
+    {{0x28, 0x84, 0x85, 0x5a, 0xdb, 0x28}, "bill-esp32cam"},
+    {{0x28, 0x84, 0x85, 0x5a, 0xdd, 0xe8}, "michael-drone"},
+};
+uint8_t cameraMac[6];
+char cameraName[32];
+
+inline void findCameraName() {
+    esp_read_mac(cameraMac, ESP_MAC_WIFI_STA);
+    snprintf(cameraName, sizeof(cameraName), "esp32cam-%02x%02x%02x", cameraMac[3], cameraMac[4], cameraMac[5]);
+    for (const CameraName &known : cameraNames)
+        if (!memcmp(known.mac, cameraMac, 6))
+            snprintf(cameraName, sizeof(cameraName), "%s", known.name);
+}
+
 // The network joined, the access point or the parked station, its address, and the camera's state, as the drone's K S request reports them (update.h).
 inline void wifiState(char *text, size_t size) {
     uint8_t channel = 0;
@@ -74,13 +95,45 @@ inline void startAp() {
     parked = !apStarted;
 }
 
+// The network a K J request has the camera join for one boot, for a firmware update over Wi-Fi in seconds (make camera-fast-wifi) instead of the drone's radio link: the repository's .env WIFI_SSID and WIFI_PASSWORD, built in by build.py. The camera otherwise lists no networks, keeping its radio for FPV.
+#ifndef UPDATE_SSID
+#define UPDATE_SSID ""
+#define UPDATE_PASSWORD ""
+#endif
+const WifiNetwork updateNetwork = {UPDATE_SSID, UPDATE_PASSWORD};
+// That boot gives up and restarts into its usual mode after updateJoinMs without an update.
+constexpr uint32_t updateJoinMs = 180000;
+bool joinedForUpdate = false;
+
+// The K J flag (Preferences "update"), read and cleared at boot so a failed join costs one boot only.
+inline bool takeUpdateJoin() {
+    Preferences store;
+    if (!store.begin("update", false))
+        return false;
+    const bool join = store.getBool("join", false);
+    if (join)
+        store.putBool("join", false);
+    store.end();
+    return join;
+}
+
+inline void requestUpdateJoin() {
+    Preferences store;
+    if (store.begin("update", false)) {
+        store.putBool("join", true);
+        store.end();
+    }
+}
+
 inline void startWifi() {
     loadRadio();
+    findCameraName();
+    joinedForUpdate = updateNetwork.ssid[0] && takeUpdateJoin();
     // Nothing is printed: UART0 is the drone link. Without wifi.h there is no Wi-Fi and no OTA.
-    if (!wifiConfigured())
+    if (!wifiConfigured() && !joinedForUpdate)
         return;
     WiFi.mode(WIFI_STA);
-    WiFi.setHostname("bill-esp32cam");
+    WiFi.setHostname(cameraName);
     WiFi.setAutoReconnect(true);
     WiFi.setSleep(false);
     // Full transmit power (about 20 dBm) draws current bursts that browned this board out on its 3.3 V regulator (2026-10-26, "Brownout detector was triggered" at Wi-Fi start); 8.5 dBm keeps the bursts smaller and still links at about -46 dBm received indoors.
@@ -105,11 +158,13 @@ inline void startWifi() {
             if (WiFi.SSID(i) == network.ssid)
                 wifiChosen = &network;
     WiFi.scanDelete();
+    if (joinedForUpdate)
+        wifiChosen = &updateNetwork;
     if (wifiChosen)
         WiFi.begin(wifiChosen->ssid, wifiChosen->password);
     else
         park();
-    ArduinoOTA.setHostname("bill-esp32cam");
+    ArduinoOTA.setHostname(cameraName);
     // No OTA password, as requested. Wi-Fi credentials are separate.
     ArduinoOTA.setTimeout(10000);
     ArduinoOTA.onStart([]() {
@@ -125,9 +180,11 @@ inline void serviceOta() {
     static uint32_t lastRetry = 0;
     static bool joined = false;
     if (!wifiChosen && !apStarted) return;
+    if (joinedForUpdate && millis() > updateJoinMs)
+        ESP.restart();
     joined |= WiFi.status() == WL_CONNECTED;
     // A network in range that never lets the camera join (a changed password) parks the station too.
-    if (!joined && wifiChosen && millis() > parkAfterMs) {
+    if (!joined && wifiChosen && millis() > parkAfterMs && !joinedForUpdate) {
         park();
         return;
     }

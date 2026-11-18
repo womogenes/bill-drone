@@ -1,0 +1,111 @@
+{
+ "motor_delay": 0.021588695885015205,
+ "right_motor_delay": 0.021588695885015205,
+ "motor_tau": 0.08928289165114918,
+ "right_motor_tau": 0.08928289165114918,
+ "right_thrust_gain": 1.067592,
+ "voltage_power": 1.42,
+ "differential_slope": 1.0,
+ "motor_start": 0.16,
+ "motor_tau_down": 0.0,
+ "motor_idle": 0.0,
+ "motor_floor": 0.0,
+ "motor_coast": 0.1865,
+ "coast_below": 150.0,
+ "motor_ceiling": 0.0,
+ "servo_delay": 0.06640378568947779,
+ "right_servo_delay": 0.06781986623154834,
+ "servo_wn": 54.534803792096355,
+ "right_servo_wn": 54.534803792096355,
+ "servo_zeta": 0.43022698172788254,
+ "servo_slew": 284.706786,
+ "link_k": 8.921436158557025,
+ "link_c": 0.09185034345972501,
+ "servo_inertia": 0.0,
+ "servo_compliance": 0.0,
+ "left_play": 0.0,
+ "right_play": 0.0,
+ "left_band": 0.0,
+ "right_band": 0.0,
+ "band_k": 0.0,
+ "right_gain": 1.041818,
+ "prop_torque": -0.0009687004803219101,
+ "prop_momentum": 0.0,
+ "rotor_momentum": 0.0027998921512888478,
+ "inflow_damping": 0.0,
+ "edgewise_damping": 0.0,
+ "wash": 0.5893403720608767,
+ "wash_z": 0.020939,
+ "pitch_wake": 0.0,
+ "wake_tau": 0.771754,
+ "roll_pendulum": 0.0,
+ "pitch_pendulum": 0.0,
+ "drag_z_x": 0.128825,
+ "drag_z_y": 0.152306,
+ "speed_moment2": 0.0,
+ "tilt_speed": 0.0,
+ "tilt_push_speed": 0.0,
+ "roll_from_yaw": 0.056306128044146,
+ "yaw_from_roll": -0.017260905023084167,
+ "com_x": 0.000159,
+ "vx_pitch": 9.81,
+ "vx_drag": 0.0,
+ "vy_roll": -9.81,
+ "vy_drag": 0.0,
+ "tilt_push": 1.116913906742462,
+ "roll_push": 0.0,
+ "pitch_push": 0.0,
+ "yaw_push": 0.0,
+ "roll_push_sd": 1.0962,
+ "pitch_push_sd": 0.5964,
+ "yaw_push_sd": 0.2678,
+ "drone": "20:50:0d:8b:7e:68",
+ "geometry": "geometry_2026-11-12_raised.json",
+ "thrust_level": 1.2428,
+ "hover_thrust": [
+  4.1498,
+  4.1389
+ ],
+ "source": "airframe_2026-11-16_plant.json refitted (sw/sim/fit_plant.py, its training and held-out lists, the frequency response at weight 5 and the four closed-loop hovers at 0.5) on the scorecard's 0.05 and 0.2 s horizons only, from a damped servo (zeta 0.9, wn 45, 55/45 ms, wash 0.3), with servo_deadband set back to 0.6 degrees (the fit drove it to 0.01 and the INDI-free hovers then shook 0.4-0.6 Hz fast). Moved: the motors 22 ms late (54), no props' reaction torque in yaw (prop_torque -0.001; 0.012), the servos 66/68 ms late at wn 54.5, zeta 0.43 (75/55 ms, 33.3, 0.22), yaw's tilt authority 0.41 of the geometric (wash 0.59; 0.25), rotor_inflow 0.20 (0.37), rotor_drag_h 0.0156 with flap_lever 0.415 m (0.0267, 0.142), tilt_authority 1.90 and tilt_push 1.12 (1.57, 0.78). Against the 2026-11-16 plant: the scorecard with the firmware flying (scorecard.py --firmware, every post-raise flight) 0.675 against 0.702, better at every horizon (0.667 / 0.579 / 0.673 / 0.708 at 0.05 / 0.2 / 0.5 / 1 s); closed loop (scorecard_closed.py) the 06:53 takeoffs tip at 0.86 s, 2.22 Hz (drone 0.71-0.91 s, 2.22 Hz; 1.07 s, 2.08 Hz before), the INDI-free hovers shake at 2.43-2.50 Hz (drone 2.29-2.50) with 9-12 deg/s (drone 12-19, 13.5-17.4 before); the 07:13 burst30 as flown 92% clean (67%) with the roll's peak 33.5 degrees at 0.74 s (log 31.5 at 0.74) and the hand-back at 1.00 s (1.01), the 07:03 burst60 as flown failing as the drone did, climbing 1.86 m (log 2.23, 1.12 before). models/NOTES.md 'The firmware in the loop'.",
+ "tilt_authority": 1.9008539325020082,
+ "climb_inflow": 0.0,
+ "speed_range": 0.0,
+ "rotor_drag_h": 0.015618095240527513,
+ "rotor_inflow": 0.20300734716586544,
+ "momentum_tilt": 1.0,
+ "rotor_drag": [
+  0.0,
+  0.0
+ ],
+ "observer": {
+  "correlation": 26.331,
+  "sd": [
+   6.759,
+   11.987,
+   7.862
+  ],
+  "noise": [
+   0.804,
+   6.077,
+   9.57
+  ]
+ },
+ "configurations": {
+  "indoor_nobands": {
+   "motor_tau": 0.0919813649950596,
+   "right_motor_tau": 0.0919813649950596
+  },
+  "indoor_bands": {
+   "motor_tau": 0.0919813649950596,
+   "right_motor_tau": 0.0919813649950596
+  },
+  "bands_old_esc": {
+   "motor_tau": 0.0919813649950596,
+   "right_motor_tau": 0.0919813649950596
+  }
+ },
+ "flap_lever": 0.41540755593063694,
+ "inflow_recovery": 0.1929977240204511,
+ "inflow_steady": 0.21213887368755904,
+ "servo_deadband": 0.6
+}

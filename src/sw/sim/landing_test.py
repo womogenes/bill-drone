@@ -1,8 +1,10 @@
 """
 Hover landings for the touchdown detector (fw/drone/main/hover.c), in the simulator and replayed from recordings.
-uv run -m sw.sim.landing_test [--runs 200] [--source path/to/hover.c] [--defines "PROBE_RATE=1.0f ..."] flies randomized landings: each takes off on IDENTIFIED_ESC with the 2026-10-29 07:20 camera-hover settings, holds at a random tag height, then lands at a random land_rate (0.05-0.2 m/s) with the hover_mass setting off by up to ±20 % from what the plant needs, the plant's mass off by up to ±10 %, the pack at 16.7 V, 14.3 V or sagging from one to the other over the flight (through the firmware's voltage compensation against the airframe's fitted voltage power, which leaves up to 18 % more thrust per table newton on the low pack), a small level-reference error and accelerometer bias, and the camera's height drifting by up to ±0.3 m over the descent (the drone's attitude error at the tag's 2 m range). --no-camera lands without the tag, --gust adds rougher air. It reports any touchdown declared in the air, how long after the body first touched the floor the landing ended (by the detector, or by the tilt and shock cut), the contact speed and the tilt through the touchdown.
-uv run -m sw.sim.landing_test --replay sw/recordings/<flight>.bin [--contact s] replays a recorded landing through hover.c with the recorded estimates, specific force and attitude forced in each tick. Before the contact time given (or throughout without one) the drone is taken to be in the air: thrust the new code flies below the recorded one shows in the specific force as that difference, lagged by the motors, over the weight. After it the floor holds the drone and the recorded specific force stands. It prints when probes start and what they find, and when touchdown comes.
+uv run -m sw.sim.landing_test [--runs 200] [--source path/to/hover.c] [--defines "PROBE_RATE=1.0f ..."] flies randomized landings: each takes off on IDENTIFIED_ESC with the 2026-10-29 07:20 camera-hover settings, holds at a random tag height, then lands at a random land_rate (0.05-0.2 m/s) with the hover_mass setting off by up to ±20 % from what the plant needs, the plant's mass off by up to ±10 %, the pack at 16.7 V, 14.3 V or sagging from one to the other over the flight (through the firmware's voltage compensation against the airframe's fitted voltage power, which leaves up to 18 % more thrust per table newton on the low pack), a small level-reference error and accelerometer bias, and the camera's height drifting by up to ±0.3 m over the descent (the drone's attitude error at the tag's 2 m range). --no-camera lands without the tag (--baro with the barometer feeding the height), --gust adds rougher air. It reports any touchdown declared in the air, how long after the body first touched the floor the landing ended (by the detector, or by the tilt and shock cut), the contact speed and the tilt through the touchdown.
+uv run -m sw.sim.landing_test --replay sw/recordings/<flight>.bin [--contact s] replays a recorded landing through hover.c with the recorded estimates, specific force and attitude forced in each tick. Before the contact time given (or throughout without one) the drone is taken to be in the air: thrust the new code flies below the recorded one shows in the specific force as that difference, lagged by the motors, over the weight. After it the floor holds the drone and the recorded specific force stands. It prints when probes start and what they find, and when touchdown comes. The Kalman filter's estimate is handed to the hold each tick as the drone logged it (the touchdown takes it; --set applies to the replay too).
 --source flies another copy of hover.c (its own hover.h beside it gives the state layout), so versions can be compared without touching the one other simulations use.
+--outdoor [RECORDING] flies drone 1 as it flew outdoors on 2026-11-09 instead (OUTDOOR's settings by default: no camera, the drag model, the GPS hold and the barometer): sw/sim/outdoor.py's plant on the current airframe (sweep.CURRENT_AIRFRAME, its uncertain terms drawn) with its GPS (the false descent at liftoff included) and the barometer (sweep.BARO, its near-floor offset drawn from -0.3 to +0.4 m), ground effect, 0-3 m/s of wind, a hold at 0.6-1.5 m and a landing at 0.2-0.75 m/s, hover_mass off by up to ±10 %, the same packs.
+--tray (with --outdoor) lands it on the base it has had since 2026-11-07 instead of the sim's wide feet: the battery tray (sweep.TRAY_FEET, resting sweep.TRAY_REST degrees nose-down) on a softer floor (800 N/m and 8-25 N·s/m a contact point, friction 0.7-1.5, sloping up to 3 degrees each way), the gyro and the accelerometer clipping at the firmware's full scales (runtime.h), and each run going on through a tip-over for 2 s after the motors stop. It then also reports the tip-overs (true tilt past 30 degrees within 1 s of contact), which way, the tilt it ends at and its speed over the ground at contact. --rates gives the landing rates to draw from (the 2026-11-09 flights had hover_land_rate 1), --floor another floor stiffness (N/m a contact point; the recorded touchdowns do not tell 800 from 20000) and --base FRONT REST a hypothetical base (its front edge FRONT mm ahead of the CoM and resting REST degrees nose-down; 27.5 and 4 as built). --fast lands with held L (HOVER_LAND_FAST) instead of L. The Kalman filter runs beside the hover from a 5 s rest and hands the hold its estimate each tick, as the drone does. --no-guard leaves out the guards (guard.c is built against the tree's hover.h), for a --source whose HoverState differs.
 """
 
 import argparse
@@ -16,7 +18,10 @@ import re
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-RECORDING = Path(__file__).resolve().parents[1] / "recordings/2026-10-29T07-20-47-024Z_2551243463.jsonl"
+# The indoor tag hover of 2026-10-29 07:20 UTC, whose settings the indoor landings fly.
+INDOOR = "2026-10-29T07-20-47"
+# --outdoor: the GPS-held barometer hover drone 1 flew on 2026-11-09 06:19 UTC.
+OUTDOOR = "2026-11-09T06-19-08"
 # The pack's resting extremes (V) and the voltage the thrust table was measured at (the recording's thrust_voltage).
 PACKS = (16.7, 14.3)
 # The hover_mass setting that matches IDENTIFIED_ESC's hold thrust at the thrust table's voltage (kg): its hold flies at about 9.5 N.
@@ -38,6 +43,8 @@ def state_class(header):
     """
     A ctypes structure for HoverState as the header lays it out, so a copy of hover.c with other fields can be flown.
     """
+    from sw.sim import hover
+
     text = re.sub(r"//[^\n]*", "", header.read_text())
     constants = {name: int(value) for name, value in re.findall(r"#define\s+(\w+)\s+(\d+)", text)}
     body = re.search(r"typedef struct \{([^}]*)\} HoverState;", text).group(1)
@@ -50,7 +57,8 @@ def state_class(header):
         for name in names.split(","):
             name = name.strip()
             dims = [int(constants.get(d, d)) for d in re.findall(r"\[(\w+)\]", name)]
-            ctype = TYPES[kind]
+            # A structure of hover.h's own (HoverEstimate) is sw.sim.hover's class of that name less the prefix.
+            ctype = TYPES[kind] if kind in TYPES else getattr(hover, kind.removeprefix("Hover"))
             for size in reversed(dims):
                 ctype = ctype * size
             fields.append((name.split("[")[0], ctype))
@@ -81,6 +89,8 @@ def install(source, defines):
         starts = []
         how = None
         height_error = 0.0
+        # How long the motors have been off when the flight ends (s).
+        wait = 1.0
 
         def __init__(self, settings):
             super().__init__(settings)
@@ -91,17 +101,17 @@ def install(source, defines):
             self.landing_us = None
             self.off = 0.0
 
-        def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, flow=None):
+        def update(self, mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag=None, gps=None, baro=None, gains=None):
             # The camera's height error near the floor (the drone's attitude error times the 2 m range): from the landing's start the tag's apparent height drifts by height_error (m, positive reads the drone low) over the time the descent should take.
             if mode != hover.HOLD and self.landing_us is None:
                 self.landing_us, self.descent = now_us, max(0.5, self.state.height / self.gains.land_rate)
             if pose and self.landing_us is not None:
                 share = min(1.0, (now_us - self.landing_us) / 1e6 / self.descent)
                 pose.tag[1] += Recorded.height_error * share
-            out = super().update(mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, flow)
+            out = super().update(mode, pose, now_us, dt, roll, pitch, yaw_rate, vertical_g, force, drag, gps, baro, gains)
             state = self.state
             self.off = self.off + dt if state.landed and out.force <= 0 else 0
-            if self.off > 1.0:
+            if self.off > Recorded.wait:
                 raise Done
             probing = getattr(state, "probing", False)
             if probing and not self.probing:
@@ -114,19 +124,23 @@ def install(source, defines):
                 Recorded.how = "cut" if out.force <= 0 else "touchdown"
             self.landed = state.landed
             self.probing = probing
-            Recorded.ticks.append((now_us / 1e6 - 1, mode, state.landed, out.force, vertical_g, state.height, probing))
+            Recorded.ticks.append((now_us / 1e6 - 1, mode, state.landed, out.force, vertical_g, state.height, probing, math.hypot(state.velocity[0], state.velocity[1])))
             return out
 
     hover.Hover = Recorded
     return Recorded
 
 
-def draw(seed):
+def draw(seed, outdoor=None):
     """
     One randomized landing.
     """
     rng = random.Random(seed)
     pack = rng.choice(("high", "low", "sag"))
+    if outdoor:
+        return {"seed": seed, "outdoor": outdoor, "land_rate": rng.choice((0.2, 0.35, 0.5, 0.75)), "mass_error": rng.uniform(0.9, 1.1), "plant_mass": 1.0, "pack": pack,
+                "volts": {"high": (PACKS[0], PACKS[0]), "low": (PACKS[1], PACKS[1]), "sag": PACKS}[pack], "climb": rng.uniform(0.6, 1.5), "wind": rng.choice((0.0, 1.0, 2.0, 3.0)),
+                "wash": rng.uniform(-0.3, 0.4), "level_error": (rng.uniform(-1, 1), rng.uniform(-1.5, 1.5)), "accel_bias": (rng.uniform(-0.005, 0.005), rng.uniform(-0.005, 0.005)), "land_at": rng.uniform(6, 12)}
     return {
         "seed": seed,
         "land_rate": rng.choice((0.05, 0.1, 0.15, 0.2)),
@@ -142,28 +156,69 @@ def draw(seed):
     }
 
 
+def tray(seed):
+    """
+    The floor under one --tray landing: friction, its stiffness and damping a contact point, and its slope (rise per meter forward and left).
+    """
+    rng = random.Random(seed + 7)
+    return {"friction": rng.uniform(0.7, 1.5), "ground": (800.0, rng.uniform(8.0, 25.0)), "slope": (math.tan(math.radians(rng.uniform(-3, 3))), math.tan(math.radians(rng.uniform(-3, 3))))}
+
+
 def fly(case, source=None, defines=()):
     """
     Fly one case; return its touchdown figures (times in s after liftoff).
     """
-    from sw.sim import airframe, sweep
+    from sw.flight_log import recording
+    from sw.flight_log import settings as recording_settings
+    from sw.sim import airframe, flight, sweep
 
     recorded = install(source, list(defines))
-    settings = json.loads(RECORDING.read_text().splitlines()[0])["settings"]
+    if case.get("outdoor"):
+        from sw.sim import outdoor
+
+        settings = recording_settings(recording(case["outdoor"]))
+        recorded.height_error = 0.0
+        power = sweep.CURRENT_AIRFRAME["voltage_power"]
+        factor = (case["volts"][0] / settings["thrust_voltage"]) ** (power - 2)
+        settings |= {"hover_land_rate": case["land_rate"], "hover_climb": case["climb"], "hover_ceiling": 2.0, "hover_mass": settings["hover_mass"] / factor * case["mass_error"]}
+        settings |= case.get("settings", {})
+        plant, _ = outdoor.plant(sweep.CURRENT_AIRFRAME, case["wind"], case["seed"], True, False, case["climb"], baro=True)
+        plant |= {"land_at": case["land_at"], "level_error": case["level_error"], "accel_bias": case["accel_bias"], "baro": sweep.BARO | {"wash": case["wash"]}}
+        plant["gps"] = plant["gps"] | {"heading": 0.0}
+        if case.get("tray"):
+            feet, rest = sweep.TRAY_FEET, sweep.TRAY_REST
+            if case["tray"].get("base"):
+                # A hypothetical base (--base): the tray's underside with its front edge moved and turned to rest at another pitch.
+                front, rest = case["tray"]["base"]
+                moved = [(front / 1000 if x > 0 else x, y) for x, y, _ in sweep.TRAY_FEET[:6]]
+                feet = [(x, y, -0.0735 + x * math.tan(math.radians(rest))) for x, y in moved] + sweep.TRAY_FEET[6:]
+            plant |= {"feet": feet, "ground_pitch": rest, "friction": case["tray"]["friction"], "ground": tuple(case["tray"]["ground"]), "ground_slope": tuple(case["tray"]["slope"]),
+                      "imu_range": (flight.GYRO_RANGE, flight.ACCEL_RANGE), "tumble": 80.0}
+            recorded.wait = 2.0
+        expected = case["climb"] / case["land_rate"]
+    else:
+        settings = recording_settings(recording(INDOOR))
+        recorded.height_error = case["height_error"]
+        power = sweep.IDENTIFIED_ESC["airframe"]["voltage_power"]
+        # The thrust the compensated motors make per table newton at the pack's starting voltage, so hover_mass is off by mass_error from what this plant needs.
+        factor = (case["volts"][0] / settings["thrust_voltage"]) ** (power - 2)
+        settings |= {"hover_land_rate": case["land_rate"], "hover_mass": SIM_MASS * case["plant_mass"] / factor * case["mass_error"], "hover_ceiling": 1.2}
+        if not case.get("camera", True):
+            settings["hover_camera"] = 0
+        if case.get("baro"):
+            settings["hover_baro_tau"] = 1.0
+        settings |= case.get("settings", {})
+        plant = sweep.IDENTIFIED_ESC | {"land_at": case["land_at"], "mass": sweep.IDENTIFIED_ESC["mass"] * case["plant_mass"], "level_error": case["level_error"], "accel_bias": case["accel_bias"],
+                                        **({"gust": case["gust"], "roll_gust": case["gust"]} if case.get("gust") else {}), **({"baro": sweep.BARO} if case.get("baro") else {}),
+                                        "camera": sweep.IDENTIFIED_ESC["camera"] | {"tag": (2.0, 0.1, case["tag_height"]), "fov": FOV}}
+        expected = case["tag_height"] / case["land_rate"]
+    if not case.get("guard", True):
+        plant["guard"] = False
+    # The Kalman filter runs beside the hover, as on the drone, where it has run since boot: a rest long enough for it to see the drone rest (as sw/sim/outdoor.py EKF_REST).
+    plant["armed_s"] = 5.0
     thrust_voltage = settings["thrust_voltage"]
-    recorded.height_error = case["height_error"]
-    power = sweep.IDENTIFIED_ESC["airframe"]["voltage_power"]
-    # The thrust the compensated motors make per table newton at the pack's starting voltage, so hover_mass is off by mass_error from what this plant needs.
-    factor = (case["volts"][0] / thrust_voltage) ** (power - 2)
-    settings |= {"hover_land_rate": case["land_rate"], "hover_mass": SIM_MASS * case["plant_mass"] / factor * case["mass_error"], "hover_ceiling": 1.2}
-    if not case.get("camera", True):
-        settings["hover_camera"] = 0
-    settings |= case.get("settings", {})
-    plant = sweep.IDENTIFIED_ESC | {"land_at": case["land_at"], "mass": sweep.IDENTIFIED_ESC["mass"] * case["plant_mass"], "level_error": case["level_error"], "accel_bias": case["accel_bias"],
-                                    **({"gust": case["gust"], "roll_gust": case["gust"]} if case.get("gust") else {}),
-                                    "camera": sweep.IDENTIFIED_ESC["camera"] | {"tag": (2.0, 0.1, case["tag_height"]), "fov": FOV}}
-    expected = case["tag_height"] / case["land_rate"]
-    seconds = 1.5 + case["land_at"] + 2 * expected + 6
+    # sweep.run's seconds count from arming: the rest, the takeoff, the hold, twice the descent and 6 s.
+    seconds = max(plant.get("armed_s", 0.0) - 0.5, 0.0) + 1.5 + case["land_at"] + 2 * expected + 6
     # The pack over the flight, and the firmware's compensation for it (flight_rt.c: thrust_scale times the battery ratio squared): the motors then make the table thrust times ratio^(voltage_power - 2), which the airframe's voltage input gives at this ratio.
     ticks = [0]
     step = airframe.Airframe.step
@@ -176,6 +231,7 @@ def fly(case, source=None, defines=()):
         return step(self, throttles, commands, ratio ** ((power - 2) / power), *rest, **named)
 
     airframe.Airframe.step = stepped
+    plant["land_fast"] = case.get("land_fast", False)
     log = []
     try:
         result = sweep.run(settings, plant, seconds=seconds, seed=case["seed"], log=log, hover=True)
@@ -185,7 +241,8 @@ def fly(case, source=None, defines=()):
         airframe.Airframe.step = step
     out = dict(case, stable=result["stable"], fail_s=result.get("fail_s"))
     # The lowest body corner above the floor each tick, and liftoff: when it first left the floor, as sweep.run counts it.
-    lowest = [row[1][2] + min(sweep.apply(sweep.rotation(*row[2]), foot)[2] for foot in sweep.BODY_FEET) for row in log]
+    feet, slope = plant.get("feet", sweep.BODY_FEET), plant.get("ground_slope", (0.0, 0.0))
+    lowest = [row[1][2] + min(lever[2] - slope[0] * lever[0] - slope[1] * lever[1] for lever in (sweep.apply(sweep.rotation(*row[2]), foot) for foot in feet)) for row in log]
     lifted = next((row[0] for row, height in zip(log, lowest) if height > 0), None)
     if lifted is None:
         return out | {"error": "no liftoff"}
@@ -213,6 +270,17 @@ def fly(case, source=None, defines=()):
         out["contact_speed"] = -(lowest[contact] - lowest[contact - 2]) / (2 * sweep.DT)
         last = max(contact, off) if off is not None else len(log) - 1
         out["contact_tilt"] = max(math.degrees(max(abs(row[2][0]), abs(row[2][1]))) for row in log[contact:last + 50])
+        if case.get("tray"):
+            # The true tilt from contact on: a tip-over is 30 degrees within 1 s (which way: the pitch and roll as it passes), and where it ends. The speed over the ground at contact, along the nose and to the left.
+            tilts = [math.degrees(math.acos(max(-1.0, min(1.0, math.cos(row[2][0]) * math.cos(row[2][1]))))) for row in log[contact:]]
+            over = next((i for i, tilt in enumerate(tilts[:round(1.0 / sweep.DT)]) if tilt > 30), None)
+            velocity = [(log[contact][1][k] - log[contact - 2][1][k]) / (2 * sweep.DT) for k in range(2)]
+            heading = log[contact][2][2]
+            out |= {"tipped": over is not None, "tip_s": over * sweep.DT if over is not None else None, "tip_pitch": math.degrees(log[contact + over][2][1]) if over is not None else None,
+                    "tip_roll": math.degrees(log[contact + over][2][0]) if over is not None else None, "rest_tilt": tilts[-1], "rest_pitch": math.degrees(log[-1][2][1]), "rest_roll": math.degrees(log[-1][2][0]),
+                    "contact_pitch": math.degrees(log[contact - 2][2][1]), "contact_roll": math.degrees(log[contact - 2][2][0]),
+                    "drift_forward": velocity[0] * math.cos(heading) + velocity[1] * math.sin(heading), "drift_left": -velocity[0] * math.sin(heading) + velocity[1] * math.cos(heading),
+                    "drift_estimate": by_step[contact][7] if contact in by_step else None}
     if fired is not None:
         out["fired_height"] = lowest[fired]
         out["estimate_at_fire"] = by_step[fired][5]
@@ -225,7 +293,7 @@ def summary(results, label):
         return values[min(len(values) - 1, int(q * len(values)))] if values else float("nan")
 
     # Holds that never got the drone off the floor, came down before the landing or flew away (the simulated hold's own failures) say nothing about touchdown.
-    failed = [r for r in results if "error" in r or not 0.1 <= r["land_height"] <= 1.5]
+    failed = [r for r in results if "error" in r or not 0.1 <= r["land_height"] <= 2.5]
     results = [r for r in results if r not in failed]
     air = [r for r in results if r.get("fired_s") is not None and (r.get("contact_s") is None or r["fired_s"] < r["contact_s"] - 0.005)]
     declared = [r for r in air if r.get("how") != "cut"]
@@ -251,26 +319,39 @@ def summary(results, label):
     if speeds:
         print("  contact speed (m/s): median %.2f, 90%% %.2f, max %.2f; tilt through touchdown (deg): median %.1f, 90%% %.1f, max %.1f" % (
             percentile(speeds, 0.5), percentile(speeds, 0.9), max(speeds), percentile(tilts, 0.5), percentile(tilts, 0.9), max(tilts)))
+    landed = [r for r in results if "tipped" in r]
+    if landed:
+        tipped = [r for r in landed if r["tipped"]]
+        pitched = [r for r in tipped if abs(r["tip_pitch"]) >= abs(r["tip_roll"])]
+        drifts = [math.hypot(r["drift_forward"], r["drift_left"]) for r in landed]
+        print("  tipped over (30 degrees within 1 s of contact): %d of %d (%d nose-down, %d nose-up, %d sideways); after one, %d of them in the air; ended past 20 degrees %d; end tilt (deg) median %.0f, 90%% %.0f" % (
+            len(tipped), len(landed), sum(r["tip_pitch"] > 0 for r in pitched), sum(r["tip_pitch"] < 0 for r in pitched), len(tipped) - len(pitched), sum(r in air for r in tipped),
+            sum(r["rest_tilt"] > 20 for r in landed), percentile([r["rest_tilt"] for r in landed], 0.5), percentile([r["rest_tilt"] for r in landed], 0.9)))
+        print("  speed over the ground at contact (m/s): median %.2f, 90%% %.2f, max %.2f; forward median %+.2f; pitch at contact (deg): median %+.1f, 10%% %+.1f, 90%% %+.1f" % (
+            percentile(drifts, 0.5), percentile(drifts, 0.9), max(drifts), percentile([r["drift_forward"] for r in landed], 0.5), percentile([r["contact_pitch"] for r in landed], 0.5),
+            percentile([r["contact_pitch"] for r in landed], 0.1), percentile([r["contact_pitch"] for r in landed], 0.9)))
     for r in air:
         print("  in the air (%s): seed %d at %.3f m (estimate %.3f), contact %s" % (r.get("how"), r["seed"], r["fired_height"], r.get("estimate_at_fire", float("nan")), r["contact_s"]))
     for r in never + unstable:
         print("  problem: seed %d land_rate %.2f contact %s ended %s stable %s" % (r["seed"], r["land_rate"], r.get("contact_s"), r.get("fired_s"), r["stable"]))
 
 
-def replay(recording, contact=None, source=None, defines=()):
+def replay(recording, contact=None, source=None, defines=(), overrides=None):
     """
-    Replay a recorded landing through hover.c (see the module notes); print what its touchdown logic does.
+    Replay a recorded landing through hover.c (see the module notes); print what its touchdown logic does, and return the times (s from the recording's start) of the first touchdown and of the thrust cut (None for none).
     """
     import numpy as np
 
-    from sw.flight_log import read_flight
+    from sw.flight_log import metadata, read_flight
+    from sw.flight_log import settings as recording_settings
     from sw.sim import hover
 
     install(source, list(defines))
     recording = Path(recording)
     data, truncated = read_flight(recording.with_suffix(".bin"))
-    start = json.loads(recording.with_suffix(".jsonl").read_text().splitlines()[0])
-    settings, table = start["settings"], np.array(start["thrust_table"])
+    # The start record, with the drone's metadata (settings, thrust table) when it arrived after the session started, as from 2026-11-09.
+    start = metadata(recording)
+    settings, table = recording_settings(recording), np.array(start["thrust_table"])
     t = (data.esp_time_us.values - data.esp_time_us.values[0]) / 1e6
     roll, pitch = np.radians(data.roll_deg.values), np.radians(data.pitch_deg.values)
     # The vertical specific force as flight_rt.c takes it (the IMU attitude is the level-referenced one turned back by pose_zero), and the collective thrust from the base throttle.
@@ -284,14 +365,20 @@ def replay(recording, contact=None, source=None, defines=()):
     pick = np.searchsorted(t, grid, side="right") - 1
     t, roll, pitch, vertical, force, mode = grid, roll[pick], pitch[pick], vertical[pick], force[pick], mode[pick]
     height, climb = data.hover_height_m.values[pick], data.hover_climb_m_s.values[pick]
-    gains = hover.gains(settings)
+    # The Kalman filter's estimate as the drone logged it (flight_rt.c computes it every tick and hands it to the hold), where the recording has it.
+    filtered = "ekf_up_m_s" in data and np.isfinite(data.ekf_up_m_s.values).any()
+    if filtered:
+        names = ("ekf_yaw_deg", "ekf_north_m_s", "ekf_west_m_s", "ekf_up_m_s", "ekf_north_m", "ekf_west_m", "ekf_height_m", "ekf_horizontal", "ekf_vertical")
+        logged = {name: data[name].values[pick] for name in names}
+    gains = hover.gains(settings | (overrides or {}))
     state, out = hover.State(), hover.Output()
     difference, flown, first, engaged = 0.0, None, None, False
-    print("%s: land_rate %.2f, hover_mass %.2f, contact %s" % (recording.name, gains.land_rate, gains.mass, "%.2f s" % contact if contact is not None else "none (in the air throughout)"))
+    print("%s: land_rate %.2f, hover_mass %.2f, contact %s%s" % (recording.name, gains.land_rate, gains.mass, "%.2f s" % contact if contact is not None else "none (in the air throughout)", "" if filtered else ", no Kalman filter logged"))
+    touchdown = cut = None
     for i in range(len(t)):
         if mode[i] == 0:
             if not engaged:
-                hover.library.hover_rest(ctypes.byref(state), float(vertical[i]), False, 0.01)
+                hover.library.hover_rest(ctypes.byref(state), float(vertical[i]), False, 0.01, None)
                 continue
             break
         engaged = True
@@ -310,8 +397,13 @@ def replay(recording, contact=None, source=None, defines=()):
             difference = 0.0
         weight = state.hold_force if getattr(state, "hold_force", 0) > 0 else gains.mass * 9.81
         before = (state.landed, getattr(state, "probing", False))
+        if filtered and hasattr(hover.library, "hover_estimate"):
+            estimate = hover.Estimate(yaw=math.radians(float(logged["ekf_yaw_deg"][i])), velocity=(float(logged["ekf_north_m_s"][i]), float(logged["ekf_west_m_s"][i]), float(logged["ekf_up_m_s"][i])),
+                                      position=(float(logged["ekf_north_m"][i]), float(logged["ekf_west_m"][i])), height=float(logged["ekf_height_m"][i]),
+                                      horizontal=bool(logged["ekf_horizontal"][i]), vertical=bool(logged["ekf_vertical"][i]))
+            hover.library.hover_estimate(ctypes.byref(state), ctypes.byref(estimate))
         hover.library.hover_update(ctypes.byref(state), ctypes.byref(gains), int(mode[i]), None, int(t[i] * 1e6) + 1000000, 0.01, float(roll[i]), float(pitch[i]), 0.0,
-                                   float(vertical[i]) + difference / weight, state.force if state.engaged else float(force[i]), None, None, None, ctypes.byref(out))
+                                   float(vertical[i]) + difference / weight, state.force if state.engaged else float(force[i]), None, None, None, None, ctypes.byref(out))
         if not landing:
             # The hold as flown: its thrust (and the integral that gives it, so the landing starts from it), which the new code's references learn from.
             lean = max(0.5, math.cos(roll[i]) * math.cos(pitch[i]))
@@ -327,14 +419,17 @@ def replay(recording, contact=None, source=None, defines=()):
             print("  %7.2f probe finds air (accelerometer %+.3f m/s against %+.3f in the air)" % (t[i], state.probe_velocity, state.probe_expected))
         if state.landed and not before[0]:
             what = "tilt or shock cut" if out.force <= 0 else "touchdown"
+            touchdown = t[i]
             if hasattr(state, "probe_velocity") and what == "touchdown":
                 what += " (accelerometer %+.3f m/s against %+.3f in the air)" % (state.probe_velocity, state.probe_expected)
             print("  %7.2f %s at %.2f of the hold's thrust" % (t[i], what, out.force / weight))
         if state.landed and out.force <= 0:
             print("  %7.2f thrust off" % t[i])
+            cut = t[i]
             break
     else:
         print("  %7.2f recording ends without touchdown" % t[-1])
+    return touchdown, cut
 
 
 def main():
@@ -350,13 +445,37 @@ def main():
     parser.add_argument("--no-camera", action="store_true", help="never see the tag (hover_camera 0): height from the IMU alone, as a landing outdoors after a lost link")
     parser.add_argument("--set", nargs="*", default=[], help="settings to override, name=value")
     parser.add_argument("--gust", type=float, default=0, help="random pitch and roll disturbance (rad/s² RMS) on top of the room's; indoors fitted 0.49 and 0.89")
+    parser.add_argument("--baro", action="store_true", help="the barometer (sweep.BARO) feeding the height without the tag, at hover_baro_tau 1 s unless --set gives another")
+    parser.add_argument("--outdoor", nargs="?", const=OUTDOOR, help="fly drone 1 outdoors on this recording's settings (default %s): see the module notes" % OUTDOOR)
+    parser.add_argument("--tray", action="store_true", help="with --outdoor: land on drone 1's battery tray and report tip-overs (see the module notes)")
+    parser.add_argument("--no-guard", action="store_true", help="leave the firmware's guards out: guard.c is built against the tree's hover.h, so a --source whose HoverState differs cannot run under it")
+    parser.add_argument("--rates", type=float, nargs="*", help="landing rates to draw from (m/s) in place of the draw's")
+    parser.add_argument("--base", type=float, nargs=2, metavar=("FRONT", "REST"), help="with --tray: a hypothetical base instead of the one built, its front edge FRONT mm ahead of the CoM (27.5 as built) and resting REST degrees nose-down (4 as built)")
+    parser.add_argument("--fast", action="store_true", help="land with held L (HOVER_LAND_FAST) instead of L")
+    parser.add_argument("--floor", type=float, help="with --tray: the floor's stiffness a contact point (N/m) in place of 800, its damping scaled to keep the damping ratio")
     args = parser.parse_args()
     defines = args.defines.split()
+    from sw.flight_log import parse_settings
+
+    overrides = parse_settings(",".join(args.set))
     if args.replay:
-        replay(args.replay, args.contact, args.source, defines)
+        replay(args.replay, args.contact, args.source, defines, overrides)
         return
-    overrides = {name: float(value) for name, value in (pair.split("=") for pair in args.set)}
-    cases = [draw(args.seed + i) | {"camera": not args.no_camera, "gust": args.gust, "settings": overrides} for i in range(args.runs)]
+    cases = [draw(args.seed + i, args.outdoor) | {"camera": not args.no_camera, "baro": args.baro, "gust": args.gust, "settings": overrides} for i in range(args.runs)]
+    for case in cases:
+        if args.tray:
+            case["tray"] = tray(case["seed"])
+            if args.floor:
+                stiffness, damping = case["tray"]["ground"]
+                case["tray"]["ground"] = (args.floor, damping * math.sqrt(args.floor / stiffness))
+            if args.base:
+                case["tray"]["base"] = tuple(args.base)
+        if args.no_guard:
+            case["guard"] = False
+        if args.fast:
+            case["land_fast"] = True
+        if args.rates:
+            case["land_rate"] = random.Random(case["seed"] + 3).choice(args.rates)
     with ProcessPoolExecutor(args.workers) as pool:
         results = list(pool.map(fly, cases, [args.source] * len(cases), [defines] * len(cases)))
     if args.save:
